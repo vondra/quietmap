@@ -124,19 +124,23 @@ pub fn pixel_ndens(
         heard.distance_m = heard.distance_m.min(candidate.distance_from(position));
     }
     // What the block left out of a group sounds with its passes, and leaves the steady rest: its
-    // energy joins the group's line in its weather states' proportions, or is a line of its own
-    // taken from its loudest source left out (its weather unknown here: mean in either state).
+    // energy, in either weather state, joins the group's line, or is a line of its own taken from
+    // its loudest source left out.
     let mut steady = rest
         .steady
         .map(|layer| layer.map(|value| reflection * value));
     let (left_groups, weights) = rest.left_groups;
     for group in left_groups {
-        let left: [f64; PERIODS] = std::array::from_fn(|p| {
-            reflection
-                * (0..4)
-                    .map(|c| weights[c] * group.at_corners[c][p])
-                    .sum::<f64>()
-        });
+        let blend = |of: &dyn Fn(&PairEnergy) -> [f64; PERIODS]| -> [f64; PERIODS] {
+            std::array::from_fn(|p| {
+                reflection
+                    * (0..4)
+                        .map(|c| weights[c] * of(&group.at_corners[c])[p])
+                        .sum::<f64>()
+            })
+        };
+        let left = blend(&|energy| energy.mixed);
+        let states = [0, 1].map(|state| blend(&|energy| energy.states[state]));
         if left.iter().all(|&value| value <= 0.0) {
             continue;
         }
@@ -154,14 +158,6 @@ pub fn pixel_ndens(
             display: (loudest.display, lden_energy(&left)),
         });
         heard.distance_m = heard.distance_m.min(nearest_m);
-        let share = |state: usize, p: usize| {
-            if heard.energy[p] > 0.0 {
-                heard.states[state][p] / heard.energy[p]
-            } else {
-                1.0
-            }
-        };
-        let states = [0, 1].map(|state| std::array::from_fn(|p| left[p] * share(state, p)));
         heard.weather.add(&left, &states);
         let layer = heard.layer as usize;
         for p in 0..PERIODS {
