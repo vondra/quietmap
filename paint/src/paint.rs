@@ -51,7 +51,7 @@ fn cell(energy: f64) -> u8 {
 }
 
 /// The cells of a pixel's energy per layer: each layer's and the total's.
-pub(crate) fn cells_of(layers: &[f64; LAYERS]) -> [u8; LAYERS + 1] {
+pub fn cells_of(layers: &[f64; LAYERS]) -> [u8; LAYERS + 1] {
     let mut cells = [NO_LEVEL; LAYERS + 1];
     for (l, &value) in layers.iter().enumerate() {
         cells[l] = cell(value);
