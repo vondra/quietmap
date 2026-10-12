@@ -438,6 +438,7 @@ impl Score {
 
     fn line(&self, name: &str) -> String {
         let share = |count: usize| 100.0 * count as f64 / self.painted.max(1) as f64;
+        let bias = self.signed / self.painted.max(1) as f64;
         let mut line = format!("{name:<10} painted {:>5}:", self.painted);
         for (k, &(limit, allowed)) in RUNGS.iter().enumerate() {
             let mark = if share(self.over[k]) > allowed {
@@ -452,11 +453,12 @@ impl Score {
             );
         }
         format!(
-            "{line}; presence {:.2} %{} ({}); bias {:+.2} dB; quiet worst {:.1} dB{}; worst {:.1} dB at {},{} (map {}, popup {})",
+            "{line}; presence {:.2} %{} ({}); bias {:+.2} dB{}; quiet worst {:.1} dB{}; worst {:.1} dB at {},{} (map {}, reference {})",
             share(self.presence),
             if share(self.presence) > 0.25 { "!" } else { "" },
             self.presence,
-            self.signed / self.painted.max(1) as f64,
+            bias,
+            if bias.abs() > 0.5 { "!" } else { "" },
             self.quiet_worst,
             if self.quiet_worst > 10.0 { "!" } else { "" },
             self.worst.0,
@@ -498,8 +500,11 @@ fn compare_maps(
                 square.0 * 1024 + (at % 1024) as u32,
                 square.1 * 1024 + (at / 1024) as u32,
             );
+            // A layer the reference does not assess there is not scored.
             for (score, (&m, &t)) in scores.iter_mut().zip(mine.iter().zip(theirs)) {
-                score.add(m, t, place);
+                if t != NO_LEVEL {
+                    score.add(m, t, place);
+                }
             }
         }
     }

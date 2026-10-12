@@ -195,7 +195,8 @@ per layer and `current.json`, which the server publishes. `qm-paint-gpu check` h
 equal to the cores on random pairs, `etalon` paints the reference (with
 `--sample-step 4` a sixteenth of its outdoor pixels, one drawn in each 4 x 4 cell, the rest not
 assessed),
-`compare` scores a map against the cells it assesses and `popup` scores a map against popup clicks.
+`compare` scores a map against a reference's cells and `popup` writes the popup's answers at random
+pixels as a sparse reference.
 
 ## Web
 

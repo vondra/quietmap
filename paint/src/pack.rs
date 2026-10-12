@@ -7,7 +7,7 @@
 //! nothing.
 
 use crate::exact::LAYERS;
-use crate::hm3::{HEADER, TILE_PX, layer_names, painted, tile_path};
+use crate::hm3::{HEADER, TILE_PX, layer_names, painted, read_tile};
 use crate::paint::{NO_LEVEL, SILENCE};
 use pmtiles::{Compression, PmTilesWriter, TileCoord, TileType};
 use rayon::prelude::*;
@@ -39,20 +39,9 @@ fn read(
     zoom: u8,
     wanted: &BTreeSet<(u32, u32)>,
 ) -> Result<Tiles, String> {
-    let name = layer_names()[number];
     wanted
         .par_iter()
-        .map(|&(x, y)| {
-            let path = tile_path(out, name, u32::from(zoom), x, y);
-            let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            if bytes.len() != HEADER.len() + 1 + TILE_PX * TILE_PX
-                || bytes[..HEADER.len()] != HEADER
-                || usize::from(bytes[HEADER.len()]) != number
-            {
-                return Err(format!("{}: not this layer's HM3 tile", path.display()));
-            }
-            Ok(((x, y), bytes[HEADER.len() + 1..].to_vec()))
-        })
+        .map(|&(x, y)| Ok(((x, y), read_tile(out, number, u32::from(zoom), x, y)?)))
         .collect()
 }
 

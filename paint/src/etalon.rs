@@ -1,8 +1,8 @@
 //! The painter's reference: every outdoor pixel answered as the popup answers a click there, every
 //! ground source loud there evaluated exactly, the quiet hum blended from its points as the
 //! painter takes it, and the flights, a building's pixels at its loudest outdoor neighbour as the
-//! painter takes them; or, sampled, every K-th outdoor pixel each way; a painted map is scored
-//! against it cell by cell.
+//! painter takes them; or, sampled, one outdoor pixel drawn in each K x K cell; a painted map is
+//! scored against it cell by cell.
 
 use crate::buildings::{fill_buildings, own_reflection_db};
 use crate::exact::{Batch, LAYERS, Point, evaluate};
