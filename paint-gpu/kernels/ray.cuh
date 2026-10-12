@@ -9,8 +9,9 @@
 // same.
 
 // Per-thread capacities; a ray needing more fails with FAILED_CAPACITY and goes to the CPU.
-// Terrain vertices a ray keeps: 12 km east-west crosses ~1,200 lattice lines at 71 N, 2,048 at 79 N.
-#define RAY_SAMPLES 2048
+// Terrain vertices a ray keeps: 12 km east-west crosses ~1,200 lattice lines at 71 N (a ray past
+// the 1,536th vertex goes to the CPU; the card reserves every resident thread's whole stack).
+#define RAY_SAMPLES 1536
 #define HULL_CAPACITY 40     // points of one state's hull (dev4's oracle rays needed at most 21)
 #define OPEN_ROOFS 12        // footprints the ray is inside at once
 #define ROOFS 512            // roofs one ray passes under
@@ -94,6 +95,10 @@ struct RayStream {
     int count;
     TerrainPoint samples[RAY_SAMPLES];
     Moments prefix[RAY_SAMPLES];
+    // From each sample to the receiver the terrain's moments about that sample (its altitude and
+    // distance): the receiver's side of a diffraction point at once, summed a stretch at a time from
+    // the receiver back, so a short stretch at the end of a long ray keeps its digits in f32.
+    Moments suffix[RAY_SAMPLES];
     // The next sample that may diffract, not yet a candidate; the sample ending the stretch of the
     // last crossing.
     int next_crest;
@@ -247,6 +252,14 @@ __device__ __noinline__ u32 sample_ray(const TerrainScene& ground, float sx, flo
         count++;
     }
     s.count = count;
+    float last_x = s.samples[count - 1].x;
+    s.suffix[count - 1] = Moments{0.0f, 0.0f, 0.0f};
+    for (int k = count - 2; k >= 0; k--) {
+        const TerrainPoint &a = s.samples[k], &b = s.samples[k + 1];
+        Moments m = rebased(s.suffix[k + 1], b.x, b.z, a.x, a.z, last_x - b.x);
+        add_stretch(m, a.x, b.x, a.z, b.z, a.g, b.g, a.x, a.z);
+        s.suffix[k] = m;
+    }
     s.foliage_m[0] = crowns.metres[0];
     s.foliage_m[1] = crowns.metres[1];
     return 0;
@@ -331,21 +344,16 @@ __device__ Moments path_from_source(const RayStream& s, float x) {
     return m;
 }
 
-// The path's moments from `x` to the receiver about (x, z_x): the terrain's stretches after x and
-// the roofs' rises after it, summed here, not as a difference of the prefixes (which f32 would
-// lose for a short stretch at the end of a long ray).
+// The path's moments from `x` to the receiver about (x, z_x): the terrain's part of its stretch,
+// then its suffix from the sample ending it, and the roofs' rises after x.
 __device__ Moments path_to_receiver(const RayStream& s, float x, float z_x) {
     Moments m = {0.0f, 0.0f, 0.0f};
     int k = stretch_holding(s, x);
+    const TerrainPoint& hi = s.samples[k];
     float za, ga;
-    terrain_on(s.samples[k - 1], s.samples[k], x, &za, &ga);
-    for (float a = x; k < s.count; k++) {
-        const TerrainPoint& hi = s.samples[k];
-        add_stretch(m, a, hi.x, za, hi.z, ga, hi.g, x, z_x);
-        a = fmaxf(a, hi.x);
-        za = hi.z;
-        ga = hi.g;
-    }
+    terrain_on(s.samples[k - 1], hi, x, &za, &ga);
+    add_stretch(m, x, hi.x, za, hi.z, ga, hi.g, x, z_x);
+    add_moments(m, rebased(s.suffix[k], hi.x, hi.z, x, z_x, s.samples[s.count - 1].x - hi.x));
     for (int r = s.roof_count - 1; r >= 0 && s.roofs[r].x1 > x; r--) {
         const Roof& roof = s.roofs[r];
         add_moments(m, roof.x0 >= x ? moved_to(roof.rise, roof.x0, x) : roof_rise(s, roof, x, roof.x1, x));
