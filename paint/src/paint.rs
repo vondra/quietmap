@@ -39,7 +39,7 @@ pub struct Grid {
 impl Grid {
     /// The grid of the map's zoom (12 or 13): blocks of about 100 m and the hum's points about
     /// 400 m apart (790 m put a quiet Dobris pixel's total 1.5 phon over the popup's; at 400 m its
-    /// cells over 1 phon went 0.75 -> 0 % for 7 s more a square, at 200 m for 36 s).
+    /// cells over 1 phon went 0.75 -> 0 %; 200 m added five times as much time).
     pub fn at_zoom(zoom: u32) -> Option<Self> {
         match zoom {
             12 => Some(Grid {

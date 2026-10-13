@@ -89,7 +89,7 @@ pub const FAILED_NO_TERRAIN: u32 = 2;
 pub const FAILED_CAPACITY: u32 = 4;
 
 /// Threads per block of the pair kernels, one pair or one ray a thread: one warp, 5 % faster than 64
-/// and 15-20 % faster than 256 (RTX 5070, pairs within 1 km grouped by 32, 2026-10-09).
+/// and 15-20 % faster than 256 (pairs within 1 km grouped by 32, 2026-10-09).
 const THREADS_PER_BLOCK: u32 = 32;
 /// Bytes of one listed ray (kernels/evaluate.cuh PairRay).
 const PAIR_RAY_BYTES: usize = 24;
@@ -255,8 +255,8 @@ impl Gpu {
             source,
             CompileOptions {
                 arch: Some(arch),
-                // Fast math: 113 and 290 ns a point and a line pair against 200 and 500, the
-                // agreement with the CPU the same (RTX 5070, evidence/2026-10-09/paint). The
+                // Fast math: point and line pairs about 1.7 times as fast, the agreement with the
+                // CPU the same (2026-10-09). The
                 // `use_fast_math` field only adds --fmad=true; the flag goes in `options`. Line
                 // numbers cost nothing at run time and let a profiler name the kernel's lines.
                 options: vec!["--use_fast_math".into(), "-lineinfo".into()],
