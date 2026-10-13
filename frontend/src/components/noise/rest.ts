@@ -1,4 +1,6 @@
-// The list's last row: everything it does not name, together: the rows past the list's length (the
+// The list's rows and its last one: once the shares are known it shows the loudest three and every
+// other row of at least 2 % of the place's loudness, ten at most (owner 2026-10-13: La Palma listed
+// thirteen roads, most of 1-2 %); the last row holds everything else together, the folded rows (the
 // aircraft layer among them when under 0 dB) and what the popup leaves out of each ground layer (its
 // contributors cut from the thirty or under 0 dB). Pure TypeScript, so it has a dependency-free unit
 // test.
@@ -8,6 +10,26 @@ import type { Contributor, LayerLevels } from '../../types/noise'
 export interface HiddenRow {
   contributor?: Contributor
   layer?: LayerLevels
+}
+
+/** The share a row needs to be shown, in whole percent, and how many rows the list shows at least and
+ *  at most. */
+export const SHOWN_PERCENT_MIN = 2
+export const SHOWN_ROWS_MIN = 3
+export const SHOWN_ROWS_MAX = 10
+
+/** Which rows, in the list's order, it shows: before the final update gives their whole percents
+ *  (`undefined`), the first `limit`; then the first three and every other of at least 2 %, `limit` at
+ *  most (a phone's is lower). */
+export function shownRows(percents: (number | undefined)[], limit = SHOWN_ROWS_MAX): boolean[] {
+  const known = percents.every(percent => percent !== undefined)
+  let shown = 0
+  return percents.map((percent, row) => {
+    const show = shown < Math.min(limit, SHOWN_ROWS_MAX)
+      && (!known || row < SHOWN_ROWS_MIN || (percent as number) >= SHOWN_PERCENT_MIN)
+    if (show) shown += 1
+    return show
+  })
 }
 
 /** How many sources the last row holds; null when they make no sound (no row). */

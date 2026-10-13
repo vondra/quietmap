@@ -7,7 +7,7 @@ import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { soneToColor } from '../utils/noise-colors'
 import { fmtSone, wholePercents } from '../utils/formatters'
 import { HoverText } from './ui/info-tip'
-import { restSources, type HiddenRow } from './noise/rest'
+import { restSources, shownRows, type HiddenRow } from './noise/rest'
 import { Chevron } from './noise/shared'
 import { AircraftLayerRow, ContributorRow, RestRow, rowRank } from './noise/source/ContributorRow'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
@@ -54,41 +54,47 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
     ...data.top_contributors.map(c => ({ rank: rowRank(c.nden_sone, c.received_lden), contributor: c })),
     ...aircraftEntry.filter(e => (e.layer.lden ?? 0) > 0),
   ].sort((a, b) => b.rank - a.rank)
-  const shownEntries = maxSources ? entries.slice(0, maxSources) : entries
-  const hidden = [
-    ...entries.slice(shownEntries.length),
-    ...aircraftEntry.filter(e => (e.layer.lden ?? 0) <= 0),
-  ]
-  const rest = restSources(data.sources, hidden)
-  // The popup's Nden of what it left out knows nothing of rows hidden here (a phone shows fewer):
-  // with them the last row has no Nden.
-  const restNden = hidden.length > 0 && data.rest_nden_sone != null ? null : data.rest_nden_sone
-  // Shares add up: the last row's is the popup's rest with the hidden rows'.
-  const restShare = data.rest_share == null
-    ? undefined
-    : hidden.reduce((sum, row: HiddenRow) => sum + ((row.contributor ? row.contributor.share : row.layer?.share) ?? 0), data.rest_share)
-  // The rows' shares in whole percents adding up to 100, once the final update carries them.
-  const shares = [
-    ...shownEntries.map(e => (e.contributor ? e.contributor.share : e.layer?.share)),
-    ...(rest != null ? [restShare] : []),
-  ]
+  const quietAircraft = aircraftEntry.filter(e => (e.layer.lden ?? 0) <= 0)
+  const shareOf = (row: HiddenRow) => (row.contributor ? row.contributor.share : row.layer?.share)
+  // Every row's share and the rest's in whole percents adding up to 100, once the final update
+  // carries them; the list shows the rows `shownRows` picks, the others fold into the last row.
+  const shares = [...entries.map(shareOf), quietAircraft.reduce((sum, e) => sum + (shareOf(e) ?? 0), data.rest_share ?? 0)]
   const percents = shares.every(share => share != null) ? wholePercents(shares as number[]) : []
+  const shownMask = shownRows(entries.map((_, row) => percents[row]), maxSources)
+  const shownEntries = entries.filter((_, row) => shownMask[row])
+  const folded = entries.filter((_, row) => !shownMask[row])
+  const hidden = [...folded, ...quietAircraft]
+  const rest = restSources(data.sources, hidden)
+  // The popup's Nden of what it left out knows nothing of the rows folded here: with them the last
+  // row has no Nden.
+  const restNden = hidden.length > 0 && data.rest_nden_sone != null ? null : data.rest_nden_sone
+  const percentOf = (entry: ListEntry) => (percents.length ? percents[entries.indexOf(entry)] : undefined)
+  const restPercent = percents.length
+    ? folded.reduce((sum, e) => sum + (percentOf(e) ?? 0), percents[entries.length])
+    : undefined
   // An opened row's segments are the same click computed again: only once it is answered.
   const click = answered && onFan
     ? { at: data.center, receiver: data.building?.facade?.receiver ?? data.center, onFan }
     : undefined
-  const shown = shownEntries.map((e, row) => e.contributor
+  const listRow = (e: ListEntry) => e.contributor
     ? (
       <ContributorRow
         key={`${e.contributor.source_type}-${e.contributor.id}`}
         c={e.contributor}
-        percent={percents[row]}
+        percent={percentOf(e)}
         onHighlight={id => onHighlight(id === null ? null : `source:${id}`)}
         click={click}
       />
     )
-    : <AircraftLayerRow key="aircraft" layer={e.layer!} percent={percents[row]} flights={data.top_flights} onHighlightFlight={onHighlight} />)
-  if (rest != null) shown.push(<RestRow key="rest" sources={rest} nden={restNden} percent={percents[shownEntries.length]} />)
+    : <AircraftLayerRow key="aircraft" layer={e.layer!} percent={percentOf(e)} flights={data.top_flights} onHighlightFlight={onHighlight} />
+  const shown = shownEntries.map(listRow)
+  if (rest != null) {
+    shown.push(
+      <RestRow key="rest" sources={rest} nden={restNden} percent={restPercent}>
+        {folded.length > 0 ? folded.map(listRow) : undefined}
+      </RestRow>,
+    )
+  }
   const sone = data.loudness?.nden_sone ?? null
 
   return (

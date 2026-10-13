@@ -6,7 +6,7 @@
 // arrives opens in its row.
 import type { ReactNode } from 'react'
 import type { BuildingAnswer, PopupUpdate } from '../../types/noise'
-import { fmtDbValue as level, fmtInt, fmtSone } from '../../utils/formatters'
+import { fmtDbValue as level, fmtInt, fmtSone, wholePercents } from '../../utils/formatters'
 import { SOURCE_LABELS } from '../noise/labels'
 import { CAPTION, compassPoint, DETAIL_TEXT, DetailTable, lineRow } from '../noise/shared'
 import { REFLECTIONS } from '../noise/source/PathTable'
@@ -73,13 +73,14 @@ export default function CalculationDetails({ data }: { data: PopupUpdate }) {
     return db == null ? 0 : p.hours * 10 ** ((db + p.penalty) / 10)
   })
   const allEnergy = periodEnergy.reduce((a, b) => a + b, 0)
-  const total = data.total_lden ?? 0
   const sone = data.loudness?.mean_sone
   const percentiles = data.percentiles
   const layers = data.sources
     .filter(layer => (layer.lden ?? 0) > 0)
     .sort((a, b) => (b.lden ?? 0) - (a.lden ?? 0))
-  const share = (lden: number | null) => (lden == null ? '—' : `${Math.round(100 * 10 ** ((lden - total) / 10))} %`)
+  // Shares in whole percents adding up to 100 (each rounded alone, Roads 100 % and Buildings 1 %).
+  const layerPercents = wholePercents(layers.map(layer => 10 ** ((layer.lden ?? 0) / 10)))
+  const periodPercents = allEnergy > 0 ? wholePercents(periodEnergy) : []
 
   return (
     <div data-testid="calculation" className={DETAIL_TEXT}>
@@ -92,7 +93,7 @@ export default function CalculationDetails({ data }: { data: PopupUpdate }) {
             rows={PERIODS.map((p, k) => [
               p.name,
               level(data.total[p.key]),
-              allEnergy > 0 ? `${Math.round(100 * periodEnergy[k] / allEnergy)} %` : '—',
+              allEnergy > 0 ? `${periodPercents[k]} %` : '—',
               sone?.[p.sone] != null ? fmtSone(sone[p.sone] as number) : '—',
             ])}
           />
@@ -112,13 +113,13 @@ export default function CalculationDetails({ data }: { data: PopupUpdate }) {
         <div className="space-y-2">
           <DetailTable
             head={['', 'Day', 'Evening', 'Night', 'Lden', 'Share']}
-            rows={layers.map(layer => [
+            rows={layers.map((layer, row) => [
               SOURCE_LABELS[layer.source_type] ?? layer.source_type,
               level(layer.ld),
               level(layer.le),
               level(layer.ln),
               level(layer.lden),
-              share(layer.lden),
+              `${layerPercents[row]} %`,
             ])}
           />
           <DetailTable
