@@ -2,8 +2,8 @@
 //! Annex A, Table A.1, on the metres each meteorological state's ray runs inside the crowns,
 //! weighted by the tree cover (dev4's depth). On the ruler, Poland's road stations whose rays cross
 //! forest read louder than measured without it, and louder than the stations without forest at
-//! the same level; the full table closes that gap, half of it does not
-//! (`evidence/2026-10-10/forest/`).
+//! the same level; the full table closes that gap, half of it does not (2026-10-10: 392 stations
+//! behind forest 2.4 dB above the measurement without it, 0.3 dB with it).
 
 use crate::bands::BANDS;
 use crate::cnossos::PlanePoint;

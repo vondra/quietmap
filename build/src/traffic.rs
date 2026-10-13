@@ -331,7 +331,7 @@ const HOUSE_UP_TO_STOREYS: u8 = 3;
 /// a building of unknown use is a shed, a house or flats by its size. A lodging (6) makes dev4's
 /// 2.45 trips a room (ITE 310 x occupancy 0.5 x car 0.6) over the 85.4 m2 of gross floor a room
 /// of the 49,151 hotel-typed buildings whose lodging states its rooms in OpenStreetMap
-/// (`evidence/2026-10-08/hotels`), with no cap: the largest of them keep the rate (dev4's cap of
+/// (counted 2026-10-08), with no cap: the largest of them keep the rate (dev4's cap of
 /// 1,472 trips read lodgings of over 300 rooms 1.8 dB low); dev4 took a room for 25 m2 and so
 /// made 4.66 trips a room.
 pub(crate) fn building_load(building_type: u8, storeys: u8, area_m2: Option<f64>) -> (f64, f64) {
@@ -542,7 +542,7 @@ fn read_roads(dev4: &Dev4, square: Square) -> Result<Option<Vec<RoadRow>>, Strin
 /// (dev4's Overture-only screening stock, matched to OSM one to one at an IoU of 0.5, without an
 /// OSM id, type or area) as buildings of unknown use of their outline's area. dev4's trip
 /// generation skipped those: 2.1 of Bangkok's 2.3 million footprints, 2.5 of Mexico City's 2.7
-/// million, against 3 % of Prague's floor (`evidence/2026-10-03/buildings`).
+/// million, against 3 % of Prague's floor (counted 2026-10-03).
 fn read_buildings(dev4: &Dev4, square: Square) -> Result<Vec<BuildingLoad>, String> {
     let Some(table) = dev4.table(square, "structures.arrow")? else {
         return Ok(Vec::new());

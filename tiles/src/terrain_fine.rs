@@ -3,8 +3,7 @@
 //! the model's height less its own 1" average, faded to nothing towards its edges and voids. A
 //! ray's ground within 100 m of its ends is the `terrain` tile's bilinear height plus this detail,
 //! where a berm, a cutting or a road on a slope narrower than the 1" lattice screens or exposes it
-//! (the D4's berm at Mníšek 3.5 dB, a road on a valley shelf 15.5 dB; `evidence/2026-10-10/
-//! fine-terrain/` in the operations repository); where a tile has no file the detail is nothing
+//! (the D4's berm at Mníšek 3.5 dB, a road on a valley shelf 15.5 dB, measured 2026-10-10); where a tile has no file the detail is nothing
 //! and the 1" heights stand as they are. The window is the `terrain` tile's, six times as fine;
 //! the detail is in the heights' 0.2 m steps, signed. Stored in blocks of 128 x 128 cells, each
 //! block one zstd frame of its planar prediction's residual (as `terrain`), behind a directory, so a

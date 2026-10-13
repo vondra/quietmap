@@ -1,5 +1,8 @@
 //! `qm-build`: builds the prepared z12 tiles of a release, one builder per kind.
 //!
+//! For visitors, down to this code: the About page Data preparation
+//! (`frontend/src/about/data-preparation.md`).
+//!
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
 //! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--climate DIR] [--tent FILE]
