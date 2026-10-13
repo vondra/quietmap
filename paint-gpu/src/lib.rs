@@ -5,6 +5,9 @@
 //!
 //! Map: [`device`] (the card, the kernels, a square's buffers and the pair evaluation), [`loudness`]
 //! (the pixels' loudness), [`batch`] (the card as the painter's batch).
+//!
+//! For visitors, down to this code: the About page The noise map
+//! (`frontend/src/about/the-noise-map.md`).
 
 pub mod batch;
 pub mod device;
