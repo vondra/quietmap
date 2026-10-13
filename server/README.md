@@ -59,14 +59,5 @@ visitor's address in `X-Forwarded-For` (forwarding headers are trusted from loop
 The server refuses to start without either binary, a year directory or the tiles directory, or with
 only one of the two Stay22 values.
 
-## Run and test
-
-    npm ci --prefix frontend && npm --prefix frontend run build
-    npm ci --prefix server
-    PORT=... QM_POPUP_BIN=... QM_RASTER_BIN=... QM_PREPARED_DIR=... QM_YEARS=... QM_TILES_DIR=... npm --prefix server start
-
-    npm --prefix server run check     # typecheck, lint, tests (the popup route against a fake qm-popup, Stay22 mocked)
-    npm --prefix frontend run check   # typecheck, lint, unit tests
-    npm --prefix frontend run e2e     # the built map in Chromium, every API answer mocked in the page
-
-`scripts/check-fast.sh` runs both `check` scripts.
+How to build, run and test it is in the repository's `README.md`; its tests (`npm --prefix server
+run check`) run the popup route against a fake `qm-popup`, with Stay22 mocked.

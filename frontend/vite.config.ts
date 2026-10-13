@@ -12,11 +12,11 @@ import { aboutPagePath } from './src/lib/about-paths.ts'
 const ABOUT_DIR = new URL('./src/about', import.meta.url).pathname
 const ABOUT_INDEX = 'virtual:about-index'
 
-/** The About pages (src/about): every path with its title, and whether its parent lists it. */
-function aboutIndex(): Record<string, { title: string; hidden?: true }> {
+/** The About pages (src/about): every path with its title. */
+function aboutIndex(): Record<string, { title: string }> {
   return Object.fromEntries(globSync('**/*.md', { cwd: ABOUT_DIR }).sort().map(file => {
     const { meta } = splitFrontMatter(readFileSync(join(ABOUT_DIR, file), 'utf8'))
-    return [aboutPagePath(file), meta.nav === 'hidden' ? { title: meta.title, hidden: true } : { title: meta.title }]
+    return [aboutPagePath(file), { title: meta.title }]
   }))
 }
 

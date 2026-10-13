@@ -1,7 +1,6 @@
 ---
 title: quietmap.org
 intro: Find your quiet place. A world atlas of environmental noise — roads, railways, aircraft, ships, industry, and the buildings around you.
-map: { center: [15, 30], zoom: 2 }
 ---
 
 ## Mission
@@ -25,119 +24,44 @@ Human-made noise is not the same as natural sound. A forest at 50 dB with birdso
 Three steps:
 
 1. **Sources emit noise.** Roads, trains, planes, ships, factories, wind turbines and buildings — each modelled from real data: traffic counts, timetables, a year of flight tracks, ship positions, registries.
-2. **Sound travels and fades.** Hills and buildings block it, noise barriers screen it, soft ground and the air absorb it — computed with the EU method CNOSSOS-EU, and for aircraft with ECAC Doc 29.
+2. **Sound travels and fades.** Hills and buildings block it, noise barriers screen it, soft ground, trees and the air absorb it — computed with the EU method CNOSSOS-EU, and for aircraft with ECAC Doc 29.
 3. **You see the result.** Click any point and the level there is computed on the spot from every source around it; the map shows how loud each place sounds, in colour: clear under 1 sone (a quiet room), then pale green, yellow, orange, red and maroon, a colour for each doubling of loudness, maroon from 32 sone.
 
-Each source layer — roads, railways, aircraft, ships, industrial, buildings — is modelled independently and toggles on its own in the map.
+Each source layer — roads, railways, aircraft, ships, industrial, buildings — is modelled independently; the map shows them together or one alone.
 
-![quietmap.org — noise visualization](map-overview.jpg)
+![Prague on the map, coloured by how loud each place sounds](map-overview.jpg)
 
-→ **[Read the full methodology](/about/methodology)** — source layers, propagation,
-the standards they use, known limits, and validation against real measurements.
+## In depth
 
-→ **[How it works](/about/how-it-works)** — how the data are stored, and how a click and the
-map are computed, step by step.
+Five pages, each from the simple to the exact, down to the code:
 
-## Click anywhere
-
-Every point on the map can explain itself. Click, and a panel shows the Lden at that spot, its day, evening and night levels and how loud it sounds, then every source audible there, loudest first — a road as one row, a factory, the aircraft — each with the share it contributes.
-
-Open a source and you see its data (vehicles a day and their mix, speed, surface, trains a day, the flights and their types…), how it is heard (a steady hum, so many cars an hour, a train every so many minutes) and how its sound gets to you: what the distance, the air, buildings and terrain and the ground take in calm air and downwind. Open its segments and each one shows the rays it was computed along, each with the ground and the buildings under it, drawn on the map. The ten loudest flights are listed.
-
-**Detailed calculation** is the whole place: each period, each layer and how much of it was computed in full, the weather, the façade the click is answered at, and the levels exceeded 5 to 90 % of the time.
-
-<p>
-<img src="click.jpg" alt="A click on náměstí Míru in Prague: the level and its sources, the loudest road opened with its data" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
-<img src="calculation.jpg" alt="The same click's detailed calculation: each period, each layer, the weather, and the paths from the loudest pieces" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
-</p>
-
-Nothing on the map is a black box — if a number surprises you, two clicks show where it came from.
-
-## Data and enrichment
-
-The map combines OpenStreetMap geometry with public traffic, rail, flight, ship, building,
-terrain, land-cover, wind-turbine and industrial-registry data. Local measurements and
-registries override class defaults where they exist; a street nobody counted carries the
-trips its buildings make; otherwise a source inherits a documented default for its class.
-Matching is class-aware: a motorway count does not become a residential-street count, and
-a tram timetable does not become a mainline estimate.
-
-The [methodology](/about/methodology) explains the model and its limits. Country pages
-say what is measured, what is estimated, and what is still missing in each place; use the
-region list below to explore them.
-
-<!-- REGION_CHILDREN -->
-
-## Dataset generations
-
-Each published generation is a frozen worldwide build: one OpenStreetMap planet extract, one
-year of flight observations, and the public traffic and registry data available at build
-time. The current generation dates from October 2026, with the OpenStreetMap planet of
-September 2026 and flights from September 2025 to August 2026.
-
-## What you see on the map
-
-### The noise indicator: Lden
-
-The map shows **Lden** (day-evening-night level), the European standard from [END 2002/49/EC](https://eur-lex.europa.eu/eli/dir/2002/49/oj/eng). It weights evening noise +5 dB and night noise +10 dB to reflect the greater annoyance of noise during rest periods:
-
-```
-Lden = 10 × log₁₀((12 × 10^(Ld/10) + 4 × 10^((Le+5)/10) + 8 × 10^((Ln+10)/10)) / 24)
-```
-
-Day: 07:00–19:00, evening: 19:00–23:00, night: 23:00–07:00.
-
-[WHO 2018 guidelines](https://www.who.int/europe/publications/i/item/9789289053563) recommend: road < 53 dB, rail < 54 dB, aircraft < 45 dB Lden.
-
-### Point and grid
-
-A click computes its own point, 4 m above ground as the END prescribes, or the loudest façade of the building clicked. The map's colours are painted on a Web-Mercator raster, fine enough to tell the street side of a building from its garden side; coarser levels of the same paint serve the zoomed-out views.
-
-### Color scale
-
-The colors are not ours. They come from Beate Tomio (Weninger), ["A Color Scheme for the Presentation of Sound Immission in Maps"](https://www.researchgate.net/publication/280488890_A_color_scheme_for_the_presentation_of_sound_immission_in_maps), EuroNoise 2015 — a scheme tested with 232 respondents — as published in its current revision **v5.b (eleven classes, 30–80 dB)** on [coloringnoise.com](https://www.coloringnoise.com/theoretical_background/new-color-scheme/) (licensed CC BY-NC-ND 4.0). We use the class colors unmodified, hex for hex, dB boundary for dB boundary.
-
-Below 30 dB the map is transparent (the scheme's "no color"); 80 dB is the terminal shade, held flat above it rather than inventing a darker one. Colors interpolate smoothly between rows — a cell at 62 dB gets a blended shade between the 60 and 65 dB rows, never a hard jump. Opacity is our rendering adaptation, not part of the scheme: the paper is opaque, but we overlay a legible basemap, so alpha rises with dB — the paper's own "louder = more salient" intent, executed via alpha.
-
-| Lden | Swatch | Hex | Opacity |
-|------|--------|-----|---------|
-| < 30 dB | — | — | 0% — not shown |
-| 30 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#82A6AD"></span> | `#82A6AD` | 40% |
-| 35 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#A0BABF"></span> | `#A0BABF` | 45% |
-| 40 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#B8D6D1"></span> | `#B8D6D1` | 50% |
-| 45 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#CEE4CC"></span> | `#CEE4CC` | 55% |
-| 50 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#E2F2BF"></span> | `#E2F2BF` | 60% |
-| 55 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#F3C683"></span> | `#F3C683` | 65% |
-| 60 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#E87E4D"></span> | `#E87E4D` | 70% |
-| 65 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#CD463E"></span> | `#CD463E` | 75% |
-| 70 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#A11A4D"></span> | `#A11A4D` | 80% |
-| 75 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#75085C"></span> | `#75085C` | 85% |
-| 80+ dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#430A4A"></span> | `#430A4A` | 90% |
-
-### Layers
-
-- **Source layers:** Roads, Railways, Industrial, Buildings, and Aircraft (ground ops, airborne, cruise), each toggleable independently; Quiet zones highlight the places below a chosen level.
-- **Advanced:** the data every click computes over — elevation, forest, hard ground, buildings by height, road traffic (vehicles a day), trains a day, the other sources (turbines, bells, terraces, car parks, airports…) and noise barriers.
+- [Data sources](/about/data-sources): where every number comes from, and what is counted or
+  estimated in your country.
+- [Data preparation](/about/data-preparation): how a road, a railway, a flight or a factory gets
+  its sound power.
+- [Noise at a point](/about/noise-at-a-point): what a click shows, and how it is computed.
+- [The noise map](/about/the-noise-map): what the colours mean, and how they are painted.
+- [Validation](/about/validation): how close the model comes to real measurements.
 
 ## FAQ
 
 **Is this measured or computed?**
-Computed — a physics model (CNOSSOS-EU for ground sources, ECAC Doc 29 for aircraft) over public data. The model is continuously checked against real monitoring stations; see [Validation](/about/methodology).
+Computed — a physics model (CNOSSOS-EU for ground sources, ECAC Doc 29 for aircraft) over public data. The model is continuously checked against real monitoring stations; see [Validation](/about/validation).
 
 **How accurate is it?**
-It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from.
+It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from. The [validation](/about/validation) page shows the gaps station by station.
 
 **Why does my quiet street show 50 dB?**
 Click it. Most surprises have a visible cause: a road with no measured traffic carries the trips its buildings make or a class default, a nearby factory is classified by registry sector, or the dominant source is something you've tuned out. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
 
 **Why are there no low-flying aircraft where I live?**
-The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, low-altitude flights aren't received and only high-altitude cruise noise (~20 dB) appears — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
+The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, flights aren't received and the layer reads too quiet or empty: near Lagos and Cairo airports 5–20 dB low, over parts of Siberia and the Amazon with no aircraft at all — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
 
-**Why does the map show nothing below 30 dB?**
-By design: the color scheme marks under 30 dB as "no color". A blank area can also mean missing source data. A click still gives the level there, however low.
+**Why is the map clear in places?**
+By design: under 1 sone, about as loud as a quiet room, the map has no colour. A blank area can also mean missing source data. A click still gives the level there, however low.
 
 **Can I use screenshots or embed the map?**
-Yes, free, with visible "quietmap.org" attribution — details in [credits & terms](/about/credits).
+Yes, free, with visible "quietmap.org" attribution — details in the [terms of use](/about/terms).
 
 ## Help us make it better
 
@@ -166,7 +90,7 @@ The [product code is open source](https://github.com/vondra/quietmap), and the c
 
 ## Credits & terms
 
-→ **[Data credits, usage terms & privacy](/about/credits)**
+→ **[Data sources and credits](/about/data-sources)** · **[Terms of use and privacy](/about/terms)**
 
 ## Contact & status
 

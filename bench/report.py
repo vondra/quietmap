@@ -14,7 +14,7 @@ import json
 import pathlib
 import statistics
 
-# First and full answer (ms) per disk (ARCHITECTURE.md, Budgets).
+# First and full answer (ms) per disk (the About page Noise at a point, frontend/src/about/noise-at-a-point.md).
 BUDGET_MS = {"nvme": (200, 500), "hdd": (500, 1500)}
 ERROR_BUDGET_DB = (0.1, 0.3)
 
