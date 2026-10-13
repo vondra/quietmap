@@ -4,7 +4,7 @@
 
 import { HM3_SILENCE, HM3_BYTE_SONE } from './hm3-decoder.ts'
 
-// Colour scale B (the owner 2026-10-11, `evidence/2026-10-11/colour-scale`): one colour a
+// Colour scale B (the owner's choice, 2026-10-11): one colour a
 // doubling of loudness — 1 sone transparent (a quiet room), 2 pale green, 4 yellow, 8 orange, 16
 // red, 32 maroon, flat above — in the order air-quality maps taught, its lightness falling with
 // loudness so the ramp still reads in grey and to deuteranope and protanope eyes. Interpolated in

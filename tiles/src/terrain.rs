@@ -3,7 +3,7 @@
 //! edges, so every point of the tile interpolates from its own file and neighbours share their
 //! seam nodes. Stored as planes in one zstd frame, the heights as the residual of a planar
 //! prediction from the west, north and north-west nodes: 0.64 B a node of information in 4 stored
-//! raw (`evidence/2026-10-10/storage-design/terrain.md`: the world 1,108.6 -> 177.1 GB, lossless).
+//! raw (measured 2026-10-10: the world 1,108.6 -> 177.1 GB, lossless).
 //! A parsed tile holds its nodes decoded, 4 bytes each, as the samplers and the GPU index them.
 
 use crate::FormatError;

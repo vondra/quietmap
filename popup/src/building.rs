@@ -17,7 +17,7 @@ use rayon::prelude::*;
 
 /// Sources evaluated at every façade to choose the loudest: at 76 buildings near measured stations
 /// dev4's 11 chose a façade 0.5 to 3.2 dB below the loudest at five, 100 the loudest at each but
-/// one where the flights decide, which the rule leaves out (`evidence/2026-10-11/facade-choice`).
+/// one where the flights decide, which the rule leaves out (measured 2026-10-11).
 pub const FACADE_SOURCE_LIMIT: usize = 100;
 
 /// Where a building click is answered.

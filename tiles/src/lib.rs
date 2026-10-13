@@ -2,6 +2,9 @@
 //! file format, writer and reader ([`terrain`], [`terrain_fine`], [`obstacles`], [`sources`],
 //! [`aircraft`]); [`read`] reads whole files; [`aircraft_tracks`] holds the year's flights as the
 //! map draws them.
+//!
+//! For visitors, down to this code: the About page Data preparation, The files
+//! (`frontend/src/about/data-preparation.md`).
 
 pub mod aircraft;
 pub mod aircraft_events;
