@@ -27,13 +27,25 @@ impl Batch for GpuBatch<'_> {
         order.par_sort_unstable_by_key(|&k| (pairs[k as usize].1, pairs[k as usize].0));
         let mut energies = vec![PairEnergy::default(); pairs.len()];
         let mut on_cpu = Vec::new();
-        let mut device_bands = self.gpu.bands(points.len())?;
+        // The card sums bands for the points the pairs reach alone, each at its slot: a pass of a
+        // few pairs read back the bands of all its 65,536 points.
+        let mut slot_of = vec![u32::MAX; points.len()];
+        let mut reached: Vec<usize> = Vec::new();
+        for &(at, _) in pairs {
+            if slot_of[at as usize] == u32::MAX {
+                slot_of[at as usize] = reached.len() as u32;
+                reached.push(at as usize);
+            }
+        }
+        let mut device_bands = self.gpu.bands(reached.len())?;
         for launch in order.chunks(PAIRS_PER_LAUNCH) {
             let point = |k: u32| &points[pairs[k as usize].0 as usize];
             let receivers: Vec<[f64; 2]> = launch.iter().map(|&k| point(k).position).collect();
             let own: Vec<u64> = launch.iter().map(|&k| point(k).own_footprint).collect();
             let candidates: Vec<u32> = launch.iter().map(|&k| pairs[k as usize].1).collect();
-            let at: Vec<u32> = launch.iter().map(|&k| pairs[k as usize].0).collect();
+            let at: Vec<u32> = (launch.iter())
+                .map(|&k| slot_of[pairs[k as usize].0 as usize])
+                .collect();
             let (sums, failed) = self.gpu.evaluate_pairs(
                 self.device_square,
                 (&receivers, &own),
@@ -55,17 +67,17 @@ impl Batch for GpuBatch<'_> {
             }
         }
         let flat = self.gpu.download(&device_bands)?;
-        let mut bands: Vec<_> = flat
-            .chunks_exact(LAYERS * PERIODS * BANDS)
-            .take(points.len())
-            .map(|point| {
-                std::array::from_fn(|l| {
-                    std::array::from_fn(|p| {
-                        std::array::from_fn(|b| f64::from(point[(l * PERIODS + p) * BANDS + b]))
-                    })
+        let mut bands = vec![[[[0.0; BANDS]; PERIODS]; LAYERS]; points.len()];
+        for (&at, point) in reached
+            .iter()
+            .zip(flat.chunks_exact(LAYERS * PERIODS * BANDS))
+        {
+            bands[at] = std::array::from_fn(|l| {
+                std::array::from_fn(|p| {
+                    std::array::from_fn(|b| f64::from(point[(l * PERIODS + p) * BANDS + b]))
                 })
-            })
-            .collect();
+            });
+        }
         let cpu: Vec<_> = on_cpu
             .par_iter()
             .map_init(Scratch::default, |scratch, &k| {
