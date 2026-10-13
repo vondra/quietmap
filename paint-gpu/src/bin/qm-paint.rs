@@ -104,14 +104,16 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let todo: Vec<(usize, TileId)> = (squares.iter().copied().enumerate())
         .filter(|(_, tile)| !painted(&out, zoom, (tile.x, tile.y)))
         .collect();
-    // The next square is prepared on a few of the cores: the pixels on the card wait on the rest.
+    // A square is prepared on every core, or on a few beside another's pixels: those on the card
+    // wait on the rest.
     let preparing_pool = (rayon::ThreadPoolBuilder::new().num_threads(PREPARING_THREADS))
         .build()
         .map_err(|e| e.to_string())?;
     let prepare = |&(number, tile): &(usize, TileId)| {
-        preparing_pool
-            .install(|| prepare_square(&release, &weather, gpu.as_ref(), grid, number, tile))
+        prepare_square(&release, &weather, gpu.as_ref(), grid, number, tile)
     };
+    let prepare_beside =
+        |following: &(usize, TileId)| preparing_pool.install(|| prepare(following));
     let finish = |prepared: Prepared| {
         finish_square(
             &weather,
@@ -130,7 +132,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         match todo.get(k + 1) {
             Some(following) if current.candidates <= PIPELINE_CANDIDATES_MAX => {
                 let (finished, prepared) = std::thread::scope(|scope| {
-                    let preparing = scope.spawn(|| prepare(following));
+                    let preparing = scope.spawn(|| prepare_beside(following));
                     let finished = finish(current);
                     let prepared = (preparing.join())
                         .unwrap_or_else(|_| Err("a square's preparation panicked".into()));
