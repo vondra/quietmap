@@ -62,9 +62,12 @@ impl Scene<'_> {
                 };
                 let low = Self::tile_reflection_coordinate(tile, low);
                 let high = Self::tile_reflection_coordinate(tile, high);
+                if tile.reflection_extent(low, high).is_none() {
+                    continue;
+                }
                 let coverage = tile
                     .reflection_coverage
-                    .get_or_init(|| Box::new(ReflectionCoverage::new(tile.obstacles, low, high)));
+                    .get_or_init(|| Box::new(ReflectionCoverage::new(tile, low, high)));
                 if !coverage.covers(low, high) {
                     return Err(
                         "reflection coverage was prepared for a smaller receiver extent".into(),
@@ -94,6 +97,9 @@ impl Scene<'_> {
                 };
                 let low = Self::tile_reflection_coordinate(tile, low);
                 let high = Self::tile_reflection_coordinate(tile, high);
+                if tile.reflection_extent(low, high).is_none() {
+                    continue;
+                }
                 let coverage = tile
                     .reflection_coverage
                     .get()

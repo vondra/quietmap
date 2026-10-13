@@ -243,7 +243,8 @@ noise map or a property certificate.
   `cnossos/` and `foliage.rs`, and its sound path.
 - `building.rs`: a click inside a building, answered at its loudest façade.
 - `obstacles/reflection.rs`, `obstacles/reflection_coverage.rs`: the same covered area for click
-  and painter; `physics/src/reflection.rs` turns its share into the receiver bonus.
+  and painter, tabulated only where the bounds of tall footprints and reachable receiver windows
+  intersect; `physics/src/reflection.rs` turns its share into the receiver bonus.
 - `aircraft/`: the boxes through the click-time equation, the flight list, the events, the tracks.
 - `rows.rs`, `percentiles.rs`, `distribution.rs`, `loudness.rs`, `shares.rs`, `lines.rs`,
   `listing.rs`, `json.rs`: the rows, the levels over time, Nden, the shares, the lines on the map,

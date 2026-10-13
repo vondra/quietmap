@@ -4,6 +4,20 @@ use super::*;
 use crate::paint::{NO_LEVEL, SILENCE};
 
 #[test]
+fn a_non_file_completion_marker_cannot_skip_a_square() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(square_path(directory.path(), 13, (1, 2))).unwrap();
+    assert!(
+        painted(directory.path(), 13, (1, 2))
+            .unwrap_err()
+            .contains("not a square bundle file")
+    );
+    let path = square_path(directory.path(), 13, (1, 3));
+    std::fs::write(&path, b"incomplete bundle").unwrap();
+    assert!(painted(directory.path(), 13, (1, 3)).is_err());
+}
+
+#[test]
 fn every_byte_and_row_boundary_round_trips() {
     let cells: Vec<u8> = (0..TILE_PX * TILE_PX)
         .map(|at| ((at / TILE_PX * 19 + at % TILE_PX * 31) % 256) as u8)
@@ -32,9 +46,9 @@ fn one_complete_bundle_keeps_quadrants_layers_and_assessed_silence() {
         }
         cells[0] = [NO_LEVEL; LAYERS + 1];
         cells[side] = [SILENCE; LAYERS + 1];
-        assert!(!painted(directory.path(), zoom, (9, 17)));
+        assert!(!painted(directory.path(), zoom, (9, 17)).unwrap());
         write(directory.path(), zoom, (9, 17), &cells).unwrap();
-        assert!(painted(directory.path(), zoom, (9, 17)));
+        assert!(painted(directory.path(), zoom, (9, 17)).unwrap());
         assert_eq!(read(directory.path(), zoom, (9, 17)).unwrap(), cells);
         assert_eq!(squares(directory.path(), zoom).unwrap(), [(9, 17)].into());
         let before = std::fs::read(square_path(directory.path(), zoom, (9, 17))).unwrap();

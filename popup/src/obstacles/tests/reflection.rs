@@ -155,3 +155,28 @@ fn cropping_the_area_table_cannot_change_a_receiver_or_answer_outside_its_extent
         assert!(scene.reflection_db([54.0, 0.0], None).is_err());
     });
 }
+
+#[test]
+fn unreachable_tall_buildings_need_no_table_or_prepared_receiver() {
+    let mut stock = Stock::new();
+    stock.building(0, 5.0, &[square(0.0, 0.0, 20.0)]);
+    stock.wall(1, 30.0, &[[-50.0, -50.0], [50.0, 50.0]]);
+    stock.building(2, 12.0, &[square(400.0, 0.0, 20.0)]);
+    stock.with_scene(|scene| {
+        assert_eq!(scene.reflection_db([0.0, 0.0], None).unwrap(), 0.0);
+        scene
+            .prepare_reflection_coverage([-30.0; 2], [30.0; 2])
+            .unwrap();
+        for slot in &scene.slots {
+            if let Slot::Read(tile) = slot {
+                assert!(tile.reflection_coverage.get().is_none());
+            }
+        }
+        assert!(scene.reflection_db([400.0, 0.0], None).is_err());
+        scene
+            .prepare_reflection_coverage([350.0, -50.0], [450.0, 50.0])
+            .unwrap();
+        assert!(scene.reflection_db([400.0, 0.0], None).unwrap() > 0.0);
+        assert_eq!(scene.reflection_db([0.0, 0.0], None).unwrap(), 0.0);
+    });
+}

@@ -203,6 +203,18 @@ impl PaintedSquare {
     }
 }
 
+fn tile_layer_cells(cells: &Cells, per_side: usize, index: usize) -> impl Iterator<Item = u8> + '_ {
+    let layer = index / (per_side * per_side);
+    let tx = index % per_side;
+    let ty = index / per_side % per_side;
+    (0..TILE_PX).flat_map(move |row| {
+        let start = (ty * TILE_PX + row) * per_side * TILE_PX + tx * TILE_PX;
+        cells[start..start + TILE_PX]
+            .iter()
+            .map(move |pixel| pixel[layer])
+    })
+}
+
 pub fn write(out: &Path, zoom: u32, square: (u32, u32), cells: &Cells) -> Result<(), String> {
     let per_side = tiles_per_side(zoom)?;
     let side = per_side * TILE_PX;
@@ -210,21 +222,26 @@ pub fn write(out: &Path, zoom: u32, square: (u32, u32), cells: &Cells) -> Result
         return Err("not a zoom-12 square's cells".into());
     }
     let count = (LAYERS + 1) * per_side * per_side;
-    let compressed: Vec<Vec<u8>> = (0..count)
+    // Equal cells in one layer have equal served bytes; find them before entropy coding.
+    let first_identical_tile: Vec<usize> = (0..count)
+        .map(|index| {
+            (index / (per_side * per_side) * per_side * per_side..index)
+                .find(|&previous| {
+                    tile_layer_cells(cells, per_side, previous)
+                        .eq(tile_layer_cells(cells, per_side, index))
+                })
+                .unwrap_or(index)
+        })
+        .collect();
+    let compressed: Vec<Option<Vec<u8>>> = (0..count)
         .into_par_iter()
         .map(|index| {
-            let layer = index / (per_side * per_side);
-            let tx = index % per_side;
-            let ty = index / per_side % per_side;
-            let tile: Vec<u8> = (0..TILE_PX)
-                .flat_map(|row| {
-                    let start = (ty * TILE_PX + row) * side + tx * TILE_PX;
-                    cells[start..start + TILE_PX]
-                        .iter()
-                        .map(move |pixel| pixel[layer])
-                })
-                .collect();
-            encode_tile(&tile, layer)
+            if first_identical_tile[index] == index {
+                let tile: Vec<u8> = tile_layer_cells(cells, per_side, index).collect();
+                encode_tile(&tile, index / (per_side * per_side)).map(Some)
+            } else {
+                Ok(None)
+            }
         })
         .collect::<Result<_, _>>()?;
     let mut bytes = Vec::from(&b"HM3S"[..]);
@@ -232,19 +249,18 @@ pub fn write(out: &Path, zoom: u32, square: (u32, u32), cells: &Cells) -> Result
     bytes.extend(square.0.to_le_bytes());
     bytes.extend(square.1.to_le_bytes());
     bytes.resize(SQUARE_HEADER_BYTES + count * 8, 0);
-    let mut stored: Vec<(&[u8], u32)> = Vec::new();
-    for (index, tile) in compressed.iter().enumerate() {
-        let offset = match stored
-            .iter()
-            .find(|(previous, _)| *previous == tile.as_slice())
-        {
-            Some((_, offset)) => *offset,
-            None => {
-                let offset = bytes.len() as u32;
-                bytes.extend_from_slice(tile);
-                stored.push((tile, offset));
-                offset
-            }
+    let mut offsets = vec![0; count];
+    for (index, first) in first_identical_tile.into_iter().enumerate() {
+        let tile = compressed[first]
+            .as_ref()
+            .expect("an encoded distinct tile");
+        let offset = if first == index {
+            let offset = bytes.len() as u32;
+            bytes.extend_from_slice(tile);
+            offsets[index] = offset;
+            offset
+        } else {
+            offsets[first]
         };
         let entry = &mut bytes[SQUARE_HEADER_BYTES + index * 8..][..8];
         entry[..4].copy_from_slice(&offset.to_le_bytes());
@@ -259,10 +275,13 @@ pub fn write(out: &Path, zoom: u32, square: (u32, u32), cells: &Cells) -> Result
     temporary
         .persist_noclobber(&path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
+    sync_square_directory(directory)
+}
+
+fn sync_square_directory(directory: &Path) -> Result<(), String> {
     std::fs::File::open(directory)
         .and_then(|file| file.sync_all())
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        .map_err(|error| format!("{}: {error}", directory.display()))
 }
 
 pub fn read(out: &Path, zoom: u32, square: (u32, u32)) -> Result<Cells, String> {
@@ -285,8 +304,19 @@ pub fn read(out: &Path, zoom: u32, square: (u32, u32)) -> Result<Cells, String> 
     Ok(cells)
 }
 
-pub fn painted(out: &Path, zoom: u32, square: (u32, u32)) -> bool {
-    square_path(out, zoom, square).is_file()
+pub fn painted(out: &Path, zoom: u32, square: (u32, u32)) -> Result<bool, String> {
+    let path = square_path(out, zoom, square);
+    match path.metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+        Ok(metadata) if metadata.is_file() => {
+            PaintedSquare::open(out, zoom, square)?;
+            // A previous run can fail after installing the filename; finish its directory sync.
+            sync_square_directory(path.parent().expect("a square's directory"))?;
+            Ok(true)
+        }
+        Ok(_) => Err(format!("{}: not a square bundle file", path.display())),
+    }
 }
 
 pub fn squares(out: &Path, zoom: u32) -> Result<BTreeSet<(u32, u32)>, String> {
