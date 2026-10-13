@@ -4,6 +4,7 @@
 //! points, blended between them.
 
 use crate::exact::Point;
+use crate::loudest::LoudestIndex;
 use crate::paint::{Grid, bilinear};
 use crate::square::{Square, gap_to_tile};
 use physics::bands::{PERIODS, lden_energy};
@@ -12,7 +13,6 @@ use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver, tile_flight_sums};
 use popup::aircraft::flights::{FlightTotals, heard_spectrum};
 use popup::aircraft::horizons::Horizons;
-use popup::aircraft::loudest_flights;
 use rayon::prelude::*;
 use tiles::aircraft::Aircraft;
 use tiles::geo::TileId;
@@ -32,25 +32,38 @@ pub(crate) fn blend_flights(corners: [FlightSums; 4], fx: f64, fy: f64) -> Fligh
 /// between them where the four around differ by more than this ratio (1 dB).
 const AIR_SMOOTH: f64 = 1.258_925_411_794_167_2;
 
+/// One aircraft tile a click reads: its place in the square's list, whether its fine boxes (else
+/// its far ones), and those boxes.
+pub(crate) struct HeardTile<'a> {
+    pub number: usize,
+    pub fine: bool,
+    pub tile: TileId,
+    pub boxes: Aircraft<'a>,
+}
+
 /// The aircraft tiles a click at `position` reads within `within_m`: fine boxes from tiles within
 /// their distance of it, else the far ones.
-fn tiles_heard<'a>(
+pub(crate) fn tiles_heard<'a>(
     square: &Square<'a>,
     position: [f64; 2],
     within_m: f64,
-) -> Vec<(TileId, Aircraft<'a>)> {
-    (square.aircraft.iter())
-        .filter_map(|tile| {
+) -> Vec<HeardTile<'a>> {
+    (square.aircraft.iter().enumerate())
+        .filter_map(|(number, tile)| {
             let gap = gap_to_tile(&square.frame, tile.tile, position);
             if gap > within_m {
                 return None;
             }
-            let boxes = if gap <= FINE_BOXES_WITHIN_M {
-                tile.fine.as_ref().or(tile.far.as_ref())
-            } else {
-                tile.far.as_ref()
+            let (fine, boxes) = match (gap <= FINE_BOXES_WITHIN_M, tile.fine.as_ref()) {
+                (true, Some(fine)) => (true, fine),
+                _ => (false, tile.far.as_ref()?),
             };
-            boxes.map(|boxes| (tile.tile, *boxes))
+            Some(HeardTile {
+                number,
+                fine,
+                tile: tile.tile,
+                boxes: *boxes,
+            })
         })
         .collect()
 }
@@ -69,7 +82,7 @@ pub struct FlightSpectra {
 impl FlightSpectra {
     pub fn new(square: &Square, pixels: usize, spacing: usize) -> Result<Self, String> {
         let side = pixels / spacing + 1;
-        let shares = (0..side * side)
+        let points: Vec<Point> = (0..side * side)
             .into_par_iter()
             .map(|at| {
                 let (x, y) = ((at % side) * spacing, (at / side) * spacing);
@@ -77,7 +90,12 @@ impl FlightSpectra {
                     x: f64::from(square.tile.x) + x as f64 / pixels as f64,
                     y: f64::from(square.tile.y) + y as f64 / pixels as f64,
                 });
-                let point = Point::at(square, position)?;
+                Point::at(square, position)
+            })
+            .collect::<Result<_, String>>()?;
+        let loudest = LoudestIndex::new(square, &points);
+        let shares = (points.par_iter())
+            .map(|point| {
                 let weather = point.weather(square);
                 let horizons = Horizons::build(
                     &square.ground,
@@ -91,8 +109,7 @@ impl FlightSpectra {
                     altitude_m: point.altitude_m,
                 };
                 let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
-                let tiles = tiles_heard(square, point.position, AIRCRAFT_REACH_M);
-                loudest_flights(&tiles, &square.frame, receiver, &horizons, &mut flights);
+                loudest.search(square, receiver, &horizons, &mut flights);
                 let spectrum = heard_spectrum(
                     &flights.loudest(),
                     &place_rates_db_per_m(&weather.alpha_db_per_km),
@@ -143,10 +160,10 @@ pub(crate) fn aircraft_sums(
         altitude_m: point.altitude_m,
     };
     let mut total = [[0.0; PERIODS]; 2];
-    for (tile, boxes) in tiles_heard(square, point.position, within_m) {
+    for heard in tiles_heard(square, point.position, within_m) {
         let sums = tile_flight_sums(
-            &boxes,
-            tile,
+            &heard.boxes,
+            heard.tile,
             &square.frame,
             receiver,
             &horizons,

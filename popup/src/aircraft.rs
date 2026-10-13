@@ -102,30 +102,33 @@ pub fn ring_aircraft(
     ring
 }
 
-/// The loudest flights of `tiles` at the receiver into `flights` from the boxes' bounds alone
-/// (`boxes::tile_lamax_bounds`), as a click finds them, without the boxes' energies: what the
-/// map's flights' spectrum takes.
-pub fn loudest_flights(
-    tiles: &[(TileId, Aircraft<'_>)],
-    frame: &LocalFrame,
-    receiver: AircraftReceiver,
-    horizons: &(impl ReceiverHorizons + Sync),
-    flights: &mut FlightTotals,
-) {
-    let bounds = (tiles.iter().enumerate())
-        .flat_map(|(tile_index, (tile, boxes))| {
-            boxes::tile_lamax_bounds(boxes, *tile, frame, receiver)
-                .into_iter()
-                .map(move |(index, bound)| (bound, tile_index, index))
-        })
-        .collect();
-    read_loudest(bounds, tiles, (frame, receiver, horizons), flights);
-}
-
 /// The kept pieces of every box whose bound on their LAmax is above the list's entry level into
 /// `flights`, loudest bound first.
 fn read_loudest(
     mut bounds: Vec<(f64, usize, usize)>,
+    tiles: &[(TileId, Aircraft<'_>)],
+    at: (
+        &LocalFrame,
+        AircraftReceiver,
+        &(impl ReceiverHorizons + Sync),
+    ),
+    flights: &mut FlightTotals,
+) {
+    bounds.par_sort_unstable_by(loudest_first);
+    read_loudest_in_order(bounds.into_iter(), tiles, at, flights);
+}
+
+/// The order the loudest flights' search reads boxes in: by their bound, loudest first, then by
+/// tile and index.
+pub fn loudest_first(a: &(f64, usize, usize), b: &(f64, usize, usize)) -> std::cmp::Ordering {
+    b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))
+}
+
+/// [`read_loudest`] over the boxes' bounds already in [`loudest_first`] order (bound, index into
+/// `tiles`, box index), read a chunk at a time while the chunk's loudest bound passes the list's
+/// entry level.
+pub fn read_loudest_in_order(
+    mut ordered: impl Iterator<Item = (f64, usize, usize)>,
     tiles: &[(TileId, Aircraft<'_>)],
     (frame, receiver, horizons): (
         &LocalFrame,
@@ -134,12 +137,12 @@ fn read_loudest(
     ),
     flights: &mut FlightTotals,
 ) {
-    bounds.par_sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    for chunk in bounds.chunks(SEARCH_CHUNK) {
-        if chunk[0].0 <= flights.entry_lmax_db() {
+    loop {
+        let chunk: Vec<(f64, usize, usize)> = ordered.by_ref().take(SEARCH_CHUNK).collect();
+        if chunk.is_empty() || chunk[0].0 <= flights.entry_lmax_db() {
             break;
         }
-        for &(_, tile_index, index) in chunk {
+        for &(_, tile_index, index) in &chunk {
             let (tile, boxes) = &tiles[tile_index];
             flights.add_boxes(boxes, *tile, &[index], frame, receiver, horizons);
         }
