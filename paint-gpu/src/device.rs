@@ -1,4 +1,6 @@
 //! Device storage and launches for source rays, weighted receiver spectra and pixel loudness.
+//!
+//! GPU compilation, scene upload and pair evaluation in the square's frame.
 // Coordinates are rebased in f64 before the GPU uses f32 frame metres. The repr(C) records mirror
 // scene.cuh, evaluate.cuh and paint.cu field by field.
 

@@ -1,4 +1,12 @@
 //! Aircraft energy at block corners from distance-weighted lattices, with the popup's boxes and spectra.
+//!
+//! The flights at a square's block corners: the aircraft boxes as the popup reads them for a
+//! click. Cruise boxes whose pieces and both average flight lines stay beyond 8 km use a 5 x 5
+//! lattice only where screening does not apply and every corner reads the same boxes within
+//! reach. The other far boxes use the hum's points and the near ones every second block corner,
+//! each interpolated where it changes slowly; their linear energies and energies times the
+//! flights' rate and passing duration are blended. Their spectrum is the loudest flights' at
+//! every second block corner, blended between them.
 
 use crate::exact::Point;
 use crate::flight_boxes::FlightBoxes;

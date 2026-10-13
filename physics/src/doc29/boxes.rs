@@ -1,4 +1,22 @@
 //! Aircraft box SEL as linear period energies from its average pieces through shared Doc 29 corrections.
+//!
+//! One aircraft box at one receiver: the click-time equation of PLAN section 5. A box sums the
+//! pieces of every flight that crossed it; the click reads the summed energies at the slant to
+//! its average aircraft (the emission-weighted centroid, one axis and gradient, the mean piece
+//! length) and applies to that average piece what the kernel applies to one segment: Delta_F with
+//! the box's scaled distance, the lateral attenuation, the installation correction of each
+//! period's installation shares and the screening. A box whose pieces climb and descend is read
+//! as two average pieces, half its energy each, at its gradient plus and minus their spread: the
+//! kernel takes the elevation angle where each piece's extended line passes the receiver,
+//! kilometres from the box beside a runway, and one mean gradient cannot stand for climbs and
+//! descents there.
+//!
+//! Why it matches the pieces: the energies add at every NPD distance; the geometry terms are the
+//! kernel's for one segment; Delta_F of short pieces (length << d_lambda) is proportional to
+//! length / d_lambda, which the energy-weighted mean length and harmonic mean d_lambda keep; the
+//! centroid is emission-weighted, so the first-order error of moving the pieces to it cancels. A
+//! box of one segment reads exactly as the kernel reads that segment (`boxes_tests`).
+//! SEL and its finite-segment and installation factors stay in linear energy for the sum.
 
 use super::box_sums::INSTALLATION_SHARE_SLANTS_M;
 use super::corrections::{

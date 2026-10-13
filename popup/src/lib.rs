@@ -1,4 +1,18 @@
 //! Progressive noise answers, source selection and shared loudness physics at a click.
+//!
+//! The popup: the ring loop over whole tile files, the selection by upper bounds and the streamed
+//! answer.
+//!
+//! For visitors, down to this code: the About page Noise at a point
+//! (`frontend/src/about/noise-at-a-point.md`).
+//!
+//! Map: [`release`] (the opened release and ring reads), [`scene`] (the ground of read tiles),
+//! [`obstacles`] (walls and buildings of read tiles), [`candidates`] (sources with their bounds),
+//! [`evaluate`] (the full physics of one source), [`answer`] (the ring loop), [`lines`] (the
+//! shown contributors whole, for the map), [`rows`] (the visitor's list, a row an object),
+//! [`percentiles`] and [`distribution`] (how the level
+//! spreads over time), [`loudness`] (Nden), [`shares`] (each row's share of it), [`json`] (an
+//! update as a line of JSON).
 
 pub mod aircraft;
 pub mod answer;

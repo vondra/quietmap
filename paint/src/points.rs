@@ -1,4 +1,10 @@
 //! Block pixels from exact loud sources, screened residuals, hum, aircraft and shared loudness physics.
+//!
+//! The points of a pass painted from their blocks: each one's block's exact sources loud there
+//! evaluated exactly (here or on a card), what the block leaves out blended from its corners as
+//! far as the point hears its far admitted sources, the hum from its points, the flights from the
+//! corners; its loudness by the popup's model ([`crate::sone`]), a block hearing only the hum and
+//! the flights blending its corners'.
 
 use crate::blocks::{Block, admit, meets};
 use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};

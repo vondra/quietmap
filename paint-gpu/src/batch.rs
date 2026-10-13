@@ -1,4 +1,9 @@
 //! Exact source energies and weighted receiver spectra on the card, with CPU fallback for refused pairs.
+//!
+//! The card as the painter's batch (`paint::exact::Batch`): a batch's pairs evaluated on the GPU in
+//! order of source, so a warp takes one source at neighbouring receivers; a pair the card cannot
+//! take (a buffer too small, a tile it would refuse) is evaluated on the CPU.
+//! Sampled quiet pairs carry importance weights for their bands; their energies stay unweighted.
 
 use crate::device::{DeviceSquare, Gpu};
 use crate::loudness::LOUDNESS_FLOATS;

@@ -1,4 +1,10 @@
 //! The loudest flights and their received spectrum from kept aircraft-box pieces, using Doc 29.
+//!
+//! The loudest flights of a click (PLAN section 5, as dev4 lists them): the pieces the loudest
+//! boxes kept, each computed exactly with the kernel at the receiver; a flight's Lmax is the
+//! loudest maximum level of its pieces (Doc 29 Eq. 4-8a), and the list is ranked by it as dev4
+//! ranks it (a flight's SEL sums only the pieces kept, so it would rank flights by what happened
+//! to be kept).
 
 use super::boxes::AircraftReceiver;
 use physics::bands::energy;

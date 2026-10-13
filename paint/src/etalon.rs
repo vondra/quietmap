@@ -1,4 +1,10 @@
 //! Outdoor-pixel and facade etalons with every retained loud ground source and aircraft box computed exactly.
+//!
+//! The painter's reference: every outdoor pixel's loudness as the painter's model takes it with
+//! every ground source loud there evaluated exactly, the quiet hum blended from its points as the
+//! painter takes it, and the flights at the pixel; or, sampled, one outdoor pixel drawn in each K x K
+//! cell; a painted map is scored against it cell by cell. A building's pixels are not assessed: the
+//! popup's answers inside buildings score the map there.
 
 use crate::exact::{Batch, LAYERS, Pair, Point, add_bands, evaluate_all, whole_energy};
 use crate::flights::{FlightSpectra, aircraft_sums};

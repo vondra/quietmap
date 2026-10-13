@@ -1,4 +1,9 @@
 //! Exact source energies and importance-weighted receiver spectra through shared popup physics.
+//!
+//! The exact evaluation of (point, source) pairs, the popup's physics: the points a square is
+//! evaluated at, every pair's energy in both weather states and every point's octave bands per
+//! layer, computed here or by a card ([`Batch`]).
+//! Importance weights apply to sampled pairs' spectra, not the energies used for confidence.
 
 use crate::square::Square;
 use physics::bands::{BANDS, PERIODS, energy, lden_energy};

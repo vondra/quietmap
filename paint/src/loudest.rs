@@ -1,4 +1,11 @@
 //! Loudest flight pieces found from box bounds over a square, with horizons only for receivers hearing pieces.
+//!
+//! The loudest flights at a square's points without bounding every box at every point: each box's
+//! bound on its pieces' LAmax over the whole square, sorted once a square, and a point's own bounds
+//! taken in that order only until the loudest left over the square could not pass what the point
+//! has bounded. The point reads the same boxes in the same order as a click's full sort
+//! (`popup::aircraft::loudest_first`): of half a million boxes in reach of a Dobris point, a few
+//! thousand.
 
 use crate::exact::Point;
 use crate::flights::tiles_heard;
