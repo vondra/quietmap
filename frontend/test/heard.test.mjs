@@ -1,5 +1,5 @@
-// Why a source is loud, short enough for a column: steady, vehicles an hour by day, every rarer pass
-// a day; trains, flights and events a day, as the flights table counts; steady sources say nothing.
+// Why a source is loud, short enough for a column: steady, or a road's vehicles an hour by day, a quiet
+// one's too; trains, flights and events a day, as the flights table counts; steady sources say nothing.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -7,13 +7,21 @@ import { flightsText, heardText } from '../src/components/noise/heard.ts'
 
 const heard = (day, evening, night, steady = false) => ({ per_hour: { day, evening, night }, steady })
 
-test('a road reads as steady, vehicles an hour by day, or below one an hour vehicles a day', () => {
-  assert.equal(heardText('road', heard(916, 845, 317, true)), 'steady')
+test('a road reads as its vehicles an hour by day, a steady or a quiet one too', () => {
+  // La Palma's lanes listed "19 veh/h" over "14 veh/day", a motorway "steady" (owner 2026-10-13):
+  // one figure, one unit down the column.
+  assert.equal(heardText('road', heard(916, 845, 317, true)), '916 veh/h')
   assert.equal(heardText('road', heard(76, 59, 20)), '76 veh/h')
-  assert.equal(heardText('road', heard(3.78, 2.92, 0.97)), '4 veh/h')
-  assert.equal(heardText('road', heard(0.59, 0.46, 0.15)), '10 veh/day')
-  assert.equal(heardText('road', heard(0.01, 0.0, 0.0)), '0.1 veh/day')
-  assert.equal(heardText('road', heard(0.003, 0.0, 0.0)), '0.04 veh/day')
+  assert.equal(heardText('road', heard(3.78, 2.92, 0.97)), '3.8 veh/h')
+  assert.equal(heardText('road', heard(0.59, 0.46, 0.15)), '0.6 veh/h')
+  assert.equal(heardText('road', heard(0.01, 0.0, 0.0)), '0.01 veh/h')
+  assert.equal(heardText('road', heard(0.003, 0.0, 0.0)), '0.003 veh/h')
+})
+
+test('a road\'s figure is both directions: its cross-section\'s day traffic', () => {
+  // K Letišti at Ruzyně: each carriageway passes 214 an hour by day, the road 6,421 a day, 79.9 % by day.
+  assert.equal(heardText('road', heard(213.8, 83.5, 38.5), { cross_section_aadt: 6421, period_shares: [0.799, 0.116, 0.085] }), '428 veh/h')
+  assert.equal(heardText('road', undefined, { cross_section_aadt: 6421, period_shares: [0.799, 0.116, 0.085] }), '428 veh/h')
 })
 
 test('trains read by the day; a steady source says nothing', () => {

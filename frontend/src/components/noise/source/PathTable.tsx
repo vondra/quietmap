@@ -44,7 +44,10 @@ export function PathTable({ path }: { path: SourcePath }) {
       : []),
     ...(path.facades_db ? [[<HoverText title={REFLECTIONS}>Reflections</HoverText>, ...both(signed(path.facades_db))]] : []),
     [<span className="text-foreground">Level</span>, ...path.lden.map(level)],
-    [<HoverText title={SHARE_OF_TIME}>Share of time</HoverText>, shares(false), shares(true)],
+    // Where the weather moves the level by under 0.05 dB in every period, the shares say nothing.
+    ...(path.bent_percent.some(p => p != null)
+      ? [[<HoverText title={SHARE_OF_TIME}>Share of time</HoverText>, shares(false), shares(true)]]
+      : []),
   ]
   return (
     <DetailTable

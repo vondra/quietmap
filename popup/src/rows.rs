@@ -1,7 +1,8 @@
 //! The visitor's list: the heard contributors as rows, one per object, so a bar's guests and its
 //! building, or a church's bells and its building, are one row opening to its parts (owner
 //! 2026-10-10: "Jeden zdroj vydává hluk a po rozkliknutí z čeho"). A part names its object in its
-//! display (`object`, the object's group key); any other contributor is a row of its own. The final
+//! display (`object`, the object's group key); a road or railway is the one of its name, else its
+//! number; any other contributor is a row of its own. The final
 //! update ranks the rows by their own Nden, their parts sounding alone together; a partial update
 //! has a row for each contributor, by Lden.
 
@@ -62,13 +63,40 @@ impl Row {
     }
 }
 
-/// The object a contributor is a part of: the one its display names, else its own group.
-fn object(contributor: &Contributor, display: &serde_json::Value) -> u64 {
-    display
+/// The object a row stands for.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Object {
+    /// The object a part's display names, or a contributor's own group.
+    Group(u64),
+    /// A road or railway by its layer and name, else its number: OpenStreetMap tags its carriageways
+    /// and stretches apart, and the builder groups by name, number and class together (Ruzyně's "K
+    /// Letišti" twice, one spelled with a no-break space; "Pražský okruh" with and without its 7).
+    Named(Layer, String),
+}
+
+/// The object a contributor is a part of: the one its display names; a road's or railway's of its
+/// name, else its number; else its own group.
+fn object(contributor: &Contributor, display: &serde_json::Value) -> Object {
+    if let Some(key) = display
         .get("object")
         .and_then(serde_json::Value::as_str)
         .and_then(|key| u64::from_str_radix(key, 16).ok())
-        .unwrap_or(contributor.group_key)
+    {
+        return Object::Group(key);
+    }
+    if matches!(contributor.layer, Layer::Road | Layer::Railway) {
+        let field = |name: &str| {
+            display
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|text| !text.is_empty())
+        };
+        if let Some(name) = field("name").or_else(|| field("ref")) {
+            return Object::Named(contributor.layer, name);
+        }
+    }
+    Object::Group(contributor.group_key)
 }
 
 /// The rows of the `heard` contributors (`fields` reads a display), the loudest first: each part
@@ -84,7 +112,7 @@ pub fn ranked_rows<'a>(
         .into_iter()
         .map(|contributor| Ok((contributor, fields(&contributor.group())?)))
         .collect::<Result<_, String>>()?;
-    let scored: Vec<(Contributor, Option<Line>, u64)> = displays
+    let scored: Vec<(Contributor, Option<Line>, Object)> = displays
         .par_iter()
         .map(|(contributor, display)| {
             let line = Line::of(
@@ -101,7 +129,7 @@ pub fn ranked_rows<'a>(
             (part, line, object(contributor, display))
         })
         .collect();
-    let mut objects: BTreeMap<u64, Vec<(Contributor, Option<Line>)>> = BTreeMap::new();
+    let mut objects: BTreeMap<Object, Vec<(Contributor, Option<Line>)>> = BTreeMap::new();
     for (part, line, object) in scored {
         objects.entry(object).or_default().push((part, line));
     }
@@ -142,4 +170,41 @@ pub fn ranked_rows<'a>(
             .then(a.principal().group_key.cmp(&b.principal().group_key))
     });
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::percentiles::tests::contributor;
+    use serde_json::json;
+
+    #[test]
+    fn a_road_is_one_row_by_its_name_else_its_number_whatever_its_tags() {
+        let road = contributor(1, Layer::Road, 60.0, 100.0);
+        let other = contributor(2, Layer::Road, 60.0, 100.0);
+        // Ruzyně: "K Letišti" with a no-break space on one carriageway, a plain one on the other.
+        assert_eq!(
+            object(&road, &json!({"name": "K\u{a0}Letišti", "ref": ""})),
+            object(&other, &json!({"name": "K  Letišti", "ref": ""})),
+        );
+        // A road named on one carriageway and numbered on both is its name; one without a name is its number.
+        assert_eq!(
+            object(&road, &json!({"name": "Pražský okruh", "ref": "7"})),
+            Object::Named(Layer::Road, "Pražský okruh".into())
+        );
+        assert_eq!(
+            object(&road, &json!({"name": "", "ref": "7"})),
+            Object::Named(Layer::Road, "7".into())
+        );
+        // Neither: its own group; a venue's part: the object its display names.
+        assert_eq!(
+            object(&road, &json!({"name": "", "ref": ""})),
+            Object::Group(1)
+        );
+        let guests = contributor(3, Layer::Building, 60.0, 100.0);
+        assert_eq!(
+            object(&guests, &json!({"name": "Bar", "object": "ff"})),
+            Object::Group(255)
+        );
+    }
 }

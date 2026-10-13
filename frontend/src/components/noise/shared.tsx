@@ -20,7 +20,6 @@ export function fieldText(value: unknown): string {
 }
 
 export function formatDist(m: number): string {
-  if (m === 0) return 'overhead'
   if (m < 1000) return `${m} m`
   return `${(m / 1000).toFixed(1)} km`
 }
