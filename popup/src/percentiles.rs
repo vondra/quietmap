@@ -476,7 +476,8 @@ fn railway_traffic(fields: &serde_json::Value) -> Option<([f64; PERIODS], f64, O
 /// Per period the mean of `energy` in `weather` in each weather state: a piece is favourable while
 /// the place's weather u lies under its favourable share, so over the state's span of u it is
 /// favourable for the part of the span under the share (no step where a share crosses a state's
-/// middle).
+/// middle). Each bin's calm energy counts in every state and its excess downwind in the states
+/// wholly under its share and in part in the state its share falls in: one pass over the bins.
 fn weather_means(weather: &Weather, energy: [f64; PERIODS]) -> [[f64; WEATHER_STATES]; PERIODS] {
     std::array::from_fn(|period| {
         let states = weather.states(period);
@@ -486,17 +487,23 @@ fn weather_means(weather: &Weather, energy: [f64; PERIODS]) -> [[f64; WEATHER_ST
         {
             return [energy[period]; WEATHER_STATES];
         }
-        std::array::from_fn(|state| {
-            let span = 1.0 / WEATHER_STATES as f64;
-            let low = state as f64 * span;
-            states
-                .iter()
-                .map(|&(share, homogeneous, favourable)| {
-                    let favoured = (share.clamp(low, low + span) - low) / span;
-                    favoured * favourable + (1.0 - favoured) * homogeneous
-                })
-                .sum()
-        })
+        // Per state the excess of the bins whose share falls in it, whole and its part in it.
+        let (mut whole, mut part) = ([0.0; WEATHER_STATES + 1], [0.0; WEATHER_STATES + 1]);
+        let mut calm = 0.0;
+        for (share, homogeneous, favourable) in states {
+            let position = share * WEATHER_STATES as f64;
+            let state = (position as usize).min(WEATHER_STATES);
+            whole[state] += favourable - homogeneous;
+            part[state] += (position - state as f64) * (favourable - homogeneous);
+            calm += homogeneous;
+        }
+        let mut means = [0.0; WEATHER_STATES];
+        let mut above = 0.0;
+        for state in (0..WEATHER_STATES).rev() {
+            above += whole[state + 1];
+            means[state] = calm + above + part[state];
+        }
+        means
     })
 }
 
