@@ -644,12 +644,14 @@ impl Resolution {
         weather_states: WEATHER_STATES,
         hour_groups: None,
     };
-    /// The map's: 1 dB, three weather states, four, one and three groups of the day's, evening's
-    /// and night's hours: Nden within 2.5 % at p99 and 3.9 % at most of the click's 0.1 dB at the
-    /// same 919 points, 2.8 ms a point on one core against 787.
+    /// The map's: 2 dB, two weather states, four, one and three groups of the day's, evening's
+    /// and night's hours. On Dobris's 1,125 popup clicks the painted total is within 1 phon but at
+    /// one cell (1.5), over 0.5 phon at 4.8 %, bias +0.23 phon (1 dB and three states: 1.8 %,
+    /// +0.16 phon); against the sone etalon the drift the same; wbench-2 246 -> 222 s
+    /// (`evidence/2026-10-12/wbench2-sone`).
     pub const MAP: Resolution = Resolution {
-        bin_db: 1.0,
-        weather_states: 3,
+        bin_db: 2.0,
+        weather_states: 2,
         hour_groups: Some([4, 1, 3]),
     };
 }
