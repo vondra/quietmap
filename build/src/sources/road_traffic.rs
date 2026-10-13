@@ -12,9 +12,19 @@ use std::path::Path;
 /// Trip ends per kilometre of local street below which a square's buildings count as unmapped.
 const MAPPED_TRIP_ENDS_PER_KM: f64 = 30.0;
 
+/// A rural and an urban value at a row of `built_up` (0 unknown, 1 rural, 2 urban): unknown takes
+/// their mean.
+fn by_built_up([rural, urban]: [f64; 2], built_up: u8) -> f64 {
+    match built_up {
+        1 => rural,
+        URBAN => urban,
+        _ => 0.5 * (rural + urban),
+    }
+}
+
 /// Per main class (dev4 code): the radius of the trip ends that predict it (m), their cap, the
-/// intercepts for built-up unknown, rural and urban, the slope on the log of the trip ends, and
-/// the one-way shift (natural logs of vehicles a day). Secondary and tertiary roads weigh the 13
+/// intercepts for rural and urban built-up ([`by_built_up`]), the slope on the log of the trip
+/// ends, and the one-way shift (natural logs of vehicles a day). Secondary and tertiary roads weigh the 13
 /// countries alike (country-balanced least squares, held out by square: 2.6 and 5.2 dB mean
 /// absolute error against 3.4 and 5.3 for a class median); unclassified roads are fitted on
 /// Great Britain's, France's and Sweden's counts (4.1 dB against 6.1). Primary roads keep
@@ -28,7 +38,7 @@ struct MainModel {
     class: u8,
     radius_m: f64,
     most_around: f64,
-    intercept: [f64; 3],
+    intercept: [f64; 2],
     slope: f64,
     oneway: f64,
 }
@@ -38,7 +48,7 @@ const MAIN_MODELS: [MainModel; 3] = [
         class: 3,
         radius_m: 5_000.0,
         most_around: 617_000.0,
-        intercept: [0.0, 4.358, 4.551],
+        intercept: [4.358, 4.551],
         slope: 0.337,
         oneway: -0.073,
     },
@@ -46,7 +56,7 @@ const MAIN_MODELS: [MainModel; 3] = [
         class: 4,
         radius_m: 5_000.0,
         most_around: 446_000.0,
-        intercept: [0.0, 2.936, 3.796],
+        intercept: [2.936, 3.796],
         slope: 0.388,
         oneway: -0.170,
     },
@@ -54,7 +64,7 @@ const MAIN_MODELS: [MainModel; 3] = [
         class: 9,
         radius_m: 2_000.0,
         most_around: 242_000.0,
-        intercept: [0.0, 2.160, 2.920],
+        intercept: [2.160, 2.920],
         slope: 0.403,
         oneway: 0.408,
     },
@@ -156,7 +166,7 @@ const THAI_RURAL_ROAD_MODELS: [MainModel; 2] = [
         class: 3,
         radius_m: 5_000.0,
         most_around: 628_000.0,
-        intercept: [3.982, 3.921, 4.043],
+        intercept: [3.921, 4.043],
         slope: 0.394,
         oneway: -0.357,
     },
@@ -164,7 +174,7 @@ const THAI_RURAL_ROAD_MODELS: [MainModel; 2] = [
         class: 4,
         radius_m: 5_000.0,
         most_around: 145_000.0,
-        intercept: [4.734, 4.627, 4.841],
+        intercept: [4.627, 4.841],
         slope: 0.279,
         oneway: 0.212,
     },
@@ -267,11 +277,7 @@ impl BuildingTraffic {
         (class, built_up, oneway, lanes): (u8, u8, bool, u8),
     ) -> f64 {
         let model = &MAJOR_MODELS[major_group(class).unwrap_or(2)];
-        let intercept = match built_up {
-            1 => model.intercept[0],
-            URBAN => model.intercept[1],
-            _ => 0.5 * (model.intercept[0] + model.intercept[1]),
-        };
+        let intercept = by_built_up(model.intercept, built_up);
         let density: f64 = MAJOR_RADII_M
             .iter()
             .zip(model.slopes)
@@ -312,11 +318,7 @@ impl BuildingTraffic {
             else {
                 return 0.0;
             };
-            match built_up {
-                1 => shifts[0],
-                URBAN => shifts[1],
-                _ => 0.5 * (shifts[0] + shifts[1]),
-            }
+            by_built_up([shifts[0], shifts[1]], built_up)
         };
         let main = |model: &MainModel| {
             let around = self
@@ -329,7 +331,7 @@ impl BuildingTraffic {
                 } else {
                     0.0
                 };
-                (model.intercept[usize::from(built_up.min(2))]
+                (by_built_up(model.intercept, built_up)
                     + model.slope * around.ln()
                     + if oneway { model.oneway } else { 0.0 }
                     + (shift_db(model.class) + selection_db) / 10.0 * std::f64::consts::LN_10)
@@ -450,8 +452,8 @@ mod tests {
         // The network's tertiary roads carry about 1,900 a day at the counted rows' median
         // 33,000 trip ends within 5 km in the country, 2,600 in towns at 50,000; its secondary
         // roads 3,700 at their median 53,000.
-        let at = |model: &MainModel, b: usize, around: f64| {
-            (model.intercept[b] + model.slope * around.ln()).exp()
+        let at = |model: &MainModel, built_up: u8, around: f64| {
+            (by_built_up(model.intercept, built_up) + model.slope * around.ln()).exp()
         };
         let [secondary, tertiary] = &THAI_RURAL_ROAD_MODELS;
         for (value, range) in [
@@ -479,7 +481,7 @@ mod tests {
     fn main_classes_scale_with_the_trip_ends_around_them() {
         let tertiary = MAIN_MODELS.iter().find(|m| m.class == 4).unwrap();
         // Twice the trip ends around: 2^0.388 = 1.31 times the traffic.
-        let at = |around: f64| (tertiary.intercept[2] + tertiary.slope * f64::ln(around)).exp();
+        let at = |around: f64| (tertiary.intercept[1] + tertiary.slope * f64::ln(around)).exp();
         assert!((at(2e6) / at(1e6) - 2f64.powf(0.388)).abs() < 1e-9);
         // An urban tertiary road among a million trip ends: 9,500 vehicles a day.
         assert!((at(1e6) - 9_478.0).abs() < 5.0, "{}", at(1e6));
