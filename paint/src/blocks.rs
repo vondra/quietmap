@@ -7,10 +7,12 @@ use std::collections::HashSet;
 
 /// A block's corners admit their loudest sources, layer by layer, until the energy each corner has
 /// not admitted is at most this share of the block's quietest corner's: dev1's speed dial
-/// (`relevance_partition.rs`, chosen by the owner 2026-09-02; on dev1's etalon window 0.15 broke
-/// only the railways' rung over 6 dB, 194 cells against 138, where 0.10 passed every rung at 58 %
-/// more card time).
-pub const DROP_BUDGET_FRACTION: f64 = 0.15;
+/// (`relevance_partition.rs`; 0.15 chosen by the owner 2026-09-02, on dev1's etalon window
+/// breaking only the railways' rung over 6 dB). 0.20 since 2026-10-13 (the owner: "souhlasím"):
+/// with the left-out's reach on Dobris's four squares 13 % fewer pairs, wbench-2's Dobris 154.2 ->
+/// 143.6 s, the total's drift within every rung (over 3 phon 0 -> 2 cells), the railway over 1
+/// phon 1.4 -> 2.0 %, the buildings 0.8 -> 1.1 %; 0.25 no faster.
+pub const DROP_BUDGET_FRACTION: f64 = 0.20;
 
 /// A source loud at a corner: its index, its group, its Lden energy, its energy per period (mixed
 /// and in either weather state) and its distance from the corner.
@@ -223,9 +225,9 @@ mod tests {
     }
 
     /// dev1's rule: a block keeps its own sources (9), then each corner admits its loudest until
-    /// what it has not admitted is within 15 % of the quietest corner's layer. Corners of 93 and
-    /// 23 give a budget of 3.45: the loud corners admit both their sources and nothing is left
-    /// out. Four corners of 100 give 15: source 2's 12 is left out, blended from the corners.
+    /// what it has not admitted is within 20 % of the quietest corner's layer. Corners of 93 and
+    /// 23 give a budget of 4.6: the loud corners admit both their sources and nothing is left out.
+    /// Four corners of 100 give 20: source 2's 12 is left out, blended from the corners.
     #[test]
     fn a_block_admits_the_loudest_until_the_rest_is_within_the_quietest_corners_budget() {
         let road = Layer::Road as usize;
