@@ -647,7 +647,7 @@ impl Resolution {
     /// The map's: 2 dB, two weather states, four, one and three groups of the day's, evening's
     /// and night's hours. On Dobris's 1,125 popup clicks the painted total is within 1 phon but at
     /// one cell (1.5), over 0.5 phon at 4.8 %, bias +0.23 phon (1 dB and three states: 1.8 %,
-    /// +0.16 phon); against the sone etalon the drift the same; wbench-2 246 -> 222 s
+    /// +0.16 phon); against the sone etalon the drift the same; the painter a tenth faster
     /// (`evidence/2026-10-12/wbench2-sone`).
     pub const MAP: Resolution = Resolution {
         bin_db: 2.0,

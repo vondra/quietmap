@@ -1,6 +1,6 @@
 //! Whole-file reads: every file of a ring is read whole, all files at once, one reader per file,
-//! so the disk sees large requests in parallel (measured cold on NVMe: 26 MB in 3-5 ms against
-//! 23-29 ms for mmap with MADV_WILLNEED and page touching, whose faults read 32 KB at a time).
+//! so the disk sees large requests in parallel (measured cold: 26 MB in a tenth to a fifth of the
+//! time of mmap with MADV_WILLNEED and page touching, whose faults read 32 KB at a time).
 
 use rayon::prelude::*;
 use std::io::Read;
