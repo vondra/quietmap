@@ -1,8 +1,4 @@
-// The popup body: how loud the place is over the whole day (Nden, the mean loudness in sone, Lden
-// under it), and what is heard there and from what: the loudest contributors, the aircraft layer
-// and the rest, each with why it is loud and how loud it is alone; once answered, an opened row's
-// segments. Under the list the whole calculation opens in place.
-// Redrawn on every streamed update of the click.
+// The click's level, source list and detailed calculation, redrawn on every streamed update.
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { soneToColor } from '../utils/noise-colors'
 import { fmtSone, wholePercents } from '../utils/formatters'
@@ -21,7 +17,6 @@ const SHOW_STATS = typeof location !== 'undefined' && new URLSearchParams(locati
 
 export interface NoiseDetailContentProps {
   data: PopupUpdate
-  maxSources?: number
   /** Shows a loudest flight's track (by `topFlightKey`) or a contributor's pieces (by
    * `source:<id>`) on the map; null shows none. */
   onHighlight: (key: string | null) => void
@@ -40,7 +35,7 @@ const NDEN_TOOLTIP = 'How loud the place sounds over the whole day: every moment
 const LDEN_TOOLTIP = 'All sources together over the day (EU Directive 2002/49): the evening\n'
   + 'counts 5 dB and the night 10 dB louder. Each period in the detailed calculation.'
 
-export default function NoiseDetailContent({ data, maxSources, onHighlight, calculationOpen = false, onCalculationToggle, onFan }: NoiseDetailContentProps) {
+export default function NoiseDetailContent({ data, onHighlight, calculationOpen = false, onCalculationToggle, onFan }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
   const answered = data.total_lden != null && !data.partial
   // The popup sends the ground contributors above its 0 dB display floor; the list ranks what is
@@ -60,7 +55,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
   // carries them; the list shows the rows `shownRows` picks, the others fold into the last row.
   const shares = [...entries.map(shareOf), quietAircraft.reduce((sum, e) => sum + (shareOf(e) ?? 0), data.rest_share ?? 0)]
   const percents = shares.every(share => share != null) ? wholePercents(shares as number[]) : []
-  const shownMask = shownRows(entries.map((_, row) => percents[row]), maxSources)
+  const shownMask = shownRows(shares.slice(0, entries.length))
   const shownEntries = entries.filter((_, row) => shownMask[row])
   const folded = entries.filter((_, row) => !shownMask[row])
   const hidden = [...folded, ...quietAircraft]

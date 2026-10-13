@@ -15,6 +15,14 @@ sources heard there, loudest first — a road as one row, a factory, the aircraf
 is heard (steady, so many vehicles an hour, so many trains a day), how far it is and its share of
 the loudness.
 
+The list shows the loudest three and every other row contributing at least 1 % of the loudness,
+up to ten rows, on a phone too. Shares retain their precision through the popup's answer; only the
+display rounds them to whole percents.
+Everything else folds into Rest, which opens to the hidden rows. Roads and railways join by name,
+or by number where unnamed. Unnamed tram tracks without a number stay separate: the popup's records
+carry no route or street identity, and connected tracks can belong to different lines. Joining
+rows changes the list; every part keeps its own noise computation.
+
 Open a source for its data (vehicles a day and their mix, speed, a surface other than asphalt;
 trains a day; the flights and their types) and what distance, air, buildings, terrain and ground
 take from its sound, in calm air and downwind. Its segments show the rays they were computed along, drawn on the map. The ten loudest

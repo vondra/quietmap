@@ -1,5 +1,4 @@
-//! One streamed update as a line of JSON: totals per layer and period, the loudest contributor
-//! groups with their display records, and what the click read so far.
+//! One streamed click update as JSON: levels, precise shares, source records and read statistics.
 
 use crate::update::Update;
 use physics::bands::{PERIODS, lden_energy};
@@ -118,11 +117,6 @@ fn path_account(
     })
 }
 
-/// A share of the click's loudness to a tenth of a percent.
-fn share(value: f64) -> f64 {
-    (value * 1000.0).round() / 1000.0
-}
-
 /// What flies over the receiver: per band (maximum level at or above) the flights a day and at
 /// night, their mean height above the ground there and type (none without flights); the
 /// helicopters a day above the lowest band.
@@ -157,7 +151,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             object.insert("nden_sone".into(), json!(sone(own)));
         }
         if let Some(part) = layer.share {
-            object.insert("share".into(), json!(share(part)));
+            object.insert("share".into(), json!(part));
         }
         // What the list leaves out of a ground layer: its last row.
         if let Some(energy) = layer.unlisted {
@@ -232,7 +226,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             object.insert("nden_sone".into(), json!(sone(own)));
         }
         if let Some(part) = row.share {
-            object.insert("share".into(), json!(share(part)));
+            object.insert("share".into(), json!(part));
         }
         object.insert(
             "path".into(),
@@ -266,7 +260,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                     "share": part
                         .share
                         .zip(row.share.filter(|whole| *whole > 0.0))
-                        .map(|(part, whole)| share(part / whole)),
+                        .map(|(part, whole)| part / whole),
                 }));
             }
             object.insert("parts".into(), Value::Array(parts));
@@ -444,7 +438,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 "nden_sone": sone(loudness.nden_sone)})
         }),
         "rest_nden_sone": update.rest_nden_sone.map(sone),
-        "rest_share": update.rest_share.map(share),
+        "rest_share": update.rest_share,
         "top_contributors": contributors,
         "top_flights": flights,
         "stats": {
@@ -473,7 +467,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 .filter(|(_, edge)| edge[2] > 0.0)
                 .map(|(name, edge)| json!({
                     "edge": name,
-                    "share": share(edge[2] / calm),
+                    "share": edge[2] / calm,
                     "screening_db": (100.0 * (edge[1] / edge[0]).log10()).round() / 10.0,
                 }))
                 .collect::<Vec<_>>(),
@@ -481,3 +475,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     }
     Ok(line.to_string())
 }
+
+#[cfg(test)]
+#[path = "json_tests.rs"]
+mod tests;

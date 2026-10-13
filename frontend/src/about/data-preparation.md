@@ -291,8 +291,8 @@ altitude at its two ends.
 
 | Layer | A piece | A source in the click's list |
 |---|---|---|
-| Roads | a straight stretch of an OpenStreetMap way, at most 250 m, cut at tile edges | a road: one name, number and class; a road with neither, its way |
-| Railways | the same along a track | a line: one name, number and kind of track |
+| Roads | a straight stretch of an OpenStreetMap way, at most 250 m, cut at tile edges | a road by name, else number; with neither, its way |
+| Railways | the same along a track | a line by name, else number; with neither, its way (unnamed tram tracks have no route or street identity) |
 | Industry | a point, or a point every 75 m over a site above 5,000 m²; a turbine at its hub | a site; a turbine |
 | Buildings | a point, or a point every 30 m over a building above 2,000 m² and every 75 m over a pitch or car park above 5,000 m² | a building; a pitch or car park; the guests of a bar; a church's bells |
 | Ships | a point every 250 m over a cell of vessel density | a cell |
