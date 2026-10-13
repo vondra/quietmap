@@ -14,7 +14,7 @@ import { lngLatToTileFloat } from '../lib/tile-math'
 import { MIN_ZOOM, WORLD_EXTENT, buildKey, tileUrl, useTileBuild, type HeatmapSource, type TileBuilds } from '../lib/tile-urls'
 import { loadTileProgressively, fetchAncestor, type HeatTile } from '../lib/progressive-tile-loader'
 import { compositeSig, baseRange, buildComposite, type Composite } from '../lib/tile-composite'
-import { labelAnchorId } from '../utils/label-layers'
+import { overlayAnchorId } from '../utils/overlay-anchor'
 import { lowestDataLayerId } from '../lib/data-layers'
 
 interface Props {
@@ -283,13 +283,13 @@ export default function HeatmapOverlay({ source }: Props): null {
   }, [mapRef, build, source])
 
   // The heatmap's z-anchor (beforeId): beneath the data layers when any is on, else beneath the
-  // basemap's first label layer.
+  // labels and the app's own layers.
   useEffect(() => {
     if (!mapRef) return
     const map = mapRef.getMap()
     const sync = () => {
-      const layers = map.getStyle()?.layers
-      const id = lowestDataLayerId(layers) ?? labelAnchorId(layers)
+      const style = map.getStyle()
+      const id = lowestDataLayerId(style?.layers) ?? overlayAnchorId(style)
       if (id !== anchor.current) {
         anchor.current = id
         applyRef.current()
