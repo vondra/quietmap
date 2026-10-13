@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { displayedTileZoom, hm3CellAt, readHeatmapCell } from '../src/lib/hm3-sample.ts'
-import { decodeHM3, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from '../src/lib/hm3-decoder.ts'
+import { decodeHM3, HM3_NO_LEVEL, HM3_SILENCE, HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder.ts'
 
 test('a point maps to the painted tile cell, wraps across the antimeridian and is null off the world', () => {
   const cell = hm3CellAt(14.1639, 49.8486, 12)
@@ -34,15 +34,19 @@ test('a cell assessed under 1/16 sone reads silence, one not assessed no level, 
   assert.deepEqual(readHeatmapCell('failed', CELL), { kind: 'unavailable' })
 })
 
-test('HM3 version 5 decodes, no other', () => {
-  const bytes = new Uint8Array(6 + TILE_PX * TILE_PX).fill(HM3_NO_LEVEL)
-  bytes.set([72, 77, 51, 32, 5, 1])
-  bytes[6] = HM3_SILENCE
-  const v5 = decodeHM3(bytes.slice().buffer)
-  assert.equal(v5.sourceId, 1)
-  assert.equal(v5.cells[0], HM3_SILENCE)
-  bytes[4] = 4
-  assert.throws(() => decodeHM3(bytes.buffer), /HM3 version 4 is not 5/)
+test('HM3 prediction restores every byte across row boundaries and refuses other formats', () => {
+  const cells = Uint8Array.from({ length: TILE_PX * TILE_PX }, (_, at) =>
+    (Math.floor(at / TILE_PX) * 19 + at % TILE_PX * 31) % 256)
+  const bytes = predictedTile(cells)
+  const decoded = decodeHM3(bytes.slice().buffer)
+  assert.equal(decoded.sourceId, 1)
+  assert.deepEqual(decoded.cells, cells)
+  bytes[4] = 5
+  assert.throws(() => decodeHM3(bytes.buffer), /HM3 version 5 is not 7/)
+  bytes[4] = HM3_VERSION
+  bytes[5] = 7
+  assert.throws(() => decodeHM3(bytes.buffer), /unknown HM3 layer/)
+  assert.throws(() => decodeHM3(bytes.slice(1).buffer), /HM3 size/)
 })
 
 test('the sampled tile zoom is the renderer\'s: rounded, one finer on HiDPI, clamped into the published band', () => {
@@ -53,9 +57,20 @@ test('the sampled tile zoom is the renderer\'s: rounded, one finer on HiDPI, cla
   assert.equal(displayedTileZoom(build, 15.2, 2), 13)
 })
 
+function predictedTile(cells) {
+  const bytes = new Uint8Array(6 + cells.length)
+  bytes.set([72, 77, 51, 32, HM3_VERSION, 1])
+  for (let at = 0; at < cells.length; at++) {
+    const left = at % TILE_PX ? cells[at - 1] : 0
+    const above = at >= TILE_PX ? cells[at - TILE_PX] : 0
+    const upperLeft = at >= TILE_PX && at % TILE_PX ? cells[at - TILE_PX - 1] : 0
+    bytes[6 + at] = cells[at] - paethPrediction(left, above, upperLeft)
+  }
+  return bytes
+}
+
 function hm3Response(status = 200, empty = false) {
-  const bytes = new Uint8Array(6 + TILE_PX * TILE_PX).fill(HM3_NO_LEVEL)
-  bytes.set([72, 77, 51, 32, 5, 1]) // "HM3 ", version 5, source 1
+  const bytes = predictedTile(new Uint8Array(TILE_PX * TILE_PX).fill(HM3_NO_LEVEL))
   return new Response(status === 200 && !empty ? bytes : null, { status })
 }
 

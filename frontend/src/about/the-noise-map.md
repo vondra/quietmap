@@ -96,8 +96,27 @@ the cores. Each file's header says what it does; the blocks are `paint/src/block
 building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
 `popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs`: per layer and the total,
 512 × 512 cells of twice the loudness level in phon (80 one sone, a doubling 20; 254 silence under
-1/16 sone, 255 not assessed), packed by `pack.rs` into one PMTiles archive per layer with every zoom
-down to 2.
+1/16 sone, 255 not assessed). Each tile is compressed when painted: PNG's Paeth predictor uses
+the left, above and upper-left cells (zero outside the tile), and the cell minus that prediction,
+modulo 256, enters one Brotli stream at quality 11 with a 512 KiB window. Among the measured
+Brotli choices, this fixed predictor and quality fit the projected volume budget. The served
+archives in the measured urban area shrink by 26 % against raw-cell Brotli at quality 9.
+The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` restores the same prediction in place;
+every cell, including silence and not assessed, returns exactly.
+
+The painter writes one atomic HM3 square bundle, its directory pointing at these compressed tile
+streams, identical ones stored once. `qm-paint merge` copies independent painters' bundles into
+one tree atomically, without decoding or replacing completed squares.
+Identical completed copies are skipped on retry; conflicting squares stop the merge.
+`paint/src/pyramid.rs` reads each compressed square once and carries the assessed-pixel
+counts and unrounded loudness through the same means, one branch at a time; it compresses each
+lower tile once. `pack.rs` copies these streams into one immutable PMTiles archive per layer,
+zooms down to 2, ordered by zoom and Hilbert tile id. Identical streams share an archive range;
+gzip compresses its index. An archive is read by byte range, so a tile needs no scan or server
+decompression, and the same files support object storage. The manifest appears only after every
+archive is complete; the server sends the stored stream with `Content-Encoding: br`.
+The manifest URL belongs to the tile format's version, so an open page with an earlier decoder
+keeps its last compatible immutable build until the page is refreshed.
 
 Loud is one rule for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB). `qm-paint-gpu check` holds the card equal to the cores

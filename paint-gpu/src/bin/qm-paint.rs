@@ -1,8 +1,10 @@
+//! Paint squares, merge their compressed bundles and publish immutable heatmap archives.
 //! `qm-paint --prepared DIR --year YYYY --zoom 12|13 --out DIR (--squares X,Y[;X,Y...] | --bbox
 //! SOUTH,WEST,NORTH,EAST)`: paints the z12 squares one after another (each on every core, its exact
 //! evaluations on the first CUDA card when there is one) into heatmap tiles at `--zoom`, skipping
 //! squares already painted; one line per square on stdout.
 //! `qm-paint pack --out DIR --zoom Z --tiles DIR --build bNNN`: the map's archives and manifest.
+//! `qm-paint merge --from DIR --out DIR --zoom Z`: atomic byte copies of completed squares.
 
 use paint::exact::Batch;
 use paint::exact::LAYERS;
@@ -66,6 +68,16 @@ fn squares(arguments: &[String]) -> Result<Vec<TileId>, String> {
 
 fn run(arguments: &[String]) -> Result<(), String> {
     let required = |key: &str| value(arguments, key).ok_or_else(|| format!("missing --{key}"));
+    if arguments.first().map(String::as_str) == Some("merge") {
+        let zoom: u32 = required("zoom")?
+            .parse()
+            .map_err(|_| "--zoom is a number")?;
+        return paint::merge::merge(
+            &PathBuf::from(required("from")?),
+            &PathBuf::from(required("out")?),
+            zoom,
+        );
+    }
     if arguments.first().map(String::as_str) == Some("pack") {
         let zoom: u8 = required("zoom")?
             .parse()

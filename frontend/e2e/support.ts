@@ -1,7 +1,6 @@
-// Hermetic browser fixtures: a one-cell HM3 world, a black basemap, a streamed popup the test writes
-// line by line (the answers are in answers.ts), and the painted canvas read back.
+// Hermetic browser fixtures for heatmap cells, the basemap and streamed popup answers.
 import { devices, expect, type Page } from '@playwright/test'
-import { TILE_PX } from '../src/lib/hm3-decoder'
+import { HM3_MANIFEST_URL, HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
 
 export const FIXTURE_DB = 63
 export const SOURCE_DB = 60
@@ -67,14 +66,19 @@ export function mapUrl(point: PixelCenter, layers = 'road', zoom = TILE_Z): stri
   return `/#lat=${point.lat}&lng=${point.lng}&z=${zoom}&bm=terrain&ro=${layers}`
 }
 
-/** A tile without levels but at most one audible receiver at the expected pixel, its loudness
- *  `sone` (HM3 v5: twice the loudness level in phon). */
+/** The fixture carries twice the loudness level in phon after native HTTP decompression. */
 function hm3Tile(point?: PixelCenter, sone?: number): Buffer {
   const tile = Buffer.alloc(6 + TILE_PX * TILE_PX, 255)
   tile.write('HM3 ', 0, 'ascii')
-  tile[4] = 5
+  tile[4] = HM3_VERSION
   tile[5] = 1
   if (point && sone != null) tile[6 + point.py * TILE_PX + point.px] = Math.round(80 + 20 * Math.log2(sone))
+  for (let at = TILE_PX * TILE_PX - 1; at >= 0; at--) {
+    const left = at % TILE_PX ? tile[6 + at - 1] : 0
+    const above = at >= TILE_PX ? tile[6 + at - TILE_PX] : 0
+    const upperLeft = at >= TILE_PX && at % TILE_PX ? tile[6 + at - TILE_PX - 1] : 0
+    tile[6 + at] -= paethPrediction(left, above, upperLeft)
+  }
   return tile
 }
 
@@ -165,7 +169,7 @@ export async function endPopup(page: Page): Promise<void> {
 export async function installHermeticMap(page: Page, point: PixelCenter): Promise<void> {
   await mockTerrainBasemap(page)
   await installPopupSeam(page)
-  await page.route('**/api/tiles-manifest', route => route.fulfill({
+  await page.route(`**${HM3_MANIFEST_URL}`, route => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({

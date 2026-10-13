@@ -5,10 +5,11 @@ import test, { after } from 'node:test'
 import { mkdtempSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { brotliCompressSync, gzipSync } from 'node:zlib'
+import { brotliCompressSync, brotliDecompressSync, gzipSync } from 'node:zlib'
 import Fastify from 'fastify'
 import { zxyToTileId } from 'pmtiles'
 import { heatmapPmtilesRoutes } from './heatmap-pmtiles.ts'
+import { HM3_VERSION, decodeHM3 } from '../../../frontend/src/lib/hm3-decoder.ts'
 
 /** Minimal valid pmtiles v3 archive with ZERO tile entries — every getZxy
  *  misses. Layout: 127-byte header, gzip root directory, gzip '{}' metadata.
@@ -41,6 +42,42 @@ async function buildApp() {
   await app.register(heatmapPmtilesRoutes, { tilesDir: dir })
   return app
 }
+
+test('a stored predicted HM3 stream reaches the frontend verbatim with native Brotli encoding', async () => {
+  const predicted = new Uint8Array(6 + 512 * 512)
+  predicted.set([72, 77, 51, 32, HM3_VERSION, 1])
+  predicted[6] = 255
+  predicted[7] = 255
+  predicted[8] = 82
+  const tile = brotliCompressSync(predicted)
+  assert.ok(tile.length < 128)
+  const root = gzipSync(Buffer.from([1, zxyToTileId(2, 0, 0), 1, tile.length, 1]))
+  const header = Buffer.from(emptyArchive().subarray(0, 127))
+  header.writeBigUInt64LE(BigInt(root.length), 16)
+  const dataOffset = 127 + root.length
+  header.writeBigUInt64LE(BigInt(dataOffset), 24)
+  header.writeBigUInt64LE(0n, 32)
+  header.writeBigUInt64LE(BigInt(dataOffset), 56)
+  header.writeBigUInt64LE(BigInt(tile.length), 64)
+  writeFileSync(join(dir, 'road.b4.pmtiles'), Buffer.concat([header, root, tile]))
+  const app = await buildApp()
+  try {
+    const response = await app.inject({ url: '/api/tiles/b4/road/2/0/0.bin' })
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.headers['content-encoding'], 'br')
+    assert.deepEqual(response.rawPayload, tile)
+    const inflated = brotliDecompressSync(response.rawPayload)
+    const decoded = decodeHM3(Uint8Array.from(inflated).buffer)
+    assert.equal(decoded.sourceId, 1)
+    for (let row = 0; row < 512; row++) {
+      assert.equal(decoded.cells[row * 512], 255)
+      assert.equal(decoded.cells[row * 512 + 1], 254)
+      assert.equal(decoded.cells[row * 512 + 2], 80)
+    }
+  } finally {
+    await app.close()
+  }
+})
 
 test('miss is a cacheable empty 200, not a 204', async () => {
   const app = await buildApp()

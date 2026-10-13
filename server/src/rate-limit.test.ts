@@ -1,8 +1,8 @@
-// Per-client rate limits: the expensive routes are throttled per IPv4 address or IPv6 /64, local
-// callers are not, and tiles never are.
+// Per-client rate limits for expensive routes; local clients and heatmap tiles are exempt.
 import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
+import { HM3_MANIFEST_URL } from '../../frontend/src/lib/hm3-decoder.ts'
 import { buildApp, type AppConfig } from './app.ts'
 import { rateLimitClientKey } from './rate-limit.ts'
 
@@ -115,7 +115,7 @@ test('tile routes are never rate-limited (the map bursts dozens per pan)', async
   for (let i = 0; i < 12; i++) {
     const tile = await server.inject({ method: 'GET', url: '/api/tiles/b1/road/4/8/5.bin', remoteAddress: '203.0.113.30' })
     assert.notEqual(tile.statusCode, 429)
-    const manifest = await server.inject({ method: 'GET', url: '/api/tiles-manifest', remoteAddress: '203.0.113.30' })
+    const manifest = await server.inject({ method: 'GET', url: HM3_MANIFEST_URL, remoteAddress: '203.0.113.30' })
     assert.notEqual(manifest.statusCode, 429)
   }
 })
