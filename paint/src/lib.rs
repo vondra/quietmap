@@ -14,6 +14,7 @@ pub mod exact;
 mod flights;
 pub mod hm3;
 pub mod hum;
+mod loudest;
 pub mod pack;
 pub mod paint;
 pub mod sone;

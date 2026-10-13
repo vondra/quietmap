@@ -64,14 +64,33 @@ pub struct TileAnswer {
     pub lamax_bounds: Vec<(usize, f64)>,
 }
 
-/// The nearest a box's pieces can come to the receiver (m): its cell and slab widened by a
+/// Receivers a box's bound holds for: the rectangle `low`-`high` (frame metres) at altitudes from
+/// the first to the second, one receiver being a rectangle of one point.
+#[derive(Debug, Clone, Copy)]
+pub struct ReceiverArea {
+    pub low: [f64; 2],
+    pub high: [f64; 2],
+    pub altitudes_m: [f64; 2],
+}
+
+impl ReceiverArea {
+    fn of(receiver: AircraftReceiver) -> Self {
+        ReceiverArea {
+            low: receiver.position,
+            high: receiver.position,
+            altitudes_m: [receiver.altitude_m; 2],
+        }
+    }
+}
+
+/// The nearest a box's pieces can come to a receiver of `area` (m): its cell and slab widened by a
 /// quarter edge (a piece reaches past its box by an eighth at most), the first band down to any
 /// depth.
 fn nearest_slant_m(
     record: &AircraftBox,
     tile: TileId,
     frame: &LocalFrame,
-    receiver: AircraftReceiver,
+    area: ReceiverArea,
 ) -> f64 {
     let cells = f64::from(1u32 << (record.zoom - 12));
     let corner = |offset: f64| {
@@ -82,16 +101,18 @@ fn nearest_slant_m(
     };
     let (a, b) = (corner(0.0), corner(1.0));
     let margin = record.height_m / 4.0;
-    let gap = |low: f64, high: f64, at: f64| (low - margin - at).max(at - high - margin).max(0.0);
-    let east = gap(a[0].min(b[0]), a[0].max(b[0]), receiver.position[0]);
-    let north = gap(a[1].min(b[1]), a[1].max(b[1]), receiver.position[1]);
+    let gap = |low: f64, high: f64, (from, to): (f64, f64)| {
+        (low - margin - to).max(from - high - margin).max(0.0)
+    };
+    let east = gap(a[0].min(b[0]), a[0].max(b[0]), (area.low[0], area.high[0]));
+    let north = gap(a[1].min(b[1]), a[1].max(b[1]), (area.low[1], area.high[1]));
     let floor = if record.clearance_m == 0.0 {
         f64::NEG_INFINITY
     } else {
         record.ground_m + record.clearance_m
     };
     let top = record.ground_m + record.clearance_m + record.height_m;
-    let up = gap(floor, top, receiver.altitude_m);
+    let up = gap(floor, top, (area.altitudes_m[0], area.altitudes_m[1]));
     east.hypot(north).hypot(up)
 }
 
@@ -204,19 +225,20 @@ pub fn tile_flight_sums(
         )
 }
 
-/// The most maximum level (dB) a box's kept pieces can reach at the receiver (Eq. 4-8a: Delta_I adds
-/// at most [`INSTALLATION_CORRECTION_MAX_DB`], Lambda only attenuates); `None` for a box keeping
-/// none. `impedance_db` is the receiver's elevation's, which helicopters do not take.
+/// The most maximum level (dB) a box's kept pieces can reach at a receiver of `area` (Eq. 4-8a:
+/// Delta_I adds at most [`INSTALLATION_CORRECTION_MAX_DB`], Lambda only attenuates); `None` for a
+/// box keeping none. `impedance_db` is the receivers' elevations' at most, which helicopters do
+/// not take.
 fn lamax_bound(
     record: &AircraftBox,
     tile: TileId,
     frame: &LocalFrame,
-    receiver: AircraftReceiver,
+    area: ReceiverArea,
     impedance_db: f64,
 ) -> Option<f64> {
     (record.piece_count > 0).then(|| {
         record.loudest_lamax_db
-            + lamax_rise_bound_db(nearest_slant_m(record, tile, frame, receiver))
+            + lamax_rise_bound_db(nearest_slant_m(record, tile, frame, area))
             + INSTALLATION_CORRECTION_MAX_DB
             + match record.group {
                 Group::FixedWing => impedance_db,
@@ -225,26 +247,46 @@ fn lamax_bound(
     })
 }
 
-/// Per box of a tile within the aircraft reach that keeps pieces, its index and its pieces'
-/// [`lamax_bound`]: what the loudest flights are searched by, without the boxes' energies.
-pub fn tile_lamax_bounds(
+/// Box `index` of a tile within the aircraft reach of the receiver and keeping pieces: its pieces'
+/// [`lamax_bound`] there (`impedance_db` the receiver's elevation's), what the loudest flights are
+/// searched by, without the box's energy.
+pub fn box_lamax_bound(
     aircraft: &Aircraft<'_>,
-    tile: TileId,
+    (tile, index): (TileId, usize),
     frame: &LocalFrame,
     receiver: AircraftReceiver,
-) -> Vec<(usize, f64)> {
-    let impedance_db = receiver_impedance_db(receiver.altitude_m);
-    (0..aircraft.box_count())
-        .filter(|&index| {
-            let [east_m, north_m] =
-                centroid_offset_m(aircraft.box_centroid(index), tile, frame, receiver);
-            east_m.hypot(north_m) <= AIRCRAFT_REACH_M
-        })
-        .filter_map(|index| {
-            let record = aircraft.aircraft_box(index);
-            lamax_bound(&record, tile, frame, receiver, impedance_db).map(|bound| (index, bound))
-        })
-        .collect()
+    impedance_db: f64,
+) -> Option<f64> {
+    let [east_m, north_m] = centroid_offset_m(aircraft.box_centroid(index), tile, frame, receiver);
+    if east_m.hypot(north_m) > AIRCRAFT_REACH_M {
+        return None;
+    }
+    let area = ReceiverArea::of(receiver);
+    lamax_bound(
+        &aircraft.aircraft_box(index),
+        tile,
+        frame,
+        area,
+        impedance_db,
+    )
+}
+
+/// Box `index`'s [`lamax_bound`] over every receiver of `area`, whose elevations' impedance is at
+/// most `impedance_db`: at least its bound at any of them.
+pub fn box_lamax_bound_over(
+    aircraft: &Aircraft<'_>,
+    (tile, index): (TileId, usize),
+    frame: &LocalFrame,
+    area: ReceiverArea,
+    impedance_db: f64,
+) -> Option<f64> {
+    lamax_bound(
+        &aircraft.aircraft_box(index),
+        tile,
+        frame,
+        area,
+        impedance_db,
+    )
 }
 
 /// The boxes of one tile at the receiver.
@@ -273,7 +315,13 @@ pub fn tile_energy(
                 return BEYOND_REACH;
             };
             let lambda = box_lambda(&record, &sel);
-            let bound = lamax_bound(&record, tile, frame, receiver, impedance_db);
+            let bound = lamax_bound(
+                &record,
+                tile,
+                frame,
+                ReceiverArea::of(receiver),
+                impedance_db,
+            );
             // Each period's Lden energy by that period's installation mix.
             let kinds = std::array::from_fn(|kind| {
                 (0..PERIODS)
