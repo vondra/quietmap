@@ -1,7 +1,4 @@
-// A source's sound path, as the computation summed it over its rays (Lden): its sound power spread
-// over the distance alone, then what air absorption, buildings and terrain, the ground effect and
-// tree crowns take or add, in calm air and downwind, to the level of each; and how often each
-// holds. The level by period under it is the two mixed by those shares.
+// A source's sound path: its spreading, absorption, screening, ground, trees and reflections.
 import type { SourcePath } from '../../../types/noise'
 import { HoverText } from '../../ui/info-tip'
 import { DetailTable } from '../shared'
@@ -42,7 +39,8 @@ export function PathTable({ path }: { path: SourcePath }) {
     ...(path.foliage_db.some(db => db != null && Math.abs(db) >= 0.05)
       ? [[<HoverText title={TREES}>Trees</HoverText>, signed(path.foliage_db[0]), signed(path.foliage_db[1])]]
       : []),
-    ...(path.facades_db ? [[<HoverText title={REFLECTIONS}>Reflections</HoverText>, ...both(signed(path.facades_db))]] : []),
+    ...(path.facades_db != null && Math.round(path.facades_db * 10) > 0
+      ? [[<HoverText title={REFLECTIONS}>Reflections</HoverText>, ...both(signed(path.facades_db))]] : []),
     [<span className="text-foreground">Level</span>, ...path.lden.map(level)],
     // Where the weather moves the level by under 0.05 dB in every period, the shares say nothing.
     ...(path.bent_percent.some(p => p != null)

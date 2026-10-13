@@ -1,16 +1,7 @@
-//! Which footprints contain a point: crossing parity per footprint along the eastward half-line
-//! (dev4 `containment.rs`), the enclosed building a point stands in, and the receiver reflection
-//! bonus of nine probes (dev4 `reflection.rs`).
+//! Footprint containment by crossing parity along the eastward half-line.
 
 use super::{Scene, cell_of};
 use tiles::obstacles::{CELL_STEPS, EnvelopeClass, OutlineKind};
-
-/// Spacing of the 3 x 3 reflection probes, a 150 m square (dev4 `ENCLOSURE_RADIUS_M`).
-const REFLECTION_PROBE_SPACING_M: f64 = 75.0;
-/// A probe is built inside a footprint strictly taller than this (dev4 `enclosure_db`).
-const REFLECTION_BUILT_ABOVE_M: f64 = 5.0;
-/// The largest receiver reflection bonus (dB).
-pub const REFLECTION_MAX_DB: f64 = 3.0;
 
 /// A building footprint in click metres.
 #[derive(Clone, Debug, PartialEq)]
@@ -132,6 +123,16 @@ impl<'a> Scene<'a> {
             .any(|p| p.inside() && Some(p.footprint_id) != ignored))
     }
 
+    /// Whether this metre point lies in a building above the height gate, excluding one footprint.
+    pub fn contains_building_above(
+        &self,
+        point: [f64; 2],
+        min_height_m: f64,
+        ignored: Option<u64>,
+    ) -> Result<bool, String> {
+        self.contains_built(self.lattice.steps(point), min_height_m, ignored)
+    }
+
     /// Whether `point` (click metres) stands inside an enclosed building.
     pub(super) fn in_enclosed_building(&self, point: [f64; 2]) -> Result<bool, String> {
         let mut parities = Vec::new();
@@ -180,38 +181,5 @@ impl<'a> Scene<'a> {
             envelope: parity.envelope,
             rings,
         }
-    }
-
-    /// The receiver reflection bonus (dev4 `enclosure_db`): 3 dB when more than half of nine
-    /// probes, 75 m apart around the receiver, stand inside a footprint taller than 5 m, 1.5 dB
-    /// above a fifth, else 0. Every envelope class counts, walls do not; the receiver's own
-    /// building does not either (CNOSSOS 2.8 excludes the façade's own reflection), the nine-probe
-    /// denominator staying.
-    pub fn reflection_db(
-        &self,
-        receiver: [f64; 2],
-        own_footprint: Option<u64>,
-    ) -> Result<f64, String> {
-        let mut built = 0u32;
-        for north in [-1.0, 0.0, 1.0] {
-            for east in [-1.0, 0.0, 1.0] {
-                let probe = [
-                    receiver[0] + east * REFLECTION_PROBE_SPACING_M,
-                    receiver[1] + north * REFLECTION_PROBE_SPACING_M,
-                ];
-                let probe = self.lattice.steps(probe);
-                if self.contains_built(probe, REFLECTION_BUILT_ABOVE_M, own_footprint)? {
-                    built += 1;
-                }
-            }
-        }
-        let density = f64::from(built) / 9.0;
-        Ok(if density > 0.5 {
-            REFLECTION_MAX_DB
-        } else if density > 0.2 {
-            REFLECTION_MAX_DB / 2.0
-        } else {
-            0.0
-        })
     }
 }

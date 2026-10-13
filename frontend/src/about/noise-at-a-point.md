@@ -152,9 +152,11 @@ click takes:
   a metre at 63 Hz to 0.12 dB at 8 kHz over at most 200 m, weighted by the tree cover;
 - how often the weather bends sound down in the ray's direction by day, evening and night, which
   mixes the calm and the downwind result;
-- the façades around the point: 3 dB when more than half of nine points 75 m apart around it fall
-  inside buildings taller than 5 m, 1.5 dB when more than a fifth do, none for flights.
-  Reflections are not traced.
+- the façades around the point: the share of a 150 m square around it covered by buildings
+  taller than 5 m, read on a fixed fine grid. It is the bonus the earlier nine-point rule gives on
+  average if its points fall independently anywhere in that window: about 0.9 dB at one fifth
+  coverage, 2.2 dB at one half and 3 dB at full coverage. Window edges count their fraction of each
+  grid cell; the receiver's own building is left out. Flights take no bonus. Reflections are not traced.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 78 400 150" role="img" aria-label="A ray seen from the side: ground samples at every line of the terrain grid, a soft hill and a house; in calm air the sound bends over the hilltop and the roof's edge in straight lines, downwind along arcs bent toward the ground" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -240,6 +242,8 @@ noise map or a property certificate.
 - `evaluate.rs`: one source at the receiver, its rays through `physics/src/ray.rs`, `line.rs`,
   `cnossos/` and `foliage.rs`, and its sound path.
 - `building.rs`: a click inside a building, answered at its loudest façade.
+- `obstacles/reflection.rs`, `obstacles/reflection_coverage.rs`: the same covered area for click
+  and painter; `physics/src/reflection.rs` turns its share into the receiver bonus.
 - `aircraft/`: the boxes through the click-time equation, the flight list, the events, the tracks.
 - `rows.rs`, `percentiles.rs`, `distribution.rs`, `loudness.rs`, `shares.rs`, `lines.rs`,
   `listing.rs`, `json.rs`: the rows, the levels over time, Nden, the shares, the lines on the map,

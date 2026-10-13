@@ -101,7 +101,7 @@ pub struct Update<'u> {
     pub lon: f64,
     pub frame: LocalFrame,
     pub receiver_altitude_m: f64,
-    /// The receiver reflection bonus of the surroundings (dB, 0, 1.5 or 3).
+    /// The receiver reflection bonus of the surroundings (dB).
     pub reflection_db: f64,
     /// The place's weather (the final update's): favourable propagation by period and direction,
     /// and the air's absorption.

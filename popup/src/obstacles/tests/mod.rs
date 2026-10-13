@@ -11,6 +11,7 @@ use tiles::obstacles::{EnvelopeClass, Outline, OutlineKind, encode, tiles_crosse
 mod containment;
 mod crossings;
 mod facades;
+mod reflection;
 mod scene;
 mod skyline;
 

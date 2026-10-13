@@ -10,13 +10,16 @@
 mod containment;
 mod crossings;
 mod facades;
+mod reflection;
+mod reflection_coverage;
 mod skyline;
 #[cfg(test)]
 mod tests;
 mod tile;
 
-pub use containment::{Footprint, FootprintRing, REFLECTION_MAX_DB};
+pub use containment::{Footprint, FootprintRing};
 pub use facades::FacadeReceiver;
+pub use physics::reflection::REFLECTION_MAX_DB;
 
 use tile::SceneTile;
 
