@@ -1,5 +1,4 @@
-// The list's last row: how many sources it holds, every ground layer's unlisted contributors and the
-// rows the list hides (a phone shows fewer, an aircraft layer under 0 dB); no row without sound.
+// The click's visible rows and Rest: shares, row limits and unlisted sources.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -29,15 +28,12 @@ test('no row when what is left out makes no sound', () => {
   assert.equal(restSources([layer('road', silent, 0)], []), null)
 })
 
-test('the list shows its loudest three and every other row of 2 % or more, ten at most', () => {
-  // La Palma (28.7022, -17.9355): thirteen roads, most of them 1-2 % of the place's loudness.
-  const laPalma = [33, 30, 8, 5, 4, 2, 2, 1, 2, 1, 1, 1, 1]
-  assert.deepEqual(shownRows(laPalma).map((shown, row) => shown ? row : null).filter(row => row !== null),
-    [0, 1, 2, 3, 4, 5, 6, 8])
-  // The loudest three stay whatever their share; a phone's limit caps the rest.
-  assert.deepEqual(shownRows([1, 1, 1, 1]), [true, true, true, false])
-  assert.equal(shownRows(Array(14).fill(7)).filter(Boolean).length, 10)
-  assert.equal(shownRows(Array(14).fill(7), 9).filter(Boolean).length, 9)
+test('the list uses unrounded shares: its loudest three and rows of at least 1 %, ten at most', () => {
+  const rowShares = [0.33, 0.3, 0.08, 0.05, 0.04, 0.02, 0.02, 0.0099, 0.0101, 0.01, 0.019, 0.018, 0.011]
+  assert.deepEqual(shownRows(rowShares).map((shown, row) => shown ? row : null).filter(row => row !== null),
+    [0, 1, 2, 3, 4, 5, 6, 8, 9, 10])
+  assert.deepEqual(shownRows([0.001, 0.001, 0.001, 0.0099]), [true, true, true, false])
+  assert.equal(shownRows(Array(14).fill(0.07)).filter(Boolean).length, 10)
 })
 
 test('before the shares arrive the list shows its first ten', () => {

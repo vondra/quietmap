@@ -1,10 +1,4 @@
-//! The visitor's list: the heard contributors as rows, one per object, so a bar's guests and its
-//! building, or a church's bells and its building, are one row opening to its parts (owner
-//! 2026-10-10: "Jeden zdroj vydává hluk a po rozkliknutí z čeho"). A part names its object in its
-//! display (`object`, the object's group key); a road or railway is the one of its name, else its
-//! number; any other contributor is a row of its own. The final
-//! update ranks the rows by their own Nden, their parts sounding alone together; a partial update
-//! has a row for each contributor, by Lden.
+//! The visitor's rows join an object's parts for display, keeping each part's sound computation.
 
 use crate::evaluate::Path;
 use crate::loudness::{Curve, loudness, own_nden};
@@ -206,5 +200,17 @@ mod tests {
             object(&guests, &json!({"name": "Bar", "object": "ff"})),
             Object::Group(255)
         );
+    }
+
+    #[test]
+    fn tram_tracks_join_only_when_the_data_names_or_numbers_the_line() {
+        let track = contributor(1, Layer::Railway, 60.0, 100.0);
+        let other_track = contributor(2, Layer::Railway, 60.0, 100.0);
+        for identity in [json!({"name": "Tram line"}), json!({"ref": "7"})] {
+            assert_eq!(object(&track, &identity), object(&other_track, &identity));
+        }
+        // An empty name and ref identify neither a route nor a street; adjacent tracks may diverge.
+        let unnamed = json!({"name": "", "ref": "", "rail_type": "tram"});
+        assert_ne!(object(&track, &unnamed), object(&other_track, &unnamed));
     }
 }

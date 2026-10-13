@@ -1,9 +1,4 @@
-// The list's rows and its last one: once the shares are known it shows the loudest three and every
-// other row of at least 2 % of the place's loudness, ten at most (owner 2026-10-13: La Palma listed
-// thirteen roads, most of 1-2 %); the last row holds everything else together, the folded rows (the
-// aircraft layer among them when under 0 dB) and what the popup leaves out of each ground layer (its
-// contributors cut from the thirty or under 0 dB). Pure TypeScript, so it has a dependency-free unit
-// test.
+// The click's visible rows and the Rest row that holds everything else.
 import type { Contributor, LayerLevels } from '../../types/noise'
 
 /** A row the list does not show: a contributor, or the aircraft layer as a whole. */
@@ -12,21 +7,21 @@ export interface HiddenRow {
   layer?: LayerLevels
 }
 
-/** The share a row needs to be shown, in whole percent, and how many rows the list shows at least and
+/** The share a row needs to be shown, and how many rows the list shows at least and
  *  at most. */
-export const SHOWN_PERCENT_MIN = 2
+export const SHOWN_SHARE_MIN = 0.01
 export const SHOWN_ROWS_MIN = 3
 export const SHOWN_ROWS_MAX = 10
 
-/** Which rows, in the list's order, it shows: before the final update gives their whole percents
- *  (`undefined`), the first `limit`; then the first three and every other of at least 2 %, `limit` at
- *  most (a phone's is lower). */
-export function shownRows(percents: (number | undefined)[], limit = SHOWN_ROWS_MAX): boolean[] {
-  const known = percents.every(percent => percent !== undefined)
+/** Which rows, in the list's order, it shows: before the final update gives their shares
+ *  (`undefined`), the first ten; then the first three and every other meeting the share cutoff,
+ *  ten at most. */
+export function shownRows(shares: (number | undefined)[]): boolean[] {
+  const known = shares.every(share => share !== undefined)
   let shown = 0
-  return percents.map((percent, row) => {
-    const show = shown < Math.min(limit, SHOWN_ROWS_MAX)
-      && (!known || row < SHOWN_ROWS_MIN || (percent as number) >= SHOWN_PERCENT_MIN)
+  return shares.map((share, row) => {
+    const show = shown < SHOWN_ROWS_MAX
+      && (!known || row < SHOWN_ROWS_MIN || (share as number) >= SHOWN_SHARE_MIN)
     if (show) shown += 1
     return show
   })

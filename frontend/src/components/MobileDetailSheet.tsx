@@ -1,5 +1,4 @@
-// The phone popup: a bottom sheet with a drag handle, a collapsed peek and the streamed answer, under
-// the place to stay whose pin opened it.
+// The phone popup's bottom sheet, with a drag handle, a collapsed peek and the streamed answer.
 import { lazy, Suspense, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
@@ -124,7 +123,6 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
                 <NoiseDetailContent
                   data={data}
-                  maxSources={9}
                   onHighlight={onHighlight}
                   calculationOpen={calculationOpen}
                   onCalculationToggle={onCalculationToggle}
