@@ -1,6 +1,6 @@
 // The About pages as dev4 had them: the product's markdown (src/about) with its front matter, the
-// logo and title on the first page and a breadcrumb on the others, an intro, the pages below each
-// one listed, and the contact at the foot.
+// logo and title on the first page and a breadcrumb on the others, an intro, the pages below a page
+// listed where it marks them, and the contact at the foot.
 import { useEffect, useState } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
@@ -10,8 +10,8 @@ import { splitFrontMatter } from '../lib/about-front-matter'
 import { ABOUT_PAGES } from '../lib/about-pages'
 import { setDocumentTitle } from '../utils/page-title'
 
-/** Where a page places the list of the pages below it; without it the list opens the page. */
-const CHILDREN_MARKER = '<!-- REGION_CHILDREN -->'
+/** Where a page lists the pages below it (the regions, a region's countries); a page without it lists none. */
+const SUBPAGES_MARKER = '<!-- SUBPAGES -->'
 
 /** An image named without a path is one of the About pages' own (public/about/images). */
 const COMPONENTS: Components = {
@@ -24,11 +24,11 @@ function Prose({ children }: { children: string }) {
   return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={COMPONENTS}>{children}</Markdown>
 }
 
-/** The pages one level below `page`, by title, but those it does not list. */
-function childrenOf(page: string): [string, string][] {
+/** The pages one level below `page`, by title. */
+function subpagesOf(page: string): [string, string][] {
   return Object.entries(ABOUT_INDEX)
-    .filter(([path, meta]) => {
-      if (meta.hidden || path === page) return false
+    .filter(([path]) => {
+      if (path === page) return false
       const rest = page === '' ? path : path.startsWith(`${page}/`) ? path.slice(page.length + 1) : null
       return rest !== null && !rest.includes('/')
     })
@@ -36,7 +36,7 @@ function childrenOf(page: string): [string, string][] {
     .sort(([, a], [, b]) => a.localeCompare(b))
 }
 
-function ChildrenGrid({ items }: { items: [string, string][] }) {
+function SubpagesGrid({ items }: { items: [string, string][] }) {
   return (
     <div className="my-6 grid grid-cols-2 gap-2 md:grid-cols-3">
       {items.map(([path, title]) => (
@@ -83,8 +83,7 @@ export default function AboutPage({ page }: { page: string }) {
   const { meta, body } = splitFrontMatter(markdown ?? '')
   useEffect(() => setDocumentTitle([page ? meta.title || null : 'About']), [page, meta.title])
   const crumbs = breadcrumb(page)
-  const children = childrenOf(page)
-  const [before, after] = body.includes(CHILDREN_MARKER) ? body.split(CHILDREN_MARKER) : [null, body]
+  const [before, after] = body.includes(SUBPAGES_MARKER) ? body.split(SUBPAGES_MARKER) : [body, null]
   return (
     <main className="h-full overflow-y-auto bg-background">
       <div className="mx-auto max-w-2xl px-6 py-12">
@@ -112,15 +111,14 @@ export default function AboutPage({ page }: { page: string }) {
               <h1 className="mb-2 text-3xl font-bold text-foreground">{meta.title}</h1>
             )}
             {meta.intro && <p className="mb-6 text-lg text-muted-foreground">{meta.intro}</p>}
-            {before === null && children.length > 0 && <ChildrenGrid items={children} />}
             <div className="about-prose">
-              {before !== null && (
+              <Prose>{before}</Prose>
+              {after !== null && (
                 <>
-                  <Prose>{before}</Prose>
-                  {children.length > 0 && <ChildrenGrid items={children} />}
+                  <SubpagesGrid items={subpagesOf(page)} />
+                  <Prose>{after}</Prose>
                 </>
               )}
-              <Prose>{after}</Prose>
             </div>
             <Footer />
           </>

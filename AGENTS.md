@@ -1,8 +1,9 @@
 # Conventions for coding agents
 
 Make noise visible, make quiet possible. The owner judges results; coding agents write the
-code. Every change serves a correct, fast answer for the visitor anywhere on Earth. Read
-`ARCHITECTURE.md` before anything else.
+code. Every change serves a correct, fast answer for the visitor anywhere on Earth. Read the About
+pages first (`frontend/src/about/`): `data-preparation.md`, `noise-at-a-point.md` and
+`the-noise-map.md` tell how the map is computed, each ending in its code.
 
 ## Simplicity
 
@@ -23,6 +24,9 @@ code. Every change serves a correct, fast answer for the visitor anywhere on Ear
 - Code is the documentation: long, precise, greppable names; a one-line doc atop every file;
   comments only for why, the provenance of a constant, or a subtle invariant.
 - About 300 lines per file. One fact in one place, one test per bug class, zero warnings.
+- How the map works is told twice only: on the About pages, for every visitor down to the code,
+  and in the code itself. No other document repeats it; a change that makes a page wrong fixes
+  the page in the same commit.
 - Physics lives once in `physics/`; a model change updates its tests and says so in the commit.
 - Before every commit run `./scripts/check-fast.sh` and read its whole output.
 
@@ -34,4 +38,5 @@ code. Every change serves a correct, fast answer for the visitor anywhere on Ear
 ## Public repository
 
 This repository is public. No hostnames, disk paths, providers or deployment details in any
-file, comment or doc: they belong in the private operations repository.
+file, comment or doc, and no timings on our own machines: they belong in the private operations
+repository. Everything else that tells how the map computes and why we believe it belongs here.

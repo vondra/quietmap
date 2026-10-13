@@ -1,7 +1,7 @@
 //! The whole of each shown contributor as the map draws it: every piece of its group within the
 //! reach in the sources files read, not only the pieces evaluated (a road sampled or cut by the
 //! stop rule would show with gaps), joined at shared ends into lines and simplified together, so
-//! the final update stays within its budget (100 KB, ARCHITECTURE.md).
+//! the final update stays within its budget (100 KB, frontend/src/about/noise-at-a-point.md).
 
 use crate::release::RingFiles;
 use rayon::prelude::*;

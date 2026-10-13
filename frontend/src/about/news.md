@@ -1,7 +1,6 @@
 ---
 title: What's new
 intro: What changed in the data and the model, and what comes next.
-nav: hidden
 ---
 
 ## October 2026

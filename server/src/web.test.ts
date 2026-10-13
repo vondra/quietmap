@@ -11,14 +11,14 @@ test('the map, its files and its About pages are served; nothing else pretends t
   const frontend = await mkdtemp(join(tmpdir(), '0db-web-'))
   await writeFile(join(frontend, 'index.html'), '<!doctype html><title>quiet-map-test</title>')
   await writeFile(join(frontend, 'known.js'), 'console.log("known")')
-  await writeFile(join(frontend, 'about-pages.json'), JSON.stringify(['', 'credits', 'europe', 'europe/cz', 'methodology', 'news']))
+  await writeFile(join(frontend, 'about-pages.json'), JSON.stringify(['', 'data-sources', 'data-sources/europe', 'data-sources/europe/cz', 'validation', 'news']))
   t.after(async () => rm(frontend, { recursive: true, force: true }))
 
   const app = Fastify()
   await registerWeb(app, frontend)
   t.after(async () => app.close())
 
-  for (const url of ['/', '/?e2e=1', '/about', '/about/', '/about/methodology', '/about/news/', '/about/europe', '/about/europe/cz']) {
+  for (const url of ['/', '/?e2e=1', '/about', '/about/', '/about/validation', '/about/news/', '/about/data-sources/europe', '/about/data-sources/europe/cz']) {
     const response = await app.inject(url)
     assert.equal(response.statusCode, 200, url)
     assert.match(response.body, /quiet-map-test/)
@@ -26,7 +26,7 @@ test('the map, its files and its About pages are served; nothing else pretends t
   assert.equal((await app.inject('/known.js')).statusCode, 200)
 
   for (const url of [
-    '/.env', '/.git/config', '/.ssh/id_rsa', '/aboutness', '/about/europe/de', '/about//news', '/about//', '/about/news//', '/about/.env',
+    '/.env', '/.git/config', '/.ssh/id_rsa', '/aboutness', '/about/data-sources/europe/de', '/about//news', '/about//', '/about/news//', '/about/.env',
     '/%2eenv', '/assets/missing.js', '/api/missing', '/about/%6eews', '/%61bout/news', '/about%2fnews',
   ]) {
     const response = await app.inject(url)

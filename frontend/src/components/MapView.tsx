@@ -25,7 +25,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 
 // The noise model's data: OpenStreetMap's ODbL asks for its credit on the map (the satellite base
 // map does not name it); every other source is credited on the About pages.
-const NOISE_DATA_CREDITS = 'Noise model: &copy; OpenStreetMap contributors and <a href="/about/credits">others</a>'
+const NOISE_DATA_CREDITS = 'Noise model: &copy; OpenStreetMap contributors and <a href="/about/data-sources">others</a>'
 
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
