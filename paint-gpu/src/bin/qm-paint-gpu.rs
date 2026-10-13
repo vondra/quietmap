@@ -6,9 +6,10 @@
 //! `--kind`; prints the agreement, the failures, the worst pairs and both times.
 //!
 //! `qm-paint-gpu popup ... --square X,Y --out DIR [--pixels N] [--seed S]`: the popup's loudness
-//! (Nden per layer and in total) at N random outdoor pixels of the square (300), written as a
-//! sparse reference under DIR (every other cell not assessed), to score a map or an etalon against
-//! with `compare`.
+//! (Nden per layer and in total) at N random pixels of the square (300), a building's at its
+//! loudest façade as a click inside it is answered, written as a sparse reference under DIR (every
+//! other cell, and a building without an exposed façade, not assessed), to score a map or an etalon
+//! against with `compare`.
 //!
 //! `qm-paint-gpu etalon ... --square X,Y --out DIR [--device D] [--sample-step K]`: the square's
 //! etalon (every outdoor pixel's loudness with every loud source exact, `paint::etalon`; with K one
@@ -376,8 +377,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The popup's answers at `pixels` random outdoor pixels of the square, as a sparse reference: the
-/// square's tiles under `out`, every other cell not assessed (`compare` scores a map against it).
+/// The popup's answers at `pixels` random pixels of the square (a building's at its loudest façade),
+/// as a sparse reference: the square's tiles under `out`, every other cell not assessed (`compare`
+/// scores a map against it).
 fn popup_reference(
     release: &Release,
     tile: TileId,
@@ -405,7 +407,8 @@ fn popup_reference(
             };
             let mut last = None;
             popup::answer::answer(release, lat, lon, &options, &mut |update| {
-                if !update.partial && update.building.is_none() {
+                let assessed = (update.building).is_none_or(|building| building.facade.is_some());
+                if !update.partial && assessed {
                     let mut ndens = [0.0; LAYERS + 1];
                     for (nden, layer) in ndens.iter_mut().zip(&update.layers) {
                         *nden = layer.nden_sone.unwrap_or(0.0);
