@@ -117,6 +117,7 @@ pub fn etalon(
                     steady,
                     bands,
                     left_groups: (&[], [0.0; 4]),
+                    left_reach: 1.0,
                     flights: flights[k],
                 };
                 let range = starts[k]..starts[k + 1];
@@ -224,6 +225,7 @@ pub fn sounds_at(
                 steady,
                 bands: hum_bands,
                 left_groups: (&[], [0.0; 4]),
+                left_reach: 1.0,
                 flights: aircraft_sums(square, point, &|_| 1.0, AIRCRAFT_REACH_M)?,
             };
             pixel_sound(

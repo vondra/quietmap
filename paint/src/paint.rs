@@ -368,6 +368,7 @@ pub fn paint_pixels(
                         steady,
                         bands,
                         left_groups: (&[], [0.0; 4]),
+                        left_reach: 1.0,
                         flights: flights[at],
                     };
                     pixel_ndens(
@@ -400,14 +401,32 @@ pub fn paint_pixels(
                 let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
                     .map(|(di, dj)| (j + dj) * corner_side + i + di);
                 let weights = corner_weights(fx, fy);
+                let range = starts[k]..starts[k] + lists[k].len();
+                let (mut steady, mut bands) = hum.at(x, y);
+                // How much of what the block leaves out reaches the pixel: its admitted far
+                // sources' energy here against their corners' blend, at most 1. A pixel behind a
+                // wall hears its far sources 10-20 dB under that blend, and the left-out blended
+                // from the corners put Dobris's total 7 phon over the etalon there.
+                let block = &pass[slot];
+                let admitted_here: f64 = (lists[k].iter().zip(&evaluated.pairs[range.clone()]))
+                    .filter(|(index, _)| block.admitted.binary_search(index).is_ok())
+                    .map(|(_, energy)| lden_energy(&energy.mixed))
+                    .sum();
+                let admitted_blended: f64 = (0..4)
+                    .map(|c| weights[c] * block.admitted_at_corners[c])
+                    .sum();
+                let left_reach = if admitted_blended > 0.0 {
+                    (admitted_here / admitted_blended).min(1.0)
+                } else {
+                    1.0
+                };
                 // What the block leaves out beside the hum, each corner's in the shape of all it
                 // hears in that layer; of it each group's own.
-                let (mut steady, mut bands) = hum.at(x, y);
-                let left_out = &pass[slot].left_out;
+                let left_out = &block.left_out;
                 for layer in 0..LAYERS {
                     for p in 0..PERIODS {
                         for (c, &corner) in around.iter().enumerate() {
-                            let energy = weights[c] * left_out[c][layer][p];
+                            let energy = weights[c] * left_out[c][layer][p] * left_reach;
                             steady[layer][p] += energy;
                             let shape = &corner_bands[corner][layer][p];
                             let sum: f64 = shape.iter().sum();
@@ -422,10 +441,10 @@ pub fn paint_pixels(
                 let rest = Rest {
                     steady,
                     bands,
-                    left_groups: (&pass[slot].left_groups, weights),
+                    left_groups: (&block.left_groups, weights),
+                    left_reach,
                     flights: blend_flights(around.map(|corner| flights[corner]), fx, fy),
                 };
-                let range = starts[k]..starts[k] + lists[k].len();
                 let reflection = point.reflection();
                 let mut layers: [f64; LAYERS] =
                     std::array::from_fn(|layer| lden_energy(&rest.steady[layer]));
