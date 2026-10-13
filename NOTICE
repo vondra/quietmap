@@ -1,0 +1,21 @@
+quietmap.org
+Copyright 2025-2026 Ondra Raska
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+If you build on this code or improve it, we would love to hear from you at
+info@quietmap.org. This is a request, not a condition of the licence.
+
+Third-party material in this repository keeps its own terms:
+
+- build/src/sources/country_speeds.rs holds the default speed limits that the
+  osm-legal-default-speeds project parses from the OpenStreetMap wiki's "Default speed limits"
+  tables, by OpenStreetMap wiki contributors, under CC BY-SA 2.0.
+- physics/tests/fixtures/cnossos_iso_tr_17534_4_direct.json holds the test-case values of
+  ISO/TR 17534-4:2020 as published by NoiseModelling (Université Gustave Eiffel).
+- The aircraft noise tables compiled into the programs come from EASA's Aircraft Noise and
+  Performance (ANP) database, and the helicopter levels from EASA Certification Noise Levels -
+  Helicopters, Issue 52, whose source is acknowledged here as its terms require.
+
+The data the map is computed from are credited, with their licences, on the About page Data
+sources (frontend/src/about/data-sources.md).

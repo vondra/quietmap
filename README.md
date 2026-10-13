@@ -30,3 +30,9 @@ Their text is in [`frontend/src/about/`](frontend/src/about/).
     npm --prefix frontend run e2e     # the built map in Chromium, every API answer mocked in the page
 
 The server's routes and settings are in [`server/README.md`](server/README.md).
+
+## Licence
+
+[Apache License 2.0](LICENSE). If you build on this code or improve it, we would love to hear from
+you at info@quietmap.org: a request, not a condition. Third-party material in the repository keeps
+its own terms ([`NOTICE`](NOTICE)).
