@@ -1,4 +1,4 @@
-//! GPU compilation, scene upload and pair evaluation in the square's frame.
+//! Device storage and launches for source rays, weighted receiver spectra and pixel loudness.
 // Coordinates are rebased in f64 before the GPU uses f32 frame metres. The repr(C) records mirror
 // scene.cuh, evaluate.cuh and paint.cu field by field.
 
@@ -330,11 +330,15 @@ impl Gpu {
         &self,
         square: &DeviceSquare,
         (receivers, own_footprint): (&[[f64; 2]], &[u64]),
-        (candidates, points): (&[u32], &[u32]),
+        (candidates, points, band_weights): (&[u32], &[u32], &[f32]),
         bands: &mut CudaSlice<f32>,
     ) -> Result<(Vec<[f32; PAIR_SUMS]>, Vec<u32>), String> {
         let count = candidates.len();
-        if receivers.len() != count || own_footprint.len() != count || points.len() != count {
+        if receivers.len() != count
+            || own_footprint.len() != count
+            || points.len() != count
+            || band_weights.len() != count
+        {
             return Err("evaluate_pairs: a receiver, an owner and a point per candidate".into());
         }
         if candidates.iter().any(|&index| index >= square.candidates)
@@ -356,6 +360,7 @@ impl Gpu {
         let own = driver(device.htod_sync_copy(own_footprint))?;
         let index = driver(device.htod_sync_copy(candidates))?;
         let point_index = driver(device.htod_sync_copy(points))?;
+        let band_weights = driver(device.htod_sync_copy(band_weights))?;
         let ray_counts = driver(device.alloc_zeros::<u32>(count))?;
         let failed = driver(device.alloc_zeros::<u32>(count))?;
         let kernel = |name: &str| {
@@ -446,6 +451,7 @@ impl Gpu {
                         &square.scene,
                         &index,
                         &point_index,
+                        &band_weights,
                         count as u32,
                         &pair_bands,
                         &failed,

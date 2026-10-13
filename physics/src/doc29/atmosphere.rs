@@ -1,13 +1,4 @@
-//! NPD curves recalculated for the model's atmosphere (Doc 29 4th ed. Vol 2 Appendix D). The ANP
-//! database normalises every NPD curve to the SAE AIR-1845 atmosphere (Table D-1), a notional
-//! average of certification tests that absorbs 5.9 dB/km at 1 kHz; the model propagates every
-//! ground source through the place's yearly air (CNOSSOS-EU's 15 C and 70 % absorb 4.1 dB/km at
-//! 1 kHz), and read in AIR-1845 the aircraft would sound up to 2 dB quieter than that air gives
-//! them. Per class and operation the anchor's spectral class, at 305 m, is taken back to the
-//! source through AIR-1845 (Eq. D-1), out to each NPD distance through both atmospheres (D-2,
-//! D-3), and the A-weighted difference (D-4) is added to its SEL and LAmax curves. The model's
-//! absorption is ISO 9613-1 at the exact 1/3-octave centres (Doc 29 names SAE ARP-5534, which it
-//! matches within 2 % in the bands that carry an aircraft's level).
+//! Aircraft NPD atmosphere corrections and received spectral energies from Doc 29 Appendix D.
 
 use super::npd::{METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, TAIL_ANCHOR_M};
 use super::spectra_generated::SPECTRA;
@@ -15,7 +6,7 @@ use crate::atmosphere::{
     ALPHA_DB_PER_KM, DEFAULT_RELATIVE_HUMIDITY_PCT, DEFAULT_TEMPERATURE_C, REFERENCE_PRESSURE_KPA,
     alpha_db_per_km,
 };
-use crate::bands::BANDS;
+use crate::bands::{BANDS, energy};
 
 /// The 24 one-third-octave bands of the spectral classes, 50 Hz to 10 kHz.
 pub const THIRD_OCTAVES: usize = 24;
@@ -212,21 +203,22 @@ pub fn class_increments_db(class: usize, departure: bool) -> [f64; NPD_DISTANCES
     npd_increments_db(spectrum, &model_rates_db_per_m()).map(|increment| increment + impedance)
 }
 
-/// The unweighted 1/3-octave levels (dB up to a constant, 50 Hz to 10 kHz) a class's flights make
+/// The unweighted 1/3-octave energies (up to a constant, 50 Hz to 10 kHz) a class's flights make
 /// at `slant_m` through the absorption `rates_db_per_m`: its approach and departure spectral
 /// classes averaged in energy, taken back from 305 m through AIR-1845 (Eq. D-1) and out again;
 /// `None` for a class without spectra.
-pub fn class_spectrum_at(
+pub fn class_spectrum_energy_at(
     class: usize,
     slant_m: f64,
     rates_db_per_m: &[f64; THIRD_OCTAVES],
 ) -> Option<[f64; THIRD_OCTAVES]> {
     let spectra = SPECTRA.get(class)?.as_ref()?;
     Some(std::array::from_fn(|n| {
-        let both =
-            10f64.powf(spectra.approach_db[n] / 10.0) + 10f64.powf(spectra.departure_db[n] / 10.0);
-        10.0 * (both / 2.0).log10() + AIR_1845_DB_PER_100M[n] / 100.0 * SPECTRUM_DISTANCE_M
-            - rates_db_per_m[n] * slant_m
+        let both = energy(spectra.approach_db[n]) + energy(spectra.departure_db[n]);
+        both / 2.0
+            * energy(
+                AIR_1845_DB_PER_100M[n] / 100.0 * SPECTRUM_DISTANCE_M - rates_db_per_m[n] * slant_m,
+            )
     }))
 }
 
@@ -389,10 +381,10 @@ mod tests {
     fn far_flights_lose_their_treble() {
         let rates = model_rates_db_per_m();
         let class = class_named("A320-232");
-        let near = class_spectrum_at(class, SPECTRUM_DISTANCE_M, &rates).unwrap();
-        let far = class_spectrum_at(class, 3_000.0, &rates).unwrap();
+        let near = class_spectrum_energy_at(class, SPECTRUM_DISTANCE_M, &rates).unwrap();
+        let far = class_spectrum_energy_at(class, 3_000.0, &rates).unwrap();
         // Bands 7 (250 Hz) and 19 (4 kHz).
-        let tilt = (near[19] - far[19]) - (near[7] - far[7]);
+        let tilt = 10.0 * ((near[19] / far[19]) / (near[7] / far[7])).log10();
         assert!((tilt - 68.1).abs() < 0.5, "{tilt}");
         let expected = (rates[19] - rates[7]) * (3_000.0 - SPECTRUM_DISTANCE_M);
         assert!((tilt - expected).abs() < 1e-9);

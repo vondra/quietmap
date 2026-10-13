@@ -1,10 +1,8 @@
-//! One flight segment at one receiver (Doc 29 4th ed. Vol 2 Eq. 4-8b with dev4's screening): the
-//! exact SEL the benchmark takes as the reference of the aircraft boxes, and the levels a box
-//! sums at the ten NPD distances.
+//! A flight segment at a receiver through shared Doc 29 NPD curves, corrections and screening.
 
 use super::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES, receiver_impedance_db};
 use super::corrections::{
-    INSTALLATION_CORRECTION_MAX_DB, finite_segment_correction_db, installation_correction_db,
+    INSTALLATION_CORRECTION_MAX_DB, finite_segment_energy_fraction, installation_energy_gain,
     lateral_attenuation_db, speed_correction_db,
 };
 use super::helicopters::{HelicopterLevels, helicopter_levels};
@@ -272,13 +270,16 @@ pub fn segment_sel_at_receiver(
     let [east_m, north_m, up_m] = closest.on_line_m;
     let slant_m = east_m.hypot(north_m).hypot(up_m);
     let npd = emission.read_npd(slant_m);
-    let finite = finite_segment_correction_db(
-        closest.along * closest.length_m,
-        closest.length_m,
-        npd.scaled_distance_m,
-    );
+    let finite = 10.0
+        * finite_segment_energy_fraction(
+            closest.along * closest.length_m,
+            closest.length_m,
+            npd.scaled_distance_m,
+        )
+        .log10();
     let lateral_attenuation = lateral_attenuation_db(closest.lambda_height_m, closest.lateral_m);
-    let installation = installation_correction_db(emission.installation, closest.height_m, slant_m);
+    let installation =
+        10.0 * installation_energy_gain(emission.installation, closest.height_m, slant_m).log10();
     let free_sel_db =
         npd.sel_db + emission.speed_correction_db + installation - lateral_attenuation + finite;
     let height_above_ground_m = 0.5
@@ -327,7 +328,9 @@ pub fn segment_lmax_db(emission: &SegmentEmission, closest: &ClosestPoints) -> f
         lateral_attenuation_db(up_m, east_m.hypot(north_m))
     };
     emission.read_npd(distance_m).lamax_db
-        + installation_correction_db(emission.installation, closest.height_m, line_slant_m)
+        + 10.0
+            * installation_energy_gain(emission.installation, closest.height_m, line_slant_m)
+                .log10()
         - lateral_attenuation
 }
 

@@ -1,7 +1,4 @@
-// The kernels: the energy one candidate delivers at one receiver, for pairs the host lists: each
-// pair's rays listed, then a thread a ray (a pair's rays differ in number, a warp's threads in step),
-// then the answered pairs' bands into their points. The square's tables are in one descriptor; a
-// thread's ray lives in its own local memory.
+// Painter ray assembly, exact energy transfers and importance-weighted receiver spectra.
 
 // Everything one square's kernels read (paint-gpu/src/device.rs writes it).
 struct SquareScene {
@@ -113,12 +110,12 @@ extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, 16) ray_transfer
 // Per answered pair: its mixed bands added to point `point_index[i]`'s in `bands` (LAYERS x PERIODS
 // x BANDS a point).
 extern "C" __global__ void pair_bands_to_points(const SquareScene* square_ptr, const u32* candidate_index,
-                                                const u32* point_index, u32 pair_count, const float* pair_bands,
+                                                const u32* point_index, const float* band_weight, u32 pair_count, const float* pair_bands,
                                                 const u32* failed, float* bands) {
     const SquareScene& square = *square_ptr;
     u32 pair = blockIdx.x * blockDim.x + threadIdx.x;
     if (pair >= pair_count || failed[pair]) return;
     const Candidate& candidate = square.candidates[candidate_index[pair]];
     float* point_bands = bands + ((u64)point_index[pair] * LAYERS + candidate.layer) * (PERIODS * BANDS);
-    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&point_bands[j], pair_bands[(u64)pair * (PERIODS * BANDS) + j]);
+    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&point_bands[j], band_weight[pair] * pair_bands[(u64)pair * (PERIODS * BANDS) + j]);
 }

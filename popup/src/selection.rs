@@ -1,18 +1,9 @@
-//! Per-layer selection: candidates are evaluated from the loudest bound until the bounds of
-//! everything left out stay below (10^(0.1/10) - 1) times the energy evaluated, per period and
-//! across all rings. Never a per-piece threshold (dev4's false-quiet bug 62e7daa2).
-//!
-//! When that proven rule would need more than `PROVEN_ROUND_LIMIT` further evaluations, the rest
-//! of the layer is estimated instead (the owner's decision of 2026-09-30: dense cities in time for
-//! an error measured at 0.02 dB at most): pieces whose bound is large against the rest are
-//! evaluated with certainty, the others sampled with probability proportional to their bound
-//! (Hansen-Hurwitz), doubling the sample until two standard errors fall under
-//! `SAMPLING_TOLERANCE` of the answer. The draws are seeded by the click, so a click answers the
-//! same every time.
+//! Source selection by bounded omission and shared importance samples, with contributor accounting.
 
 use crate::candidates::{Attributes, Candidate, DisplayRef};
 use crate::evaluate::{Bands, Path, Received, Receiver, Scratch, period_sums, received_bands};
 use crate::listing::EvaluatedPiece;
+use crate::sampling::BoundSample;
 use crate::update::{CONTRIBUTOR_PIECES, Contributor};
 use physics::bands::{BANDS, PERIODS};
 use rayon::prelude::*;
@@ -26,11 +17,6 @@ const MINIMUM_BATCH: usize = 16;
 /// When the proven rule would take a layer's evaluations in one call past this, the rest of the
 /// layer is sampled.
 const PROVEN_ROUND_LIMIT: usize = 1_024;
-/// The first sample and the largest one.
-const SAMPLE_START: usize = 512;
-const SAMPLE_MAX: usize = 32_768;
-/// Two standard errors of the estimate may reach this fraction of the answer: 0.05 dB.
-const SAMPLING_TOLERANCE: f64 = 0.011_579_454_376_269_092;
 
 /// One layer's account across the rings.
 pub struct LayerSelection {
@@ -324,40 +310,13 @@ fn sample_rest(
     // Pending stays sorted ascending (only its loudest end is ever drained).
     rest.reverse();
     let mut evaluated: HashMap<usize, ([f64; PERIODS], Received)> = HashMap::new();
-    let mut size = SAMPLE_START;
-    let mut first = 0;
+    let orders: Vec<f64> = rest.iter().map(|candidate| candidate.order).collect();
+    let mut sample = BoundSample::new(seed);
     loop {
-        // Certainty pieces for this sample size.
-        let mut rest_order: f64 = rest[first..].iter().map(|c| c.order).sum();
-        let mut certain = first;
-        while certain < rest.len() && rest[certain].order * size as f64 >= rest_order {
-            rest_order -= rest[certain].order;
-            certain += 1;
-        }
-        let population = rest.len() - certain;
-        let exhaustive = population <= size;
-        let mut random = SplitMix(seed ^ size as u64);
-        let draws: Vec<usize> = if exhaustive {
-            (certain..rest.len()).collect()
-        } else {
-            let cumulative: Vec<f64> = rest[certain..]
-                .iter()
-                .scan(0.0, |sum, c| {
-                    *sum += c.order;
-                    Some(*sum)
-                })
-                .collect();
-            let total = *cumulative.last().expect("a non-empty rest");
-            (0..size)
-                .map(|_| {
-                    let target = random.unit() * total;
-                    certain
-                        + cumulative
-                            .partition_point(|&sum| sum <= target)
-                            .min(population - 1)
-                })
-                .collect()
-        };
+        let round = sample.round(&orders);
+        let (first, certain) = (round.certain.start, round.certain.end);
+        let draws = &round.draws;
+        let exhaustive = round.exhaustive;
         let needed: Vec<(usize, Candidate)> = (first..certain)
             .chain(draws.iter().copied())
             .filter(|index| !evaluated.contains_key(index))
@@ -373,55 +332,23 @@ fn sample_rest(
         for index in first..certain {
             selection.add(&rest[index], &evaluated[&index].1);
         }
-        first = certain;
-        let (estimate, variance) = if exhaustive {
-            let mut sum = [0.0; PERIODS];
-            for index in certain..rest.len() {
-                for (total, value) in sum.iter_mut().zip(evaluated[&index].0) {
-                    *total += value;
-                }
-            }
-            (sum, [0.0; PERIODS])
-        } else {
-            let n = draws.len() as f64;
-            let mut mean = [0.0; PERIODS];
-            let mut square = [0.0; PERIODS];
-            for &index in &draws {
-                let probability = rest[index].order / rest_order;
-                for period in 0..PERIODS {
-                    let y = evaluated[&index].0[period] / probability;
-                    mean[period] += y / n;
-                    square[period] += y * y / n;
-                }
-            }
-            let variance = std::array::from_fn(|period| {
-                (square[period] - mean[period] * mean[period]).max(0.0) * n / (n - 1.0) / n
-            });
-            (mean, variance)
-        };
+        let (estimate, variance) = round.estimate(&orders, |index| evaluated[&index].0);
         let answer: [f64; PERIODS] =
             std::array::from_fn(|period| selection.answer_energy()[period] + estimate[period]);
-        let precise = (0..PERIODS)
-            .all(|period| 2.0 * variance[period].sqrt() <= SAMPLING_TOLERANCE * answer[period]);
-        if exhaustive || precise || size >= SAMPLE_MAX {
+        if sample.converged(&round, variance, answer) {
             for period in 0..PERIODS {
                 selection.estimate[period] += estimate[period];
                 selection.variance[period] += variance[period];
             }
             if !exhaustive {
-                selection.covered += population;
+                selection.covered += round.population;
             }
             // Each drawn piece stands for its share of the estimate: drawn m times out of n with
             // probability p, its weight is m / (n p), so the spectrum sums to the layer's estimate.
             // The estimate stays the layer's steady rest, no contributor's: weighted into its own
             // group a drawn piece would carry other groups' energy as its passes (+1.5 sone where
             // every piece evaluated read 2.55).
-            let mut times: std::collections::BTreeMap<usize, f64> =
-                std::collections::BTreeMap::new();
-            for &index in &draws {
-                *times.entry(index).or_default() += 1.0;
-            }
-            for (&index, &drawn) in &times {
+            for (index, weight) in round.weights(&orders) {
                 let (energy, received) = &evaluated[&index];
                 if exhaustive {
                     selection.add(&rest[index], received);
@@ -429,7 +356,6 @@ fn sample_rest(
                         *estimate -= value;
                     }
                 } else {
-                    let weight = drawn / (draws.len() as f64 * rest[index].order / rest_order);
                     selection.evaluated += 1;
                     selection.add_spectrum(
                         &received
@@ -440,6 +366,6 @@ fn sample_rest(
             }
             return Ok(());
         }
-        size *= 2;
+        sample.advance(&round);
     }
 }

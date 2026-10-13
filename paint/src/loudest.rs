@@ -1,19 +1,14 @@
-//! The loudest flights at a square's points without bounding every box at every point: each box's
-//! bound on its pieces' LAmax over the whole square, sorted once a square, and a point's own bounds
-//! taken in that order only until the loudest left over the square could not pass what the point
-//! has bounded. The point reads the same boxes in the same order as a click's full sort
-//! (`popup::aircraft::loudest_first`): of half a million boxes in reach of a Dobris point, a few
-//! thousand.
+//! Loudest flight pieces found from box bounds over a square, with horizons only for receivers hearing pieces.
 
 use crate::exact::Point;
 use crate::flights::tiles_heard;
 use crate::square::Square;
 use physics::doc29::atmosphere::receiver_impedance_db;
-use physics::doc29::screening::ReceiverHorizons;
 use popup::aircraft::boxes::{
     AIRCRAFT_REACH_M, AircraftReceiver, ReceiverArea, box_lamax_bound, box_lamax_bound_over,
 };
 use popup::aircraft::flights::FlightTotals;
+use popup::aircraft::horizons::Horizons;
 use popup::aircraft::{loudest_first, read_loudest_in_order};
 use rayon::prelude::*;
 use std::cmp::Ordering;
@@ -80,14 +75,20 @@ impl LoudestIndex {
     pub fn search(
         &self,
         square: &Square,
-        receiver: AircraftReceiver,
-        horizons: &(impl ReceiverHorizons + Sync),
+        point: &Point,
         flights: &mut FlightTotals,
-    ) {
+    ) -> Result<(), String> {
+        let receiver = AircraftReceiver {
+            position: point.position,
+            altitude_m: point.altitude_m,
+        };
         let heard = tiles_heard(square, receiver.position, AIRCRAFT_REACH_M);
         let lists: Vec<&[(f64, u32)]> = (heard.iter())
             .map(|tile| &self.lists[tile.number][usize::from(!tile.fine)][..])
             .collect();
+        if lists.iter().all(|list| list.is_empty()) {
+            return Ok(());
+        }
         let tiles: Vec<_> = heard.iter().map(|tile| (tile.tile, tile.boxes)).collect();
         let impedance_db = receiver_impedance_db(receiver.altitude_m);
         let mut over: BinaryHeap<Over> = (lists.iter().enumerate())
@@ -114,12 +115,20 @@ impl LoudestIndex {
                 }
             }
         });
+        let horizons = Horizons::build(
+            &square.ground,
+            &square.obstacles,
+            point.position,
+            point.altitude_m,
+            point.own_footprint,
+        )?;
         read_loudest_in_order(
             ordered,
             &tiles,
-            (&square.frame, receiver, horizons),
+            (&square.frame, receiver, &horizons),
             flights,
         );
+        Ok(())
     }
 }
 

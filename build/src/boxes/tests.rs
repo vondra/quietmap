@@ -1,6 +1,4 @@
-//! The whole chain on synthetic flights over flat ground: segments into boxes, boxes into an
-//! aircraft file, the file's boxes at receivers through the click-time equation, against the
-//! kernel's exact sum of the segments.
+//! Synthetic-flight checks of aircraft preparation, storage and shared receiver physics.
 
 use super::*;
 use physics::doc29::box_geometry::BOX_EDGE_LEVEL_STEP_DB;
@@ -101,7 +99,7 @@ fn boxed_db(files: &[(TileId, Vec<u8>)], receiver: [f64; 2]) -> f64 {
                 installation_shares: record.installation_shares,
                 ground_m: record.ground_m - 4.0,
             };
-            energy += 10f64.powf(box_sel_at_receiver(&at_receiver, &Unscreened).sel_db[0] / 10.0);
+            energy += box_sel_at_receiver(&at_receiver, &Unscreened).sel_energy[0];
         }
     }
     10.0 * energy.log10()

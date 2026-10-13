@@ -1,6 +1,4 @@
-//! The exact evaluation of (point, source) pairs, the popup's physics: the points a square is
-//! evaluated at, every pair's energy in both weather states and every point's octave bands per
-//! layer, computed here or by a card ([`Batch`]).
+//! Exact source energies and importance-weighted receiver spectra through shared popup physics.
 
 use crate::square::Square;
 use physics::bands::{BANDS, PERIODS, energy, lden_energy};
@@ -110,10 +108,28 @@ pub struct Evaluated {
     pub bands: Vec<PointBands>,
 }
 
+/// A source at a receiver, with its spectrum's importance-sampling weight; its energy stays unweighted for variance.
+#[derive(Clone, Copy)]
+pub struct Pair {
+    pub point: u32,
+    pub candidate: u32,
+    pub band_weight: f64,
+}
+
+impl Pair {
+    pub fn new(point: u32, candidate: u32) -> Self {
+        Self {
+            point,
+            candidate,
+            band_weight: 1.0,
+        }
+    }
+}
+
 /// Exact evaluations of many pairs at once (a card): what candidate `c` delivers at point `p`, for
 /// every `(p, c)` of `pairs`.
 pub trait Batch: Sync {
-    fn evaluate(&self, points: &[Point], pairs: &[(u32, u32)]) -> Result<Evaluated, String>;
+    fn evaluate(&self, points: &[Point], pairs: &[Pair]) -> Result<Evaluated, String>;
     /// Each pixel's Nden per layer and in total (sone) from its packed sound
     /// (`crate::sone::PixelSound::pack`): `input` all the pixels' floats, `offsets` where each
     /// pixel's begin.
@@ -143,11 +159,11 @@ pub fn whole_energy(
 }
 
 /// Adds a pair's `bands` to its point's, in its candidate's layer.
-pub fn add_bands(square: &Square, point: &mut PointBands, index: u32, bands: &Bands) {
+pub fn add_bands(square: &Square, point: &mut PointBands, index: u32, bands: &Bands, weight: f64) {
     let layer = &mut point[square.candidates[index as usize].layer as usize];
     for (total, period) in layer.iter_mut().zip(bands) {
         for (sum, value) in total.iter_mut().zip(period) {
-            *sum += value;
+            *sum += weight * value;
         }
     }
 }
@@ -156,23 +172,34 @@ pub fn add_bands(square: &Square, point: &mut PointBands, index: u32, bands: &Ba
 pub fn evaluate_all(
     square: &Square,
     points: &[Point],
-    pairs: &[(u32, u32)],
+    pairs: &[Pair],
     batch: Option<&dyn Batch>,
 ) -> Result<Evaluated, String> {
     // A pass without pairs (a square of flights alone) asks the card nothing: its bands' buffer
-    // would be allocated and read back for nothing (0.5 s of the Sahara's 0.6 s squares).
+    // would be allocated and read back for nothing.
     if let Some(batch) = batch.filter(|_| !pairs.is_empty()) {
         return batch.evaluate(points, pairs);
     }
     let each: Vec<(PairEnergy, Bands)> = pairs
         .par_iter()
-        .map_init(Scratch::default, |scratch, &(at, index)| {
-            whole_energy(square, &points[at as usize], index, scratch)
+        .map_init(Scratch::default, |scratch, pair| {
+            whole_energy(
+                square,
+                &points[pair.point as usize],
+                pair.candidate,
+                scratch,
+            )
         })
         .collect::<Result<_, String>>()?;
     let mut bands = vec![[[[0.0; BANDS]; PERIODS]; LAYERS]; points.len()];
-    for (&(at, index), (_, pair)) in pairs.iter().zip(&each) {
-        add_bands(square, &mut bands[at as usize], index, pair);
+    for (pair, (_, spectrum)) in pairs.iter().zip(&each) {
+        add_bands(
+            square,
+            &mut bands[pair.point as usize],
+            pair.candidate,
+            spectrum,
+            pair.band_weight,
+        );
     }
     Ok(Evaluated {
         pairs: each.into_iter().map(|(energy, _)| energy).collect(),
@@ -184,7 +211,7 @@ pub fn evaluate_all(
 pub fn evaluate(
     square: &Square,
     points: &[Point],
-    pairs: &[(u32, u32)],
+    pairs: &[Pair],
     batch: Option<&dyn Batch>,
 ) -> Result<Vec<f64>, String> {
     Ok(evaluate_all(square, points, pairs, batch)?

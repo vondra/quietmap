@@ -36,8 +36,8 @@ upper bound there reaches 20 dB.
   20 % of its quietest corner's sound.
 - What is left out is blended between the block's four corners, and weakened at a pixel as much as
   the block's computed far sources are there, as behind a house.
-- The hum, the sources under 20 dB, is computed as a click computes it at points 64 pixels apart
-  (390 m in Prague), and blended. It is never dropped.
+- The hum, the sources under 20 dB, is estimated with the click's physics and error budget at
+  points 64 pixels apart (390 m in Prague), and blended.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 354" role="img" aria-label="A part of a painted tile around pixel P: road A crosses the blocks around P and is computed exactly at P; road B is computed at the corners of P's block, its loudest pieces there exactly at P too, past a house, the rest of it blended between the corners; the hum comes from points 64 pixels apart" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -62,8 +62,17 @@ upper bound there reaches 20 dB.
 <figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">Part of a tile painted at 1,024 pixels, distances in Prague. Road A crosses the blocks around pixel P and is computed exactly there. Road B is computed at the corners of P's block; its loudest pieces there are computed exactly at P too, their rays here passing a house, and the rest of it is blended between the corners. The quiet sources come from the hum points.</figcaption>
 </figure>
 
-Neighbouring blocks share their corners, so what is blended meets at them. The flights are blended
-from the block corners. A pixel inside a building shows the building's loudest façade, as a click
+Neighbouring blocks share their corners, so what is blended meets at them. Aircraft boxes are
+summed at the hum's 17 × 17 points; their near share is computed every second block corner,
+and between those where the energy varies by more than 1 dB. Cruise boxes use 5 × 5 points
+where screening does not apply, every corner reads the same boxes within reach, and their pieces
+and average flight lines stay at least 8 km away. Their energies and energies times the flights' rate and passing
+duration are blended to the block corners, keeping how their noise changes over time. The
+quiet sources may be omitted only when their summed bounds can change a layer's exact loud
+energy by at most 0.1 dB in every period. Otherwise the painter uses the click's bound-proportional
+sampling and 0.05 dB confidence budget, batches the selected rays on the graphics card and
+applies the sampling weights to their spectra.
+A pixel inside a building shows the building's loudest façade, as a click
 inside it does: of the receivers 0.1 m in front of its walls, the three whose painted pixel in front
 is loudest are computed like pixels, without the building's own reflection, and the loudest of
 them counts.
@@ -78,10 +87,10 @@ loudness of the pixels under it.
 
 The painter is held to two references. The etalon is the same tile with every loud source computed
 exactly at every pixel: over the pixels of 1 sone or more, each layer and the total may differ from
-it by more than 1 phon (7 % of loudness) at no more than 1 % of them, by more than 3 phon at 0.01 %
+it by more than 0.5 phon at no more than 20 % of them, by more than 1 phon (7 % of loudness) at
+no more than 1 %, by more than 3 phon at 0.01 %
 and by more than 6 phon at 0.001 %, with a bias under 0.5 phon. And where the map is clicked, it
-should agree with the click within 1 phon: on a zoom-12 tile of Prague (October 2026) it does at
-99.7 % of 1,798 outdoor clicks and at 92 % of 201 clicks inside buildings.
+should agree with the click within 1 phon.
 
 The exact computations run on a graphics card in single precision or on the processor's
 cores in double; on 20,000 random pairs of source and pixel in Prague the two agree within 0.004 dB

@@ -1,17 +1,12 @@
-//! The painter's reference: every outdoor pixel's loudness as the painter's model takes it with
-//! every ground source loud there evaluated exactly, the quiet hum blended from its points as the
-//! painter takes it, and the flights at the pixel; or, sampled, one outdoor pixel drawn in each K x K
-//! cell; a painted map is scored against it cell by cell. A building's pixels are not assessed: the
-//! popup's answers inside buildings score the map there.
+//! Outdoor-pixel and facade etalons with every retained loud ground source and aircraft box computed exactly.
 
-use crate::exact::{Batch, LAYERS, Point, add_bands, evaluate_all, whole_energy};
+use crate::exact::{Batch, LAYERS, Pair, Point, add_bands, evaluate_all, whole_energy};
 use crate::flights::{FlightSpectra, aircraft_sums};
 use crate::hum::Hum;
 use crate::paint::{Cells, Grid, NO_LEVEL, Painted, cells_of};
 use crate::sone::{Displays, PixelSound, Rest, pixel_ndens, pixel_sound};
 use crate::square::Square;
 use physics::bands::lden_energy;
-use popup::aircraft::boxes::AIRCRAFT_REACH_M;
 use popup::evaluate::Scratch;
 use popup::percentiles::Resolution;
 use popup::selection::SplitMix;
@@ -71,14 +66,14 @@ pub fn etalon(
             .filter(|(_, point)| point.own_footprint == 0)
             .collect();
         let (pixels_at, points): (Vec<usize>, Vec<Point>) = outdoor.into_iter().unzip();
-        let pairs: Vec<(u32, u32)> = (0..points.len())
+        let pairs: Vec<Pair> = (0..points.len())
             .into_par_iter()
             .map_init(Vec::new, |near, k| {
                 let point = &points[k];
                 square.index.reaching(point.position, point.position, near);
                 near.iter()
                     .filter(|&&index| square.loud(index, point.position, &point.bound))
-                    .map(|&index| (k as u32, index))
+                    .map(|&index| Pair::new(k as u32, index))
                     .collect::<Vec<_>>()
             })
             .flatten()
@@ -87,20 +82,21 @@ pub fn etalon(
             || evaluate_all(square, &points, &pairs, batch),
             || {
                 (points.par_iter())
-                    .map(|point| aircraft_sums(square, point, &|_| 1.0, AIRCRAFT_REACH_M))
+                    .map(|point| aircraft_sums(square, point))
                     .collect::<Result<Vec<_>, String>>()
             },
         );
         let (evaluated, flights) = (evaluated?, flights?);
         // The pairs come point by point: each point's run of them.
         let mut starts = vec![0usize; points.len() + 1];
-        for &(k, _) in &pairs {
+        for pair in &pairs {
+            let k = pair.point;
             starts[k as usize + 1] += 1;
         }
         for k in 0..points.len() {
             starts[k + 1] += starts[k];
         }
-        let candidates: Vec<u32> = pairs.iter().map(|&(_, index)| index).collect();
+        let candidates: Vec<u32> = pairs.iter().map(|pair| pair.candidate).collect();
         let painted: Vec<Painted> = (0..points.len())
             .into_par_iter()
             .map(|k| -> Result<_, String> {
@@ -200,7 +196,7 @@ pub fn sounds_at(
             let mut energies = Vec::with_capacity(loud.len());
             for &index in &loud {
                 let (energy, pair) = whole_energy(square, point, index, scratch)?;
-                add_bands(square, &mut bands, index, &pair);
+                add_bands(square, &mut bands, index, &pair, 1.0);
                 energies.push(energy);
             }
             let (steady, hum_bands) = hum.at(at % n, at / n);
@@ -209,7 +205,7 @@ pub fn sounds_at(
                 bands: hum_bands,
                 left_groups: (&[], [0.0; 4]),
                 left_reach: 1.0,
-                flights: aircraft_sums(square, point, &|_| 1.0, AIRCRAFT_REACH_M)?,
+                flights: aircraft_sums(square, point)?,
             };
             pixel_sound(
                 square,
