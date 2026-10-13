@@ -8,14 +8,14 @@
 
 use paint::exact::Batch;
 use paint::exact::LAYERS;
-use paint::hm3::{painted, write};
+use paint::hm3::painted;
 use paint::paint::{Corners, Grid, SILENCE, corners_of, paint_pixels};
 use paint::square::{Files, Square};
 use paint_gpu::batch::GpuBatch;
 use paint_gpu::device::{DeviceSquare, Gpu};
+use paint_gpu::square_writer::{PaintedSquareCells, write_beside_painting};
 use physics::weather::WeatherTable;
 use popup::release::Release;
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 use tiles::geo::{Mercator, TileId};
@@ -113,9 +113,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
     if let Some(gpu) = &gpu {
         eprintln!("qm-paint: exact evaluations on {}", gpu.name);
     }
-    let todo: Vec<(usize, TileId)> = (squares.iter().copied().enumerate())
-        .filter(|(_, tile)| !painted(&out, zoom, (tile.x, tile.y)))
-        .collect();
+    let mut todo = Vec::new();
+    for (number, tile) in squares.iter().copied().enumerate() {
+        if !painted(&out, zoom, (tile.x, tile.y))? {
+            todo.push((number, tile));
+        }
+    }
     // A square is prepared on every core, or on a few beside another's pixels: those on the card
     // wait on the rest.
     let preparing_pool = (rayon::ThreadPoolBuilder::new().num_threads(PREPARING_THREADS))
@@ -126,40 +129,38 @@ fn run(arguments: &[String]) -> Result<(), String> {
     };
     let prepare_beside =
         |following: &(usize, TileId)| preparing_pool.install(|| prepare(following));
-    let finish = |prepared: Prepared| {
-        finish_square(
-            &weather,
-            gpu.as_ref(),
-            grid,
-            (&out, zoom),
-            squares.len(),
-            prepared,
-        )
-    };
     // While the card paints one square's pixels, the cores read the next and take its corners,
     // unless the square on the card is heavy: two of those do not fit in memory.
-    let mut next = todo.first().map(prepare).transpose()?;
-    for k in 0..todo.len() {
-        let current = next.take().ok_or("a square not prepared")?;
-        match todo.get(k + 1) {
-            Some(following) if current.candidates <= PIPELINE_CANDIDATES_MAX => {
-                let (finished, prepared) = std::thread::scope(|scope| {
-                    let preparing = scope.spawn(|| prepare_beside(following));
-                    let finished = finish(current);
-                    let prepared = (preparing.join())
-                        .unwrap_or_else(|_| Err("a square's preparation panicked".into()));
-                    (finished, prepared)
-                });
-                finished?;
-                next = Some(prepared?);
-            }
-            following => {
-                finish(current)?;
-                next = following.map(prepare).transpose()?;
+    write_beside_painting(&out, zoom, |sender| {
+        let finish = |prepared: Prepared| {
+            let cells = finish_square(&weather, gpu.as_ref(), grid, squares.len(), prepared)?;
+            sender
+                .send(cells)
+                .map_err(|_| "a square's writer stopped".to_string())
+        };
+        let mut next = todo.first().map(prepare).transpose()?;
+        for k in 0..todo.len() {
+            let current = next.take().ok_or("a square not prepared")?;
+            match todo.get(k + 1) {
+                Some(following) if current.candidates <= PIPELINE_CANDIDATES_MAX => {
+                    let (finished, prepared) = std::thread::scope(|scope| {
+                        let preparing = scope.spawn(|| prepare_beside(following));
+                        let finished = finish(current);
+                        let prepared = (preparing.join())
+                            .unwrap_or_else(|_| Err("a square's preparation panicked".into()));
+                        (finished, prepared)
+                    });
+                    finished?;
+                    next = Some(prepared?);
+                }
+                following => {
+                    finish(current)?;
+                    next = following.map(prepare).transpose()?;
+                }
             }
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// A square's sources at most this many candidates paint while the next one is prepared (Dobris's
@@ -221,15 +222,14 @@ fn prepare_square(
     })
 }
 
-/// Paints a prepared square's pixels and writes its tiles; one line on stdout.
+/// Paints a prepared square's pixels and releases its source buffers before encoding the bundle.
 fn finish_square(
     weather: &WeatherTable,
     gpu: Option<&Gpu>,
     grid: Grid,
-    (out, zoom): (&PathBuf, u32),
     count: usize,
     prepared: Prepared,
-) -> Result<(), String> {
+) -> Result<PaintedSquareCells, String> {
     let started = Instant::now();
     let Prepared {
         number,
@@ -259,17 +259,16 @@ fn finish_square(
             )?
         }
     };
-    write(out, zoom, (tile.x, tile.y), &cells)?;
     let painted_s = corners_s + started.elapsed().as_secs_f64();
-    writeln!(
-        std::io::stdout().lock(),
-        "qm-paint: square {}/{} ({} of {count}): {:.0} MB, {candidates} sources, read {read_s:.1} s, built {built_s:.1} s, painted {painted_s:.1} s",
-        tile.x,
-        tile.y,
-        number + 1,
-        files.bytes() as f64 / 1e6,
-    )
-    .map_err(|e| e.to_string())
+    Ok(PaintedSquareCells {
+        cells,
+        tile,
+        number,
+        count,
+        file_bytes: files.bytes(),
+        candidates,
+        seconds: [read_s, built_s, painted_s],
+    })
 }
 
 fn main() {

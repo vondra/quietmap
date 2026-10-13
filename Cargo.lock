@@ -776,6 +776,7 @@ dependencies = [
  "physics",
  "popup",
  "rayon",
+ "tempfile",
  "tiles",
 ]
 

@@ -17,7 +17,7 @@ fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
         let mut interrupted =
             tempfile::NamedTempFile::new_in(destination.parent().unwrap()).unwrap();
         interrupted.write_all(b"incomplete copy").unwrap();
-        assert!(!hm3::painted(merged.path(), 13, square));
+        assert!(!hm3::painted(merged.path(), 13, square).unwrap());
         crate::merge::merge(&root, merged.path(), 13).unwrap();
         assert_eq!(
             std::fs::read(square_path(&root, 13, square)).unwrap(),
@@ -25,7 +25,7 @@ fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
         );
         hm3::write(&root, 13, (square.0, square.1 + 1), &cells).unwrap();
         crate::merge::merge(&root, merged.path(), 13).unwrap();
-        assert!(hm3::painted(merged.path(), 13, (square.0, square.1 + 1)));
+        assert!(hm3::painted(merged.path(), 13, (square.0, square.1 + 1)).unwrap());
     }
     pack(merged.path(), 13, published.path(), "b1").unwrap();
     let manifest_path = published.path().join("current.json");

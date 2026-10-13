@@ -12,3 +12,4 @@
 pub mod batch;
 pub mod device;
 pub mod loudness;
+pub mod square_writer;

@@ -1,5 +1,6 @@
 //! A receiver extent's tall-building union on the fixed lattice, with exact integer area sums.
 
+use super::tile::SceneTile;
 use std::collections::HashMap;
 use std::ops::Range;
 use tiles::geo::STEPS_PER_TILE;
@@ -19,6 +20,8 @@ struct ExclusiveRun {
 }
 
 pub(super) struct ReflectionCoverage {
+    prepared_first: [usize; 2],
+    prepared_last: [usize; 2],
     first: [usize; 2],
     last: [usize; 2],
     stride: usize,
@@ -26,7 +29,7 @@ pub(super) struct ReflectionCoverage {
     exclusive_runs: HashMap<u64, Vec<ExclusiveRun>>,
 }
 
-fn is_tall_building_outline(obstacles: Obstacles<'_>, index: usize) -> bool {
+pub(super) fn is_tall_building_outline(obstacles: Obstacles<'_>, index: usize) -> bool {
     let outline = obstacles.outline(index);
     outline.kind.is_building() && outline.height_m > REFLECTION_BUILT_ABOVE_M
 }
@@ -109,21 +112,45 @@ fn rasterize_footprint(
     }
 }
 
+impl SceneTile<'_> {
+    pub(super) fn reflection_extent(
+        &self,
+        low: [f64; 2],
+        high: [f64; 2],
+    ) -> Option<([usize; 2], [usize; 2])> {
+        let (first, last) = self.tall_building_extent?;
+        let ranges = [0, 1].map(|axis| {
+            centres_between(
+                raster_coordinate(f64::from(first[axis])),
+                raster_coordinate(f64::from(last[axis])),
+                (low[axis].floor().clamp(0.0, SIDE as f64) as usize)
+                    ..(high[axis].ceil().clamp(0.0, SIDE as f64) as usize),
+            )
+        });
+        ranges.iter().all(|range| !range.is_empty()).then(|| {
+            (
+                ranges.each_ref().map(|range| range.start),
+                ranges.each_ref().map(|range| range.end),
+            )
+        })
+    }
+}
+
 impl ReflectionCoverage {
-    pub(super) fn new(obstacles: Obstacles<'_>, low: [f64; 2], high: [f64; 2]) -> Self {
-        let first = low.map(|value| value.floor().clamp(0.0, SIDE as f64) as usize);
-        let last = high.map(|value| value.ceil().clamp(0.0, SIDE as f64) as usize);
+    pub(super) fn new(tile: &SceneTile<'_>, low: [f64; 2], high: [f64; 2]) -> Self {
+        let (first, last) = tile
+            .reflection_extent(low, high)
+            .expect("reachable tall cells");
+        let obstacles = tile.obstacles;
         let mut coverage = Self {
+            prepared_first: low.map(|value| value.floor().clamp(0.0, SIDE as f64) as usize),
+            prepared_last: high.map(|value| value.ceil().clamp(0.0, SIDE as f64) as usize),
             first,
             last,
             stride: last[0] - first[0] + 1,
-            summed_area: Vec::new(),
+            summed_area: vec![0; (last[0] - first[0] + 1) * (last[1] - first[1] + 1)],
             exclusive_runs: HashMap::new(),
         };
-        if !(0..obstacles.outline_count()).any(|index| is_tall_building_outline(obstacles, index)) {
-            return coverage;
-        }
-        coverage.summed_area = vec![0; coverage.stride * (last[1] - first[1] + 1)];
         let mut footprints = Vec::new();
         let mut first = 0;
         while first < obstacles.outline_count() {
@@ -179,23 +206,27 @@ impl ReflectionCoverage {
     }
 
     fn whole_cells(&self, x: (usize, usize), y: (usize, usize)) -> u32 {
+        // Clip integer sums, not the window's fractional segments: splitting a weighted sum
+        // at the crop boundary would change its floating-point rounding.
+        let x = (x.0.max(self.first[0]), x.1.min(self.last[0]));
+        let y = (y.0.max(self.first[1]), y.1.min(self.last[1]));
+        if x.0 >= x.1 || y.0 >= y.1 {
+            return 0;
+        }
         let at = |column, row| self.summed_area[self.index(column, row)];
         at(x.1, y.1) + at(x.0, y.0) - at(x.0, y.1) - at(x.1, y.0)
     }
 
     pub(super) fn covers(&self, low: [f64; 2], high: [f64; 2]) -> bool {
         (0..2).all(|axis| {
-            low[axis].max(0.0) >= self.first[axis] as f64
-                && high[axis].min(SIDE as f64) <= self.last[axis] as f64
+            low[axis].max(0.0) >= self.prepared_first[axis] as f64
+                && high[axis].min(SIDE as f64) <= self.prepared_last[axis] as f64
         })
     }
 
     pub(super) fn covered(&self, low: [f64; 2], high: [f64; 2], own: Option<u64>) -> f64 {
         let low = low.map(|value| value.clamp(0.0, SIDE as f64));
         let high = high.map(|value| value.clamp(0.0, SIDE as f64));
-        if self.summed_area.is_empty() {
-            return 0.0;
-        }
         let segments = |low: f64, high: f64| {
             let first = low.floor() as usize;
             let last = high.floor() as usize;

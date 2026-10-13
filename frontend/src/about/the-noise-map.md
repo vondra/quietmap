@@ -114,18 +114,20 @@ The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` res
 every cell, including silence and not assessed, returns exactly.
 
 The painter writes one atomic HM3 square bundle, its directory pointing at these compressed tile
-streams, identical ones stored once. `qm-paint merge` copies independent painters' bundles into
-one tree atomically, without decoding or replacing completed squares.
-Identical completed copies are skipped on retry; conflicting squares stop the merge.
-`paint/src/pyramid.rs` reads each compressed square once and carries the assessed-pixel
-counts and unrounded loudness through the same means, one branch at a time; it compresses each
-lower tile once. `pack.rs` copies these streams into one immutable PMTiles archive per layer,
-zooms down to 2, ordered by zoom and Hilbert tile id. Identical streams share an archive range;
-gzip compresses its index. An archive is read by byte range, so a tile needs no scan or server
-decompression, and the same files support object storage. The manifest appears only after every
-archive is complete; the server sends the stored stream with `Content-Encoding: br`.
-The manifest URL belongs to the tile format's version, so an open page with an earlier decoder
-keeps its last compatible immutable build until the page is refreshed.
+streams, identical tile grids encoded and stored once. A writer compresses and publishes it while
+the next square is painted; at most two squares' cell buffers are resident, and a square is complete
+only after its bundle is durable (`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies
+independent painters' bundles into one tree atomically, without decoding or replacing completed
+squares. Identical completed copies are skipped on retry; conflicting squares stop the merge.
+`paint/src/pyramid.rs` reads each compressed square once and carries the assessed-pixel counts and
+unrounded loudness through the same means, one branch at a time; it compresses each lower tile once.
+`pack.rs` copies these streams into one immutable PMTiles archive per layer, zooms down to 2,
+ordered by zoom and Hilbert tile id. Identical streams share an archive range; gzip compresses its
+index. An archive is read by byte range, so a tile needs no scan or server decompression, and the
+same files support object storage. The manifest appears only after every archive is complete; the
+server sends the stored stream with `Content-Encoding: br`. The manifest URL belongs to the tile
+format's version, so an open page with an earlier decoder keeps its last compatible immutable build
+until the page is refreshed.
 
 Loud is one rule for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB). `qm-paint-gpu check` holds the card equal to the cores
