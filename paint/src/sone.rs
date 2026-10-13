@@ -63,11 +63,13 @@ impl Displays {
 
 /// What a pixel hears beside its exact pairs, its reflection not yet taken: per layer the energy
 /// per period not evaluated there (left out at the corners, humming) and its bands; of it the
-/// groups its block left out with the pixel's weights of the block's corners; the flights.
+/// groups its block left out with the pixel's weights of the block's corners, and the share of
+/// what the block left out that reaches the pixel; the flights.
 pub(crate) struct Rest<'a> {
     pub steady: [[f64; PERIODS]; LAYERS],
     pub bands: PointBands,
     pub left_groups: (&'a [LeftGroup], [f64; 4]),
+    pub left_reach: f64,
     pub flights: FlightSums,
 }
 
@@ -207,6 +209,7 @@ pub(crate) fn pixel_sound(
         let blend = |of: &dyn Fn(&PairEnergy) -> [f64; PERIODS]| -> [f64; PERIODS] {
             std::array::from_fn(|p| {
                 reflection
+                    * rest.left_reach
                     * (0..4)
                         .map(|c| weights[c] * of(&group.at_corners[c])[p])
                         .sum::<f64>()

@@ -65,11 +65,14 @@ pub(crate) struct LeftGroup {
     pub nearest: [u32; 4],
 }
 
-/// A block: the sources its pixels evaluate exactly (sorted), what they leave out at each corner
+/// A block: the sources its pixels evaluate exactly (sorted), of them those its corners admit
+/// beyond its own (sorted) and their Lden energy at each corner, what they leave out at each corner
 /// per layer and period, and of it each source group's (sorted by group): it sounds with its passes
 /// at the pixels, not steady (a railway's farther ways carry the same trains).
 pub(crate) struct Block {
     pub exact: Vec<u32>,
+    pub admitted: Vec<u32>,
+    pub admitted_at_corners: [f64; 4],
     pub left_out: [[[f64; PERIODS]; LAYERS]; 4],
     pub left_groups: Vec<LeftGroup>,
 }
@@ -103,6 +106,7 @@ pub(crate) fn meets(a: [f64; 2], b: [f64; 2], low: [f64; 2], high: [f64; 2]) -> 
 pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
     let mut admitted: HashSet<u32> = local.iter().copied().collect();
     let mut exact = local;
+    let mut beyond = Vec::new();
     for layer in 0..LAYERS {
         let quietest = (corners.iter())
             .map(|corner| corner.totals[layer])
@@ -120,6 +124,7 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
                 }
                 if admitted.insert(source.index) {
                     exact.push(source.index);
+                    beyond.push(source.index);
                     unadmitted -= source.lden;
                 }
             }
@@ -177,8 +182,17 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
     });
     let left_groups = left.into_iter().map(|(group, ..)| group).collect();
     exact.sort_unstable();
+    beyond.sort_unstable();
+    let admitted_at_corners = corners.map(|corner| {
+        (corner.ranked.iter().flatten())
+            .filter(|source| beyond.binary_search(&source.index).is_ok())
+            .map(|source| source.lden)
+            .sum()
+    });
     Block {
         exact,
+        admitted: beyond,
+        admitted_at_corners,
         left_out,
         left_groups,
     }
