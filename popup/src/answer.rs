@@ -250,14 +250,6 @@ pub fn answer(
         } else {
             None
         };
-        if ring == 1 && enclosing.is_none() {
-            station = Some(Station {
-                position: [0.0, 0.0],
-                altitude_m: ground.at([0.0, 0.0])?.height_m + RECEIVER_HEIGHT_M,
-                weather,
-                reflection_db: obstacles.reflection_db([0.0, 0.0], None)?,
-            });
-        }
         let facade_receivers = match &enclosing {
             Some(footprint) => obstacles.facade_receivers(footprint)?,
             None => Vec::new(),
@@ -282,6 +274,27 @@ pub fn answer(
                 (files, bytes, read_seconds, started),
                 emit,
             );
+        }
+        if ring == 1 {
+            let first = facade_receivers
+                .first()
+                .map_or([0.0; 2], |receiver| receiver.position);
+            let (mut low, mut high) = (first, first);
+            for receiver in &facade_receivers {
+                for axis in 0..2 {
+                    low[axis] = low[axis].min(receiver.position[axis]);
+                    high[axis] = high[axis].max(receiver.position[axis]);
+                }
+            }
+            obstacles.prepare_reflection_coverage(low, high)?;
+        }
+        if ring == 1 && enclosing.is_none() {
+            station = Some(Station {
+                position: [0.0, 0.0],
+                altitude_m: ground.at([0.0, 0.0])?.height_m + RECEIVER_HEIGHT_M,
+                weather,
+                reflection_db: obstacles.reflection_db([0.0, 0.0], None)?,
+            });
         }
         // Before a building's façade is chosen the candidates are collected around the click,
         // wide enough for any of its façades, and bounded again at the chosen one.

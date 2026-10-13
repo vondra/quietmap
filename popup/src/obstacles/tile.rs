@@ -1,6 +1,8 @@
 //! One read tile of a scene: its parsed file and what the walks need beyond it, computed once.
 
+use super::reflection_coverage::ReflectionCoverage;
 use rayon::prelude::*;
+use std::sync::OnceLock;
 use tiles::obstacles::{CELLS, Obstacles, OutlineKind};
 
 /// Outlines per parallel task when a tile is prepared (extended to a footprint's end).
@@ -11,6 +13,7 @@ const RUN_CHUNK: usize = 65_536;
 
 /// One read tile with what the walks need beyond its file.
 pub(super) struct SceneTile<'a> {
+    pub(super) reflection_coverage: OnceLock<Box<ReflectionCoverage>>,
     pub(super) obstacles: Obstacles<'a>,
     /// Scene steps of the tile's local origin.
     pub(super) offset: [i64; 2],
@@ -99,6 +102,7 @@ impl<'a> SceneTile<'a> {
             })
             .collect();
         let tile = SceneTile {
+            reflection_coverage: OnceLock::new(),
             obstacles,
             offset,
             run_first_vertex,

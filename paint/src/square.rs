@@ -335,6 +335,8 @@ impl<'a> Square<'a> {
         }
         let mut obstacles = Scene::new(frame);
         obstacles.insert_all(obstacle_tiles);
+        let half = [frame.east_m_per_unit / 2.0, frame.north_m_per_unit / 2.0];
+        obstacles.prepare_reflection_coverage(half.map(|value| -value), half)?;
         // Every piece within the ground reach of some pixel: of the square's centre, its reach
         // and half its diagonal.
         let half_diagonal = frame.east_m_per_unit.hypot(frame.north_m_per_unit) / 2.0;

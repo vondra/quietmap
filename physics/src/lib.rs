@@ -22,4 +22,5 @@ pub mod loudness;
 pub mod percentile;
 pub mod profile;
 pub mod ray;
+pub mod reflection;
 pub mod weather;

@@ -1,9 +1,4 @@
-// The detailed calculation of an answered click, opened inside the popup under its list: where the
-// levels are computed (a building's façade, the reflection of the walls around), the day, evening
-// and night with their levels, shares of Lden and loudness and the levels exceeded 5 to 90 % of
-// each, the layers with their levels and shares, and the place's weather. For finding out why a
-// number is what it is, and where the data or the physics went wrong; how each source's sound
-// arrives opens in its row.
+// The click's detailed calculation: its receiver, periods, layers, loudness, percentiles and weather.
 import type { ReactNode } from 'react'
 import type { BuildingAnswer, PopupUpdate } from '../../types/noise'
 import { fmtDbValue as level, fmtInt, fmtSone, wholePercents } from '../../utils/formatters'
@@ -52,16 +47,17 @@ function Section({ title, hint, children }: { title: string, hint: string, child
  *  building's façade, and the reflection of walls close behind the receiver. */
 function ReceiverSection({ building, reflectionDb }: { building: BuildingAnswer | null, reflectionDb: number }) {
   const facade = building?.facade ?? null
-  if (!facade && reflectionDb <= 0) return null
+  const reflection = Number(reflectionDb.toFixed(1))
+  if (!facade && reflection <= 0) return null
   return (
     <Section title="Receiver" hint={RECEIVER_EXPLAINED}>
       {facade && building && lineRow(
         <HoverText title={'Inside a building the level is computed 0.1 m in front of points along\nits façades; the loudest by Lden is shown'}>Façade</HoverText>,
         `facing ${compassPoint(facade.bearing_deg)}, loudest of ${building.facade_receivers} façade points`,
       )}
-      {reflectionDb > 0 && lineRow(
+      {reflection > 0 && lineRow(
         <HoverText title={REFLECTIONS}>Reflections</HoverText>,
-        `+${reflectionDb.toFixed(1)} dB`,
+        `+${reflection.toFixed(1)} dB`,
       )}
     </Section>
   )

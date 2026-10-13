@@ -1,4 +1,4 @@
-//! Containment and the reflection bonus (dev4 `tests/containment.rs`, `tests/reflection.rs`).
+//! Footprint containment, including holes, overlapping outlines and vertex rows.
 
 use super::*;
 
@@ -9,7 +9,7 @@ fn contains(scene: &Scene, point: [f64; 2], min_height_m: f64) -> bool {
 }
 
 #[test]
-fn contains_and_enclosure_thresholds() {
+fn containment_respects_the_height_gate() {
     let mut stock = Stock::new();
     stock.building(1, 12.0, &[square(0.0, 0.0, 60.0)]);
     stock.with_scene(|scene| {
@@ -19,15 +19,7 @@ fn contains_and_enclosure_thresholds() {
             !contains(scene, [0.0, 0.0], 20.0),
             "the height gate excludes the 12 m footprint"
         );
-        // 60 m half-size against 75 m probes: only the centre probe inside, 1/9, 0 dB.
-        assert_eq!(scene.reflection_db([0.0, 0.0], None).unwrap(), 0.0);
     });
-    let mut block = Stock::new();
-    block.building(1, 12.0, &[square(0.0, 0.0, 200.0)]);
-    assert_eq!(
-        block.with_scene(|scene| scene.reflection_db([0.0, 0.0], None).unwrap()),
-        3.0
-    );
 }
 
 #[test]
@@ -127,28 +119,11 @@ fn a_tangent_vertex_keeps_parity() {
 }
 
 #[test]
-fn outdoor_roofs_are_not_buildings_to_click_but_count_for_reflection() {
+fn outdoor_roofs_are_not_enclosed_buildings() {
     let mut stock = Stock::new();
     stock.building_of_class(4, 6.0, EnvelopeClass::Outdoor, &[square(0.0, 0.0, 200.0)]);
     stock.wall(5, 6.0, &[[-10.0, 0.0], [10.0, 0.0]]);
     stock.with_scene(|scene| {
         assert_eq!(scene.enclosing_building([0.0, 0.0]).unwrap(), None);
-        assert_eq!(scene.reflection_db([0.0, 0.0], None).unwrap(), 3.0);
-    });
-}
-
-/// CNOSSOS 2.8 excludes the façade's own reflection: at a receiver 0.1 m in front of a 160 m
-/// block, the probes inside that block stop counting, a block across the street still does.
-#[test]
-fn the_density_bonus_ignores_the_receivers_own_building() {
-    let mut stock = Stock::new();
-    stock.building(0, 20.0, &[square(-80.1, 0.0, 80.0)]);
-    stock.building(1, 20.0, &[square(110.0, 0.0, 90.0)]);
-    stock.with_scene(|scene| {
-        // Six of nine probes are built: three in the own block, three across the street.
-        assert_eq!(scene.reflection_db([0.0, 0.0], None).unwrap(), 3.0);
-        assert_eq!(scene.reflection_db([0.0, 0.0], Some(0)).unwrap(), 1.5);
-        // Another footprint's id is another building: the own block still counts.
-        assert_eq!(scene.reflection_db([0.0, 0.0], Some(1 << 48)).unwrap(), 3.0);
     });
 }

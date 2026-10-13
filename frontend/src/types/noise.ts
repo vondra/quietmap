@@ -263,7 +263,7 @@ export interface PopupUpdate {
   partial: boolean
   center: [number, number]
   elevation_m: number
-  /** The receiver reflection bonus of the surroundings (dB: 0, 1.5 or 3). */
+  /** The receiver reflection bonus of the surroundings (dB). */
   reflection_db?: number
   /** The place's weather (final update): per period the percent of the time the weather bends
    *  sound down along each of 16 bearings (the direction it travels, clockwise from north), and
