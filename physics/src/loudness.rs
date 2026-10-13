@@ -127,8 +127,7 @@ fn core_loudness(levels: &[f64; THIRD_OCTAVES]) -> [f64; 21] {
             level -= DCB[band];
             let s = 0.25;
             // The quarter power as two square roots and the powers of ten as exponentials: the
-            // same loudness to a millionth of a sone over 200,000 spectra in half the time
-            // (0.90 -> 0.42 us a spectrum).
+            // same loudness to a millionth of a sone over 200,000 spectra in half the time.
             let threshold = energy(LTQ[band] / 4.0);
             core[band] = (0.0635
                 * threshold

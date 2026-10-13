@@ -61,7 +61,7 @@ fn mixture_floats() -> usize {
 }
 
 /// The kernels' tables at the map's resolution, in global memory (a warp's lanes read different
-/// entries, which constant memory serves one at a time: 0.40 -> 0.29 s for 16,384 pixels on a V100);
+/// entries, which constant memory serves one at a time: a quarter less time for the same pixels);
 /// f32's Debug is the shortest decimal that reads back as it.
 fn loudness_constants() -> String {
     let resolution = Resolution::MAP;
