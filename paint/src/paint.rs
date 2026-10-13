@@ -60,6 +60,9 @@ impl Grid {
 /// Block rows one pass of pixels takes (4 rows of 64 blocks at z13, 65,536 pixels).
 const PIXEL_PASS_BLOCK_ROWS: usize = 4;
 
+/// Pixel passes at once with a card.
+const PIXEL_PASSES_AT_ONCE: usize = 4;
+
 /// Per pixel (row-major from the north-west) its cell per layer and the total's last ([`cell`]),
 /// [`SILENCE`] or [`NO_LEVEL`].
 pub type Cells = Vec<[u8; LAYERS + 1]>;
@@ -481,25 +484,35 @@ pub fn paint_pixels(
             .collect();
         Ok((painted, indoor))
     };
-    // With a card, two passes run at once: one's lists and loudness on the cores while the other's
-    // pairs are on the card.
+    // With a card, a few passes run at once, each taking the next rows: one's lists and loudness
+    // on the cores while the others' pairs are on the card.
     let first_rows: Vec<usize> = (0..blocks).step_by(PIXEL_PASS_BLOCK_ROWS).collect();
     let painted: Vec<Result<PassPixels, String>> = match batch {
         None => first_rows.iter().map(|&row| pass_of(row)).collect(),
-        Some(_) => std::thread::scope(|scope| {
-            let (even, odd): (Vec<usize>, Vec<usize>) = (first_rows.iter())
-                .partition(|&&row| (row / PIXEL_PASS_BLOCK_ROWS).is_multiple_of(2));
-            let pass_of = &pass_of;
-            let other =
-                scope.spawn(move || odd.iter().map(|&row| pass_of(row)).collect::<Vec<_>>());
-            let mut done: Vec<_> = even.iter().map(|&row| pass_of(row)).collect();
-            done.extend(
-                other
-                    .join()
-                    .unwrap_or_else(|_| vec![Err("a pixel pass panicked".into())]),
-            );
-            done
-        }),
+        Some(_) => {
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let worker = || {
+                let mut done = Vec::new();
+                loop {
+                    let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(&row) = first_rows.get(k) else {
+                        return done;
+                    };
+                    done.push(pass_of(row));
+                }
+            };
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..PIXEL_PASSES_AT_ONCE)
+                    .map(|_| scope.spawn(worker))
+                    .collect();
+                (workers.into_iter())
+                    .flat_map(|worker| {
+                        (worker.join())
+                            .unwrap_or_else(|_| vec![Err("a pixel pass panicked".into())])
+                    })
+                    .collect()
+            })
+        }
     };
     let mut pixels: Vec<Option<Painted>> = vec![None; n * n];
     let mut indoor = Vec::new();
