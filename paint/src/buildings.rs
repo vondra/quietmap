@@ -5,7 +5,7 @@
 
 use crate::blocks::Block;
 use crate::exact::{LAYERS, Point};
-use crate::paint::{Painted, metres_at, pixel_of};
+use crate::paint::{PASS_BLOCKS, Painted, metres_at, pixel_of, runs_within};
 use crate::points::{PASSES_AT_ONCE, PointPainter};
 use crate::square::Square;
 use rayon::prelude::*;
@@ -96,50 +96,62 @@ pub(crate) fn facade_candidates(
 }
 
 /// Each building's level: its candidates painted as points of their blocks, each standing at a wall
-/// (its block never blends its corners' loudness), in as many runs as passes go at once, the
-/// loudest from the ground sources kept.
+/// (its block never blends its corners' loudness), a run of their blocks at a time as a pass of
+/// pixels takes them (`block_pairs`: each block's pairs at most at its every pixel), at least as
+/// many runs as passes go at once; the loudest from the ground sources kept.
 pub(crate) fn building_levels(
     painter: &PointPainter,
+    block_pairs: &[usize],
     mut candidates: Vec<FacadeCandidate>,
 ) -> Result<HashMap<u64, Painted>, String> {
-    if candidates.is_empty() {
-        return Ok(HashMap::new());
-    }
     let (n, side) = (painter.grid.pixels, painter.grid.block);
     let block_of = |pixel: usize| (pixel / n / side) * (n / side) + (pixel % n) / side;
     candidates.sort_by_key(|c| block_of(c.pixel));
-    let mut block_ids: Vec<usize> = candidates.iter().map(|c| block_of(c.pixel)).collect();
-    block_ids.sort_unstable();
-    block_ids.dedup();
-    let pass: Vec<Block> = (block_ids.par_iter())
-        .map_init(Vec::new, |near, &at| painter.block(near, at))
+    // The candidates' blocks in order, each with its candidates' range and their pairs at most.
+    let mut blocks: Vec<(usize, Range<usize>)> = Vec::new();
+    for (k, candidate) in candidates.iter().enumerate() {
+        let at = block_of(candidate.pixel);
+        match blocks.last_mut() {
+            Some((last, range)) if *last == at => range.end = k + 1,
+            _ => blocks.push((at, k..k + 1)),
+        }
+    }
+    let bounds: Vec<usize> = (blocks.iter())
+        .map(|(at, range)| range.len() * block_pairs[*at] / (side * side))
         .collect();
-    let places: Vec<(usize, usize)> = (candidates.iter())
+    let mut footprints = Vec::with_capacity(candidates.len());
+    let mut pixels = Vec::with_capacity(candidates.len());
+    let points: Vec<Point> = (candidates.into_iter())
         .map(|c| {
-            let slot = block_ids.binary_search(&block_of(c.pixel));
-            (slot.expect("a candidate's block is listed"), c.pixel)
+            footprints.push(c.footprint);
+            pixels.push(c.pixel);
+            c.point
         })
         .collect();
-    let walls = vec![true; block_ids.len()];
-    let (footprints, points): (Vec<u64>, Vec<Point>) = (candidates.into_iter())
-        .map(|c| (c.footprint, c.point))
-        .unzip();
-    let run = points.len().div_ceil(PASSES_AT_ONCE);
-    let runs: Vec<Range<usize>> = (0..points.len())
-        .step_by(run)
-        .map(|first| first..(first + run).min(points.len()))
-        .collect();
-    let painted = painter.in_passes(runs, |run| {
-        painter.paint(
+    let most = blocks.len().div_ceil(PASSES_AT_ONCE).min(PASS_BLOCKS);
+    let painted = painter.in_passes(runs_within(&bounds, most), |run| {
+        let block_ids: Vec<usize> = blocks[run.clone()].iter().map(|(at, _)| *at).collect();
+        let pass: Vec<Block> = (block_ids.par_iter())
+            .map_init(Vec::new, |near, &at| painter.block(near, at))
+            .collect();
+        let (first, last) = (&blocks[run.start].1, &blocks[run.end - 1].1);
+        let points_run = first.start..last.end;
+        let places: Vec<(usize, usize)> = (blocks[run].iter().enumerate())
+            .flat_map(|(slot, (_, range))| range.clone().map(move |k| (slot, k)))
+            .map(|(slot, k)| (slot, pixels[k]))
+            .collect();
+        let walls = vec![true; block_ids.len()];
+        let paint = painter.paint(
             &block_ids,
             &pass,
-            &points[run.clone()],
-            &places[run],
+            &points[points_run.clone()],
+            &places,
             &walls,
-        )
+        )?;
+        Ok((points_run, paint))
     })?;
-    let painted =
-        (painted.into_iter()).flat_map(|(run, paint)| footprints[run].iter().copied().zip(paint));
+    let painted = (painted.into_iter())
+        .flat_map(|(_, (points_run, paint))| footprints[points_run].iter().copied().zip(paint));
     Ok(loudest_by_ground(painted))
 }
 

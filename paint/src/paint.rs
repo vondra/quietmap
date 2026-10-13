@@ -57,8 +57,32 @@ impl Grid {
     }
 }
 
-/// Block rows one pass of pixels takes (4 rows of 64 blocks at z13, 65,536 pixels).
-const PIXEL_PASS_BLOCK_ROWS: usize = 4;
+/// Blocks one pass takes at most (4 rows of 64 at z13, 65,536 pixels).
+pub(crate) const PASS_BLOCKS: usize = 256;
+
+/// Pairs a pass may evaluate, as its points' blocks' exact sources bound them: a pass holds about
+/// 180 bytes a bounded pair (four passes of four block rows of a Prague square, 35-55 M bounded
+/// pairs each, held 47 GB, 9 GB of it the square and its corners), and Prague's centre ran out of
+/// memory; Dobříš's passes stay whole (11.8 M bounded pairs at most).
+pub(crate) const PASS_PAIRS: usize = 24_000_000;
+
+/// Consecutive runs of items, `bounds[k]` item k's pairs at most: each of at most `most` items whose
+/// bounds sum to at most [`PASS_PAIRS`], or a single item.
+pub(crate) fn runs_within(bounds: &[usize], most: usize) -> Vec<Range<usize>> {
+    let mut runs = Vec::new();
+    let (mut start, mut sum) = (0, 0);
+    for (at, &bound) in bounds.iter().enumerate() {
+        if at > start && (at - start == most || sum + bound > PASS_PAIRS) {
+            runs.push(start..at);
+            (start, sum) = (at, 0);
+        }
+        sum += bound;
+    }
+    if start < bounds.len() {
+        runs.push(start..bounds.len());
+    }
+    runs
+}
 
 /// Per pixel (row-major from the north-west) its cell per layer and the total's last ([`cell`]),
 /// [`SILENCE`] or [`NO_LEVEL`].
@@ -271,8 +295,9 @@ pub fn paint_pixels(
     };
     let blocks = n / grid.block;
     let area = grid.block * grid.block;
-    // Every pixel, a run of blocks (a few block rows) at a time: the outdoor ones painted, the
-    // indoor ones' place and building kept for their building's façade.
+    // Every pixel, a run of blocks at a time (four block rows, fewer where their pairs would pass
+    // PASS_PAIRS): the outdoor ones painted, the indoor ones' place and building kept for their
+    // building's façade.
     let pass_of = |run: Range<usize>| -> Result<PassPixels, String> {
         let block_ids: Vec<usize> = run.collect();
         let pass: Vec<Block> = (block_ids.par_iter())
@@ -307,12 +332,19 @@ pub fn paint_pixels(
             .collect();
         Ok((outdoor, indoor))
     };
-    let rows = blocks * PIXEL_PASS_BLOCK_ROWS;
-    let runs: Vec<Range<usize>> = (0..blocks * blocks)
-        .step_by(rows)
-        .map(|first| first..(first + rows).min(blocks * blocks))
+    // Each block's pairs at most, its exact sources at every pixel: the block computed a row at a
+    // time and dropped (a dense square's blocks all at once hold gigabytes), again in its pass.
+    let bounds: Vec<usize> = (0..blocks)
+        .flat_map(|row| {
+            (row * blocks..(row + 1) * blocks)
+                .into_par_iter()
+                .map_init(Vec::new, |near, at| {
+                    painter.block(near, at).exact.len() * area
+                })
+                .collect::<Vec<usize>>()
+        })
         .collect();
-    let painted = painter.in_passes(runs, pass_of)?;
+    let painted = painter.in_passes(runs_within(&bounds, PASS_BLOCKS), pass_of)?;
     let mut pixels: Vec<Option<Painted>> = vec![None; n * n];
     let mut indoor = Vec::new();
     for (_, (outdoor, inside)) in painted {
@@ -322,7 +354,7 @@ pub fn paint_pixels(
         }
     }
     let candidates = facade_candidates(square, n, &pixels, &indoor)?;
-    let levels = building_levels(&painter, candidates)?;
+    let levels = building_levels(&painter, &bounds, candidates)?;
     fill_buildings(&mut pixels, &indoor, &levels);
     let cells = (pixels.par_iter())
         .map(|pixel| {
@@ -337,4 +369,23 @@ pub fn paint_pixels(
         painter.pairs.into_inner(),
     );
     Ok(cells)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs keep the items' order and cut at `most` items or before the pairs pass [`PASS_PAIRS`];
+    /// an item over it stands alone.
+    #[test]
+    fn runs_cut_at_their_count_and_their_pairs() {
+        let half = PASS_PAIRS / 2;
+        assert_eq!(runs_within(&[1, 1, 1, 1, 1], 2), vec![0..2, 2..4, 4..5]);
+        assert_eq!(runs_within(&[half, half, 1, half], 10), vec![0..2, 2..4]);
+        assert_eq!(
+            runs_within(&[1, 3 * PASS_PAIRS, 1], 10),
+            vec![0..1, 1..2, 2..3]
+        );
+        assert!(runs_within(&[], 4).is_empty());
+    }
 }
