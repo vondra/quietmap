@@ -79,7 +79,7 @@ export function ContributorRow({ c, percent, onHighlight, click }: {
     <SourceRow
       label={contributorLabel(c)}
       distance={formatDist(c.distance_m)}
-      heard={heardText(c.source_type, c.heard)}
+      heard={heardText(c.source_type, c.heard, c.metadata)}
       nden={c.nden_sone}
       percent={percent}
       onToggle={open => onHighlight?.(open ? c.id : null)}
@@ -103,12 +103,19 @@ export function AircraftLayerRow({ layer, percent, flights, onHighlightFlight }:
   )
 }
 
-/** The sources the list does not name, together: how many, their Nden and their share. */
-export function RestRow({ sources, nden, percent }: {
+/** The sources the list does not name, together: how many, their Nden and their share; it opens to
+ *  the rows the list folded into it. */
+export function RestRow({ sources, nden, percent, children }: {
   sources: number
   /** Its Nden, all of it together and steady (the final update's). */
   nden: number | null | undefined
   percent?: number
+  /** The folded rows; none when it holds only what the popup left out. */
+  children?: ReactNode
 }) {
-  return <SourceRow label={`Rest (${fmtInt(sources)})`} distance="" heard={null} nden={nden} percent={percent} />
+  return (
+    <SourceRow label={`Rest (${fmtInt(sources)})`} distance="" heard={null} nden={nden} percent={percent}>
+      {children && <div className="pl-3">{children}</div>}
+    </SourceRow>
+  )
 }

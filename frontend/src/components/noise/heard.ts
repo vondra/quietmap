@@ -1,7 +1,7 @@
-// How a source is heard, short enough for a column of the popup's row, from its passes per hour (END
-// periods: day 12 h, evening 4 h, night 8 h): steady when its passes run together at its distance,
-// else how often it passes, a road's vehicles an hour by day ("732 veh/h") and every rarer pass a
-// day ("120 trains/day", "0.3 veh/day"); the building layer's events how often they sound
+// How a source is heard, one figure short enough for a column of the popup's row (END periods: day
+// 12 h, evening 4 h, night 8 h): a road's vehicles an hour by day, both directions, a quiet one's
+// too ("732 veh/h", "0.6 veh/h": one unit down the column), a railway's trains a day ("120
+// trains/day"); the building layer's events how often they sound
 // ("3× a day": church bells, calls to prayer); the aircraft layer its flights a day above 50 dB.
 // Steady sources (buildings, industry, ships) carry no passes and get no words.
 import type { AircraftEvents, Contributor } from '../../types/noise'
@@ -14,13 +14,26 @@ function perDay(perHour: { day: number, evening: number, night: number }): numbe
   return perHour.day * PERIOD_HOURS.day + perHour.evening * PERIOD_HOURS.evening + perHour.night * PERIOD_HOURS.night
 }
 
-export function heardText(sourceType: string, heard: Contributor['heard']): string | null {
+export function heardText(sourceType: string, heard: Contributor['heard'], metadata?: Contributor['metadata']): string | null {
+  if (sourceType === 'road') {
+    const perHour = roadPerHourByDay(metadata) ?? heard?.per_hour.day
+    return perHour == null ? null : `${fmtCount(perHour)} veh/h`
+  }
   if (!heard) return null
-  if (heard.steady) return 'steady'
   const daily = fmtCount(perDay(heard.per_hour))
   if (sourceType === 'railway') return `${daily} trains/day`
   if (sourceType === 'building') return `${daily}× a day`
-  return heard.per_hour.day >= 1 ? `${Math.round(heard.per_hour.day)} veh/h` : `${daily} veh/day`
+  return null
+}
+
+/** A road's vehicles an hour by day, both directions: its cross-section's daily traffic, the day's
+ *  share of it over the day's 12 hours (a carriageway's own passes are one direction's). */
+function roadPerHourByDay(metadata: Contributor['metadata'] | undefined): number | undefined {
+  const daily = metadata?.cross_section_aadt
+  const shares = metadata?.period_shares
+  return typeof daily === 'number' && Array.isArray(shares) && typeof shares[0] === 'number'
+    ? (daily * shares[0]) / PERIOD_HOURS.day
+    : undefined
 }
 
 /** The aircraft layer's flights a day whose peak level here reaches the flights table's first band
