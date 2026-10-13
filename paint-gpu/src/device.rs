@@ -89,6 +89,7 @@ pub const POINT_BANDS: usize = LAYERS * PERIODS * BANDS;
 pub const FAILED_NOT_READ: u32 = 1;
 pub const FAILED_NO_TERRAIN: u32 = 2;
 pub const FAILED_CAPACITY: u32 = 4;
+pub const FAILED_LINE_CUTOFF: u32 = 8;
 
 /// One warp per pair-kernel block allows 128 registers per thread with the ray kernel's launch
 /// bounds. Against two-warp blocks at 64 registers, real pixel launches improve by about 5% on

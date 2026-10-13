@@ -275,7 +275,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
         .par_iter()
         .zip(&chosen)
         .map_init(Scratch::default, |scratch, (&position, &index)| {
-            whole_energy(&square, &Point::at(&square, position)?, index, scratch)
+            // This compares ray energy before reflection. Grouped receivers can extend beyond the
+            // square's prepared reflection window; their ground and weather still belong to its scene.
+            whole_energy(
+                &square,
+                &Point::with_receiver_properties(&square, position, 0, 0.0)?,
+                index,
+                scratch,
+            )
         })
         .collect();
     let cpu_s = started.elapsed().as_secs_f64();
@@ -326,13 +333,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
             }
         }
     }
-    let count = |code: u32| failed.iter().filter(|&&c| c == code).count();
+    let count = |code: u32| failed.iter().filter(|&&c| c & code != 0).count();
     println!(
-        "pairs {pairs}: compared {}, silent {silent}, GPU failed {gpu_failed} (not read {}, no terrain {}, capacity {}), CPU failed {cpu_failed}",
+        "pairs {pairs}: compared {}, silent {silent}, GPU failed {gpu_failed} (not read {}, no terrain {}, capacity {}, line cutoff {}), CPU failed {cpu_failed}",
         mixed.len(),
         count(paint_gpu::device::FAILED_NOT_READ),
         count(paint_gpu::device::FAILED_NO_TERRAIN),
         count(paint_gpu::device::FAILED_CAPACITY),
+        count(paint_gpu::device::FAILED_LINE_CUTOFF),
     );
     mixed.sort_by(|a, b| b.0.total_cmp(&a.0));
     let mut lden: Vec<f64> = mixed.iter().map(|d| d.0).collect();
@@ -350,11 +358,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 .unwrap_or(0.0)
         };
         println!(
-            "|GPU - CPU| {name} dB: median {:.2e}, p99 {:.2e}, p99.9 {:.2e}, max {:.2e}",
+            "|GPU - CPU| {name} dB: median {:.2e}, p99 {:.2e}, p99.9 {:.2e}, p99.99 {:.2e}, max {:.2e}; over 1 {}, over 3 {}",
             at(0.5),
             at(0.99),
             at(0.999),
-            at(1.0)
+            at(0.9999),
+            at(1.0),
+            values.iter().filter(|&&value| value > 1.0).count(),
+            values.iter().filter(|&&value| value > 3.0).count()
         );
     }
     println!(

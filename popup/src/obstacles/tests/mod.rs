@@ -203,6 +203,14 @@ fn every_crossing(scene: &Scene, from: [f64; 2], to: [f64; 2]) -> Vec<Crossing> 
                         t,
                         height_m: record.height_m,
                         building: record.kind.is_building(),
+                        bounds_roof: record.kind.is_building()
+                            && tile.edge_bounds_roof(
+                                start,
+                                delta,
+                                v,
+                                record.first_vertex,
+                                record.vertex_count,
+                            ),
                         footprint_id: record.footprint_id,
                     });
                 }

@@ -35,17 +35,18 @@ impl Point {
     pub fn at(square: &Square, position: [f64; 2]) -> Result<Self, String> {
         let own_footprint = square.obstacles.enclosing_building_id(position)?;
         let reflection_db = square.obstacles.reflection_db(position, own_footprint)?;
-        Self::standing(square, position, own_footprint.unwrap_or(0), reflection_db)
+        Self::with_receiver_properties(square, position, own_footprint.unwrap_or(0), reflection_db)
     }
 
     /// Building `footprint`'s façade receiver at `position`, as a click inside the building is
     /// answered (`popup::building`): outdoors, its reflection without the façade's own.
     pub fn on_facade(square: &Square, position: [f64; 2], footprint: u64) -> Result<Self, String> {
         let reflection_db = square.obstacles.reflection_db(position, Some(footprint))?;
-        Self::standing(square, position, 0, reflection_db)
+        Self::with_receiver_properties(square, position, 0, reflection_db)
     }
 
-    fn standing(
+    /// A point with a known footprint and reflection, sharing the terrain and weather construction.
+    pub fn with_receiver_properties(
         square: &Square,
         position: [f64; 2],
         own_footprint: u64,

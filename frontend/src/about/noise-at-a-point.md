@@ -269,5 +269,7 @@ all. Each update stays under 100 KB, held by caps on the lines and tracks it car
   answer. Exact mode (`--exact 1`, benchmark only) is the same loop with the stop rule off.
 - A building's source is never screened by a footprint containing it (its own, or another outline
   of the same building).
+- A ray tangent to a building corner keeps its top as an obstacle, but does not enter or leave a
+  roof: a tangent cannot make another footprint count as containing the source.
 
 </details>
