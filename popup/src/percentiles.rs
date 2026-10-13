@@ -637,8 +637,7 @@ pub struct Resolution {
 }
 
 impl Resolution {
-    /// A click's: 0.5 dB, Nden within 0.09 % of 0.1 dB's at 919 points
-    /// (`evidence/2026-10-12/sone-map-4`).
+    /// A click's: 0.5 dB, Nden within 0.09 % of 0.1 dB's at 919 points (measured 2026-10-12).
     pub const CLICK: Resolution = Resolution {
         bin_db: 0.5,
         weather_states: WEATHER_STATES,
@@ -648,7 +647,7 @@ impl Resolution {
     /// and night's hours. On Dobris's 1,125 popup clicks the painted total is within 1 phon but at
     /// one cell (1.5), over 0.5 phon at 4.8 %, bias +0.23 phon (1 dB and three states: 1.8 %,
     /// +0.16 phon); against the sone etalon the drift the same; the painter a tenth faster
-    /// (`evidence/2026-10-12/wbench2-sone`).
+    /// (measured 2026-10-12).
     pub const MAP: Resolution = Resolution {
         bin_db: 2.0,
         weather_states: 2,

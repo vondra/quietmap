@@ -110,7 +110,7 @@ pub fn received_energy_bound(
 /// A ground source is loud at a receiver where its bound there reaches this Lden (dB): the painter
 /// evaluates the loud ones exactly and estimates the quiet rest as the popup does, never dropping
 /// it (the distant quiet hum is up to 40 % of a quiet forest's level). The map is drawn from 20 dB
-/// (owner, 2026-10-10) (`evidence/2026-10-10/painter-plan`).
+/// (the owner's choice, 2026-10-10).
 pub const REACH_EDGE_LDEN_DB: f64 = 20.0;
 
 /// The farthest a source of A-weighted Lden power `lden_power` (per metre for a line) can be loud:
