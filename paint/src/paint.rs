@@ -1,17 +1,8 @@
-//! A square painted as dev1 painted it, in blocks of 16 x 16 pixels. At every block corner each
-//! ground source loud there (`popup::candidates::loud`) is evaluated exactly. A block's pixels
-//! evaluate exactly the loud sources crossing it or the eight blocks around and, layer by layer,
-//! the loudest at its corners until what is left out weighs at most a share of its quietest
-//! corner's ([`crate::blocks`]); what is left out is blended from the corners, the quiet hum from
-//! its points ([`Hum`]), the flights from the corners. Each pixel's loudness (Nden, sone) per layer
-//! and in total is the popup's model on those ([`crate::sone`]); a block hearing only the hum and
-//! the flights (no source of its own, no wall) blends its corners' ([`crate::points`]). A
-//! building's pixels take its loudest façade, painted at its likeliest loudest façade receivers as a
-//! click inside it is answered ([`crate::buildings`]).
+//! Square corners, block pixels and facade loudness from exact sources, sampled hum and aircraft fields.
 
 use crate::blocks::{Block, Corner};
 use crate::buildings::{building_levels, facade_candidates, fill_buildings};
-use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all};
+use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
 use crate::flights::{FlightSpectra, FlightSums, flights_at_corners};
 use crate::hum::Hum;
 use crate::points::PointPainter;
@@ -229,14 +220,14 @@ pub fn corners_of(
     }
     let displays = Displays::of(square)?;
     // Every block corner evaluates every source loud there.
-    let pairs: Vec<(u32, u32)> = (0..corner_points.len())
+    let pairs: Vec<Pair> = (0..corner_points.len())
         .into_par_iter()
         .map_init(Vec::new, |near, k| {
             let point = &corner_points[k];
             square.index.reaching(point.position, point.position, near);
             (near.iter())
                 .filter(|&&index| square.loud(index, point.position, &point.bound))
-                .map(|&index| (k as u32, index))
+                .map(|&index| Pair::new(k as u32, index))
                 .collect::<Vec<_>>()
         })
         .flatten()
@@ -246,7 +237,8 @@ pub fn corners_of(
         .map(|_| Corner::default())
         .collect();
     let evaluated = evaluate_all(square, &corner_points, &pairs, batch)?;
-    for (&(k, index), energy) in pairs.iter().zip(&evaluated.pairs) {
+    for (pair, energy) in pairs.iter().zip(&evaluated.pairs) {
+        let (k, index) = (pair.point, pair.candidate);
         let candidate = &square.candidates[index as usize];
         let distance_m = candidate.distance_from(corner_points[k as usize].position);
         corners[k as usize].add(

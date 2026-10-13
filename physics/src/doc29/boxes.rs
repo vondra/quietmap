@@ -1,23 +1,8 @@
-//! One aircraft box at one receiver: the click-time equation of PLAN section 5. A box sums the
-//! pieces of every flight that crossed it; the click reads the summed energies at the slant to
-//! its average aircraft (the emission-weighted centroid, one axis and gradient, the mean piece
-//! length) and applies to that average piece what the kernel applies to one segment: Delta_F with
-//! the box's scaled distance, the lateral attenuation, the installation correction of each
-//! period's installation shares and the screening. A box whose pieces climb and descend is read
-//! as two average pieces, half its energy each, at its gradient plus and minus their spread: the
-//! kernel takes the elevation angle where each piece's extended line passes the receiver,
-//! kilometres from the box beside a runway, and one mean gradient cannot stand for climbs and
-//! descents there.
-//!
-//! Why it matches the pieces: the energies add at every NPD distance; the geometry terms are the
-//! kernel's for one segment; Delta_F of short pieces (length << d_lambda) is proportional to
-//! length / d_lambda, which the energy-weighted mean length and harmonic mean d_lambda keep; the
-//! centroid is emission-weighted, so the first-order error of moving the pieces to it cancels. A
-//! box of one segment reads exactly as the kernel reads that segment (`boxes_tests`).
+//! Aircraft box SEL as linear period energies from its average pieces through shared Doc 29 corrections.
 
 use super::box_sums::INSTALLATION_SHARE_SLANTS_M;
 use super::corrections::{
-    finite_segment_correction_db, installation_correction_db, lateral_attenuation_db,
+    finite_segment_energy_fraction, installation_energy_gain, lateral_attenuation_db,
 };
 use super::npd::{Installation, NPD_DISTANCES, NPD_LAST_DISTANCE_M, NpdPosition, TAIL_ANCHOR_M};
 use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, screened_sel_db};
@@ -53,22 +38,45 @@ pub struct AircraftBoxAtReceiver<'a> {
     pub ground_m: f64,
 }
 
-/// A box's SEL sums at the receiver per period and the terms that made them.
+/// A box's SEL energies at the receiver per period and the terms that made them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxSel {
-    /// After screening (dB per period, -inf silent).
-    pub sel_db: [f64; PERIODS],
+    /// After screening (linear energy per period, zero silent).
+    pub sel_energy: [f64; PERIODS],
     pub closest: ClosestPoints,
+    pub closest_slant_m: f64,
     /// Per period (each with its mean piece length).
-    pub finite_segment_correction_db: [f64; PERIODS],
+    pub finite_segment_energy_fraction: [f64; PERIODS],
     pub lateral_attenuation_db: f64,
-    /// Per period, Delta_I of its installation mix.
-    pub installation_correction_db: [f64; PERIODS],
+    /// Per period, the energy gain of its installation mix.
+    pub installation_energy_gain: [f64; PERIODS],
     /// Per period, the received energy's shares of wing-mounted jets, fuselage-mounted jets and
     /// propellers.
     pub installation_fractions: [[f64; 3]; PERIODS],
     pub terrain_loss_db: f64,
     pub building_loss_db: f64,
+}
+
+/// A lower bound on the closest-line slant for receivers within `half_extent_m` of the origin.
+pub fn minimum_line_slant_m(
+    centroid_m: [f64; 3],
+    axis_rad: f64,
+    gradient: f64,
+    half_extent_m: [f64; 3],
+) -> f64 {
+    let (sin, cos) = axis_rad.sin_cos();
+    let [east, north, up] = centroid_m;
+    let [east_extent, north_extent, up_extent] = half_extent_m;
+    let across = -sin * east + cos * north;
+    let across_extent = sin.abs() * east_extent + cos.abs() * north_extent;
+    let stretch = gradient.hypot(1.0);
+    let vertical = (up - gradient * (cos * east + sin * north)) / stretch;
+    let vertical_extent = (up_extent
+        + gradient.abs() * (cos.abs() * east_extent + sin.abs() * north_extent))
+        / stretch;
+    (across.abs() - across_extent)
+        .max(0.0)
+        .hypot((vertical.abs() - vertical_extent).max(0.0))
 }
 
 /// The average piece's length (m): the periods' lengths weighted by their energy at 1,000 ft.
@@ -88,8 +96,8 @@ fn average_length_m(aircraft_box: &AircraftBoxAtReceiver) -> f64 {
 }
 
 /// The ends of the average piece: the mean length centred on the centroid along the axis.
-pub fn average_piece_ends(aircraft_box: &AircraftBoxAtReceiver) -> [[f64; 3]; 2] {
-    let half = 0.5 * average_length_m(aircraft_box).max(1.0);
+fn average_piece_ends(aircraft_box: &AircraftBoxAtReceiver, length_m: f64) -> [[f64; 3]; 2] {
+    let half = 0.5 * length_m.max(1.0);
     let (sin, cos) = aircraft_box.axis_rad.sin_cos();
     let step = [cos * half, sin * half, aircraft_box.gradient * half];
     let c = aircraft_box.centroid_m;
@@ -128,12 +136,9 @@ fn box_level_db(levels: &[f64; NPD_DISTANCES], tail_db: f64, position: &NpdPosit
     last - spherical_db(slant_m) - absorption_db_per_m * (slant_m - NPD_LAST_DISTANCE_M)
 }
 
-/// The installation shares at `slant_m`: linear in lg distance between the two share slants,
-/// held beyond them.
-fn shares_at(shares: [[f64; 3]; 2], slant_m: f64) -> [f64; 3] {
-    let [near, far] = INSTALLATION_SHARE_SLANTS_M;
-    let t = ((slant_m / near).log10() / (far / near).log10()).clamp(0.0, 1.0);
-    std::array::from_fn(|k| shares[0][k] + t * (shares[1][k] - shares[0][k]))
+/// The installation shares at the clamped fraction between their two reference slants.
+fn shares_at(shares: [[f64; 3]; 2], fraction: f64) -> [f64; 3] {
+    std::array::from_fn(|k| shares[0][k] + fraction * (shares[1][k] - shares[0][k]))
 }
 
 /// The box's SEL sums at the receiver: its two average pieces, or one without a spread (the terms
@@ -142,33 +147,27 @@ pub fn box_sel_at_receiver(
     aircraft_box: &AircraftBoxAtReceiver,
     horizons: &impl ReceiverHorizons,
 ) -> BoxSel {
+    let length_m = average_length_m(aircraft_box);
     let spread = aircraft_box.gradient_spread;
     if spread <= 0.0 {
-        return average_piece_sel(aircraft_box, horizons);
+        return average_piece_sel(aircraft_box, horizons, length_m);
     }
     let at = |gradient: f64| {
         let piece = AircraftBoxAtReceiver {
             gradient,
             ..*aircraft_box
         };
-        average_piece_sel(&piece, horizons)
+        average_piece_sel(&piece, horizons, length_m)
     };
     let (lower, upper) = (
         at(aircraft_box.gradient - spread),
         at(aircraft_box.gradient + spread),
     );
-    let sel_db = std::array::from_fn(|period| {
-        let sum = 0.5 * (energy(lower.sel_db[period]) + energy(upper.sel_db[period]));
-        if sum > 0.0 {
-            10.0 * sum.log10()
-        } else {
-            f64::NEG_INFINITY
-        }
-    });
+    let sel_energy =
+        std::array::from_fn(|period| 0.5 * (lower.sel_energy[period] + upper.sel_energy[period]));
     // Each period's two installation mixes, weighed by what each piece brings to the receiver.
     let installation_fractions = std::array::from_fn(|period| {
-        let [lower_energy, upper_energy] =
-            [&lower, &upper].map(|piece| energy(piece.sel_db[period]));
+        let [lower_energy, upper_energy] = [lower.sel_energy[period], upper.sel_energy[period]];
         if lower_energy + upper_energy > 0.0 {
             std::array::from_fn(|k| {
                 (lower_energy * lower.installation_fractions[period][k]
@@ -180,7 +179,7 @@ pub fn box_sel_at_receiver(
         }
     });
     BoxSel {
-        sel_db,
+        sel_energy,
         installation_fractions,
         ..lower
     }
@@ -190,8 +189,9 @@ pub fn box_sel_at_receiver(
 fn average_piece_sel(
     aircraft_box: &AircraftBoxAtReceiver,
     horizons: &impl ReceiverHorizons,
+    length_m: f64,
 ) -> BoxSel {
-    let [start, end] = average_piece_ends(aircraft_box);
+    let [start, end] = average_piece_ends(aircraft_box, length_m);
     let closest = closest_points(start, end);
     let [east_m, north_m, up_m] = closest.on_line_m;
     let slant_m = east_m.hypot(north_m).hypot(up_m);
@@ -204,7 +204,7 @@ fn average_piece_sel(
     let stretch = aircraft_box.gradient.hypot(1.0);
     let finite: [f64; PERIODS] = std::array::from_fn(|period| {
         let length_m = (aircraft_box.piece_length_m[period] * stretch).max(1.0);
-        finite_segment_correction_db(
+        finite_segment_energy_fraction(
             along_m + 0.5 * (length_m - closest.length_m),
             length_m,
             scaled_distance_m,
@@ -216,19 +216,21 @@ fn average_piece_sel(
         Installation::Fuselage,
         Installation::Propeller,
     ];
-    let corrections = installations
-        .map(|installation| installation_correction_db(installation, height_m, slant_m));
+    let corrections =
+        installations.map(|installation| installation_energy_gain(installation, height_m, slant_m));
+    let [near, far] = INSTALLATION_SHARE_SLANTS_M;
+    let fraction = ((slant_m / near).log10() / (far / near).log10()).clamp(0.0, 1.0);
     let mixes = aircraft_box.installation_shares.map(|shares| {
-        let shares = shares_at(shares, slant_m);
-        let parts: [f64; 3] = std::array::from_fn(|k| shares[k] * energy(corrections[k]));
+        let shares = shares_at(shares, fraction);
+        let parts: [f64; 3] = std::array::from_fn(|k| shares[k] * corrections[k]);
         let installation_energy: f64 = parts.iter().sum();
         if installation_energy > 0.0 {
             (
-                10.0 * installation_energy.log10(),
+                installation_energy,
                 parts.map(|part| part / installation_energy),
             )
         } else {
-            (0.0, shares)
+            (1.0, shares)
         }
     });
     let installation = mixes.map(|(correction, _)| correction);
@@ -243,23 +245,32 @@ fn average_piece_sel(
         } else {
             (0.0, 0.0)
         };
-    let sel_db: [f64; PERIODS] = std::array::from_fn(|period| {
-        let levels = &aircraft_box.levels_db[period];
-        if levels.iter().all(|level| *level == f64::NEG_INFINITY) {
-            return f64::NEG_INFINITY;
+    let attenuation_gain = energy(
+        screened_sel_db(0.0, lateral_attenuation, terrain_loss_db, building_loss_db)
+            - lateral_attenuation,
+    );
+    let sel_energy: [f64; PERIODS] = std::array::from_fn(|period| {
+        if aircraft_box.levels_db[period]
+            .iter()
+            .all(|level| *level == f64::NEG_INFINITY)
+        {
+            return 0.0;
         }
-        let free = box_level_db(levels, aircraft_box.tail_levels_db[period], &position)
-            + finite[period]
-            + installation[period]
-            - lateral_attenuation;
-        screened_sel_db(free, lateral_attenuation, terrain_loss_db, building_loss_db)
+        energy(box_level_db(
+            &aircraft_box.levels_db[period],
+            aircraft_box.tail_levels_db[period],
+            &position,
+        )) * finite[period]
+            * installation[period]
+            * attenuation_gain
     });
     BoxSel {
-        sel_db,
+        sel_energy,
         closest,
-        finite_segment_correction_db: finite,
+        closest_slant_m: slant_m,
+        finite_segment_energy_fraction: finite,
         lateral_attenuation_db: lateral_attenuation,
-        installation_correction_db: installation,
+        installation_energy_gain: installation,
         installation_fractions,
         terrain_loss_db,
         building_loss_db,

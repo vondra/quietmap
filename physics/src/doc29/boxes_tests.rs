@@ -1,8 +1,42 @@
-//! The click-time equation against the kernel: a box of one segment reads as the kernel reads the
-//! segment, and a box of a bundle of pieces reads as the sum of their kernel levels at receivers
-//! beyond the box.
+//! Aircraft box energies against exact segment SEL and independent period weights.
 
 use super::*;
+
+#[test]
+fn extended_line_bound_keeps_far_low_tracks_on_the_fine_lattice() {
+    let extent = [2_000.0, 1_000.0, 200.0];
+    assert_eq!(
+        minimum_line_slant_m([12_000.0, 0.0, 500.0], 0.0, 0.0, extent),
+        300.0
+    );
+    assert!(minimum_line_slant_m([12_000.0, 0.0, 9_000.0], 0.0, 0.0, extent) >= 8_000.0);
+    for axis in [0.0, 0.5, 1.5] {
+        for gradient in [-0.2, 0.0, 0.2] {
+            let centroid = [8_000.0, 3_000.0, 2_000.0];
+            let bound = minimum_line_slant_m(centroid, axis, gradient, extent);
+            let (sin, cos) = axis.sin_cos();
+            for corner in 0..8 {
+                let receiver: [f64; 3] = std::array::from_fn(|dimension| {
+                    extent[dimension]
+                        * if corner & (1 << dimension) == 0 {
+                            -1.0
+                        } else {
+                            1.0
+                        }
+                });
+                let ends = [-100.0, 100.0].map(|along| {
+                    [
+                        centroid[0] + along * cos - receiver[0],
+                        centroid[1] + along * sin - receiver[1],
+                        centroid[2] + along * gradient - receiver[2],
+                    ]
+                });
+                let closest = closest_points(ends[0], ends[1]).on_line_m;
+                assert!(bound <= closest[0].hypot(closest[1]).hypot(closest[2]) + 1e-9);
+            }
+        }
+    }
+}
 use crate::doc29::box_sums::{BoxSums, BoxValues};
 use crate::doc29::screening::Unscreened;
 use crate::doc29::segment::{
@@ -52,7 +86,7 @@ fn box_of(pieces: &[(SegmentEmission, [f64; 3], [f64; 3])]) -> BoxValues {
     sums.values().expect("a box with energy")
 }
 
-fn box_day_sel(values: &BoxValues) -> Option<f64> {
+fn received_box(values: &BoxValues) -> BoxSel {
     let aircraft_box = AircraftBoxAtReceiver {
         centroid_m: values.centroid_m,
         axis_rad: values.axis_rad,
@@ -65,7 +99,33 @@ fn box_day_sel(values: &BoxValues) -> Option<f64> {
         installation_shares: values.installation_shares,
         ground_m: -4.0,
     };
-    Some(box_sel_at_receiver(&aircraft_box, &Unscreened).sel_db[0])
+    box_sel_at_receiver(&aircraft_box, &Unscreened)
+}
+
+fn box_day_sel(values: &BoxValues) -> Option<f64> {
+    Some(10.0 * received_box(values).sel_energy[0].log10())
+}
+
+/// Shared geometry preserves each period's own energy, including a silent period, with either one or two pieces.
+#[test]
+fn shared_geometry_preserves_period_energy_and_silence() {
+    let emission = emission("A320", &flight(true, 150.0, 0.05, 600.0));
+    let mut sums = BoxSums::default();
+    sums.add(
+        &emission.npd_distance_levels(),
+        emission.installation,
+        [1.0, 0.0, 10.0],
+        [-150.0, 500.0, 300.0],
+        [150.0, 500.0, 330.0],
+    );
+    let mut values = sums.values().expect("a box with energy");
+    for spread in [0.0, 0.08] {
+        values.gradient_spread = spread;
+        let received = received_box(&values);
+        assert!(received.sel_energy[0] > 0.0);
+        assert_eq!(received.sel_energy[1], 0.0);
+        assert!((received.sel_energy[2] / received.sel_energy[0] - 10.0).abs() < 1e-12);
+    }
 }
 
 /// A box of one segment is that segment: the same curve, d_lambda, Delta_F, Lambda and Delta_I,
@@ -379,9 +439,12 @@ fn each_period_reads_its_own_installation_mix() {
     let [east, north, up] = sel.closest.on_line_m;
     let slant = east.hypot(north).hypot(up);
     let height = sel.closest.height_m;
-    let correction = |installation| installation_correction_db(installation, height, slant);
-    assert!((sel.installation_correction_db[0] - correction(Installation::Wing)).abs() < 1e-9);
-    assert!((sel.installation_correction_db[2] - correction(Installation::Propeller)).abs() < 1e-9);
+    let correction = |installation| installation_energy_gain(installation, height, slant);
+    assert!((sel.installation_energy_gain[0] - correction(Installation::Wing)).abs() < 1e-9);
+    assert!((sel.installation_energy_gain[2] - correction(Installation::Propeller)).abs() < 1e-9);
     // 2 km aside at 1,000 m the wing jets' Delta_I is -0.07 dB, the propellers' 0.
-    assert!((sel.installation_correction_db[0] - sel.installation_correction_db[2]).abs() > 0.05);
+    assert!(
+        (10.0 * (sel.installation_energy_gain[0] / sel.installation_energy_gain[2]).log10()).abs()
+            > 0.05
+    );
 }

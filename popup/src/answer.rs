@@ -1,6 +1,4 @@
-//! The ring loop: read the clicked tile and ring 1 whole, answer, then ring after ring until the
-//! reach is covered. Every ring's candidates join their layer's selection ([`crate::selection`]).
-//! A click inside a building is answered at its loudest façade ([`crate::building`]).
+//! Progressive noise answers at a click from prepared sources, aircraft, terrain and yearly weather.
 
 use crate::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver};
 use crate::aircraft::flights::FlightTotals;
@@ -501,10 +499,13 @@ pub fn answer(
             )?;
             let flight_sound = crate::loudness::FlightSound {
                 energy: flight_energy,
-                spectrum_db: Some(crate::aircraft::flights::heard_spectrum(
-                    &listed_flights,
-                    &place_rates_db_per_m(&weather.alpha_db_per_km),
-                )),
+                spectrum_db: Some(
+                    crate::aircraft::flights::heard_spectrum_energy(
+                        &listed_flights,
+                        &place_rates_db_per_m(&weather.alpha_db_per_km),
+                    )
+                    .map(|value| 10.0 * value.log10()),
+                ),
             };
             let sounds = crate::loudness::layer_sounds(&selections);
             let curves = crate::loudness::curves(&sounds, &flight_sound);

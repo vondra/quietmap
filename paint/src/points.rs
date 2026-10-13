@@ -1,11 +1,7 @@
-//! The points of a pass painted from their blocks: each one's block's exact sources loud there
-//! evaluated exactly (here or on a card), what the block leaves out blended from its corners as
-//! far as the point hears its far admitted sources, the hum from its points, the flights from the
-//! corners; its loudness by the popup's model ([`crate::sone`]), a block hearing only the hum and
-//! the flights blending its corners'.
+//! Block pixels from exact loud sources, screened residuals, hum, aircraft and shared loudness physics.
 
 use crate::blocks::{Block, admit, meets};
-use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all};
+use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
 use crate::flights::blend_flights;
 use crate::paint::{Corners, Grid, Painted, corner_weights, rectangle_at};
 use crate::sone::{Rest, pixel_ndens, pixel_sound};
@@ -113,8 +109,8 @@ impl PointPainter<'_> {
                     .collect()
             })
             .collect();
-        let pairs: Vec<(u32, u32)> = (lists.iter().enumerate())
-            .flat_map(|(k, list)| list.iter().map(move |&index| (k as u32, index)))
+        let pairs: Vec<Pair> = (lists.iter().enumerate())
+            .flat_map(|(k, list)| list.iter().map(move |&index| Pair::new(k as u32, index)))
             .collect();
         self.pairs.fetch_add(pairs.len(), Ordering::Relaxed);
         let evaluated = evaluate_all(square, points, &pairs, self.batch)?;

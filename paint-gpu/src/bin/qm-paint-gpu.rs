@@ -1,29 +1,4 @@
-//! `qm-paint-gpu check --prepared DIR --year YYYY --square X,Y [--pairs N] [--seed S] [--device D]
-//! [--group G] [--near M] [--reach M] [--kind point|line]`:
-//! the GPU's energy of random (receiver, source) pairs in one square against the CPU's (the
-//! popup's `received_bands` at the painter's outdoor point), half the sources within `--near`
-//! metres (300), half anywhere within `--reach` (the ground reach), only points or only lines with
-//! `--kind`; prints the agreement, the failures, the worst pairs and both times.
-//!
-//! `qm-paint-gpu popup ... --square X,Y --out DIR [--pixels N] [--seed S]`: the popup's loudness
-//! (Nden per layer and in total) at N random pixels of the square (300), a building's at its
-//! loudest façade as a click inside it is answered, written as a sparse reference under DIR (every
-//! other cell, and a building without an exposed façade, not assessed), to score a map or an etalon
-//! against with `compare`.
-//!
-//! `qm-paint-gpu etalon ... --square X,Y --out DIR [--device D] [--sample-step K]`: the square's
-//! etalon (every outdoor pixel's loudness with every loud source exact, `paint::etalon`; with K one
-//! drawn in each K x K cell, the rest not assessed) written as z13 tiles under DIR.
-//!
-//! `qm-paint-gpu check-loudness ... --square X,Y [--pixels N] [--seed S] [--device D]`: the card's
-//! loudness (`paint_gpu::loudness`) of N random outdoor pixels' sounds (`paint::etalon::sounds_at`,
-//! 500) against the cores' (`PixelSound::ndens`): the differences in phon per layer and in total,
-//! the worst, and both times.
-//!
-//! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a painted map against
-//! a reference (an etalon, or the popup's sparse answers) cell by cell where the reference assesses
-//! one, per layer and the total by the owner's z13 contract in loudness level (rungs over 0.5, 1, 3
-//! and 6 phon, presence, bias, the quiet band; a breached limit marked `!`), and the worst cell.
+//! GPU physics checks, sparse popup references, exact etalons and cell-by-cell drift comparisons.
 
 use paint::exact::{LAYERS, PairEnergy, Point, whole_energy};
 use paint::paint::{NO_LEVEL, SILENCE, cells_of};
@@ -61,7 +36,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         command,
         Some("check" | "check-loudness" | "popup" | "etalon" | "compare")
     ) {
-        return Err("usage: qm-paint-gpu check|check-loudness|popup|etalon|compare --prepared DIR --year YYYY ... (see the file's header)".into());
+        return Err("usage: qm-paint-gpu check|check-loudness|popup|etalon|compare --prepared DIR --year YYYY ... (--square X,Y; compare: --painted DIR --reference DIR --squares X,Y;...)".into());
     }
     let required = |name: &str| option(arguments, name).ok_or(format!("--{name} is required"));
     let parse = |name: &str, default: u64| -> Result<u64, String> {
@@ -233,13 +208,18 @@ fn run(arguments: &[String]) -> Result<(), String> {
     // a first launch brings the card to its clocks.
     const LAUNCH: usize = 1 << 18;
     let own = vec![0u64; LAUNCH];
+    let band_weights = vec![1.0f32; LAUNCH];
     let point_of_pair: Vec<u32> = (0..LAUNCH as u32).collect();
     let mut bands = gpu.bands(LAUNCH)?;
     let warm = pairs.min(20_000);
     gpu.evaluate_pairs(
         &device_square,
         (&receivers[..warm], &own[..warm]),
-        (&chosen[..warm], &point_of_pair[..warm]),
+        (
+            &chosen[..warm],
+            &point_of_pair[..warm],
+            &band_weights[..warm],
+        ),
         &mut bands,
     )?;
     let (mut gpu_sums, mut failed, mut gpu_bands) = (Vec::new(), Vec::new(), Vec::new());
@@ -251,7 +231,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
         let (sums, failures) = gpu.evaluate_pairs(
             &device_square,
             (&receivers[start..start + count], &own[..count]),
-            (&chosen[start..start + count], &point_of_pair[..count]),
+            (
+                &chosen[start..start + count],
+                &point_of_pair[..count],
+                &band_weights[..count],
+            ),
             &mut bands,
         )?;
         gpu_s += started.elapsed().as_secs_f64();

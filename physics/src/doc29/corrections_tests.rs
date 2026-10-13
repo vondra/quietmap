@@ -1,5 +1,4 @@
-//! Corrections: Doc 29's lateral attenuation values and dev4's speed, finite-segment and
-//! installation cases.
+//! Doc 29 finite-segment, installation, speed and lateral-correction checks.
 
 use super::*;
 
@@ -12,16 +11,16 @@ fn speed_correction_is_zero_at_the_reference_and_3_db_at_half_speed() {
 
 #[test]
 fn finite_segment_correction_alongside_behind_and_infinite() {
-    let alongside = finite_segment_correction_db(500.0, 1_000.0, 370.0);
-    assert!(alongside < 0.0 && alongside > -10.0, "{alongside}");
-    let behind = finite_segment_correction_db(-500.0, 1_000.0, 370.0);
-    assert!(behind < -5.0, "{behind}");
+    let alongside = finite_segment_energy_fraction(500.0, 1_000.0, 370.0);
+    assert!(alongside < 1.0 && alongside > 0.1, "{alongside}");
+    let behind = finite_segment_energy_fraction(-500.0, 1_000.0, 370.0);
+    assert!(behind < 10.0f64.powf(-0.5), "{behind}");
     // A segment reaching far both ways carries the infinite line's energy.
-    let infinite = finite_segment_correction_db(500_000.0, 1_000_000.0, 370.0);
-    assert!(infinite.abs() < 1e-3, "{infinite}");
+    let infinite = finite_segment_energy_fraction(500_000.0, 1_000_000.0, 370.0);
+    assert!((infinite - 1.0).abs() < 1e-3, "{infinite}");
     // Half of it on either side of the closest point.
-    let half = finite_segment_correction_db(0.0, 1_000_000.0, 370.0);
-    assert!((half + 3.0103).abs() < 1e-3, "{half}");
+    let half = finite_segment_energy_fraction(0.0, 1_000_000.0, 370.0);
+    assert!((half - 0.5).abs() < 1e-3, "{half}");
 }
 
 #[test]
@@ -63,29 +62,30 @@ fn lateral_attenuation_is_never_negative() {
 /// have none.
 #[test]
 fn installation_correction_peaks_below_its_bound() {
-    let mut wing_peak = f64::NEG_INFINITY;
+    let mut wing_peak = 0.0f64;
     for tenth_degree in 0..=900 {
         let angle = f64::from(tenth_degree).to_radians() / 10.0;
         let (height_m, slant_m) = (1_000.0 * angle.sin(), 1_000.0);
-        wing_peak = wing_peak.max(installation_correction_db(
+        wing_peak = wing_peak.max(installation_energy_gain(
             Installation::Wing,
             height_m,
             slant_m,
         ));
-        assert!(installation_correction_db(Installation::Fuselage, height_m, slant_m) <= 1e-12);
+        assert!(installation_energy_gain(Installation::Fuselage, height_m, slant_m) <= 1.0 + 1e-12);
         assert_eq!(
-            installation_correction_db(Installation::Propeller, height_m, slant_m),
-            0.0
+            installation_energy_gain(Installation::Propeller, height_m, slant_m),
+            1.0
         );
     }
     assert!(
-        wing_peak > 0.40 && wing_peak < INSTALLATION_CORRECTION_MAX_DB,
+        10.0 * wing_peak.log10() > 0.40
+            && 10.0 * wing_peak.log10() < INSTALLATION_CORRECTION_MAX_DB,
         "{wing_peak}"
     );
     // Below the receiver the correction is read at 0 deg: -1.49 dB for wing engines.
-    let below = installation_correction_db(Installation::Wing, -300.0, 1_000.0);
+    let below = installation_energy_gain(Installation::Wing, -300.0, 1_000.0);
     assert!(
-        (below - 10.0 * 0.062 * 0.0039f64.log10()).abs() < 1e-12,
+        (10.0 * below.log10() - 10.0 * 0.062 * 0.0039f64.log10()).abs() < 1e-12,
         "{below}"
     );
 }

@@ -1,12 +1,9 @@
-//! The loudest flights of a click (PLAN section 5, as dev4 lists them): the pieces the loudest
-//! boxes kept, each computed exactly with the kernel at the receiver; a flight's Lmax is the
-//! loudest maximum level of its pieces (Doc 29 Eq. 4-8a), and the list is ranked by it as dev4
-//! ranks it (a flight's SEL sums only the pieces kept, so it would rank flights by what happened
-//! to be kept).
+//! The loudest flights and their received spectrum from kept aircraft-box pieces, using Doc 29.
 
 use super::boxes::AircraftReceiver;
+use physics::bands::energy;
 use physics::doc29::atmosphere::{
-    PlaceAtmosphere, SHIFT_DISTANCES, SPECTRUM_DISTANCE_M, THIRD_OCTAVES, class_spectrum_at,
+    PlaceAtmosphere, SHIFT_DISTANCES, SPECTRUM_DISTANCE_M, THIRD_OCTAVES, class_spectrum_energy_at,
 };
 use physics::doc29::corrections::speed_correction_db;
 use physics::doc29::helicopters::helicopter_levels;
@@ -48,38 +45,43 @@ pub struct LoudFlight {
     pub track: Vec<Vec<[f64; 2]>>,
 }
 
-/// The flights' received spectrum for the loudness (unweighted third octaves, dB up to a
+/// The flights' received spectrum for the loudness (unweighted third-octave energies up to a
 /// constant): the listed flights' spectral classes at their slants in the place's air
 /// (`rates_db_per_m`), each by its sound exposure, as their energy adds (one loud light aircraft
 /// among airliners no longer lends them its spectrum). A helicopter, which Doc 29 gives none, takes
 /// the fallback class's, as do the flights where none is listed, so their energy always keeps a
 /// spectrum.
-pub fn heard_spectrum(
+pub fn heard_spectrum_energy(
     listed: &[LoudFlight],
     rates_db_per_m: &[f64; THIRD_OCTAVES],
 ) -> [f64; THIRD_OCTAVES] {
     let fallback = usize::from(FALLBACK_NOISE_CLASS);
     let spectrum = |class: usize, slant_m: f64| {
-        class_spectrum_at(class, slant_m, rates_db_per_m)
-            .or_else(|| class_spectrum_at(fallback, slant_m, rates_db_per_m))
+        class_spectrum_energy_at(class, slant_m, rates_db_per_m)
+            .or_else(|| class_spectrum_energy_at(fallback, slant_m, rates_db_per_m))
             .expect("the fallback class has a spectrum")
     };
     if listed.is_empty() {
         return spectrum(fallback, SPECTRUM_DISTANCE_M);
     }
-    let mut energy = [0.0; THIRD_OCTAVES];
+    let weighting = std::array::from_fn::<_, THIRD_OCTAVES, _>(|n| {
+        energy(A_WEIGHTING_DB[n + OCTAVE_START - 1])
+    });
+    let mut spectrum_energy = [0.0; THIRD_OCTAVES];
     for flight in listed {
         let own = spectrum(flight.class, flight.closest_m.hypot(flight.altitude_m));
         // Its shape set to its A-weighted sound exposure.
-        let a_weighted: f64 = (own.iter().enumerate())
-            .map(|(n, db)| 10f64.powf((db + A_WEIGHTING_DB[n + OCTAVE_START - 1]) / 10.0))
+        let a_weighted: f64 = own
+            .iter()
+            .zip(weighting)
+            .map(|(value, weight)| value * weight)
             .sum();
-        let scale = 10f64.powf(flight.sel_db / 10.0) / a_weighted;
-        for (total, db) in energy.iter_mut().zip(own) {
-            *total += scale * 10f64.powf(db / 10.0);
+        let scale = energy(flight.sel_db) / a_weighted;
+        for (total, value) in spectrum_energy.iter_mut().zip(own) {
+            *total += scale * value;
         }
     }
-    energy.map(|value| 10.0 * value.log10())
+    spectrum_energy
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -210,9 +212,8 @@ impl FlightTotals {
                         altitude_m: closest[2],
                         track: Vec::new(),
                     });
-                let energy = 10f64.powf(entry.sel_db / 10.0)
-                    + 10f64.powf((sel.sel_db + impedance_db) / 10.0);
-                entry.sel_db = 10.0 * energy.log10();
+                let summed_energy = energy(entry.sel_db) + energy(sel.sel_db + impedance_db);
+                entry.sel_db = 10.0 * summed_energy.log10();
                 if lmax_db > entry.lmax_db {
                     (entry.lmax_db, entry.closest_m, entry.altitude_m) =
                         (lmax_db, lateral, closest[2]);
@@ -259,17 +260,17 @@ mod tests {
             track: Vec::new(),
         };
         let fallback = usize::from(FALLBACK_NOISE_CLASS);
-        let own = |class| class_spectrum_at(class, 500.0, &rates);
+        let own = |class| class_spectrum_energy_at(class, 500.0, &rates);
         let helicopter = (0..NUM_CLASSES)
             .find(|&class| own(class).is_none())
             .unwrap();
         assert!(is_helicopter_class(helicopter));
-        // One flight lends its own shape (dB up to a constant).
+        // A single flight keeps its spectral energy ratios.
         let same_shape = |a: [f64; THIRD_OCTAVES], b: [f64; THIRD_OCTAVES]| {
-            (0..THIRD_OCTAVES).all(|n| ((a[n] - b[n]) - (a[0] - b[0])).abs() < 1e-9)
+            (0..THIRD_OCTAVES).all(|n| ((a[n] / b[n]) / (a[0] / b[0]) - 1.0).abs() < 1e-9)
         };
         assert!(same_shape(
-            heard_spectrum(&[flight(helicopter)], &rates),
+            heard_spectrum_energy(&[flight(helicopter)], &rates),
             own(fallback).unwrap()
         ));
         let jet = (0..NUM_CLASSES)
@@ -278,15 +279,15 @@ mod tests {
             })
             .unwrap();
         assert!(same_shape(
-            heard_spectrum(&[flight(jet)], &rates),
+            heard_spectrum_energy(&[flight(jet)], &rates),
             own(jet).unwrap()
         ));
         // Two by their exposure: the jet 10 dB louder in SEL weighs ten times the fallback's.
         let mut loud = flight(jet);
         loud.sel_db += 10.0;
-        let mixed = heard_spectrum(&[loud, flight(fallback)], &rates);
+        let mixed = heard_spectrum_energy(&[loud, flight(fallback)], &rates);
         assert!(!same_shape(mixed, own(jet).unwrap()));
-        let unlisted = class_spectrum_at(fallback, SPECTRUM_DISTANCE_M, &rates).unwrap();
-        assert_eq!(heard_spectrum(&[], &rates), unlisted);
+        let unlisted = class_spectrum_energy_at(fallback, SPECTRUM_DISTANCE_M, &rates).unwrap();
+        assert_eq!(heard_spectrum_energy(&[], &rates), unlisted);
     }
 }

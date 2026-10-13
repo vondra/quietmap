@@ -1,13 +1,13 @@
-//! A tile's aircraft boxes at the receiver: every box through the click-time equation
-//! (`physics::doc29::boxes`), all of them, since a box costs well under a microsecond; their SEL
-//! sums per period become period energies (Leq), as the ground layers report.
+//! Aircraft box energies, passing durations and flight-list bounds from the shared Doc 29 physics.
 
 use physics::bands::{PERIOD_HOURS, PERIODS, energy, lden_energy};
 use physics::doc29::atmosphere::receiver_impedance_db;
-use physics::doc29::boxes::{AircraftBoxAtReceiver, BoxSel, box_sel_at_receiver};
+use physics::doc29::boxes::{
+    AircraftBoxAtReceiver, BoxSel, box_sel_at_receiver, minimum_line_slant_m,
+};
 use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
 use physics::doc29::npd::lamax_rise_bound_db;
-use physics::doc29::screening::ReceiverHorizons;
+use physics::doc29::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M};
 use rayon::prelude::*;
 use tiles::aircraft::{Aircraft, AircraftBox, Group};
 use tiles::geo::{LocalFrame, Mercator, TileId};
@@ -116,6 +116,43 @@ fn nearest_slant_m(
     east.hypot(north).hypot(up)
 }
 
+/// The finest smooth-field slant of a box over `area`, zero where screening or reach can cut it.
+pub fn minimum_box_slant_m(
+    record: &AircraftBox,
+    tile: TileId,
+    frame: &LocalFrame,
+    area: ReceiverArea,
+) -> f64 {
+    let midpoint = AircraftReceiver {
+        position: std::array::from_fn(|axis| 0.5 * (area.low[axis] + area.high[axis])),
+        altitude_m: 0.5 * (area.altitudes_m[0] + area.altitudes_m[1]),
+    };
+    let [east, north] = centroid_offset_m(record.centroid, tile, frame, midpoint);
+    let centroid = [
+        east,
+        north,
+        record.centroid_altitude_m - midpoint.altitude_m,
+    ];
+    let half_extent = [
+        0.5 * (area.high[0] - area.low[0]),
+        0.5 * (area.high[1] - area.low[1]),
+        0.5 * (area.altitudes_m[1] - area.altitudes_m[0]),
+    ];
+    if record.centroid_altitude_m - record.ground_m < SCREENING_CEILING_ABOVE_GROUND_M
+        || (east.abs() + half_extent[0]).hypot(north.abs() + half_extent[1]) > AIRCRAFT_REACH_M
+    {
+        return 0.0;
+    }
+    // SEL and passing duration depend on the extended line even when its piece is far away.
+    [
+        record.gradient - record.gradient_spread,
+        record.gradient + record.gradient_spread,
+    ]
+    .into_iter()
+    .map(|gradient| minimum_line_slant_m(centroid, record.axis_rad, gradient, half_extent))
+    .fold(nearest_slant_m(record, tile, frame, area), f64::min)
+}
+
 /// One box at the receiver: its centroid's horizontal distance (m), its period energies (Leq,
 /// linear) and its selection; none where `heard` refuses the distance.
 /// A box centroid's horizontal offset from the receiver, east and north (m).
@@ -136,7 +173,7 @@ fn box_at(
     frame: &LocalFrame,
     receiver: AircraftReceiver,
     horizons: &impl ReceiverHorizons,
-    (impedance_db, heard): (f64, &dyn Fn(f64) -> bool),
+    (impedance_gain, heard): (f64, &dyn Fn(f64) -> bool),
 ) -> Option<(f64, [f64; PERIODS], BoxSel)> {
     let [east_m, north_m] = centroid_offset_m(record.centroid, tile, frame, receiver);
     let distance_m = east_m.hypot(north_m);
@@ -160,12 +197,12 @@ fn box_at(
         ground_m: record.ground_m - receiver.altitude_m,
     };
     let sel = box_sel_at_receiver(&at_receiver, horizons);
-    let impedance_db = match record.group {
-        Group::FixedWing => impedance_db,
-        Group::Helicopter => 0.0,
+    let impedance_gain = match record.group {
+        Group::FixedWing => impedance_gain,
+        Group::Helicopter => 1.0,
     };
     let energy: [f64; PERIODS] = std::array::from_fn(|period| {
-        energy(sel.sel_db[period] + impedance_db) / (PERIOD_HOURS[period] * 3_600.0)
+        sel.sel_energy[period] * impedance_gain / (PERIOD_HOURS[period] * 3_600.0)
     });
     Some((distance_m, energy, sel))
 }
@@ -173,44 +210,43 @@ fn box_at(
 /// A box's flights' Kurze lambda per period: the period's flights a day over its hours, times its
 /// closest slant over the flights' speed.
 fn box_lambda(record: &AircraftBox, sel: &BoxSel) -> [f64; PERIODS] {
-    let slant = sel.closest.on_line_m[0]
-        .hypot(sel.closest.on_line_m[1])
-        .hypot(sel.closest.on_line_m[2]);
     std::array::from_fn(|period| {
         let flights = f64::from(record.flights[period]) / 365.25;
-        flights / (PERIOD_HOURS[period] * 3_600.0) * slant / FLIGHT_SPEED_M_S
+        flights / (PERIOD_HOURS[period] * 3_600.0) * sel.closest_slant_m / FLIGHT_SPEED_M_S
     })
 }
 
-/// The flights of one tile's boxes within `reach_m` of the receiver (at most the aircraft reach),
-/// each box's share `weight` of its centroid's horizontal distance (the heatmap's): their energy
-/// and energy times lambda per period.
+/// Selected boxes of one tile within the aircraft reach: energy and energy times lambda per period.
 pub fn tile_flight_sums(
     aircraft: &Aircraft<'_>,
     tile: TileId,
     frame: &LocalFrame,
     receiver: AircraftReceiver,
     horizons: &impl ReceiverHorizons,
-    (weight, reach_m): (&dyn Fn(f64) -> f64, f64),
+    (indices, weight, reach_m): (impl Iterator<Item = usize>, &dyn Fn(f64) -> f64, f64),
 ) -> ([f64; PERIODS], [f64; PERIODS]) {
-    let reach_m = reach_m.min(AIRCRAFT_REACH_M);
-    let heard = |distance_m: f64| distance_m <= reach_m && weight(distance_m) > 0.0;
+    let heard = |distance_m: f64| distance_m <= reach_m.min(AIRCRAFT_REACH_M);
     let ends = (
-        receiver_impedance_db(receiver.altitude_m),
+        energy(receiver_impedance_db(receiver.altitude_m)),
         &heard as &dyn Fn(f64) -> bool,
     );
-    // A box beyond the reach is known from its centroid alone, before its record is read.
-    (0..aircraft.box_count())
-        .filter(|&index| {
-            let [east_m, north_m] =
-                centroid_offset_m(aircraft.box_centroid(index), tile, frame, receiver);
-            heard(east_m.hypot(north_m))
-        })
+    // Reject out-of-reach centroids before decoding their spectra.
+    indices
         .filter_map(|index| {
+            let centroid = aircraft.box_centroid(index);
+            let [east_m, north_m] = centroid_offset_m(centroid, tile, frame, receiver);
+            let distance = east_m.hypot(north_m);
+            let share = if heard(distance) {
+                weight(distance)
+            } else {
+                0.0
+            };
+            (share > 0.0).then_some((index, share))
+        })
+        .filter_map(|(index, share)| {
             let record = aircraft.aircraft_box(index);
-            let (distance_m, energy, sel) = box_at(&record, tile, frame, receiver, horizons, ends)?;
+            let (_, energy, sel) = box_at(&record, tile, frame, receiver, horizons, ends)?;
             let lambda = box_lambda(&record, &sel);
-            let share = weight(distance_m);
             let heard: [f64; PERIODS] = std::array::from_fn(|p| share * energy[p] * lambda[p]);
             Some((energy.map(|value| share * value), heard))
         })
@@ -299,6 +335,7 @@ pub fn tile_energy(
 ) -> TileAnswer {
     // The NPD curves at the receiver's elevation (Doc 29 4.2.1); helicopters carry no impedance.
     let impedance_db = receiver_impedance_db(receiver.altitude_m);
+    let impedance_gain = energy(impedance_db);
     let per_box: Vec<BoxAnswer> = (0..aircraft.box_count())
         .into_par_iter()
         .with_min_len(1_024)
@@ -310,7 +347,7 @@ pub fn tile_energy(
                 frame,
                 receiver,
                 horizons,
-                (impedance_db, &|distance_m| distance_m <= AIRCRAFT_REACH_M),
+                (impedance_gain, &|distance_m| distance_m <= AIRCRAFT_REACH_M),
             ) else {
                 return BEYOND_REACH;
             };
