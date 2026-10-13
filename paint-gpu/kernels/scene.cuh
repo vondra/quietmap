@@ -163,13 +163,15 @@ __device__ const TerrainTile* terrain_tile(const TerrainScene& scene, i64 dx, i6
     return &scene.tiles[(dy + scene.radius) * (2 * scene.radius + 1) + dx + scene.radius];
 }
 
-// Metres north of the origin of row line `k` of the lattice `scale` times as fine as the one
-// arc-second, the northernmost 0: on the 1" rows, evenly between them (popup::scene::Ground::
-// row_line_y).
+// Metres north of the origin of row line `k` of the lattice `scale` (1 or FINE_PER_NODE) times as
+// fine as the one arc-second, the northernmost 0: on the 1" rows, evenly between them (popup::scene::
+// Ground::row_line_y). The scale is one of two constants: a division by a variable takes some twenty
+// instructions, by a constant a multiply.
 __device__ __forceinline__ float row_line_north(const TerrainScene& sc, int scale, int k) {
-    int row = k / scale, sub = k - row * scale;
+    if (scale == 1) return sc.scene_rows[k];
+    int row = k / FINE_PER_NODE, sub = k - row * FINE_PER_NODE;
     float north = sc.scene_rows[row];
-    return sub == 0 ? north : north + (sc.scene_rows[row + 1] - north) * (float)sub / (float)scale;
+    return sub == 0 ? north : north + (sc.scene_rows[row + 1] - north) * (float)sub / (float)FINE_PER_NODE;
 }
 
 // The lines of the lattice `scale` times as fine as the one arc-second a ray crosses, in order

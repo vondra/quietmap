@@ -1,8 +1,6 @@
-//! One card and one square on it: the kernels compiled for the card (NVRTC), the square's terrain
-//! and obstacles files as stored, its candidates and attributes, the weather table, and the pair
-//! evaluation. The device works in f32 in the square's frame: here, in f64, every absolute
-//! coordinate (Mercator, terrain nodes) becomes an offset from the frame's origin. The `#[repr(C)]`
-//! structs mirror kernels/scene.cuh, evaluate.cuh and paint.cu field by field.
+//! GPU compilation, scene upload and pair evaluation in the square's frame.
+// Coordinates are rebased in f64 before the GPU uses f32 frame metres. The repr(C) records mirror
+// scene.cuh, evaluate.cuh and paint.cu field by field.
 
 use cudarc::driver::sys::CUdevice_attribute;
 use cudarc::driver::{
@@ -36,6 +34,8 @@ const COMMON: &str = include_str!("../kernels/common.cuh");
 const PHYSICS: &str = concat!(
     include_str!("../kernels/cnossos.cuh"),
     include_str!("../kernels/scene.cuh"),
+    include_str!("../kernels/ray_stream.cuh"),
+    include_str!("../kernels/ray_path.cuh"),
     include_str!("../kernels/ray.cuh"),
     include_str!("../kernels/line.cuh"),
     include_str!("../kernels/evaluate.cuh"),
@@ -88,8 +88,9 @@ pub const FAILED_NOT_READ: u32 = 1;
 pub const FAILED_NO_TERRAIN: u32 = 2;
 pub const FAILED_CAPACITY: u32 = 4;
 
-/// Threads per block of the pair kernels, one pair or one ray a thread: one warp, 5 % faster than 64
-/// and 15-20 % faster than 256 (pairs within 1 km grouped by 32, 2026-10-09).
+/// One warp per pair-kernel block allows 128 registers per thread with the ray kernel's launch
+/// bounds. Against two-warp blocks at 64 registers, real pixel launches improve by about 5% on
+/// compute capability 12.0, and fixed-pair checks on 7.0 and 7.5 improve by more than half.
 const THREADS_PER_BLOCK: u32 = 32;
 /// Bytes of one listed ray (kernels/evaluate.cuh PairRay).
 const PAIR_RAY_BYTES: usize = 24;
@@ -247,7 +248,7 @@ impl Gpu {
             attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
         let arch: &'static str = Box::leak(format!("compute_{major}{minor}").into_boxed_str());
         let source = format!(
-            "{COMMON}{}{}{PHYSICS}",
+            "{COMMON}{}{}#define THREADS_PER_BLOCK {THREADS_PER_BLOCK}\n{PHYSICS}",
             band_constants(),
             lattice_constants()
         );
@@ -255,10 +256,10 @@ impl Gpu {
             source,
             CompileOptions {
                 arch: Some(arch),
-                // Fast math: point and line pairs about 1.7 times as fast, the agreement with the
-                // CPU the same (2026-10-09). The
-                // `use_fast_math` field only adds --fmad=true; the flag goes in `options`. Line
-                // numbers cost nothing at run time and let a profiler name the kernel's lines.
+                // Fast math reduces point and line pair time by about 44% and 42%, with unchanged
+                // agreement with the CPU (2026-10-09). The `use_fast_math` field only adds
+                // --fmad=true; the flag goes in `options`. Line numbers cost nothing at run time
+                // and let a profiler name the kernel's lines.
                 options: vec!["--use_fast_math".into(), "-lineinfo".into()],
                 ..Default::default()
             },

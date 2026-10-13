@@ -84,8 +84,9 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float*
 }
 
 // Per listed ray, a thread each: its pair's sums (PAIR_SUMS a pair) and mixed bands (PERIODS x BANDS
-// a pair) added to, or its failure to the pair's.
-extern "C" __global__ void ray_transfers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
+// a pair) added to, or its failure to the pair's. Sixteen one-warp blocks allow 128 registers per
+// thread; requiring more warps makes the register allowance too small for the walk's live state.
+extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, 16) ray_transfers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
                                          const u32* candidate_index, const PairRay* rays, u32 ray_count, float* sums,
                                          float* pair_bands, u32* failed) {
     const SquareScene& square = *square_ptr;
