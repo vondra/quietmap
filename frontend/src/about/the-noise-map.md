@@ -63,8 +63,10 @@ upper bound there reaches 20 dB.
 </figure>
 
 Neighbouring blocks share their corners, so what is blended meets at them. The flights are blended
-from the block corners, and a pixel inside a building shows the loudest outdoor pixel along its
-walls, without the building's own reflection.
+from the block corners. A pixel inside a building shows the building's loudest façade, as a click
+inside it does: of the receivers 0.1 m in front of its walls, the three whose painted pixel in front
+is loudest are computed like pixels, without the building's own reflection, and the loudest of
+them counts.
 
 A pixel's loudness is computed as a click computes it, at a coarser grain: the levels over time in
 steps of 2 dB, two states of the weather, and four groups of the day's hours, one of the evening's
@@ -78,8 +80,8 @@ The painter is held to two references. The etalon is the same tile with every lo
 exactly at every pixel: over the pixels of 1 sone or more, each layer and the total may differ from
 it by more than 1 phon (7 % of loudness) at no more than 1 % of them, by more than 3 phon at 0.01 %
 and by more than 6 phon at 0.001 %, with a bias under 0.5 phon. And where the map is clicked, it
-should agree with the click within 1 phon: in central Prague (October 2026) it does at 96 % of the
-outdoor pixels and at half of those inside buildings, which read a median 0.7 phon louder.
+should agree with the click within 1 phon: on a zoom-12 tile of Prague (October 2026) it does at
+99.7 % of 1,798 outdoor clicks and at 92 % of 201 clicks inside buildings.
 
 The exact computations run on a graphics card in single precision or on the processor's
 cores in double; on 20,000 random pairs of source and pixel in Prague the two agree within 0.004 dB
@@ -90,11 +92,12 @@ for 99 % of them and 0.03 dB for 99.9 %.
 `paint/` is the method and `paint-gpu/` (`qm-paint`) runs it, a square of zoom 12 at a time: its
 files read once to the reach of its farthest pixel, the exact pairs on the first CUDA card
 (`paint-gpu/kernels/`, the popup's physics in single precision, each function citing its Rust) or on
-the cores. Each file's header says what it does; the blocks are `paint/src/blocks.rs`, a pixel's
-loudness `paint/src/sone.rs` at `popup::percentiles::Resolution::MAP`, and the tiles
-`paint/src/hm3.rs`: per layer and the total, 512 × 512 cells of twice the loudness level in phon (80
-one sone, a doubling 20; 254 silence under 1/16 sone, 255 not assessed), packed by `pack.rs` into one
-PMTiles archive per layer with every zoom down to 2.
+the cores. Each file's header says what it does; the blocks are `paint/src/blocks.rs`, a
+building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
+`popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs`: per layer and the total,
+512 × 512 cells of twice the loudness level in phon (80 one sone, a doubling 20; 254 silence under
+1/16 sone, 255 not assessed), packed by `pack.rs` into one PMTiles archive per layer with every zoom
+down to 2.
 
 Loud is one rule for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB). `qm-paint-gpu check` holds the card equal to the cores

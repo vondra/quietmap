@@ -1,10 +1,9 @@
 //! The painter's reference: every outdoor pixel's loudness as the painter's model takes it with
 //! every ground source loud there evaluated exactly, the quiet hum blended from its points as the
-//! painter takes it, and the flights at the pixel; a building's pixels at its loudest outdoor
-//! neighbour as the painter takes them; or, sampled, one outdoor pixel drawn in each K x K cell; a
-//! painted map is scored against it cell by cell.
+//! painter takes it, and the flights at the pixel; or, sampled, one outdoor pixel drawn in each K x K
+//! cell; a painted map is scored against it cell by cell. A building's pixels are not assessed: the
+//! popup's answers inside buildings score the map there.
 
-use crate::buildings::{fill_buildings, own_reflection_db};
 use crate::exact::{Batch, LAYERS, Point, add_bands, evaluate_all, whole_energy};
 use crate::flights::{FlightSpectra, aircraft_sums};
 use crate::hum::Hum;
@@ -30,8 +29,7 @@ const ETALON_PASS_ROWS: usize = 4;
 /// per layer the ground sources loud there and the quiet hum (at the points of `grid`, as the
 /// painter takes it) times the pixel's reflection, and the flights, the card's ground pairs beside
 /// the cores' flights; its loudness by the painter's model (the flights' spectrum as the painter
-/// blends it); a building's pixels at its loudest outdoor neighbour, which only the full etalon
-/// has (a sample leaves them not assessed).
+/// blends it).
 pub fn etalon(
     square: &Square,
     grid: Grid,
@@ -56,11 +54,9 @@ pub fn etalon(
     };
     let displays = Displays::of(square)?;
     let mut pixel_layers: Vec<Option<Painted>> = vec![None; n * n];
-    let mut indoor = Vec::new();
     let cells = n.div_ceil(sample_step);
     for first_row in (0..cells).step_by(ETALON_PASS_ROWS) {
-        let (outdoor, inside): (Vec<(usize, Point)>, Vec<_>) = (first_row
-            ..(first_row + ETALON_PASS_ROWS).min(cells))
+        let outdoor: Vec<(usize, Point)> = (first_row..(first_row + ETALON_PASS_ROWS).min(cells))
             .flat_map(|row| (0..cells).map(move |column| (row, column)))
             .map(|(row, column)| sampled_pixel(square.tile, n, sample_step, row, column))
             .collect::<Vec<usize>>()
@@ -72,12 +68,8 @@ pub fn etalon(
             })
             .collect::<Result<Vec<_>, String>>()?
             .into_iter()
-            .partition(|(_, point)| point.own_footprint == 0);
-        indoor.extend(
-            inside
-                .into_iter()
-                .map(|(at, point)| (at, point.own_footprint)),
-        );
+            .filter(|(_, point)| point.own_footprint == 0)
+            .collect();
         let (pixels_at, points): (Vec<usize>, Vec<Point>) = outdoor.into_iter().unzip();
         let pairs: Vec<(u32, u32)> = (0..points.len())
             .into_par_iter()
@@ -154,15 +146,6 @@ pub fn etalon(
         for (at, layers) in pixels_at.into_iter().zip(painted) {
             pixel_layers[at] = Some(layers);
         }
-    }
-    if sample_step == 1 {
-        fill_buildings(&mut pixel_layers, n, &indoor, &|at, footprint| {
-            own_reflection_db(
-                square,
-                metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5),
-                footprint,
-            )
-        })?;
     }
     Ok((pixel_layers.par_iter())
         .map(|pixel| {
