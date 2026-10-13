@@ -1,4 +1,4 @@
-# Server
+# Server routes for the map, heatmap archives and streamed point answers
 
 Fastify on Node 24 (TypeScript run as is, no build step). It serves the built map, the heatmap
 tiles, the data layers, the geocoder proxies, the places to stay and the streamed popup:
@@ -6,7 +6,7 @@ tiles, the data layers, the geocoder proxies, the places to stay and the streame
 | route | answer |
 |---|---|
 | `GET /api/popup?lat=&lon=[&year=][&source=ID,...[&piece=K]]` | one click, streamed as `application/x-ndjson` (below) |
-| `GET /api/tiles-manifest` | the published heatmap generation: `{build, zoom, layers}` |
+| `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{build, zoom, layers}` |
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
 | `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
 | `GET /api/search?q=&lat=&lon=`, `GET /api/reverse?lat=&lon=` | address suggestions and place names (public Photon geocoder) |

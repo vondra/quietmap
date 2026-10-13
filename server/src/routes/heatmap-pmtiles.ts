@@ -1,7 +1,4 @@
-// Versioned heatmap tile route — serves HM3 tiles out of per-layer pmtiles
-// archives (`{layer}.{build}.pmtiles` in the tiles directory). A build ("b546", …)
-// is an immutable published generation, so both hits and misses are cached hard
-// by the browser.
+// Serve the stored HM3 Brotli streams by range from immutable per-layer PMTiles archives.
 
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
@@ -22,7 +19,7 @@ const gunzipAsync = promisify(gunzip)
 
 const BUILD_ID = /^b\d+$/
 
-// Retain parsed directories for up to four generations of the eight layers.
+// Retain parsed directories for up to 32 immutable layer archives.
 const ARCHIVE_CACHE_MAX = 32
 
 /** Cache parsed directories, but retain an archive descriptor only during a range read:

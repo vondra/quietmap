@@ -1,4 +1,4 @@
-// GET /api/tiles-manifest — the currently published pmtiles generation.
+// Publish the current generation at the HM3 decoder's format-specific manifest URL.
 //
 // The manifest `{build, zoom?, layers: {layer: {file, build?}}}` is MANIFEST_FILENAME in the
 // tiles directory. The route projects only the fields needed to fetch tiles: generation, hashes
@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { ALLOWED_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, WORLD_BASE_ZOOM } from './heatmap-shared.ts'
+import { HM3_MANIFEST_URL, HM3_VERSION } from '../../../frontend/src/lib/hm3-decoder.ts'
 
 const BUILD_ID = /^b\d+$/
 const SHA256 = /^[a-f0-9]{64}$/
@@ -45,6 +46,9 @@ export function manifestBaseZoom(manifest: PmtilesManifest): number {
  *  disk is deliberately NOT checked: a mid-sync directory still serves its pin
  *  and the tile route 404s the not-yet-synced archives. */
 export function validatePmtilesManifest(manifest: PmtilesManifest, manifestPath: string): void {
+  if (manifest.hm3_version !== HM3_VERSION) {
+    throw new Error(`${manifestPath} does not contain HM3 version ${HM3_VERSION}`)
+  }
   if (typeof manifest.build !== 'string' || !BUILD_ID.test(manifest.build)) {
     throw new Error(`${manifestPath} has an invalid build id`)
   }
@@ -121,7 +125,7 @@ function publicManifest(manifest: PmtilesManifest) {
 }
 
 export async function heatmapManifestRoutes(app: FastifyInstance, { tilesDir }: { tilesDir: string }): Promise<void> {
-  app.get('/api/tiles-manifest', async (_req, reply) => {
+  app.get(HM3_MANIFEST_URL, async (_req, reply) => {
     reply.header('Cache-Control', 'no-cache')
     let manifest
     try {

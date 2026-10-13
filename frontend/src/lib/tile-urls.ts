@@ -1,5 +1,4 @@
-// Heatmap tile URLs: the published pmtiles generation ("build") and base zoom from
-// /api/tiles-manifest, and the noise layers the tiles exist for.
+// Track compatible published HM3 generations and form immutable per-layer tile URLs.
 //
 // GENERATION-SNAPSHOT CONTRACT: the
 // build is delivered to components ONLY as a subscribed snapshot
@@ -14,9 +13,10 @@
 // tiles) = `null` = the tile layers simply don't mount.
 
 import { useSyncExternalStore } from 'react'
+import { HM3_MANIFEST_URL } from './hm3-decoder.ts'
 
 // The toggleable noise layers of the heatmap, each its own tile tree. All share
-// the same HM3 format and palette (Lden), so the tile fetch/decode/energy-sum
+// the same HM3 format and loudness palette, so the tile fetch/decode
 // loop is layer-agnostic. `total` (every layer summed, one fetch) is a tile
 // source but no toggle.
 export const HEATMAP_LAYERS = [
@@ -122,7 +122,7 @@ let pollingStarted = false
 
 async function refreshTileBuild(): Promise<void> {
   try {
-    const res = await fetch('/api/tiles-manifest', { cache: 'no-cache' })
+    const res = await fetch(HM3_MANIFEST_URL, { cache: 'no-cache' })
     if (!res.ok) return // nothing published yet → stay as-is
     const manifest = (await res.json()) as {
       build?: unknown

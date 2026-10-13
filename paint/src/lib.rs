@@ -1,5 +1,4 @@
-//! The heatmap: every pixel's loudness (sone) per layer and in total on the popup's physics, a z12
-//! square at a time.
+//! Paint each heatmap square's per-layer and total loudness using the popup's physics.
 //!
 //! Map: [`square`] (a square's neighbourhood read once, its sources indexed by place and reach),
 //! [`exact`] (the points and the exact evaluation of (point, source) pairs, here or on a card),
@@ -20,8 +19,10 @@ mod flights;
 pub mod hm3;
 pub mod hum;
 mod loudest;
+pub mod merge;
 pub mod pack;
 pub mod paint;
 mod points;
+mod pyramid;
 pub mod sone;
 pub mod square;

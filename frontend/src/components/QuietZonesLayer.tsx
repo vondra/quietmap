@@ -66,7 +66,7 @@ export default function QuietZonesLayer({ enabled, threshold }: Props): null {
 type QuietTile = { cells: Uint8Array }
 
 function makeQuietLayer(threshold: number, build: TileBuilds) {
-  // HM3 v5 encodes twice the loudness level in phon: 80 + 20 log2(sone).
+  // Decoded HM3 cells hold twice the loudness level in phon: 80 + 20 log2(sone).
   const maxByte = 80 + 20 * Math.log2(threshold)
   return new TileLayer<QuietTile | null>({
     // Generation snapshot in the id: a flip re-keys the layer so deck drops
