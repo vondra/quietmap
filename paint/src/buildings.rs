@@ -1,12 +1,25 @@
-//! A building on the map: its loudest façade, as a click inside it answers (`popup::building`),
-//! taken from the outdoor pixels along its outline instead of the façade receivers.
+//! A building on the map: its loudest façade, as a click inside it is answered (`popup::building`):
+//! of its exposed façade receivers in the square (CNOSSOS-EU 2.8, `popup::obstacles`), the few whose
+//! painted outdoor pixel in front is loudest are painted as points of their blocks, and the loudest
+//! of them from the ground sources gives every pixel of the building its level.
 
-use crate::exact::LAYERS;
-use crate::paint::Painted;
+use crate::blocks::Block;
+use crate::exact::{LAYERS, Point};
+use crate::paint::{Painted, metres_at, pixel_of};
+use crate::points::{PASSES_AT_ONCE, PointPainter};
+use crate::square::Square;
+use rayon::prelude::*;
 use std::collections::HashMap;
+use std::ops::Range;
 use tiles::sources::Layer;
 
-/// The ground layers' energy of a pixel: what the popup ranks façades by (the flights apart).
+/// Façade receivers painted for each building: those whose painted outdoor pixel in front is
+/// loudest. Over the 201 clicks inside buildings of a Prague square three put 8.0 % of them over 1
+/// phon from the popup for 6 % more pairs, every receiver 4.0 % for 23 % more, the loudest in front
+/// per way faced 14.9 % (its neighbour pixel 32.8 %).
+const FACADE_CANDIDATES: usize = 3;
+
+/// The ground layers' energy of a point: what the popup ranks façades by (the flights apart).
 fn ground_energy(layers: &[f64; LAYERS]) -> f64 {
     (layers.iter().enumerate())
         .filter(|&(layer, _)| layer != Layer::Aircraft as usize)
@@ -14,114 +27,181 @@ fn ground_energy(layers: &[f64; LAYERS]) -> f64 {
         .sum()
 }
 
-/// The decibels a building's own façade adds to the reflection at `position` (click metres): the
-/// receiver's reflection with every building against it without `footprint` (`popup::building`).
-pub fn own_reflection_db(
-    square: &crate::square::Square,
-    position: [f64; 2],
+/// A façade receiver chosen to be painted: its building, its point, the pixel it lies in.
+pub(crate) struct FacadeCandidate {
     footprint: u64,
-) -> Result<f64, String> {
-    Ok(square.obstacles.reflection_db(position, None)?
-        - square.obstacles.reflection_db(position, Some(footprint))?)
+    point: Point,
+    pixel: usize,
 }
 
-/// A painted façade with the reflection its own building adds taken away, `incident` the energy's
-/// ratio: its ground layers' energy times it, its flights as they are; its loudness as its
-/// loudness level follows the energy's level (a loudness level a phon per decibel: sone times the
-/// ratio to the power log10 2), the total by its whole energy's ratio.
-fn incident((energies, ndens): Painted, incident: f64) -> Painted {
-    let aircraft = Layer::Aircraft as usize;
-    let air = energies[aircraft];
-    let ground = ground_energy(&energies);
-    let follow = |sone: f64, ratio: f64| sone * ratio.powf(std::f64::consts::LOG10_2);
-    let mut layers = energies;
-    let mut loudness = ndens;
-    for layer in (0..LAYERS).filter(|&layer| layer != aircraft) {
-        layers[layer] *= incident;
-        loudness[layer] = follow(ndens[layer], incident);
-    }
-    if ground + air > 0.0 {
-        loudness[LAYERS] = follow(ndens[LAYERS], (incident * ground + air) / (ground + air));
-    }
-    (layers, loudness)
-}
-
-/// Gives each building's pixels (`indoor`: a pixel's place in the square and its footprint) its
-/// loudest façade: of the outdoor pixels next to any of them (`pixels`, `None` where nothing is
-/// painted), the one loudest from the ground sources, without the reflection its own building's
-/// façade adds there (`own_reflection_db` of that pixel and building: CNOSSOS-EU 2.8 takes the sound
-/// falling on a façade; [`incident`]). A building without a painted neighbour keeps no level; one
-/// across a square's edge takes each side's own.
-pub fn fill_buildings(
-    pixels: &mut [Option<Painted>],
+/// Each building's façade receivers to paint (`indoor`: its pixels' places and footprints): of its
+/// exposed receivers inside the square, in the popup's canonical order, the [`FACADE_CANDIDATES`]
+/// whose painted pixel half a pixel in front (outward) is loudest from the ground sources; a pixel
+/// around would rank a receiver by a street it does not face (a south façade's corner by the road
+/// east of it, 3.6 dB under the façade's loudest receiver). A building with none keeps no level.
+pub(crate) fn facade_candidates(
+    square: &Square,
     n: usize,
+    pixels: &[Option<Painted>],
     indoor: &[(usize, u64)],
-    own_reflection_db: &dyn Fn(usize, u64) -> Result<f64, String>,
-) -> Result<(), String> {
-    // Per building its loudest outdoor neighbour: (ground energy, the neighbour's place).
-    let mut loudest: HashMap<u64, (f64, usize)> = HashMap::new();
+) -> Result<Vec<FacadeCandidate>, String> {
+    let mut first: HashMap<u64, usize> = HashMap::new();
     for &(at, footprint) in indoor {
-        let (x, y) = (at % n, at / n);
-        for (nx, ny) in (x.saturating_sub(1)..=(x + 1).min(n - 1))
-            .flat_map(|nx| (y.saturating_sub(1)..=(y + 1).min(n - 1)).map(move |ny| (nx, ny)))
-        {
-            let neighbour = ny * n + nx;
-            // A building's own pixels have no energies until the end: only outdoor ones answer.
-            let Some((layers, _)) = pixels[neighbour] else {
-                continue;
+        first.entry(footprint).or_insert(at);
+    }
+    let mut buildings: Vec<(u64, usize)> = first.into_iter().collect();
+    buildings.sort_unstable();
+    // A pixel's shorter side (m): half of it in front of a receiver lies in the pixel it faces.
+    let pixel_m = {
+        let [a, b] = [0.0, 1.0].map(|at| metres_at(square, n, at, at));
+        (b[0] - a[0]).abs().min((b[1] - a[1]).abs())
+    };
+    let in_front = |position: [f64; 2], bearing_deg: f64| -> f64 {
+        let (east, north) = bearing_deg.to_radians().sin_cos();
+        let front = [
+            position[0] + 0.5 * pixel_m * east,
+            position[1] + 0.5 * pixel_m * north,
+        ];
+        let painted = pixel_of(square, n, front).and_then(|at| pixels[at].as_ref());
+        painted.map_or(0.0, |(layers, _)| ground_energy(layers))
+    };
+    let chosen: Vec<Vec<FacadeCandidate>> = (buildings.par_iter())
+        .map(|&(footprint, at)| -> Result<_, String> {
+            let inside = metres_at(square, n, (at % n) as f64 + 0.5, (at / n) as f64 + 0.5);
+            let Some(building) = square.obstacles.enclosing_building(inside)? else {
+                return Ok(Vec::new());
             };
-            // Equal energies go to the first pixel in the square's order, whatever the passes' order.
-            let ground = ground_energy(&layers);
-            let best = loudest.entry(footprint).or_insert((ground, neighbour));
-            if ground > best.0 || (ground == best.0 && neighbour < best.1) {
-                *best = (ground, neighbour);
+            let mut ranked: Vec<(f64, [f64; 2], usize)> = Vec::new();
+            for receiver in square.obstacles.facade_receivers(&building)? {
+                if let Some(pixel) = pixel_of(square, n, receiver.position) {
+                    let estimate = in_front(receiver.position, receiver.outward_bearing_deg);
+                    ranked.push((estimate, receiver.position, pixel));
+                }
             }
+            // A stable sort: equal estimates keep the canonical order.
+            ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+            ranked.truncate(FACADE_CANDIDATES);
+            (ranked.into_iter())
+                .map(|(_, position, pixel)| {
+                    Ok(FacadeCandidate {
+                        footprint,
+                        point: Point::on_facade(square, position, footprint)?,
+                        pixel,
+                    })
+                })
+                .collect()
+        })
+        .collect::<Result<_, String>>()?;
+    Ok(chosen.into_iter().flatten().collect())
+}
+
+/// Each building's level: its candidates painted as points of their blocks, each standing at a wall
+/// (its block never blends its corners' loudness), in as many runs as passes go at once, the
+/// loudest from the ground sources kept.
+pub(crate) fn building_levels(
+    painter: &PointPainter,
+    mut candidates: Vec<FacadeCandidate>,
+) -> Result<HashMap<u64, Painted>, String> {
+    if candidates.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let (n, side) = (painter.grid.pixels, painter.grid.block);
+    let block_of = |pixel: usize| (pixel / n / side) * (n / side) + (pixel % n) / side;
+    candidates.sort_by_key(|c| block_of(c.pixel));
+    let mut block_ids: Vec<usize> = candidates.iter().map(|c| block_of(c.pixel)).collect();
+    block_ids.sort_unstable();
+    block_ids.dedup();
+    let pass: Vec<Block> = (block_ids.par_iter())
+        .map_init(Vec::new, |near, &at| painter.block(near, at))
+        .collect();
+    let places: Vec<(usize, usize)> = (candidates.iter())
+        .map(|c| {
+            let slot = block_ids.binary_search(&block_of(c.pixel));
+            (slot.expect("a candidate's block is listed"), c.pixel)
+        })
+        .collect();
+    let walls = vec![true; block_ids.len()];
+    let (footprints, points): (Vec<u64>, Vec<Point>) = (candidates.into_iter())
+        .map(|c| (c.footprint, c.point))
+        .unzip();
+    let run = points.len().div_ceil(PASSES_AT_ONCE);
+    let runs: Vec<Range<usize>> = (0..points.len())
+        .step_by(run)
+        .map(|first| first..(first + run).min(points.len()))
+        .collect();
+    let painted = painter.in_passes(runs, |run| {
+        painter.paint(
+            &block_ids,
+            &pass,
+            &points[run.clone()],
+            &places[run],
+            &walls,
+        )
+    })?;
+    let painted =
+        (painted.into_iter()).flat_map(|(run, paint)| footprints[run].iter().copied().zip(paint));
+    Ok(loudest_by_ground(painted))
+}
+
+/// Per building the paint of its loudest candidate from the ground sources (the flights apart),
+/// equal energies to the first.
+fn loudest_by_ground(
+    painted: impl Iterator<Item = (u64, Option<Painted>)>,
+) -> HashMap<u64, Painted> {
+    let mut levels: HashMap<u64, Painted> = HashMap::new();
+    for (footprint, paint) in painted {
+        let Some(paint) = paint else {
+            continue;
+        };
+        let level = levels.entry(footprint).or_insert(paint);
+        if ground_energy(&paint.0) > ground_energy(&level.0) {
+            *level = paint;
         }
     }
-    let mut facades: HashMap<u64, Painted> = HashMap::with_capacity(loudest.len());
-    for (&footprint, &(_, neighbour)) in &loudest {
-        let facade = pixels[neighbour].expect("a painted neighbour");
-        let ratio = 10f64.powf(-own_reflection_db(neighbour, footprint)? / 10.0);
-        facades.insert(footprint, incident(facade, ratio));
-    }
+    levels
+}
+
+/// Gives each building's pixels (`indoor`: their places and footprints) its level; a building
+/// without one keeps no level.
+pub(crate) fn fill_buildings(
+    pixels: &mut [Option<Painted>],
+    indoor: &[(usize, u64)],
+    levels: &HashMap<u64, Painted>,
+) {
     for &(at, footprint) in indoor {
-        if let Some(&facade) = facades.get(&footprint) {
-            pixels[at] = Some(facade);
+        if let Some(level) = levels.get(&footprint) {
+            pixels[at] = Some(*level);
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A 2x2 building in a 4x4 square takes its neighbour loudest from the ground sources (not the
-    /// one loudest with its flights), without its own façade's reflection, the flights unchanged:
-    /// 3 dB less energy, 3 phon less loudness level on the ground layers (sone times 2^-0.3); a
-    /// building whose neighbours are all unpainted stays without level.
+    /// A building takes its candidate loudest from the ground sources, not the one loudest with
+    /// its flights, and every one of its pixels takes it; a building without a painted candidate
+    /// keeps no level.
     #[test]
     fn a_building_reads_its_loudest_facade() {
-        let n = 4;
-        let (road, aircraft) = (Layer::Road as usize, Layer::Aircraft as usize);
-        let mut pixels: Vec<Option<Painted>> = vec![None; n * n];
+        let aircraft = Layer::Aircraft as usize;
         let mut loud = [1000.0; LAYERS];
         loud[aircraft] = 1.0;
         let mut overflown = [10.0; LAYERS];
         overflown[aircraft] = 1e9;
-        pixels[0] = Some((overflown, [1.0; LAYERS + 1]));
-        pixels[3] = Some((loud, [8.0; LAYERS + 1]));
-        let indoor: Vec<(usize, u64)> = [5, 6, 9, 10].iter().map(|&at| (at, 7)).collect();
-        let three_db = |_: usize, _: u64| Ok(3.0);
-        fill_buildings(&mut pixels, n, &indoor, &three_db).unwrap();
-        let halved = 1000.0 * 10f64.powf(-0.3);
-        for &(at, _) in &indoor {
-            let (layers, ndens) = pixels[at].unwrap();
-            assert!((layers[road] - halved).abs() < 1e-9 && layers[aircraft] == 1.0);
-            assert!((ndens[road] - 8.0 * 2f64.powf(-0.3)).abs() < 1e-3 && ndens[aircraft] == 8.0);
-        }
-        let mut unpainted: Vec<Option<Painted>> = vec![None; n * n];
-        fill_buildings(&mut unpainted, n, &indoor, &three_db).unwrap();
-        assert!(unpainted.iter().all(Option::is_none));
+        let levels = loudest_by_ground(
+            [
+                (7, Some((overflown, [1.0; LAYERS + 1]))),
+                (7, Some((loud, [8.0; LAYERS + 1]))),
+                (9, None),
+            ]
+            .into_iter(),
+        );
+        let mut pixels: Vec<Option<Painted>> = vec![None; 6];
+        let indoor = [(1, 7), (2, 7), (4, 9)];
+        fill_buildings(&mut pixels, &indoor, &levels);
+        assert_eq!(pixels[1], Some((loud, [8.0; LAYERS + 1])));
+        assert_eq!(pixels[2], pixels[1]);
+        assert!(pixels[4].is_none() && pixels[0].is_none());
     }
 }

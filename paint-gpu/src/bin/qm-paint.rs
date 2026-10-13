@@ -262,7 +262,7 @@ fn finish_square(
 
 fn main() {
     // A square's large buffers, freed, serve the next square from the heap instead of going back to
-    // the system and being faulted in again: 20 of the Sahara's squares 11.9 -> 6.5 s on msas2
+    // the system and being faulted in again: the Sahara's quiet squares in about half the time
     // (2026-10-11).
     unsafe {
         libc::mallopt(libc::M_MMAP_THRESHOLD, 1 << 30);

@@ -18,8 +18,8 @@ use std::f64::consts::PI;
 /// the whole piece is up to +1.75 dB loud.
 pub const LINE_BUCKET_COUNT: usize = 5;
 /// A piece seen under less than this in-plane angle takes one bucket, its five rays lying within
-/// it: on Dobříš's four squares the painter 289 -> 155 s with every layer within the same drift
-/// from its etalon; under 5 degrees the railways drift more (2026-10-12).
+/// it: on Dobříš's four squares the painter's time nearly halved with every layer within the same
+/// drift from its etalon; under 5 degrees the railways drift more (2026-10-12).
 pub const ONE_BUCKET_SPAN_RAD: f64 = 3.0 * PI / 180.0;
 /// A bucket wider than this in horizontal azimuth gets geometry-placed nodes (dev4 screening
 /// fixtures 2026-08-08: at 3 deg the worst receiver sits on a 0.85 dB plateau, at 5 deg above 1 dB).

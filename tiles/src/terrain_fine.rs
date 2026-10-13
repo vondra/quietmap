@@ -8,8 +8,8 @@
 //! and the 1" heights stand as they are. The window is the `terrain` tile's, six times as fine;
 //! the detail is in the heights' 0.2 m steps, signed. Stored in blocks of 128 x 128 cells, each
 //! block one zstd frame of its planar prediction's residual (as `terrain`), behind a directory, so a
-//! click decodes only the blocks its rays' ends touch (12-60 ms of CPU against 117-140 ms for
-//! whole tiles, measured on Czechia's clicks).
+//! click decodes only the blocks its rays' ends touch (a tenth to a half of the CPU time of whole
+//! tiles, measured on Czechia's clicks).
 
 use crate::FormatError;
 use crate::terrain::{Window, predicted};
