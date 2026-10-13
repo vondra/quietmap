@@ -32,8 +32,11 @@ pub struct Crossing {
     pub t: f64,
     /// Height above the local ground (m).
     pub height_m: f64,
-    /// A building wall (its crossings pair into roofs) rather than a barrier.
+    /// A building contact rather than a barrier, for the receiver skyline and displayed ray.
     pub building: bool,
+    /// An entry or exit of a building ring, paired into roofs. Barriers and tangent contacts
+    /// contribute obstacle tops without changing roof or source-containment parity.
+    pub bounds_roof: bool,
     /// The global footprint id: the two walls of one building share it.
     pub footprint_id: u64,
 }
@@ -194,8 +197,8 @@ fn attenuation_energy(attenuation_db: f64) -> f64 {
 }
 
 /// The footprints containing a building's source, sorted, into `out`: its own (`own_footprint`, 0
-/// for a source that is no building's: none) and every footprint the ray crosses an odd number of
-/// times (the receiver stands outside every enclosed footprint, so the ray leaves it once more than
+/// for a source that is no building's: none) and every footprint the ray enters or leaves an odd number of
+/// times (tangent contacts do not count; the receiver stands outside, so the ray leaves it once more than
 /// it enters). They never screen the source.
 pub fn containing_footprints(crossings: &[Crossing], own_footprint: u64, out: &mut Vec<u64>) {
     out.clear();
@@ -205,7 +208,7 @@ pub fn containing_footprints(crossings: &[Crossing], own_footprint: u64, out: &m
     out.extend(
         crossings
             .iter()
-            .filter(|c| c.building)
+            .filter(|c| c.bounds_roof)
             .map(|c| c.footprint_id),
     );
     out.sort_unstable();
@@ -291,7 +294,7 @@ impl PathBuffers {
         self.buildings.clear();
         // A building's source sits inside its footprint, sometimes inside another outline of the
         // same building too (a part mapped twice). The receiver stands outside every enclosed
-        // footprint, so a footprint the ray crosses an odd number of times contains the source:
+        // footprint, so a footprint the ray enters or leaves an odd number of times contains the source:
         // it is the source's own and does not screen it.
         let mut containing = std::mem::take(&mut self.containing);
         containing_footprints(crossings, ends.own_footprint, &mut containing);
@@ -302,7 +305,7 @@ impl PathBuffers {
             let x = crossing.t * length;
             let top = terrain_at(x) + crossing.height_m;
             self.tops.push((x, top));
-            if crossing.building {
+            if crossing.bounds_roof {
                 self.buildings.push((crossing.footprint_id, x, top));
             }
         }

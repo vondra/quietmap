@@ -266,6 +266,9 @@ __device__ u32 line_quadrature_nodes(const LinePieceGeometry& g, const ObstacleS
     // differences are exact enough).
     float a = -g.foot_along_m, p = g.perpendicular_m;
     float span = atan2f(g.length_m * p, p * p + a * (g.length_m - g.foot_along_m));
+    // Cutoff probes differ by several millionths of a radian after endpoint rounding. This narrow
+    // neighbourhood goes through the CPU rather than let one rounded angle choose one ray or five.
+    if (fabsf(span - ONE_BUCKET_SPAN_RAD) <= 1e-5f) return FAILED_LINE_CUTOFF;
     int buckets = span < ONE_BUCKET_SPAN_RAD ? 1 : LINE_BUCKET_COUNT;
     float bucket_angle = span / (float)buckets;
     for (int bucket = 0; bucket < buckets; bucket++) {

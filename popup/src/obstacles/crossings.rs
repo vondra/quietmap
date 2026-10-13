@@ -30,7 +30,7 @@ pub(super) fn segment_intersection_t(
 /// Sorts by t with one crossing per footprint and chainage: an edge listed in several cells or
 /// tiles meets the ray at bit-identical t, and the two edges of one footprint meeting at a hit
 /// vertex differ in the last bits (a tangent ray keeps one conservative crossing). A crossing is
-/// dropped when its footprint already kept one less than 1e-9 before it.
+/// merged when its footprint already kept one less than 1e-9 before it, retaining real boundaries.
 pub(super) fn sort_and_deduplicate(crossings: &mut Vec<Crossing>) {
     crossings.sort_unstable_by(|a, b| {
         a.t.total_cmp(&b.t)
@@ -40,11 +40,14 @@ pub(super) fn sort_and_deduplicate(crossings: &mut Vec<Crossing>) {
     for index in 0..crossings.len() {
         let candidate = crossings[index];
         let repeat = crossings[..kept]
-            .iter()
+            .iter_mut()
             .rev()
             .take_while(|earlier| candidate.t - earlier.t < 1e-9)
-            .any(|earlier| earlier.footprint_id == candidate.footprint_id);
-        if !repeat {
+            .find(|earlier| earlier.footprint_id == candidate.footprint_id);
+        if let Some(earlier) = repeat {
+            // Another ring of the same footprint may enter exactly where this one is tangent.
+            earlier.bounds_roof |= candidate.bounds_roof;
+        } else {
             crossings[kept] = candidate;
             kept += 1;
         }
@@ -72,6 +75,41 @@ pub(super) fn edge_meets_box(a: [i16; 2], b: [i16; 2], [low, high]: [[i32; 2]; 2
 }
 
 impl SceneTile<'_> {
+    /// Whether an edge hit enters or leaves its ring. A tangent vertex still screens as a top,
+    /// but does not bound a roof or toggle source containment; collinear neighbours are skipped.
+    pub(super) fn edge_bounds_roof(
+        &self,
+        start: [f64; 2],
+        delta: [f64; 2],
+        edge: usize,
+        first: usize,
+        count: usize,
+    ) -> bool {
+        let side = |index| {
+            let vertex = self.vertex(index);
+            delta[0] * (vertex[1] - start[1]) - delta[1] * (vertex[0] - start[0])
+        };
+        let (a, b) = (side(edge), side(edge + 1));
+        if a != 0.0 && b != 0.0 {
+            return true;
+        }
+        let distinct = count - 1;
+        let vertex = (if a == 0.0 { edge } else { edge + 1 } - first) % distinct;
+        let mut neighbours = [0.0; 2];
+        for offset in 1..distinct {
+            if neighbours[0] == 0.0 {
+                neighbours[0] = side(first + (vertex + distinct - offset) % distinct);
+            }
+            if neighbours[1] == 0.0 {
+                neighbours[1] = side(first + (vertex + offset) % distinct);
+            }
+            if neighbours[0] != 0.0 && neighbours[1] != 0.0 {
+                break;
+            }
+        }
+        neighbours[0] * neighbours[1] < 0.0
+    }
+
     /// Appends the crossings of the ray `start + t delta` with the edges of the runs `runs`, the
     /// ray's visit of their cell covering the piece between `ends`. The piece's box passes every
     /// edge the exact test can meet there; an outline's record is read only for a crossing.
@@ -100,6 +138,14 @@ impl SceneTile<'_> {
                         t,
                         height_m: record.height_m,
                         building: record.kind.is_building(),
+                        bounds_roof: record.kind.is_building()
+                            && self.edge_bounds_roof(
+                                start,
+                                delta,
+                                next - 1,
+                                record.first_vertex,
+                                record.vertex_count,
+                            ),
                         footprint_id: record.footprint_id,
                     });
                 }

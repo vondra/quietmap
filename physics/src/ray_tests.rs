@@ -40,6 +40,7 @@ fn building(t: f64, height_m: f64, footprint_id: u64) -> Crossing {
         t,
         height_m,
         building: true,
+        bounds_roof: true,
         footprint_id,
     }
 }
@@ -49,6 +50,7 @@ fn barrier(t: f64, height_m: f64, footprint_id: u64) -> Crossing {
         t,
         height_m,
         building: false,
+        bounds_roof: false,
         footprint_id,
     }
 }

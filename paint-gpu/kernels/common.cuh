@@ -28,6 +28,7 @@ __constant__ float BAND_FREQUENCY_HZ[BANDS] = {63.0f, 125.0f, 250.0f, 500.0f, 10
 #define FAILED_NOT_READ 1u      // a terrain or obstacles tile the CPU would refuse
 #define FAILED_NO_TERRAIN 2u    // a terrain node without data
 #define FAILED_CAPACITY 4u      // a per-thread buffer too small for this pair
+#define FAILED_LINE_CUTOFF 8u   // f32 cannot choose the line quadrature count at its cutoff
 
 // physics::bands::energy, amplitude
 __device__ __forceinline__ float energy_of_level(float level_db) {

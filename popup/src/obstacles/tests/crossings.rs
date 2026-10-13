@@ -2,6 +2,41 @@
 
 use super::*;
 
+/// A corner touch screens as a top, without making another footprint contain a building source.
+#[test]
+fn a_tangent_contact_keeps_the_other_buildings_roof_and_containment_parity() {
+    for coincident_entry in [false, true] {
+        let mut stock = Stock::new();
+        stock.building(1, 6.0, &[square(0.0, 0.0, 5.0)]);
+        stock.building(
+            2,
+            9.0,
+            &[vec![
+                [100.0, 0.0],
+                [110.0, 10.0],
+                [100.0, 20.0],
+                [90.0, 10.0],
+            ]],
+        );
+        let centre = if coincident_entry { 120.0 } else { 200.0 };
+        stock.building(2, 9.0, &[square(centre, 0.0, 20.0)]);
+        let from = stock.snapped([0.0, 0.0]);
+        let to = stock.snapped([300.0, 0.0]);
+        let crossings = stock.with_scene(|scene| {
+            assert_eq!(scene.enclosing_building_id(from).unwrap(), Some(1));
+            crossings_of(scene, from, to)
+        });
+        assert_eq!(crossings.len(), if coincident_entry { 3 } else { 4 });
+        let other: Vec<_> = crossings.iter().filter(|c| c.footprint_id == 2).collect();
+        assert_eq!(other[0].bounds_roof, coincident_entry);
+        assert!(other[1..].iter().all(|crossing| crossing.bounds_roof));
+        let mut containing = Vec::new();
+        physics::ray::containing_footprints(&crossings, 1, &mut containing);
+        assert!(containing.contains(&1));
+        assert!(!containing.contains(&2));
+    }
+}
+
 #[test]
 fn ray_through_square_crosses_twice() {
     let mut stock = Stock::new();
