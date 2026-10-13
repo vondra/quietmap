@@ -1,4 +1,8 @@
 //! Doc 29 NPD curve interpolation, energy tails and scaled distances for aircraft noise classes.
+//!
+//! NPD curves (Doc 29 4th ed. Vol 2 4.2 and 4.5.6): SEL and LAmax at the ten NPD distances,
+//! linear in log distance between them, dev4's energy tail past 25,000 ft, the scaled distance of
+//! the finite-segment correction, and the power rows each noise class reads.
 
 use crate::bands::energy;
 use std::f64::consts::PI;

@@ -1,4 +1,10 @@
 // Painter ray assembly, exact energy transfers and importance-weighted receiver spectra.
+//
+// The kernels: the energy one candidate delivers at one receiver, for pairs the host lists: each
+// pair's rays listed, then a thread a ray (a pair's rays differ in number, a warp's threads in step),
+// then the answered pairs' bands into their points. The square's tables are in one descriptor; a
+// thread's ray lives in its own local memory.
+// Sampled quiet pairs weight their bands by importance; their energies stay unweighted.
 
 // Everything one square's kernels read (paint-gpu/src/device.rs writes it).
 struct SquareScene {

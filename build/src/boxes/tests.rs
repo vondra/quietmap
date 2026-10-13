@@ -1,4 +1,8 @@
 //! Synthetic-flight checks of aircraft preparation, storage and shared receiver physics.
+//!
+//! The whole chain on synthetic flights over flat ground: segments into boxes, boxes into an
+//! aircraft file, the file's boxes at receivers through the click-time equation, against the
+//! kernel's exact sum of the segments.
 
 use super::*;
 use physics::doc29::box_geometry::BOX_EDGE_LEVEL_STEP_DB;

@@ -1,4 +1,15 @@
 //! Square corners, block pixels and facade loudness from exact sources, sampled hum and aircraft fields.
+//!
+//! A square painted as dev1 painted it, in blocks of 16 x 16 pixels. At every block corner each
+//! ground source loud there (`popup::candidates::loud`) is evaluated exactly. A block's pixels
+//! evaluate exactly the loud sources crossing it or the eight blocks around and, layer by layer,
+//! the loudest at its corners until what is left out weighs at most a share of its quietest
+//! corner's ([`crate::blocks`]); what is left out is blended from the corners, the quiet hum from
+//! its points ([`Hum`]), the flights from the corners. Each pixel's loudness (Nden, sone) per layer
+//! and in total is the popup's model on those ([`crate::sone`]); a block hearing only the hum and
+//! the flights (no source of its own, no wall) blends its corners' ([`crate::points`]). A
+//! building's pixels take its loudest façade, painted at its likeliest loudest façade receivers as a
+//! click inside it is answered ([`crate::buildings`]).
 
 use crate::blocks::{Block, Corner};
 use crate::buildings::{building_levels, facade_candidates, fill_buildings};

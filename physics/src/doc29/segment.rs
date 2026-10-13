@@ -1,4 +1,8 @@
 //! A flight segment at a receiver through shared Doc 29 NPD curves, corrections and screening.
+//!
+//! One flight segment at one receiver (Doc 29 4th ed. Vol 2 Eq. 4-8b with dev4's screening): the
+//! exact SEL the benchmark takes as the reference of the aircraft boxes, and the levels a box
+//! sums at the ten NPD distances.
 
 use super::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES, receiver_impedance_db};
 use super::corrections::{

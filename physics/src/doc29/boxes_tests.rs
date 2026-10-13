@@ -1,4 +1,8 @@
 //! Aircraft box energies against exact segment SEL and independent period weights.
+//!
+//! The click-time equation against the kernel: a box of one segment reads as the kernel reads the
+//! segment, and a box of a bundle of pieces reads as the sum of their kernel levels at receivers
+//! beyond the box.
 
 use super::*;
 

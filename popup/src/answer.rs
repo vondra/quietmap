@@ -1,4 +1,8 @@
 //! Progressive noise answers at a click from prepared sources, aircraft, terrain and yearly weather.
+//!
+//! The ring loop: read the clicked tile and ring 1 whole, answer, then ring after ring until the
+//! reach is covered. Every ring's candidates join their layer's selection ([`crate::selection`]).
+//! A click inside a building is answered at its loudest façade ([`crate::building`]).
 
 use crate::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver};
 use crate::aircraft::flights::FlightTotals;

@@ -1,4 +1,7 @@
 //! Aircraft-box energy and loudest-flight checks against exact segment sums.
+//!
+//! The check's report of one point: the boxes around it, fine and as the popup reads them,
+//! against the exact sums, and the popup's flight lists against the exact loudest flights.
 
 use super::super::place::{BoxKey, tile_bands};
 use super::exact::{

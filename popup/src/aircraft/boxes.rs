@@ -1,4 +1,8 @@
 //! Aircraft box energies, passing durations and flight-list bounds from the shared Doc 29 physics.
+//!
+//! A tile's aircraft boxes at the receiver: every box through the click-time equation
+//! (`physics::doc29::boxes`), all of them; their linear SEL sums per period become period
+//! energies (Leq), as the ground layers report.
 
 use physics::bands::{PERIOD_HOURS, PERIODS, energy, lden_energy};
 use physics::doc29::atmosphere::receiver_impedance_db;

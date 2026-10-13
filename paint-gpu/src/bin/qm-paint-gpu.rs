@@ -1,4 +1,31 @@
 //! GPU physics checks, sparse popup references, exact etalons and cell-by-cell drift comparisons.
+//!
+//! `qm-paint-gpu check --prepared DIR --year YYYY --square X,Y [--pairs N] [--seed S] [--device D]
+//! [--group G] [--near M] [--reach M] [--kind point|line]`:
+//! the GPU's energy of random (receiver, source) pairs in one square against the CPU's (the
+//! popup's `received_bands` at the painter's outdoor point), half the sources within `--near`
+//! metres (300), half anywhere within `--reach` (the ground reach), only points or only lines with
+//! `--kind`; prints the agreement, the failures, the worst pairs and both times.
+//!
+//! `qm-paint-gpu popup ... --square X,Y --out DIR [--pixels N] [--seed S]`: the popup's loudness
+//! (Nden per layer and in total) at N random pixels of the square (300), a building's at its
+//! loudest façade as a click inside it is answered, written as a sparse reference under DIR (every
+//! other cell, and a building without an exposed façade, not assessed), to score a map or an etalon
+//! against with `compare`.
+//!
+//! `qm-paint-gpu etalon ... --square X,Y --out DIR [--device D] [--sample-step K]`: the square's
+//! etalon (every outdoor pixel's loudness with every loud source exact, `paint::etalon`; with K one
+//! drawn in each K x K cell, the rest not assessed) written as z13 tiles under DIR.
+//!
+//! `qm-paint-gpu check-loudness ... --square X,Y [--pixels N] [--seed S] [--device D]`: the card's
+//! loudness (`paint_gpu::loudness`) of N random outdoor pixels' sounds (`paint::etalon::sounds_at`,
+//! 500) against the cores' (`PixelSound::ndens`): the differences in phon per layer and in total,
+//! the worst, and both times.
+//!
+//! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a painted map against
+//! a reference (an etalon, or the popup's sparse answers) cell by cell where the reference assesses
+//! one, per layer and the total by the owner's z13 contract in loudness level (rungs over 0.5, 1, 3
+//! and 6 phon, presence, bias, the quiet band; a breached limit marked `!`), and the worst cell.
 
 use paint::exact::{LAYERS, PairEnergy, Point, whole_energy};
 use paint::paint::{NO_LEVEL, SILENCE, cells_of};

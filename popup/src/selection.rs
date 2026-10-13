@@ -1,4 +1,16 @@
 //! Source selection by bounded omission and shared importance samples, with contributor accounting.
+//!
+//! Per-layer selection: candidates are evaluated from the loudest bound until the bounds of
+//! everything left out stay below (10^(0.1/10) - 1) times the energy evaluated, per period and
+//! across all rings. Never a per-piece threshold (dev4's false-quiet bug 62e7daa2).
+//!
+//! When that proven rule would need more than `PROVEN_ROUND_LIMIT` further evaluations, the rest
+//! of the layer is estimated instead (the owner's decision of 2026-09-30: dense cities in time for
+//! an error measured at 0.02 dB at most): pieces whose bound is large against the rest are
+//! evaluated with certainty, the others sampled with probability proportional to their bound
+//! (Hansen-Hurwitz), doubling the sample until two standard errors fall under
+//! `SAMPLING_TOLERANCE` of the answer. The draws are seeded by the click, so a click answers the
+//! same every time.
 
 use crate::candidates::{Attributes, Candidate, DisplayRef};
 use crate::evaluate::{Bands, Path, Received, Receiver, Scratch, period_sums, received_bands};

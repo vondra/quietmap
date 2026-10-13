@@ -1,4 +1,8 @@
 //! Doc 29 speed and lateral losses, finite-segment energy fractions and installation energy gains.
+//!
+//! The corrections of an NPD level in Doc 29 4th ed. Vol 2 Eq. 4-8b: speed Delta_V, finite
+//! segment Delta_F, lateral attenuation Lambda and engine installation Delta_I.
+//! Finite-segment and installation terms are applied as linear energy factors.
 
 use std::f64::consts::FRAC_1_PI;
 

@@ -1,4 +1,7 @@
 //! Doc 29 finite-segment, installation, speed and lateral-correction checks.
+//!
+//! Corrections: Doc 29's lateral attenuation values and dev4's speed, finite-segment and
+//! installation cases.
 
 use super::*;
 

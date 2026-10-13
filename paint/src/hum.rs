@@ -1,4 +1,12 @@
 //! Quiet ground source energies and spectra from shared importance samples on the hum lattice.
+//!
+//! The quiet hum of a square: at points every `spacing` pixels, per layer the energy per period of
+//! the ground sources not loud there (`popup::candidates::loud`), with the click's error budget:
+//! left out under 0.1 dB of the whole answer, else sampled to 0.05 dB (`popup::sampling`), over the
+//! loud ones evaluated exactly, and its bands. The selected quiet rays are batched through
+//! `crate::hum_samples`; their importance weights apply to spectra, while unweighted energies
+//! determine the sample's confidence. It changes slowly and a pixel takes it blended from the
+//! four points around; the painter and its etalon take the same.
 
 use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
 use crate::hum_samples::sampled_hum;
