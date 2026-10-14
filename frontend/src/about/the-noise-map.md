@@ -37,7 +37,8 @@ upper bound there reaches 20 dB.
 - What is left out is blended between the block's four corners, and weakened at a pixel as much as
   the block's computed far sources are there, as behind a house.
 - The hum, the sources under 20 dB, is estimated with the click's physics and error budget at
-  points 64 pixels apart (390 m in Prague), and blended.
+  points 64 pixels apart (390 m in Prague), and blended between them in decibels: it falls off
+  steeply from its nearest sources, and a blend in energy read quiet places by their loudest point.
 
 An open block hearing only the hum and flights takes its loudness from shared corners, without
 constructing a receiver at every pixel. Other blocks use a 5 × 5 grid of actual pixel receivers,
