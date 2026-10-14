@@ -20,6 +20,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tiles::geo::{Mercator, TileId};
 
+// glibc's per-thread arenas kept each square's freed buffers: over 32 Czech squares in one process
+// the memory between squares grew from 4.5 to 11.3 GiB (14.1 GiB peak); mimalloc returns them
+// (2 to 3.6 GiB between squares, 10.5 GiB peak) in the same time.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn value<'a>(arguments: &'a [String], key: &str) -> Option<&'a str> {
     arguments
         .windows(2)
