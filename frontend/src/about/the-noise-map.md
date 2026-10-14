@@ -39,6 +39,11 @@ upper bound there reaches 20 dB.
 - The hum, the sources under 20 dB, is estimated with the click's physics and error budget at
   points 64 pixels apart (390 m in Prague), and blended.
 
+An open block hearing only the hum and flights takes its loudness from shared corners, without
+constructing a receiver at every pixel. A block without a crossing ground source can do the same
+on a 3 × 3 grid when sixteen further pixel samples agree within one phon in every layer
+and total. Crossing sources, buildings and reflection keep the pixel computations.
+
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 354" role="img" aria-label="A part of a painted tile around pixel P: road A crosses the blocks around P and is computed exactly at P; road B is computed at the corners of P's block, its loudest pieces there exactly at P too, past a house, the rest of it blended between the corners; the hum comes from points 64 pixels apart" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
 <rect x="40" y="136" width="96" height="96" fill="#2f7fd8" fill-opacity=".14"/>
@@ -64,7 +69,9 @@ upper bound there reaches 20 dB.
 
 Neighbouring blocks share their corners, so what is blended meets at them. Aircraft boxes are
 summed at the hum's 17 × 17 points; their near share is computed every second block corner,
-and between those where the energy varies by more than 1 dB. Cruise boxes use 5 × 5 points
+and between those where the energy varies by more than 1 dB. Their spectra use 33 × 33 points:
+alternating points and cell centres are computed, others blended only where the spectra change
+little and their centre agrees. The square's edges are computed. Cruise boxes use 5 × 5 points
 where screening does not apply, every corner reads the same boxes within reach, and their pieces
 and average flight lines stay at least 8 km away. Their energies and energies times the flights' rate and passing
 duration are blended to the block corners, keeping how their noise changes over time. The
@@ -101,7 +108,9 @@ for 99 % of them and 0.03 dB for 99.9 %.
 `paint/` is the method and `paint-gpu/` (`qm-paint`) runs it, a square of zoom 12 at a time: its
 files read once to the reach of its farthest pixel, the exact pairs on the first CUDA card
 (`paint-gpu/kernels/`, the popup's physics in single precision, each function citing its Rust) or on
-the cores. Each file's header says what it does; the blocks are `paint/src/blocks.rs`, a
+the cores. Each file's header says what it does; the blocks are `paint/src/blocks.rs`, their quiet
+interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, the aircraft spectra
+`paint/src/flight_spectra.rs`, a
 building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
 `popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs`: per layer and the total,
 512 × 512 cells of twice the loudness level in phon (80 one sone, a doubling 20; 254 silence under

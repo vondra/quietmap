@@ -195,3 +195,26 @@ fn scene_steps_are_the_frames_metres() {
         });
     }
 }
+
+#[test]
+fn an_open_rectangle_excludes_enclosing_footprints_and_nearby_reflectors() {
+    for (lat, lon) in [(LAT, LON), (10.0, 179.998)] {
+        let mut stock = Stock::at(lat, lon);
+        stock.building(7, 15.0, &[square(0.0, 0.0, 300.0)]);
+        stock.with_scene(|scene| {
+            assert!(!scene.is_open_rectangle([-10.0; 2], [10.0; 2]));
+            assert!(!scene.is_open_rectangle([320.0, -10.0], [340.0, 10.0]));
+            assert!(scene.is_open_rectangle([600.0, -10.0], [620.0, 10.0]));
+        });
+        let empty = Stock::at(lat, lon);
+        empty.with_scene(|scene| {
+            assert!(scene.is_open_rectangle([-10.0; 2], [10.0; 2]));
+            assert!(!scene.is_open_rectangle([0.0, 100_000.0], [10.0, 100_010.0]));
+        });
+        let mut enclosing = Stock::at(lat, lon);
+        enclosing.building(8, 15.0, &[square(0.0, 0.0, 1_000.0)]);
+        enclosing.with_scene(|scene| {
+            assert!(!scene.is_open_rectangle([-10.0; 2], [10.0; 2]));
+        });
+    }
+}

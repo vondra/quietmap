@@ -7,7 +7,8 @@
 //! popup's answers inside buildings score the map there.
 
 use crate::exact::{Batch, LAYERS, Pair, Point, add_bands, evaluate_all, whole_energy};
-use crate::flights::{FlightSpectra, aircraft_sums};
+use crate::flight_spectra::FlightSpectra;
+use crate::flights::aircraft_sums;
 use crate::hum::Hum;
 use crate::paint::{Cells, Grid, NO_LEVEL, Painted, cells_of};
 use crate::sone::{Displays, PixelSound, Rest, pixel_ndens, pixel_sound};

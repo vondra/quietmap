@@ -35,6 +35,13 @@ impl Hum {
         batch: Option<&dyn Batch>,
     ) -> Result<Self, String> {
         let side = pixels / spacing + 1;
+        if square.candidates.is_empty() {
+            return Ok(Self {
+                side,
+                spacing,
+                quiet: vec![([[0.0; PERIODS]; LAYERS], PointBands::default()); side * side],
+            });
+        }
         let points: Vec<Point> = (0..side * side)
             .into_par_iter()
             .map(|at| {
@@ -90,15 +97,8 @@ impl Hum {
     /// The hum at the pixel `(x, y)` of the square, blended from the four points around its centre:
     /// per layer its energy per period and its bands.
     pub fn at(&self, x: usize, y: usize) -> ([[f64; PERIODS]; LAYERS], PointBands) {
-        let last = self.side - 2;
-        let (i, j) = ((x / self.spacing).min(last), (y / self.spacing).min(last));
-        let fx = ((x - i * self.spacing) as f64 + 0.5) / self.spacing as f64;
-        let fy = ((y - j * self.spacing) as f64 + 0.5) / self.spacing as f64;
-        let corners = [(0, 0), (1, 0), (0, 1), (1, 1)]
-            .map(|(di, dj)| &self.quiet[(j + dj) * self.side + i + di]);
-        let energy = std::array::from_fn(|layer| {
-            std::array::from_fn(|p| bilinear(corners.map(|corner| corner.0[layer][p]), fx, fy))
-        });
+        let (corners, fx, fy) = self.neighbours(x, y);
+        let energy = self.energies_at(x, y);
         let bands = std::array::from_fn(|layer| {
             std::array::from_fn(|p| {
                 std::array::from_fn(|b| {
@@ -107,6 +107,24 @@ impl Hum {
             })
         });
         (energy, bands)
+    }
+
+    /// The hum's energies alone, where the pixel's loudness has already been interpolated.
+    pub(crate) fn energies_at(&self, x: usize, y: usize) -> [[f64; PERIODS]; LAYERS] {
+        let (corners, fx, fy) = self.neighbours(x, y);
+        std::array::from_fn(|layer| {
+            std::array::from_fn(|p| bilinear(corners.map(|corner| corner.0[layer][p]), fx, fy))
+        })
+    }
+
+    fn neighbours(&self, x: usize, y: usize) -> ([&HumPointSound; 4], f64, f64) {
+        let last = self.side - 2;
+        let (i, j) = ((x / self.spacing).min(last), (y / self.spacing).min(last));
+        let fx = ((x - i * self.spacing) as f64 + 0.5) / self.spacing as f64;
+        let fy = ((y - j * self.spacing) as f64 + 0.5) / self.spacing as f64;
+        let corners = [(0, 0), (1, 0), (0, 1), (1, 1)]
+            .map(|(di, dj)| &self.quiet[(j + dj) * self.side + i + di]);
+        (corners, fx, fy)
     }
 
     /// Whether the hum stays under 0 dB at every point even with the largest reflection (3 dB):

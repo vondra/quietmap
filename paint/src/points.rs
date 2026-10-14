@@ -7,10 +7,10 @@
 //! the flights blending its corners'.
 
 use crate::blocks::{Block, admit, meets};
-use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
+use crate::exact::{Batch, LAYERS, Pair, Point, evaluate_all};
 use crate::flights::blend_flights;
 use crate::paint::{Corners, Grid, Painted, corner_weights, rectangle_at};
-use crate::sone::{Rest, pixel_ndens, pixel_sound};
+use crate::sone::{Rest, pixel_sound};
 use crate::square::Square;
 use physics::bands::{BANDS, PERIODS, lden_energy};
 use popup::percentiles::Resolution;
@@ -139,26 +139,8 @@ impl PointPainter<'_> {
                 }
                 let block_at = block_ids[slot];
                 let (i, j) = (block_at % blocks_per_side, block_at / blocks_per_side);
-                let silent: PointBands = [[[0.0; BANDS]; PERIODS]; LAYERS];
                 let corner = |(di, dj): (usize, usize)| {
-                    let at = (j + dj) * corner_side + i + di;
-                    let (x, y) = ((i + di) * grid.block, (j + dj) * grid.block);
-                    let (steady, bands) = corners.hum.at(x, y);
-                    let rest = Rest {
-                        steady,
-                        bands,
-                        left_groups: (&[], [0.0; 4]),
-                        left_reach: 1.0,
-                        flights: corners.flights[at],
-                    };
-                    pixel_ndens(
-                        square,
-                        &corners.displays,
-                        (corners.corner_points[at].position, 1.0),
-                        (&[], &[], &silent),
-                        (&rest, &corners.flight_spectra.at(x, y)),
-                        Resolution::MAP,
-                    )
+                    crate::quiet_corners::loudness_at_corner(self, (j + dj) * corner_side + i + di)
                 };
                 Ok(Some([
                     corner((0, 0))?,

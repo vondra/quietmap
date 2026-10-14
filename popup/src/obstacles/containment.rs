@@ -46,6 +46,38 @@ fn tallest_enclosed(parities: &[Parity]) -> Option<&Parity> {
 }
 
 impl<'a> Scene<'a> {
+    /// Whether every receiver in the metre rectangle is outdoors without reflection: no edge
+    /// in its reflection windows or containment walks. A footprint can cover the rectangle
+    /// without an edge inside it, so the eastward walk still extends by the widest footprint.
+    pub fn is_open_rectangle(&self, low: [f64; 2], high: [f64; 2]) -> bool {
+        let a = self.lattice.steps(low);
+        let b = self.lattice.steps(high);
+        let half_a = self.reflection_window_half_steps(a);
+        let half_b = self.reflection_window_half_steps(b);
+        let padding = [0, 1].map(|axis| {
+            half_a[axis].max(half_b[axis])
+                + super::reflection_coverage::REFLECTION_LATTICE_STEPS as f64
+        });
+        let first = cell_of([0, 1].map(|axis| a[axis].min(b[axis]) - padding[axis]));
+        let mut last = cell_of([0, 1].map(|axis| a[axis].max(b[axis]) + padding[axis]));
+        // The coverage's bilinear prefix can read just beyond a reflection window. Unknown
+        // cells prevent the shortcut; the ordinary receiver still checks the cells it needs.
+        last[0] += (self.widest_footprint_steps + 2 * CELL_STEPS - 1) / CELL_STEPS;
+        for row in first[1]..=last[1] {
+            for column in first[0]..=last[0] {
+                let Ok(cell) = self.tile_at([column, row]) else {
+                    return false;
+                };
+                if let Some((tile, index)) = cell
+                    && !tile.obstacles.cell_run_range(index).is_empty()
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Crossing parity of every footprint taller than `min_height_m` along the eastward half-line
     /// from `point` (scene steps). Holes share their footprint's id, so a courtyard reads outside;
     /// a vertex on the half-line counts by the half-open rule `(y0 > y) != (y1 > y)` (transit

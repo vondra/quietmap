@@ -5,19 +5,16 @@
 //! lattice only where screening does not apply and every corner reads the same boxes within
 //! reach. The other far boxes use the hum's points and the near ones every second block corner,
 //! each interpolated where it changes slowly; their linear energies and energies times the
-//! flights' rate and passing duration are blended. Their spectrum is the loudest flights' at
-//! every second block corner, blended between them.
+//! flights' rate and passing duration are blended. Their spectral shares keep the finer grid
+//! at every second block corner, with checked interpolation ([`crate::flight_spectra`]).
 
 use crate::exact::Point;
 use crate::flight_boxes::FlightBoxes;
-use crate::loudest::LoudestIndex;
 use crate::paint::{Grid, bilinear};
 use crate::square::{Square, gap_to_tile};
 use physics::bands::{PERIODS, lden_energy};
-use physics::doc29::atmosphere::{THIRD_OCTAVES as CLASS_THIRDS, place_rates_db_per_m};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver, tile_flight_sums};
-use popup::aircraft::flights::{FlightTotals, heard_spectrum_energy};
 use popup::aircraft::horizons::Horizons;
 use rayon::prelude::*;
 use tiles::aircraft::Aircraft;
@@ -68,65 +65,6 @@ pub(crate) fn tiles_heard<'a>(
             })
         })
         .collect()
-}
-
-/// The flights' spectrum over a square: at points every `spacing` pixels (every second block
-/// corner, where the near flights are summed: a low light aircraft shows within a few hundred
-/// metres) the loudest flights' spectral classes at their slants in the place's air by their
-/// exposure, as a click there takes them (`popup::aircraft::flights::heard_spectrum_energy`), each as
-/// shares of its unweighted third-octave energy.
-pub struct FlightSpectra {
-    side: usize,
-    spacing: usize,
-    shares: Vec<[f64; CLASS_THIRDS]>,
-}
-
-impl FlightSpectra {
-    pub fn new(square: &Square, pixels: usize, spacing: usize) -> Result<Self, String> {
-        let side = pixels / spacing + 1;
-        let points: Vec<Point> = (0..side * side)
-            .into_par_iter()
-            .map(|at| {
-                let (x, y) = ((at % side) * spacing, (at / side) * spacing);
-                let position = square.frame.to_metres(tiles::geo::Mercator {
-                    x: f64::from(square.tile.x) + x as f64 / pixels as f64,
-                    y: f64::from(square.tile.y) + y as f64 / pixels as f64,
-                });
-                Point::at(square, position)
-            })
-            .collect::<Result<_, String>>()?;
-        let loudest = LoudestIndex::new(square, &points);
-        let shares = (points.par_iter())
-            .map(|point| {
-                let weather = point.weather(square);
-                let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
-                loudest.search(square, point, &mut flights)?;
-                let energy = heard_spectrum_energy(
-                    &flights.loudest(),
-                    &place_rates_db_per_m(&weather.alpha_db_per_km),
-                );
-                let sum: f64 = energy.iter().sum();
-                Ok(energy.map(|value| value / sum))
-            })
-            .collect::<Result<_, String>>()?;
-        Ok(FlightSpectra {
-            side,
-            spacing,
-            shares,
-        })
-    }
-
-    /// The spectrum (dB up to a constant) at the pixel `(x, y)`, blended from the four points
-    /// around its centre.
-    pub fn at(&self, x: usize, y: usize) -> [f64; CLASS_THIRDS] {
-        let last = self.side - 2;
-        let (i, j) = ((x / self.spacing).min(last), (y / self.spacing).min(last));
-        let fx = ((x - i * self.spacing) as f64 + 0.5) / self.spacing as f64;
-        let fy = ((y - j * self.spacing) as f64 + 0.5) / self.spacing as f64;
-        let corners = [(0, 0), (1, 0), (0, 1), (1, 1)]
-            .map(|(di, dj)| &self.shares[(j + dj) * self.side + i + di]);
-        std::array::from_fn(|n| 10.0 * bilinear(corners.map(|corner| corner[n]), fx, fy).log10())
-    }
 }
 
 /// All flights at `point` within the aircraft reach,

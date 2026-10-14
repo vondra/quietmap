@@ -288,6 +288,16 @@ pub struct Square<'a> {
 }
 
 impl<'a> Square<'a> {
+    /// Whether either aircraft resolution contains a box: empty files carry no flight sound.
+    pub(crate) fn has_aircraft_boxes(&self) -> bool {
+        self.aircraft.iter().any(|tile| {
+            tile.fine
+                .iter()
+                .chain(&tile.far)
+                .any(|boxes| boxes.box_count() > 0)
+        })
+    }
+
     pub fn new(weather: &'a WeatherTable, tile: TileId, files: &'a Files) -> Result<Self, String> {
         let frame = LocalFrame::at(tile.centre());
         let read = &files.rings;
