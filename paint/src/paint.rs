@@ -7,16 +7,20 @@
 //! corner's ([`crate::blocks`]); what is left out is blended from the corners, the quiet hum from
 //! its points ([`Hum`]), the flights from the corners. Each pixel's loudness (Nden, sone) per layer
 //! and in total is the popup's model on those ([`crate::sone`]); a block hearing only the hum and
-//! the flights (no source of its own, no wall) blends its corners' ([`crate::points`]). A
-//! building's pixels take its loudest façade, painted at its likeliest loudest façade receivers as a
+//! the flights (no source of its own, no wall) blends its corners' ([`crate::points`]). Quiet
+//! blocks skip pixel receivers through [`crate::quiet`]; open blocks without crossing sources
+//! can interpolate after a loudness lattice and its interior probes agree within one phon.
+//! A building's pixels take its loudest façade, painted at its likeliest loudest façade receivers as a
 //! click inside it is answered ([`crate::buildings`]).
 
 use crate::blocks::{Block, Corner};
 use crate::buildings::{building_levels, facade_candidates, fill_buildings};
 use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
-use crate::flights::{FlightSpectra, FlightSums, flights_at_corners};
+use crate::flight_spectra::FlightSpectra;
+use crate::flights::{FlightSums, flights_at_corners};
 use crate::hum::Hum;
 use crate::points::PointPainter;
+use crate::quiet::QuietBlocks;
 use crate::sone::Displays;
 use crate::square::Square;
 use rayon::prelude::*;
@@ -196,6 +200,16 @@ pub fn corners_of(
     let n = grid.pixels;
     let metres = |x: f64, y: f64| metres_at(square, n, x, y);
     let rectangle = |x0: f64, y0: f64, x1: f64, y1: f64| rectangle_at(square, n, x0, y0, x1, y1);
+    let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
+    if square.candidates.is_empty() {
+        let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);
+        // Empty aircraft files still assess buildings: an unexposed facade remains unassessed.
+        if no_flights
+            || (!square.has_aircraft_boxes() && square.obstacles.is_open_rectangle(low, high))
+        {
+            return Ok(None);
+        }
+    }
     let started = std::time::Instant::now();
     let blocks = n / grid.block;
     let corner_side = blocks + 1;
@@ -225,7 +239,6 @@ pub fn corners_of(
     let mut near = Vec::new();
     let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);
     square.index.reaching(low, high, &mut near);
-    let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
     if near.is_empty() && no_flights && hum.silent() {
         return Ok(None);
     }
@@ -298,11 +311,20 @@ pub fn paint_pixels(
     };
     let blocks = n / grid.block;
     let area = grid.block * grid.block;
+    let quiet = QuietBlocks::new(&painter)?;
+    if quiet.blocks.iter().all(|&quiet| quiet) {
+        let cells = quiet.cells(&painter);
+        report_pixels(corners_s, corner_pairs, started, painter.pairs.into_inner());
+        return Ok(cells);
+    }
     // Every pixel, a run of blocks at a time (four block rows, fewer where their pairs would pass
     // PASS_PAIRS): the outdoor ones painted, the indoor ones' place and building kept for their
     // building's façade.
     let pass_of = |run: Range<usize>| -> Result<PassPixels, String> {
-        let block_ids: Vec<usize> = run.collect();
+        let block_ids: Vec<usize> = run.filter(|&at| !quiet.blocks[at]).collect();
+        if block_ids.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
         let pass: Vec<Block> = (block_ids.par_iter())
             .map_init(Vec::new, |near, &at| painter.block(near, at))
             .collect();
@@ -342,13 +364,18 @@ pub fn paint_pixels(
             (row * blocks..(row + 1) * blocks)
                 .into_par_iter()
                 .map_init(Vec::new, |near, at| {
-                    painter.block(near, at).exact.len() * area
+                    if quiet.blocks[at] {
+                        0
+                    } else {
+                        painter.block(near, at).exact.len() * area
+                    }
                 })
                 .collect::<Vec<usize>>()
         })
         .collect();
     let painted = painter.in_passes(runs_within(&bounds, PASS_BLOCKS), pass_of)?;
     let mut pixels: Vec<Option<Painted>> = vec![None; n * n];
+    quiet.fill(&painter, &mut pixels);
     let mut indoor = Vec::new();
     for (_, (outdoor, inside)) in painted {
         indoor.extend(inside);
@@ -366,12 +393,16 @@ pub fn paint_pixels(
                 .map_or([NO_LEVEL; LAYERS + 1], |(_, ndens)| cells_of(ndens))
         })
         .collect();
+    report_pixels(corners_s, corner_pairs, started, painter.pairs.into_inner());
+    Ok(cells)
+}
+
+fn report_pixels(corners_s: f64, corner_pairs: usize, started: std::time::Instant, pairs: usize) {
     eprintln!(
         "qm-paint: hum and corners {corners_s:.1} s ({corner_pairs} pairs), pixels {:.1} s ({} pairs)",
         started.elapsed().as_secs_f64(),
-        painter.pairs.into_inner(),
+        pairs,
     );
-    Ok(cells)
 }
 
 #[cfg(test)]
