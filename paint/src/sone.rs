@@ -73,16 +73,20 @@ pub(crate) struct Rest<'a> {
     pub flights: FlightSums,
 }
 
-/// One source group's exact pairs at a pixel, summed: its energy per period, and in calm air and
-/// downwind; its loudest pair's display record (as a click's contributor) and that pair's Lden
-/// energy.
+/// One source group's exact pairs at a pixel: its energy and binned weather, its loudest pair's
+/// display record (as a click's contributor) and that pair's Lden energy.
 struct Heard {
     layer: Layer,
     energy: [f64; PERIODS],
-    states: [[f64; PERIODS]; 2],
     weather: Weather,
     distance_m: f64,
     display: (DisplayRef, f64),
+}
+
+/// Source-group storage reused by one parallel pixel job.
+#[derive(Default)]
+pub(crate) struct PixelSoundScratch {
+    groups: HashMap<u64, Heard>,
 }
 
 /// The pixel's Nden per layer and in total (sone, 0 for silence) at `resolution` on the cores: its
@@ -95,7 +99,15 @@ pub(crate) fn pixel_ndens(
     rest: (&Rest, &[f64; CLASS_THIRDS]),
     resolution: Resolution,
 ) -> Result<[f64; LAYERS + 1], String> {
-    Ok(pixel_sound(square, displays, position_reflection, exact, rest)?.ndens(resolution))
+    Ok(pixel_sound(
+        square,
+        displays,
+        &mut PixelSoundScratch::default(),
+        position_reflection,
+        exact,
+        rest,
+    )?
+    .ndens(resolution))
 }
 
 /// What a pixel's loudness takes: each layer's lines over its steady energy, the layers' sounds and
@@ -164,17 +176,18 @@ impl PixelSound {
 pub(crate) fn pixel_sound(
     square: &Square,
     displays: &Displays,
+    scratch: &mut PixelSoundScratch,
     (position, reflection): ([f64; 2], f64),
     (candidates, energies, bands): (&[u32], &[PairEnergy], &PointBands),
     (rest, flight_spectrum_db): (&Rest, &[f64; CLASS_THIRDS]),
 ) -> Result<PixelSound, String> {
-    let mut groups: HashMap<u64, Heard> = HashMap::new();
+    let groups = &mut scratch.groups;
+    groups.clear();
     for (&index, energy) in candidates.iter().zip(energies) {
         let candidate = &square.candidates[index as usize];
         let heard = groups.entry(candidate.group_key).or_insert_with(|| Heard {
             layer: candidate.layer,
             energy: [0.0; PERIODS],
-            states: [[0.0; PERIODS]; 2],
             weather: Weather::default(),
             distance_m: f64::INFINITY,
             display: (candidate.display, f64::NEG_INFINITY),
@@ -190,10 +203,8 @@ pub(crate) fn pixel_sound(
         let states = energy
             .states
             .map(|state| state.map(|value| reflection * value));
-        for p in 0..PERIODS {
-            heard.energy[p] += mixed[p];
-            heard.states[0][p] += states[0][p];
-            heard.states[1][p] += states[1][p];
+        for (total, value) in heard.energy.iter_mut().zip(mixed) {
+            *total += value;
         }
         heard.weather.add(&mixed, &states);
         heard.distance_m = heard.distance_m.min(candidate.distance_from(position));
@@ -228,7 +239,6 @@ pub(crate) fn pixel_sound(
         let heard = groups.entry(group.key).or_insert_with(|| Heard {
             layer: loudest.layer,
             energy: [0.0; PERIODS],
-            states: [[0.0; PERIODS]; 2],
             weather: Weather::default(),
             distance_m: nearest_m,
             display: (loudest.display, lden_energy(&left)),
@@ -238,8 +248,6 @@ pub(crate) fn pixel_sound(
         let layer = heard.layer as usize;
         for p in 0..PERIODS {
             heard.energy[p] += left[p];
-            heard.states[0][p] += states[0][p];
-            heard.states[1][p] += states[1][p];
             steady[layer][p] = (steady[layer][p] - left[p]).max(0.0);
         }
     }

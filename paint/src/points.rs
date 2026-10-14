@@ -7,10 +7,11 @@
 //! the flights blending its corners'.
 
 use crate::blocks::{Block, admit, meets};
-use crate::exact::{Batch, LAYERS, Pair, Point, evaluate_all};
+use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Pair, Point, evaluate_all};
 use crate::flights::blend_flights;
 use crate::paint::{Corners, Grid, Painted, corner_weights, rectangle_at};
-use crate::sone::{Rest, pixel_sound};
+use crate::passes::paint_passes;
+use crate::sone::{PixelSoundScratch, Rest, pixel_sound};
 use crate::square::Square;
 use physics::bands::{BANDS, PERIODS, lden_energy};
 use popup::percentiles::Resolution;
@@ -19,13 +20,10 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tiles::sources::Layer;
 
-/// Passes at once with a card.
-pub(crate) const PASSES_AT_ONCE: usize = 4;
-
 /// A point's loudness per layer and in total: known (sone), or its sound packed for the card.
 enum Loudness {
     Known([f64; LAYERS + 1]),
-    Packed(Vec<f32>),
+    Packed,
 }
 
 /// What paints a square's points once its corners are known.
@@ -39,7 +37,8 @@ pub(crate) struct PointPainter<'a> {
 }
 
 impl PointPainter<'_> {
-    /// `pass` over every run of `runs`, each run with its result: with a card [`PASSES_AT_ONCE`]
+    /// `pass` over every run of `runs`, each run with its result: with a card
+    /// [`crate::passes::PASSES_AT_ONCE`]
     /// at once, each taking the next run from a shared queue (one's lists and loudness on the
     /// cores while the others' pairs are on the card); without one in order.
     pub fn in_passes<T: Send>(
@@ -51,22 +50,7 @@ impl PointPainter<'_> {
         if self.batch.is_none() {
             return runs.iter().map(run_one).collect();
         }
-        let next = AtomicUsize::new(0);
-        let worker = || {
-            let mut done = Vec::new();
-            while let Some(run) = runs.get(next.fetch_add(1, Ordering::Relaxed)) {
-                done.push(run_one(run));
-            }
-            done
-        };
-        std::thread::scope(|scope| {
-            let workers: Vec<_> = (0..PASSES_AT_ONCE).map(|_| scope.spawn(worker)).collect();
-            (workers.into_iter())
-                .flat_map(|worker| {
-                    (worker.join()).unwrap_or_else(|_| vec![Err("a pass panicked".into())])
-                })
-                .collect()
-        })
+        paint_passes(&runs, &pass)
     }
 
     /// Block `at` (row-major among the square's blocks): the loud sources crossing it or the eight
@@ -152,112 +136,164 @@ impl PointPainter<'_> {
             .collect::<Result<_, String>>()?;
         // Each outdoor point's loudness: blended in a block hearing only the hum and the flights;
         // else its sound packed for the card, or its loudness on the cores without one.
-        let heard: Vec<(usize, [f64; LAYERS], Loudness)> = (0..points.len())
-            .into_par_iter()
-            .filter(|&k| points[k].own_footprint == 0)
-            .map(|k| -> Result<_, String> {
-                let ((slot, at), point) = (places[k], &points[k]);
-                let (x, y) = (at % n, at / n);
-                let (fx, fy) = (within(x), within(y));
-                let (i, j) = (x / grid.block, y / grid.block);
-                let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
-                    .map(|(di, dj)| (j + dj) * corner_side + i + di);
-                let weights = corner_weights(fx, fy);
-                let range = starts[k]..starts[k] + lists[k].len();
-                let (mut steady, mut bands) = corners.hum.at(x, y);
-                // How much of what the block leaves out reaches the point: its admitted far
-                // sources' energy here against their corners' blend, at most 1. A pixel behind a
-                // wall hears its far sources 10-20 dB under that blend, and the left-out blended
-                // from the corners put Dobris's total 7 phon over the etalon there.
-                let block = &blocks[slot];
-                let admitted_here: f64 = (lists[k].iter().zip(&evaluated.pairs[range.clone()]))
-                    .filter(|(index, _)| block.admitted.binary_search(index).is_ok())
-                    .map(|(_, energy)| lden_energy(&energy.mixed))
-                    .sum();
-                let admitted_blended: f64 = (0..4)
-                    .map(|c| weights[c] * block.admitted_at_corners[c])
-                    .sum();
-                let left_reach = if admitted_blended > 0.0 {
-                    (admitted_here / admitted_blended).min(1.0)
-                } else {
-                    1.0
-                };
-                // What the block leaves out beside the hum, each corner's in the shape of all it
-                // hears in that layer; of it each group's own.
-                for layer in 0..LAYERS {
-                    for p in 0..PERIODS {
-                        for (c, &corner) in around.iter().enumerate() {
-                            let energy = weights[c] * block.left_out[c][layer][p] * left_reach;
-                            steady[layer][p] += energy;
-                            let shape = &corners.corner_bands[corner][layer][p];
-                            let sum: f64 = shape.iter().sum();
-                            if energy > 0.0 && sum > 0.0 {
-                                for b in 0..BANDS {
-                                    bands[layer][p][b] += energy * shape[b] / sum;
-                                }
+        let paint_point = |k: usize,
+                           scratch: &mut PixelSoundScratch,
+                           input: &mut Vec<f32>|
+         -> Result<(usize, [f64; LAYERS], Loudness), String> {
+            let ((slot, at), point) = (places[k], &points[k]);
+            let (x, y) = (at % n, at / n);
+            let (fx, fy) = (within(x), within(y));
+            let (i, j) = (x / grid.block, y / grid.block);
+            let around =
+                [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(di, dj)| (j + dj) * corner_side + i + di);
+            let weights = corner_weights(fx, fy);
+            let range = starts[k]..starts[k] + lists[k].len();
+            let (mut steady, mut bands) = corners.hum.at(x, y);
+            // How much of what the block leaves out reaches the point: its admitted far
+            // sources' energy here against their corners' blend, at most 1. A pixel behind a
+            // wall hears its far sources 10-20 dB under that blend, and the left-out blended
+            // from the corners put Dobris's total 7 phon over the etalon there.
+            let block = &blocks[slot];
+            let admitted_here: f64 = (lists[k].iter().zip(&evaluated.pairs[range.clone()]))
+                .filter(|(index, _)| block.admitted.binary_search(index).is_ok())
+                .map(|(_, energy)| lden_energy(&energy.mixed))
+                .sum();
+            let admitted_blended: f64 = (0..4)
+                .map(|c| weights[c] * block.admitted_at_corners[c])
+                .sum();
+            let left_reach = if admitted_blended > 0.0 {
+                (admitted_here / admitted_blended).min(1.0)
+            } else {
+                1.0
+            };
+            // What the block leaves out beside the hum, each corner's in the shape of all it
+            // hears in that layer; of it each group's own.
+            for layer in 0..LAYERS {
+                for p in 0..PERIODS {
+                    for (c, &corner) in around.iter().enumerate() {
+                        let energy = weights[c] * block.left_out[c][layer][p] * left_reach;
+                        steady[layer][p] += energy;
+                        let shape = &corners.corner_bands[corner][layer][p];
+                        let sum: f64 = shape.iter().sum();
+                        if energy > 0.0 && sum > 0.0 {
+                            for b in 0..BANDS {
+                                bands[layer][p][b] += energy * shape[b] / sum;
                             }
                         }
                     }
                 }
-                let rest = Rest {
-                    steady,
-                    bands,
-                    left_groups: (&block.left_groups, weights),
-                    left_reach,
-                    flights: blend_flights(around.map(|corner| corners.flights[corner]), fx, fy),
-                };
-                let reflection = point.reflection();
-                let mut layers: [f64; LAYERS] =
-                    std::array::from_fn(|layer| lden_energy(&rest.steady[layer]));
-                for (&index, energy) in lists[k].iter().zip(&evaluated.pairs[range.clone()]) {
-                    layers[square.candidates[index as usize].layer as usize] +=
-                        lden_energy(&energy.mixed);
-                }
-                let mut layers = layers.map(|energy| reflection * energy);
-                layers[Layer::Aircraft as usize] += lden_energy(&rest.flights[0]);
-                if let Some(at_corners) = &smooth[slot] {
-                    let ndens = std::array::from_fn(|l| {
-                        (0..4).map(|c| weights[c] * at_corners[c][l]).sum::<f64>()
-                    });
-                    return Ok((k, layers, Loudness::Known(ndens)));
-                }
-                let sound = pixel_sound(
-                    square,
-                    &corners.displays,
-                    (point.position, reflection),
-                    (&lists[k][..], &evaluated.pairs[range], &evaluated.bands[k]),
-                    (&rest, &corners.flight_spectra.at(x, y)),
-                )?;
-                Ok(match self.batch {
-                    Some(_) => {
-                        let mut packed = Vec::new();
-                        sound.pack(Resolution::MAP.weather_states, &mut packed);
-                        (k, layers, Loudness::Packed(packed))
-                    }
-                    None => (k, layers, Loudness::Known(sound.ndens(Resolution::MAP))),
-                })
-            })
-            .collect::<Result<_, String>>()?;
-        let (mut input, mut offsets) = (Vec::new(), Vec::new());
-        for (_, _, loudness) in &heard {
-            if let Loudness::Packed(packed) = loudness {
-                offsets.push(input.len() as u64);
-                input.extend_from_slice(packed);
             }
-        }
-        let mut card = match self.batch {
-            Some(batch) if !offsets.is_empty() => batch.loudness(&input, &offsets)?,
-            _ => Vec::new(),
-        }
-        .into_iter();
-        let mut painted: Vec<Option<Painted>> = vec![None; points.len()];
-        for (k, layers, loudness) in heard {
-            let ndens = match loudness {
-                Loudness::Known(ndens) => ndens,
-                Loudness::Packed(_) => card.next().unwrap_or([0.0; LAYERS + 1]).map(f64::from),
+            let rest = Rest {
+                steady,
+                bands,
+                left_groups: (&block.left_groups, weights),
+                left_reach,
+                flights: blend_flights(around.map(|corner| corners.flights[corner]), fx, fy),
             };
-            painted[k] = Some((layers, ndens));
-        }
+            let reflection = point.reflection();
+            let mut layers: [f64; LAYERS] =
+                std::array::from_fn(|layer| lden_energy(&rest.steady[layer]));
+            for (&index, energy) in lists[k].iter().zip(&evaluated.pairs[range.clone()]) {
+                layers[square.candidates[index as usize].layer as usize] +=
+                    lden_energy(&energy.mixed);
+            }
+            let mut layers = layers.map(|energy| reflection * energy);
+            layers[Layer::Aircraft as usize] += lden_energy(&rest.flights[0]);
+            if let Some(at_corners) = &smooth[slot] {
+                let ndens = std::array::from_fn(|l| {
+                    (0..4).map(|c| weights[c] * at_corners[c][l]).sum::<f64>()
+                });
+                return Ok((k, layers, Loudness::Known(ndens)));
+            }
+            let sound = pixel_sound(
+                square,
+                &corners.displays,
+                scratch,
+                (point.position, reflection),
+                (&lists[k][..], &evaluated.pairs[range], &evaluated.bands[k]),
+                (&rest, &corners.flight_spectra.at(x, y)),
+            )?;
+            Ok(match self.batch {
+                Some(_) => {
+                    sound.pack(Resolution::MAP.weather_states, input);
+                    (k, layers, Loudness::Packed)
+                }
+                None => (k, layers, Loudness::Known(sound.ndens(Resolution::MAP))),
+            })
+        };
+        let prepare_chunk = |first: usize, end: usize| -> Result<_, String> {
+            let area = grid.block * grid.block;
+            let parts = points[first..end]
+                .par_chunks(area)
+                .enumerate()
+                .map(|(part, chunk)| -> Result<_, String> {
+                    let start = first + part * area;
+                    let mut scratch = PixelSoundScratch::default();
+                    let (mut input, mut offsets, mut heard) = (Vec::new(), Vec::new(), Vec::new());
+                    for (offset, point) in chunk.iter().enumerate() {
+                        if point.own_footprint != 0 {
+                            continue;
+                        }
+                        let k = start + offset;
+                        let offset = input.len() as u64;
+                        let point = paint_point(k, &mut scratch, &mut input)?;
+                        if matches!(point.2, Loudness::Packed) {
+                            offsets.push(offset);
+                        }
+                        heard.push(point);
+                    }
+                    Ok((heard, input, offsets))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let floats = parts.iter().map(|(_, input, _)| input.len()).sum();
+            let count = parts.iter().map(|(_, _, offsets)| offsets.len()).sum();
+            let mut input = Vec::with_capacity(floats);
+            let mut offsets = Vec::with_capacity(count);
+            let mut heard = Vec::new();
+            for (part, packed, packed_offsets) in parts {
+                let base = input.len() as u64;
+                offsets.extend(packed_offsets.into_iter().map(|offset| base + offset));
+                input.extend_from_slice(&packed);
+                heard.extend(part);
+            }
+            Ok((heard, input, offsets))
+        };
+        let mut painted = vec![None; points.len()];
+        std::thread::scope(|scope| -> Result<(), String> {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(0);
+            scope.spawn(move || {
+                for first in (0..points.len()).step_by(PIXELS_PER_LOUDNESS_BATCH) {
+                    let chunk =
+                        prepare_chunk(first, (first + PIXELS_PER_LOUDNESS_BATCH).min(points.len()));
+                    let failed = chunk.is_err();
+                    if sender.send(chunk).is_err() || failed {
+                        return;
+                    }
+                }
+            });
+            for chunk in receiver {
+                let (heard, input, offsets) = chunk?;
+                let mut card = match self.batch {
+                    Some(batch) if !offsets.is_empty() => batch.loudness(&input, &offsets)?,
+                    _ => Vec::new(),
+                }
+                .into_iter();
+                for (k, layers, loudness) in heard {
+                    let ndens = match loudness {
+                        Loudness::Known(ndens) => ndens,
+                        Loudness::Packed => card
+                            .next()
+                            .ok_or("a packed pixel has no card loudness")?
+                            .map(f64::from),
+                    };
+                    painted[k] = Some((layers, ndens));
+                }
+                if card.next().is_some() {
+                    return Err("a card loudness has no packed pixel".into());
+                }
+            }
+            Ok(())
+        })?;
         Ok(painted)
     }
 }

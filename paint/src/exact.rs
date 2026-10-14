@@ -15,6 +15,9 @@ use tiles::sources::Layer;
 
 pub const LAYERS: usize = Layer::ALL.len();
 
+/// Pixels in a prepared loudness chunk: its card mixtures occupy about 124 MB.
+pub const PIXELS_PER_LOUDNESS_BATCH: usize = 8_192;
+
 /// A point evaluated: where it stands and what its rays share. Its weather is the table's at its
 /// place, taken when a ray is evaluated here ([`Point::weather`]): a card takes its own, and a
 /// square's million points stay small.
@@ -136,7 +139,8 @@ impl Pair {
 /// every `(p, c)` of `pairs`.
 pub trait Batch: Sync {
     fn evaluate(&self, points: &[Point], pairs: &[Pair]) -> Result<Evaluated, String>;
-    /// Each pixel's Nden per layer and in total (sone) from its packed sound
+    /// One chunk's Nden per layer and in total (sone), at most [`PIXELS_PER_LOUDNESS_BATCH`] points,
+    /// from its packed sound
     /// (`crate::sone::PixelSound::pack`): `input` all the pixels' floats, `offsets` where each
     /// pixel's begin.
     fn loudness(&self, input: &[f32], offsets: &[u64]) -> Result<Vec<[f32; LAYERS + 1]>, String>;

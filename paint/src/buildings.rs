@@ -6,7 +6,8 @@
 use crate::blocks::Block;
 use crate::exact::{LAYERS, Point};
 use crate::paint::{PASS_BLOCKS, Painted, metres_at, pixel_of, runs_within};
-use crate::points::{PASSES_AT_ONCE, PointPainter};
+use crate::passes::PASSES_AT_ONCE;
+use crate::points::PointPainter;
 use crate::square::Square;
 use rayon::prelude::*;
 use std::collections::HashMap;

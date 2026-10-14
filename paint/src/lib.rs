@@ -25,6 +25,7 @@ mod loudest;
 pub mod merge;
 pub mod pack;
 pub mod paint;
+mod passes;
 mod points;
 mod pyramid;
 mod quiet;

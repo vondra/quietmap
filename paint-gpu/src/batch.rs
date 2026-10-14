@@ -13,10 +13,8 @@ use physics::bands::{BANDS, PERIODS};
 use popup::evaluate::Scratch;
 use rayon::prelude::*;
 
-/// Pairs one launch takes (about 110 MB of buffers on the card).
+/// Pairs one launch takes: 172 bytes per pair, 24 per ray and 576 per reached point.
 const PAIRS_PER_LAUNCH: usize = 2_000_000;
-/// Pixels one loudness launch takes (about 50 MB of their sounds, 250 MB of their mixtures).
-const PIXELS_PER_LAUNCH: usize = 8_192;
 
 pub struct GpuBatch<'a> {
     pub gpu: &'a Gpu,
@@ -126,15 +124,6 @@ impl Batch for GpuBatch<'_> {
         input: &[f32],
         offsets: &[u64],
     ) -> Result<Vec<[f32; LOUDNESS_FLOATS]>, String> {
-        let mut ndens = Vec::with_capacity(offsets.len());
-        for (k, launch) in offsets.chunks(PIXELS_PER_LAUNCH).enumerate() {
-            let start = launch[0] as usize;
-            let end = offsets
-                .get((k + 1) * PIXELS_PER_LAUNCH)
-                .map_or(input.len(), |&end| end as usize);
-            let local: Vec<u64> = launch.iter().map(|&offset| offset - start as u64).collect();
-            ndens.extend(self.gpu.pixel_loudness(&input[start..end], &local)?);
-        }
-        Ok(ndens)
+        self.gpu.pixel_loudness(input, offsets)
     }
 }
