@@ -3,8 +3,8 @@
 //! The points of a pass painted from their blocks: each one's block's exact sources loud there
 //! evaluated exactly (here or on a card), what the block leaves out blended from its corners as
 //! far as the point hears its far admitted sources, the hum from its points, the flights from the
-//! corners; its loudness by the popup's model ([`crate::sone`]), a block hearing only the hum and
-//! the flights blending its corners'.
+//! corners; its loudness by the popup's model ([`crate::sone`]). Checked interpolation lives in
+//! [`crate::quiet`]; every point reaching this painter computes its own sound.
 
 use crate::blocks::{Block, admit, meets};
 use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Pair, Point, evaluate_all};
@@ -75,15 +75,13 @@ impl PointPainter<'_> {
     }
 
     /// Each point's paint, `None` for one in a building: `places[k]` is its block's slot among
-    /// `blocks` (the square's block `block_ids[slot]`) and the pixel (row-major) whose hum, flights
-    /// and corner weights it takes; a block with `walls[slot]` never blends its corners' loudness.
+    /// `blocks` and the pixel (row-major) whose hum, flights
+    /// and corner weights it takes. Every outdoor point reaching this stage computes its sound.
     pub fn paint(
         &self,
-        block_ids: &[usize],
         blocks: &[Block],
         points: &[Point],
         places: &[(usize, usize)],
-        walls: &[bool],
     ) -> Result<Vec<Option<Painted>>, String> {
         let (square, grid, n) = (self.square, self.grid, self.grid.pixels);
         let blocks_per_side = n / grid.block;
@@ -112,30 +110,7 @@ impl PointPainter<'_> {
             })
             .collect();
         let within = |t: usize| ((t % grid.block) as f64 + 0.5) / grid.block as f64;
-        // A block hearing no source of its own, left out or near, and no wall: only the hum and the
-        // flights, both blended, so its loudness is blended from its corners'.
-        let smooth: Vec<Option<[[f64; LAYERS + 1]; 4]>> = (0..blocks.len())
-            .into_par_iter()
-            .map(|slot| -> Result<_, String> {
-                let block = &blocks[slot];
-                if !block.exact.is_empty() || !block.left_groups.is_empty() || walls[slot] {
-                    return Ok(None);
-                }
-                let block_at = block_ids[slot];
-                let (i, j) = (block_at % blocks_per_side, block_at / blocks_per_side);
-                let corner = |(di, dj): (usize, usize)| {
-                    crate::quiet_corners::loudness_at_corner(self, (j + dj) * corner_side + i + di)
-                };
-                Ok(Some([
-                    corner((0, 0))?,
-                    corner((1, 0))?,
-                    corner((0, 1))?,
-                    corner((1, 1))?,
-                ]))
-            })
-            .collect::<Result<_, String>>()?;
-        // Each outdoor point's loudness: blended in a block hearing only the hum and the flights;
-        // else its sound packed for the card, or its loudness on the cores without one.
+        // Each outdoor point's sound packed for the card, or its loudness on the cores without one.
         let paint_point = |k: usize,
                            scratch: &mut PixelSoundScratch,
                            input: &mut Vec<f32>|
@@ -199,12 +174,6 @@ impl PointPainter<'_> {
             }
             let mut layers = layers.map(|energy| reflection * energy);
             layers[Layer::Aircraft as usize] += lden_energy(&rest.flights[0]);
-            if let Some(at_corners) = &smooth[slot] {
-                let ndens = std::array::from_fn(|l| {
-                    (0..4).map(|c| weights[c] * at_corners[c][l]).sum::<f64>()
-                });
-                return Ok((k, layers, Loudness::Known(ndens)));
-            }
             let sound = pixel_sound(
                 square,
                 &corners.displays,

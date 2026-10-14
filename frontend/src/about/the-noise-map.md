@@ -40,9 +40,13 @@ upper bound there reaches 20 dB.
   points 64 pixels apart (390 m in Prague), and blended.
 
 An open block hearing only the hum and flights takes its loudness from shared corners, without
-constructing a receiver at every pixel. A block without a crossing ground source can do the same
-on a 3 × 3 grid when sixteen further pixel samples agree within one phon in every layer
-and total. Crossing sources, buildings and reflection keep the pixel computations.
+constructing a receiver at every pixel. Other blocks use a 5 × 5 grid of actual pixel receivers,
+with one further pixel probe for each of its sixteen patches. A patch interpolates energy
+and loudness only when its probe agrees within half a phon in every layer and total, and no
+source or screening edge crosses it or the margin protecting the pixels used to rank façades.
+The other pixels keep their ray computations; exact lattice and probe results are reused.
+Between samples, a shadow cast from outside the patch can still change sharply.
+Buildings and their façade receivers keep the exact computations.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 354" role="img" aria-label="A part of a painted tile around pixel P: road A crosses the blocks around P and is computed exactly at P; road B is computed at the corners of P's block, its loudest pieces there exactly at P too, past a house, the rest of it blended between the corners; the hum comes from points 64 pixels apart" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">

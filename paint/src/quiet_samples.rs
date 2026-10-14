@@ -1,59 +1,124 @@
-//! Open blocks without crossing ground sources sampled on a loudness grid, checked by sixteen additional pixel receivers.
+//! Sub-block loudness lattices checked against pixel probes, retaining exact samples and screening edges.
 //!
 //! These samples use the ordinary painter's source admission, propagation and sound model.
-//! Interpolation replaces its remaining receivers only after checking each layer and total;
-//! rejected blocks keep their ordinary pixels. The one-phon check is twice the map cell's step,
+//! Interpolation replaces a patch's remaining receivers only after checking each layer and total;
+//! rejected patches reuse their exact lattice and probe results. The half-phon check matches the map cell's step,
 //! an empirical safeguard verified against the independent etalon, not a bound on unsampled rays.
 
+use crate::blocks::meets;
 use crate::exact::{LAYERS, Point};
-use crate::paint::{PASS_BLOCKS, Painted, SILENCE, bilinear, cell, metres_at, runs_within};
+use crate::paint::{
+    PASS_BLOCKS, Painted, SILENCE, bilinear, cell, metres_at, rectangle_at, runs_within,
+    shortest_pixel_side_metres,
+};
 use crate::points::PointPainter;
 use rayon::prelude::*;
 
 pub(crate) struct QuietSamples {
-    axis: [usize; 3],
-    values: Vec<Painted>,
+    axis: [usize; 5],
+    values: Vec<Option<Painted>>,
+    accepted: [bool; 16],
 }
 
 impl QuietSamples {
-    pub fn at(&self, x: usize, y: usize) -> Painted {
+    fn patch_at(&self, x: usize, y: usize) -> [usize; 2] {
         let interval = |at: usize| {
-            let low = self
-                .axis
+            self.axis
                 .partition_point(|&sample| sample <= at)
                 .saturating_sub(1)
-                .min(1);
-            (
-                low,
-                (at - self.axis[low]) as f64 / (self.axis[low + 1] - self.axis[low]) as f64,
-            )
+                .min(3)
         };
-        let ((i, fx), (j, fy)) = (interval(x), interval(y));
-        let around = [
-            j * 3 + i,
-            j * 3 + i + 1,
-            (j + 1) * 3 + i,
-            (j + 1) * 3 + i + 1,
-        ];
+        [interval(x), interval(y)]
+    }
+
+    pub fn at(&self, x: usize, y: usize) -> Painted {
+        let [i, j] = self.patch_at(x, y);
+        let fraction =
+            |at, low| (at - self.axis[low]) as f64 / (self.axis[low + 1] - self.axis[low]) as f64;
+        let (fx, fy) = (fraction(x, i), fraction(y, j));
+        let around = lattice_corners([i, j]);
         (
             std::array::from_fn(|layer| {
-                bilinear(around.map(|at| self.values[at].0[layer]), fx, fy)
+                bilinear(around.map(|at| self.values[at].unwrap().0[layer]), fx, fy)
             }),
             std::array::from_fn(|layer| {
-                bilinear(around.map(|at| self.values[at].1[layer]), fx, fy)
+                bilinear(around.map(|at| self.values[at].unwrap().1[layer]), fx, fy)
             }),
         )
     }
+
+    pub fn accepts(&self, x: usize, y: usize) -> bool {
+        let [i, j] = self.patch_at(x, y);
+        self.accepted[j * 4 + i]
+    }
+
+    pub fn complete(&self) -> bool {
+        self.accepted.iter().all(|&accepted| accepted)
+    }
+
+    pub fn interpolated_patches(&self) -> usize {
+        self.accepted.iter().filter(|&&accepted| accepted).count()
+    }
+
+    fn agrees_with_probe(
+        &self,
+        [i, j]: [usize; 2],
+        (x, y): (usize, usize),
+        heard: &[f64; LAYERS + 1],
+    ) -> bool {
+        // A one-pixel interval has no independent interior probe.
+        x > self.axis[i]
+            && x < self.axis[i + 1]
+            && y > self.axis[j]
+            && y < self.axis[j + 1]
+            && lattice_corners([i, j])
+                .iter()
+                .all(|&at| self.values[at].is_some())
+            && agrees_with_interpolation(heard, &self.at(x, y).1)
+    }
+
+    fn sample_index(&self, x: usize, y: usize) -> Option<usize> {
+        if let (Some(i), Some(j)) = (
+            self.axis.iter().position(|&at| at == x),
+            self.axis.iter().position(|&at| at == y),
+        ) {
+            return Some(j * 5 + i);
+        }
+        let centres: [usize; 4] = std::array::from_fn(|at| (self.axis[at] + self.axis[at + 1]) / 2);
+        if let (Some(i), Some(j)) = (
+            centres.iter().position(|&at| at == x),
+            centres.iter().position(|&at| at == y),
+        ) {
+            return Some(25 + j * 4 + i);
+        }
+        None
+    }
+
+    pub fn has_paint(&self, x: usize, y: usize) -> bool {
+        self.sample_index(x, y)
+            .map_or_else(|| self.accepts(x, y), |at| self.values[at].is_some())
+    }
+
+    pub fn known_at(&self, x: usize, y: usize) -> Option<Painted> {
+        if let Some(at) = self.sample_index(x, y) {
+            return self.values[at];
+        }
+        self.accepts(x, y).then(|| self.at(x, y))
+    }
 }
 
-/// Each accepted block's samples; rejected blocks retain the ordinary pixel path.
-pub(crate) fn sample_open_blocks(
+/// Each block's exact samples and checked patches; rejected patches retain their other pixels.
+pub(crate) fn sample_block_pixels(
     painter: &PointPainter,
     block_ids: Vec<usize>,
 ) -> Result<Vec<(usize, QuietSamples)>, String> {
     let (square, grid) = (painter.square, painter.grid);
     let side = grid.pixels / grid.block;
     let b = grid.block;
+    // The wall can be a whole pixel from the centre of the pixel in front of its façade receiver.
+    let receiver_protection_pixels = 1.0
+        + popup::obstacles::FACADE_RECEIVER_OFFSET_M
+            / shortest_pixel_side_metres(square, grid.pixels);
     let (axis, positions) = sample_positions(b);
     let passes = (0..block_ids.len())
         .step_by(PASS_BLOCKS)
@@ -97,26 +162,38 @@ pub(crate) fn sample_open_blocks(
                     )
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            let painted =
-                painter.paint(ids, &blocks[run], &points, &places, &vec![true; ids.len()])?;
+            let painted = painter.paint(&blocks[run.clone()], &points, &places)?;
             for (slot, &at) in ids.iter().enumerate() {
-                let heard: Option<Vec<_>> = painted
-                    [slot * positions.len()..(slot + 1) * positions.len()]
-                    .iter()
-                    .copied()
-                    .collect();
-                let Some(heard) = heard else { continue };
-                let sampled = QuietSamples {
+                let heard = &painted[slot * positions.len()..(slot + 1) * positions.len()];
+                let mut sampled = QuietSamples {
                     axis,
-                    values: heard[..9].to_vec(),
+                    values: heard.to_vec(),
+                    accepted: [false; 16],
                 };
-                if positions[9..]
-                    .iter()
-                    .zip(&heard[9..])
-                    .all(|(&(x, y), (_, ndens))| {
-                        agrees_with_interpolation(ndens, &sampled.at(x, y).1)
-                    })
+                for (cell, (&(x, y), probe)) in positions[25..].iter().zip(&heard[25..]).enumerate()
                 {
+                    let Some((_, ndens)) = probe else { continue };
+                    let (i, j) = (cell % 4, cell / 4);
+                    if !sampled.agrees_with_probe([i, j], (x, y), ndens) {
+                        continue;
+                    }
+                    let (base_x, base_y) = ((at % side) * b, (at / side) * b);
+                    let (low, high) = rectangle_at(
+                        square,
+                        grid.pixels,
+                        (base_x + axis[i]) as f64 + 0.5 - receiver_protection_pixels,
+                        (base_y + axis[j]) as f64 + 0.5 - receiver_protection_pixels,
+                        (base_x + axis[i + 1]) as f64 + 0.5 + receiver_protection_pixels,
+                        (base_y + axis[j + 1]) as f64 + 0.5 + receiver_protection_pixels,
+                    );
+                    let near = blocks[run.start + slot].exact.iter().any(|&source| {
+                        let [a, b] = square.candidates[source as usize].ends_m;
+                        meets(a, b, low, high)
+                    });
+                    sampled.accepted[cell] =
+                        !near && square.obstacles.has_no_screening_edges(low, high);
+                }
+                if sampled.values.iter().any(Option::is_some) {
                     accepted.push((at, sampled));
                 }
             }
@@ -129,10 +206,14 @@ pub(crate) fn sample_open_blocks(
         .collect())
 }
 
-fn sample_positions(b: usize) -> ([usize; 3], Vec<(usize, usize)>) {
-    let axis = [0, b / 2, b - 1];
-    let quarters = [0, b / 4, b / 2, 3 * b / 4, b - 1];
-    let centres: [usize; 4] = std::array::from_fn(|at| (quarters[at] + quarters[at + 1]) / 2);
+fn lattice_corners([i, j]: [usize; 2]) -> [usize; 4] {
+    let first = j * 5 + i;
+    [first, first + 1, first + 5, first + 6]
+}
+
+fn sample_positions(b: usize) -> ([usize; 5], Vec<(usize, usize)>) {
+    let axis = [0, b / 4, b / 2, 3 * b / 4, b - 1];
+    let centres: [usize; 4] = std::array::from_fn(|at| (axis[at] + axis[at + 1]) / 2);
     let positions: Vec<_> = axis
         .into_iter()
         .flat_map(|y| axis.into_iter().map(move |x| (x, y)))
@@ -145,7 +226,7 @@ fn sample_positions(b: usize) -> ([usize; 3], Vec<(usize, usize)>) {
     (axis, positions)
 }
 
-/// Two half-phon cell steps in every layer and total; silence is already quantized.
+/// One half-phon cell step in every layer and total; silence is already quantized.
 fn agrees_with_interpolation(heard: &[f64; LAYERS + 1], blended: &[f64; LAYERS + 1]) -> bool {
     heard.iter().zip(blended).all(|(&heard, &blended)| {
         if !heard.is_finite() || !blended.is_finite() || heard < 0.0 || blended < 0.0 {
@@ -154,60 +235,10 @@ fn agrees_with_interpolation(heard: &[f64; LAYERS + 1], blended: &[f64; LAYERS +
         if cell(heard) == SILENCE && cell(blended) == SILENCE {
             return true;
         }
-        heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log2()).abs() <= 1.0
+        heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log2()).abs() <= 0.5
     })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_sample_grid_covers_every_pixel_without_extrapolation() {
-        for b in [8, 16] {
-            let (axis, positions) = sample_positions(b);
-            assert_eq!(positions.len(), 25);
-            assert!(
-                positions[9..]
-                    .iter()
-                    .all(|&(x, y)| !axis.contains(&x) && !axis.contains(&y))
-            );
-            let mut unique = positions.clone();
-            unique.sort_unstable();
-            unique.dedup();
-            assert_eq!(unique.len(), positions.len());
-            let values = axis
-                .into_iter()
-                .flat_map(|y| {
-                    axis.into_iter().map(move |x| {
-                        let value = 1.0 + x as f64 + 2.0 * y as f64;
-                        ([value; LAYERS], [value; LAYERS + 1])
-                    })
-                })
-                .collect();
-            let samples = QuietSamples { axis, values };
-            for y in 0..b {
-                for x in 0..b {
-                    assert!(
-                        (samples.at(x, y).1[LAYERS] - (1.0 + x as f64 + 2.0 * y as f64)).abs()
-                            < 1e-12
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn a_probe_checks_each_layer_and_rejects_undefined_loudness() {
-        let heard = [1.0; LAYERS + 1];
-        let mut blended = heard;
-        blended[0] *= 2.0f64.powf(1.1 / 10.0);
-        assert!(!agrees_with_interpolation(&heard, &blended));
-        blended[0] = 2.0f64.powf(0.9 / 10.0);
-        assert!(agrees_with_interpolation(&heard, &blended));
-        assert!(!agrees_with_interpolation(
-            &[f64::NAN; LAYERS + 1],
-            &[0.0; LAYERS + 1]
-        ));
-    }
-}
+#[path = "quiet_samples_tests.rs"]
+mod tests;

@@ -5,7 +5,9 @@
 
 use crate::blocks::Block;
 use crate::exact::{LAYERS, Point};
-use crate::paint::{PASS_BLOCKS, Painted, metres_at, pixel_of, runs_within};
+use crate::paint::{
+    PASS_BLOCKS, Painted, metres_at, pixel_of, runs_within, shortest_pixel_side_metres,
+};
 use crate::passes::PASSES_AT_ONCE;
 use crate::points::PointPainter;
 use crate::square::Square;
@@ -53,10 +55,7 @@ pub(crate) fn facade_candidates(
     let mut buildings: Vec<(u64, usize)> = first.into_iter().collect();
     buildings.sort_unstable();
     // A pixel's shorter side (m): half of it in front of a receiver lies in the pixel it faces.
-    let pixel_m = {
-        let [a, b] = [0.0, 1.0].map(|at| metres_at(square, n, at, at));
-        (b[0] - a[0]).abs().min((b[1] - a[1]).abs())
-    };
+    let pixel_m = shortest_pixel_side_metres(square, n);
     let in_front = |position: [f64; 2], bearing_deg: f64| -> f64 {
         let (east, north) = bearing_deg.to_radians().sin_cos();
         let front = [
@@ -97,12 +96,11 @@ pub(crate) fn facade_candidates(
 }
 
 /// Each building's level: its candidates painted as points of their blocks, each standing at a wall
-/// (its block never blends its corners' loudness), a run of their blocks at a time as a pass of
-/// pixels takes them (`block_pairs`: each block's pairs at most at its every pixel), at least as
-/// many runs as passes go at once; the loudest from the ground sources kept.
+/// with a run of their blocks at a time as a pass of pixels takes them, at least as many runs as
+/// passes go at once; the loudest from the ground sources kept.
 pub(crate) fn building_levels(
     painter: &PointPainter,
-    block_pairs: &[usize],
+    exact_source_counts: &[usize],
     mut candidates: Vec<FacadeCandidate>,
 ) -> Result<HashMap<u64, Painted>, String> {
     let (n, side) = (painter.grid.pixels, painter.grid.block);
@@ -118,7 +116,7 @@ pub(crate) fn building_levels(
         }
     }
     let bounds: Vec<usize> = (blocks.iter())
-        .map(|(at, range)| range.len() * block_pairs[*at] / (side * side))
+        .map(|(at, range)| range.len() * exact_source_counts[*at])
         .collect();
     let mut footprints = Vec::with_capacity(candidates.len());
     let mut pixels = Vec::with_capacity(candidates.len());
@@ -131,9 +129,9 @@ pub(crate) fn building_levels(
         .collect();
     let most = blocks.len().div_ceil(PASSES_AT_ONCE).min(PASS_BLOCKS);
     let painted = painter.in_passes(runs_within(&bounds, most), |run| {
-        let block_ids: Vec<usize> = blocks[run.clone()].iter().map(|(at, _)| *at).collect();
-        let pass: Vec<Block> = (block_ids.par_iter())
-            .map_init(Vec::new, |near, &at| painter.block(near, at))
+        let pass: Vec<Block> = blocks[run.clone()]
+            .par_iter()
+            .map_init(Vec::new, |near, (at, _)| painter.block(near, *at))
             .collect();
         let (first, last) = (&blocks[run.start].1, &blocks[run.end - 1].1);
         let points_run = first.start..last.end;
@@ -141,14 +139,7 @@ pub(crate) fn building_levels(
             .flat_map(|(slot, (_, range))| range.clone().map(move |k| (slot, k)))
             .map(|(slot, k)| (slot, pixels[k]))
             .collect();
-        let walls = vec![true; block_ids.len()];
-        let paint = painter.paint(
-            &block_ids,
-            &pass,
-            &points[points_run.clone()],
-            &places,
-            &walls,
-        )?;
+        let paint = painter.paint(&pass, &points[points_run.clone()], &places)?;
         Ok((points_run, paint))
     })?;
     let painted = (painted.into_iter())

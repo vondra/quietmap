@@ -7,9 +7,9 @@
 //! corner's ([`crate::blocks`]); what is left out is blended from the corners, the quiet hum from
 //! its points ([`Hum`]), the flights from the corners. Each pixel's loudness (Nden, sone) per layer
 //! and in total is the popup's model on those ([`crate::sone`]); a block hearing only the hum and
-//! the flights (no source of its own, no wall) blends its corners' ([`crate::points`]). Quiet
-//! blocks skip pixel receivers through [`crate::quiet`]; open blocks without crossing sources
-//! can interpolate after a loudness lattice and its interior probes agree within one phon.
+//! the flights (no source of its own, no wall) blends its corners' ([`crate::quiet`]). Quiet
+//! blocks skip pixel receivers through [`crate::quiet`]; patches away from crossing sources and
+//! screening edges interpolate after their loudness lattice and pixel probe agree within half a phon.
 //! A building's pixels take its loudest façade, painted at its likeliest loudest façade receivers as a
 //! click inside it is answered ([`crate::buildings`]).
 
@@ -163,6 +163,12 @@ pub(crate) fn metres_at(square: &Square, n: usize, x: f64, y: f64) -> [f64; 2] {
         x: f64::from(square.tile.x) + x / n as f64,
         y: f64::from(square.tile.y) + y / n as f64,
     })
+}
+
+/// The shorter pixel side, shared by façade ranking and the screening-edge protection.
+pub(crate) fn shortest_pixel_side_metres(square: &Square, pixels: usize) -> f64 {
+    let [a, b] = [0.0, 1.0].map(|at| metres_at(square, pixels, at, at));
+    (b[0] - a[0]).abs().min((b[1] - a[1]).abs())
 }
 
 /// The pixel (row-major) holding `position` (frame metres), `None` outside the square.
@@ -337,17 +343,12 @@ pub fn paint_pixels(
                 let y = (at / blocks) * grid.block + inside / grid.block;
                 (slot, y * n + x)
             })
+            .filter(|&(_, at)| !quiet.has_paint(&painter, at))
             .collect();
         let points: Vec<Point> = (places.par_iter())
             .map(|&(_, at)| Point::at(square, metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5)))
             .collect::<Result<_, String>>()?;
-        let walls: Vec<bool> = (0..block_ids.len())
-            .map(|slot| {
-                (slot * area..(slot + 1) * area)
-                    .any(|k| points[k].own_footprint != 0 || points[k].reflection_db != 0.0)
-            })
-            .collect();
-        let painted = painter.paint(&block_ids, &pass, &points, &places, &walls)?;
+        let painted = painter.paint(&pass, &points, &places)?;
         let indoor = (points.iter().zip(&places))
             .filter(|(point, _)| point.own_footprint != 0)
             .map(|(point, &(_, at))| (at, point.own_footprint))
@@ -357,20 +358,22 @@ pub fn paint_pixels(
             .collect();
         Ok((outdoor, indoor))
     };
-    // Each block's pairs at most, its exact sources at every pixel: the block computed a row at a
-    // time and dropped (a dense square's blocks all at once hold gigabytes), again in its pass.
-    let bounds: Vec<usize> = (0..blocks)
-        .flat_map(|row| {
-            (row * blocks..(row + 1) * blocks)
-                .into_par_iter()
-                .map_init(Vec::new, |near, at| {
-                    if quiet.blocks[at] {
-                        0
-                    } else {
-                        painter.block(near, at).exact.len() * area
-                    }
+    let bounds: Vec<usize> = quiet
+        .exact_source_counts
+        .par_iter()
+        .enumerate()
+        .map(|(block, &count)| {
+            if quiet.blocks[block] || count == 0 {
+                return 0;
+            }
+            let remaining = (0..area)
+                .filter(|&inside| {
+                    let x = (block % blocks) * grid.block + inside % grid.block;
+                    let y = (block / blocks) * grid.block + inside / grid.block;
+                    !quiet.has_paint(&painter, y * n + x)
                 })
-                .collect::<Vec<usize>>()
+                .count();
+            count * remaining
         })
         .collect();
     let painted = painter.in_passes(runs_within(&bounds, PASS_BLOCKS), pass_of)?;
@@ -384,7 +387,7 @@ pub fn paint_pixels(
         }
     }
     let candidates = facade_candidates(square, n, &pixels, &indoor)?;
-    let levels = building_levels(&painter, &bounds, candidates)?;
+    let levels = building_levels(&painter, &quiet.exact_source_counts, candidates)?;
     fill_buildings(&mut pixels, &indoor, &levels);
     let cells = (pixels.par_iter())
         .map(|pixel| {

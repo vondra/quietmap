@@ -46,6 +46,37 @@ fn tallest_enclosed(parities: &[Parity]) -> Option<&Parity> {
 }
 
 impl<'a> Scene<'a> {
+    /// Whether the rectangle meets no stored obstacle edge; unread cells refuse the proof.
+    /// With an outdoor sample and no edge, its interior cannot enter a building footprint.
+    pub fn has_no_screening_edges(&self, low: [f64; 2], high: [f64; 2]) -> bool {
+        let [a, b] = [low, high].map(|point| self.lattice.steps(point));
+        let first = cell_of([0, 1].map(|axis| a[axis].min(b[axis])));
+        let last = cell_of([0, 1].map(|axis| a[axis].max(b[axis])));
+        for row in first[1]..=last[1] {
+            for column in first[0]..=last[0] {
+                let Ok(cell) = self.tile_at([column, row]) else {
+                    return false;
+                };
+                let Some((tile, index)) = cell else { continue };
+                let rectangle = super::crossings::piece_box([a, b], 0.0, tile.offset);
+                for run_index in tile.obstacles.cell_run_range(index) {
+                    let run = tile.obstacles.run(run_index);
+                    let first_vertex = tile.run_first_vertex[run_index] as usize;
+                    for edge in first_vertex..first_vertex + usize::from(run.edge_count) {
+                        if super::crossings::edge_meets_box(
+                            tile.obstacles.vertex(edge),
+                            tile.obstacles.vertex(edge + 1),
+                            rectangle,
+                        ) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// Whether every receiver in the metre rectangle is outdoors without reflection: no edge
     /// in its reflection windows or containment walks. A footprint can cover the rectangle
     /// without an edge inside it, so the eastward walk still extends by the widest footprint.

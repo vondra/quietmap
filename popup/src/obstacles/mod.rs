@@ -18,7 +18,7 @@ mod tests;
 mod tile;
 
 pub use containment::{Footprint, FootprintRing};
-pub use facades::FacadeReceiver;
+pub use facades::{FACADE_RECEIVER_OFFSET_M, FacadeReceiver};
 pub use physics::reflection::REFLECTION_MAX_DB;
 
 use tile::SceneTile;

@@ -1,7 +1,7 @@
 //! Shared background corner loudness for quiet-block interpolation, using the painter's existing sound model.
 //!
-//! Both the receiver-free quiet path and ordinary open pixels take this same calculation. Shared
-//! corners need it once; obstacle cells rejected by the rectangle proof retain ordinary receivers.
+//! Shared background corners need this calculation once; pixels rejected by the rectangle proof
+//! or a patch probe retain their ordinary receiver sound.
 
 use crate::exact::LAYERS;
 use crate::points::PointPainter;
