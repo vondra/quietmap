@@ -157,8 +157,6 @@ pub fn minimum_box_slant_m(
     .fold(nearest_slant_m(record, tile, frame, area), f64::min)
 }
 
-/// One box at the receiver: its centroid's horizontal distance (m), its period energies (Leq,
-/// linear) and its selection; none where `heard` refuses the distance.
 /// A box centroid's horizontal offset from the receiver, east and north (m).
 fn centroid_offset_m(
     centroid: [i16; 2],
@@ -173,23 +171,14 @@ fn centroid_offset_m(
 
 fn box_at(
     record: &AircraftBox,
-    tile: TileId,
-    frame: &LocalFrame,
-    receiver: AircraftReceiver,
+    horizontal_offset_m: [f64; 2],
+    altitude_m: f64,
     horizons: &impl ReceiverHorizons,
-    (impedance_gain, heard): (f64, &dyn Fn(f64) -> bool),
-) -> Option<(f64, [f64; PERIODS], BoxSel)> {
-    let [east_m, north_m] = centroid_offset_m(record.centroid, tile, frame, receiver);
-    let distance_m = east_m.hypot(north_m);
-    if !heard(distance_m) {
-        return None;
-    }
+    impedance_gain: f64,
+) -> ([f64; PERIODS], BoxSel) {
+    let [east_m, north_m] = horizontal_offset_m;
     let at_receiver = AircraftBoxAtReceiver {
-        centroid_m: [
-            east_m,
-            north_m,
-            record.centroid_altitude_m - receiver.altitude_m,
-        ],
+        centroid_m: [east_m, north_m, record.centroid_altitude_m - altitude_m],
         axis_rad: record.axis_rad,
         gradient: record.gradient,
         gradient_spread: record.gradient_spread,
@@ -198,7 +187,7 @@ fn box_at(
         tail_levels_db: &record.tail_energy_db,
         lg_scaled_distance: &record.lg_scaled_distance,
         installation_shares: record.installation_shares,
-        ground_m: record.ground_m - receiver.altitude_m,
+        ground_m: record.ground_m - altitude_m,
     };
     let sel = box_sel_at_receiver(&at_receiver, horizons);
     let impedance_gain = match record.group {
@@ -208,7 +197,7 @@ fn box_at(
     let energy: [f64; PERIODS] = std::array::from_fn(|period| {
         sel.sel_energy[period] * impedance_gain / (PERIOD_HOURS[period] * 3_600.0)
     });
-    Some((distance_m, energy, sel))
+    (energy, sel)
 }
 
 /// A box's flights' Kurze lambda per period: the period's flights a day over its hours, times its
@@ -230,10 +219,7 @@ pub fn tile_flight_sums(
     (indices, weight, reach_m): (impl Iterator<Item = usize>, &dyn Fn(f64) -> f64, f64),
 ) -> ([f64; PERIODS], [f64; PERIODS]) {
     let heard = |distance_m: f64| distance_m <= reach_m.min(AIRCRAFT_REACH_M);
-    let ends = (
-        energy(receiver_impedance_db(receiver.altitude_m)),
-        &heard as &dyn Fn(f64) -> bool,
-    );
+    let impedance_gain = energy(receiver_impedance_db(receiver.altitude_m));
     // Reject out-of-reach centroids before decoding their spectra.
     indices
         .filter_map(|index| {
@@ -245,14 +231,20 @@ pub fn tile_flight_sums(
             } else {
                 0.0
             };
-            (share > 0.0).then_some((index, share))
+            (share > 0.0).then_some((index, share, [east_m, north_m]))
         })
-        .filter_map(|(index, share)| {
+        .map(|(index, share, horizontal_offset_m)| {
             let record = aircraft.aircraft_box(index);
-            let (_, energy, sel) = box_at(&record, tile, frame, receiver, horizons, ends)?;
+            let (energy, sel) = box_at(
+                &record,
+                horizontal_offset_m,
+                receiver.altitude_m,
+                horizons,
+                impedance_gain,
+            );
             let lambda = box_lambda(&record, &sel);
             let heard: [f64; PERIODS] = std::array::from_fn(|p| share * energy[p] * lambda[p]);
-            Some((energy.map(|value| share * value), heard))
+            (energy.map(|value| share * value), heard)
         })
         .fold(
             ([0.0; PERIODS], [0.0; PERIODS]),
@@ -345,16 +337,19 @@ pub fn tile_energy(
         .with_min_len(1_024)
         .map(|index| {
             let record = aircraft.aircraft_box(index);
-            let Some((_, energy, sel)) = box_at(
-                &record,
-                tile,
-                frame,
-                receiver,
-                horizons,
-                (impedance_gain, &|distance_m| distance_m <= AIRCRAFT_REACH_M),
-            ) else {
+            let horizontal_offset_m = centroid_offset_m(record.centroid, tile, frame, receiver);
+            let within_reach =
+                horizontal_offset_m[0].hypot(horizontal_offset_m[1]) <= AIRCRAFT_REACH_M;
+            if !within_reach {
                 return BEYOND_REACH;
-            };
+            }
+            let (energy, sel) = box_at(
+                &record,
+                horizontal_offset_m,
+                receiver.altitude_m,
+                horizons,
+                impedance_gain,
+            );
             let lambda = box_lambda(&record, &sel);
             let bound = lamax_bound(
                 &record,

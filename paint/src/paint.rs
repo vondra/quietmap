@@ -389,11 +389,11 @@ pub fn paint_pixels(
     let candidates = facade_candidates(square, n, &pixels, &indoor)?;
     let levels = building_levels(&painter, &quiet.exact_source_counts, candidates)?;
     fill_buildings(&mut pixels, &indoor, &levels);
-    let cells = (pixels.par_iter())
-        .map(|pixel| {
-            pixel
-                .as_ref()
-                .map_or([NO_LEVEL; LAYERS + 1], |(_, ndens)| cells_of(ndens))
+    let cells = (pixels.par_iter().enumerate())
+        .map(|(at, pixel)| match pixel {
+            Some((_, ndens)) => cells_of(ndens),
+            None if quiet.has_paint(&painter, at) => cells_of(&quiet.loudness_at(&painter, at)),
+            None => [NO_LEVEL; LAYERS + 1],
         })
         .collect();
     report_pixels(corners_s, corner_pairs, started, painter.pairs.into_inner());
