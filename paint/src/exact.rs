@@ -14,10 +14,13 @@ use rayon::prelude::*;
 use tiles::sources::Layer;
 
 pub const LAYERS: usize = Layer::ALL.len();
+/// Pixels one loudness launch takes (about 50 MB of their sounds, 250 MB of their mixtures).
+pub const PIXELS_PER_LOUDNESS_BATCH: usize = 8_192;
 
 /// A point evaluated: where it stands and what its rays share. Its weather is the table's at its
 /// place, taken when a ray is evaluated here ([`Point::weather`]): a card takes its own, and a
 /// square's million points stay small.
+#[derive(Clone)]
 pub struct Point {
     pub position: [f64; 2],
     pub altitude_m: f64,
@@ -36,6 +39,25 @@ impl Point {
         let own_footprint = square.obstacles.enclosing_building_id(position)?;
         let reflection_db = square.obstacles.reflection_db(position, own_footprint)?;
         Self::with_receiver_properties(square, position, own_footprint.unwrap_or(0), reflection_db)
+    }
+
+    /// A square pixel's point at `position`: an indoor pixel is filled from its building's
+    /// loudest façade, so its own reflection, terrain and weather are not evaluated.
+    pub fn pixel(square: &Square, position: [f64; 2]) -> Result<Self, String> {
+        if let Some(own_footprint) = square.obstacles.enclosing_building_id(position)? {
+            return Ok(Point {
+                position,
+                altitude_m: 0.0,
+                own_footprint,
+                reflection_db: 0.0,
+                bound: ReceiverBound {
+                    gain: [0.0; PERIODS],
+                    alpha_db_per_km: [0.0; BANDS],
+                },
+            });
+        }
+        let reflection_db = square.obstacles.reflection_db(position, None)?;
+        Self::with_receiver_properties(square, position, 0, reflection_db)
     }
 
     /// Building `footprint`'s façade receiver at `position`, as a click inside the building is

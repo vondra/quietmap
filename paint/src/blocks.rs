@@ -102,6 +102,33 @@ pub(crate) fn meets(a: [f64; 2], b: [f64; 2], low: [f64; 2], high: [f64; 2]) -> 
     t0 <= t1
 }
 
+/// How many sources [`admit`] admits for a block, without building its left-out groups.
+pub(crate) fn admit_count(local: Vec<u32>, corners: [&Corner; 4]) -> usize {
+    let mut admitted: HashSet<u32> = local.into_iter().collect();
+    for layer in 0..LAYERS {
+        let quietest = (corners.iter())
+            .map(|corner| corner.totals[layer])
+            .fold(f64::INFINITY, f64::min);
+        let budget = DROP_BUDGET_FRACTION * quietest;
+        for corner in corners {
+            let ranked = &corner.ranked[layer];
+            let mut unadmitted: f64 = (ranked.iter())
+                .filter(|source| !admitted.contains(&source.index))
+                .map(|source| source.lden)
+                .sum();
+            for source in ranked {
+                if unadmitted <= budget {
+                    break;
+                }
+                if admitted.insert(source.index) {
+                    unadmitted -= source.lden;
+                }
+            }
+        }
+    }
+    admitted.len()
+}
+
 /// dev1's admission of a block: its own sources `local`, then at each corner in turn, layer by
 /// layer, the corner's loudest until the energy it has not admitted is within the budget; and the
 /// energy the admitted leave out at each corner.

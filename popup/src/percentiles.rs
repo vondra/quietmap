@@ -24,7 +24,7 @@ use tiles::sources::Layer;
 
 /// Contributors under this share of their period's energy count as steady (their fluctuation does
 /// not move a percentile of the sum).
-const FLUCTUATING_SHARE_MIN: f64 = 1e-4;
+pub const FLUCTUATING_SHARE_MIN: f64 = 1e-4;
 /// The same for the list's last row, everything it leaves out: a coarser account of a row that
 /// names nothing ([`rest_lines`]).
 const REST_SHARE_MIN: f64 = 1e-2;
@@ -127,7 +127,8 @@ impl Weather {
     /// Each bin's favourable share and its energy of `period` in either state: a draw's weather u
     /// in [0, 1) takes the favourable energy of the bins whose share is above it.
     fn states(&self, period: usize) -> [(f64, f64, f64); 2 * SHARE_BINS] {
-        self.0.map(|[homogeneous, favourable, mix]| {
+        std::array::from_fn(|bin| {
+            let [homogeneous, favourable, mix] = &self.0[bin];
             let share = favourable_share(mix[period], homogeneous[period], favourable[period]);
             (share, homogeneous[period], favourable[period])
         })
@@ -268,6 +269,23 @@ impl Line {
             profile: self.profile,
             duty: self.duty,
         }
+    }
+
+    /// Appends this line's packed card representation at `states` merged weather states to `out`
+    /// without heap allocations.
+    pub fn pack(&self, states: usize, out: &mut Vec<f32>) {
+        out.extend(self.energy.map(|value| value as f32));
+        for period in 0..PERIODS {
+            for state in 0..states {
+                out.push(merged_state(&self.means[period], states, state) as f32);
+            }
+        }
+        out.extend(self.lambda.map(|value| value as f32));
+        out.push(self.profile.map_or(-1.0, |profile| profile as f32));
+        out.extend(
+            self.duty
+                .map_or([f32::NAN; PERIODS], |duty| duty.map(|value| value as f32)),
+        );
     }
 
     /// A group's line by its `passes`: steady but for its events, or its passes; none where its
@@ -618,11 +636,13 @@ pub fn place_lines<'a>(
     passes: &dyn Fn(&Group) -> Result<Passes, String>,
 ) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
     let (mut lines, mut steady) = lines(groups, total, FLUCTUATING_SHARE_MIN, passes)?;
-    let flights_line = Line::flights(weather, flights);
-    for (steady, energy) in steady.iter_mut().zip(flights_line.energy) {
-        *steady = (*steady - energy).max(0.0);
+    if flights.0.iter().any(|&energy| energy > 0.0) {
+        let flights_line = Line::flights(weather, flights);
+        for (steady, energy) in steady.iter_mut().zip(flights_line.energy) {
+            *steady = (*steady - energy).max(0.0);
+        }
+        lines.push(flights_line);
     }
-    lines.push(flights_line);
     Ok((lines, steady))
 }
 
@@ -827,26 +847,29 @@ pub fn hour_groups(
     (cut, hours)
 }
 
+/// One merged weather state's mean from the native `means`.
+fn merged_state(means: &[f64; WEATHER_STATES], states: usize, state: usize) -> f64 {
+    if states == WEATHER_STATES {
+        return means[state];
+    }
+    let (low, high) = (
+        state as f64 / states as f64,
+        (state + 1) as f64 / states as f64,
+    );
+    (0..WEATHER_STATES)
+        .map(|native| {
+            let from = native as f64 / WEATHER_STATES as f64;
+            let to = (native + 1) as f64 / WEATHER_STATES as f64;
+            means[native] * (high.min(to) - low.max(from)).max(0.0) * states as f64
+        })
+        .sum()
+}
+
 /// The native weather states' means merged into `states` equally likely ones, each the mean over
 /// its span of the native ones it covers.
 pub fn merged_states(means: &[f64; WEATHER_STATES], states: usize) -> Vec<f64> {
-    if states == WEATHER_STATES {
-        return means.to_vec();
-    }
     (0..states)
-        .map(|state| {
-            let (low, high) = (
-                state as f64 / states as f64,
-                (state + 1) as f64 / states as f64,
-            );
-            (0..WEATHER_STATES)
-                .map(|native| {
-                    let from = native as f64 / WEATHER_STATES as f64;
-                    let to = (native + 1) as f64 / WEATHER_STATES as f64;
-                    means[native] * (high.min(to) - low.max(from)).max(0.0) * states as f64
-                })
-                .sum()
-        })
+        .map(|state| merged_state(means, states, state))
         .collect()
 }
 

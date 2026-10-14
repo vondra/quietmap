@@ -9,7 +9,7 @@
 //! every second block corner, blended between them.
 
 use crate::exact::Point;
-use crate::flight_boxes::FlightBoxes;
+use crate::flight_boxes::{FlightBoxes, HorizonsSlot};
 use crate::loudest::LoudestIndex;
 use crate::paint::{Grid, bilinear};
 use crate::square::{Square, gap_to_tile};
@@ -100,7 +100,46 @@ impl FlightSpectra {
             .map(|point| {
                 let weather = point.weather(square);
                 let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
-                loudest.search(square, point, &mut flights)?;
+                loudest.search(square, point, None, &mut flights)?;
+                let energy = heard_spectrum_energy(
+                    &flights.loudest(),
+                    &place_rates_db_per_m(&weather.alpha_db_per_km),
+                );
+                let sum: f64 = energy.iter().sum();
+                Ok(energy.map(|value| value / sum))
+            })
+            .collect::<Result<_, String>>()?;
+        Ok(FlightSpectra {
+            side,
+            spacing,
+            shares,
+        })
+    }
+
+    pub(crate) fn with_corners(
+        square: &Square,
+        grid: Grid,
+        corners: &[Point],
+        horizons_cache: &[HorizonsSlot],
+    ) -> Result<Self, String> {
+        let spacing = 2 * grid.block;
+        let side = grid.pixels / spacing + 1;
+        let corner_side = grid.pixels / grid.block + 1;
+        let points: Vec<Point> = (0..side * side)
+            .map(|at| corners[(at / side * 2) * corner_side + (at % side) * 2].clone())
+            .collect();
+        let loudest = LoudestIndex::new(square, &points);
+        let shares = (points.par_iter().enumerate())
+            .map(|(at, point)| {
+                let corner_at = (at / side * 2) * corner_side + (at % side) * 2;
+                let weather = point.weather(square);
+                let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
+                loudest.search(
+                    square,
+                    point,
+                    Some(&horizons_cache[corner_at]),
+                    &mut flights,
+                )?;
                 let energy = heard_spectrum_energy(
                     &flights.loudest(),
                     &place_rates_db_per_m(&weather.alpha_db_per_km),
@@ -167,38 +206,38 @@ pub(crate) fn aircraft_sums(square: &Square, point: &Point) -> Result<FlightSums
 pub(crate) fn flights_at_corners(
     square: &Square,
     grid: Grid,
-    metres: &(dyn Fn(f64, f64) -> [f64; 2] + Sync),
     corners: &[Point],
+    horizons_cache: &[HorizonsSlot],
 ) -> Result<Vec<FlightSums>, String> {
-    let boxes = FlightBoxes::new(square, corners);
+    let coarse_m = square.frame.east_m_per_unit / grid.pixels as f64 * grid.hum as f64;
+    let near_within_m = 3.0 * coarse_m;
+    let boxes = FlightBoxes::new(square, corners, near_within_m);
     if boxes.occupied.iter().all(|&occupied| !occupied) {
         return Ok(vec![[[0.0; PERIODS]; 2]; corners.len()]);
     }
-    let coarse_m = square.frame.east_m_per_unit / grid.pixels as f64 * grid.hum as f64;
     let far = |distance_m: f64| {
         let fraction = ((distance_m - 1.5 * coarse_m) / (1.5 * coarse_m)).clamp(0.0, 1.0);
         fraction * fraction * (3.0 - 2.0 * fraction)
     };
     let one = |_: f64| 1.0;
     let near = |distance| 1.0 - far(distance);
-    let near_within_m = 3.0 * coarse_m;
+    let corner_side = grid.pixels / grid.block + 1;
+    let ratio = grid.hum / grid.block;
     let coarse_side = grid.pixels / grid.hum + 1;
     let coarse = (0..coarse_side * coarse_side)
         .into_par_iter()
         .map(|at| {
             let (column, row) = (at % coarse_side, at / coarse_side);
-            let point = Point::at(
-                square,
-                metres((column * grid.hum) as f64, (row * grid.hum) as f64),
-            )?;
+            let corner_at = (row * ratio) * corner_side + column * ratio;
             boxes.at(
                 square,
-                &point,
+                &corners[corner_at],
+                &horizons_cache[corner_at],
                 [
-                    boxes.occupied[0],
-                    boxes.occupied[1] && column.is_multiple_of(4) && row.is_multiple_of(4),
+                    boxes.occupied[1].then_some((1, &far as &dyn Fn(f64) -> f64)),
+                    (boxes.occupied[2] && column.is_multiple_of(4) && row.is_multiple_of(4))
+                        .then_some((2, &one as &dyn Fn(f64) -> f64)),
                 ],
-                [&far, &one],
                 AIRCRAFT_REACH_M,
             )
         })
@@ -207,24 +246,20 @@ pub(crate) fn flights_at_corners(
     let air = (0..air_side * air_side)
         .into_par_iter()
         .map(|at| {
-            let point = Point::at(
-                square,
-                metres(
-                    ((at % air_side) * 2 * grid.block) as f64,
-                    ((at / air_side) * 2 * grid.block) as f64,
-                ),
-            )?;
+            let (column, row) = (at % air_side, at / air_side);
+            let corner_at = (row * 2) * corner_side + column * 2;
             Ok(boxes.at(
                 square,
-                &point,
-                [boxes.occupied[0], false],
-                [&near, &one],
+                &corners[corner_at],
+                &horizons_cache[corner_at],
+                [
+                    boxes.occupied[0].then_some((0, &near as &dyn Fn(f64) -> f64)),
+                    None,
+                ],
                 near_within_m,
             )?[0])
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let corner_side = grid.pixels / grid.block + 1;
-    let ratio = grid.hum / grid.block;
     let blend = |i: usize, j: usize, step: usize, lookup: &dyn Fn(usize, usize) -> FlightSums| {
         let limit = (corner_side - 1) / step - 1;
         let (west, north) = ((i / step).min(limit) * step, (j / step).min(limit) * step);
@@ -265,8 +300,11 @@ pub(crate) fn flights_at_corners(
                     boxes.at(
                         square,
                         point,
-                        [boxes.occupied[0], false],
-                        [&near, &one],
+                        &horizons_cache[at],
+                        [
+                            boxes.occupied[0].then_some((0, &near as &dyn Fn(f64) -> f64)),
+                            None,
+                        ],
                         near_within_m,
                     )?[0]
                 } else {

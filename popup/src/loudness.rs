@@ -70,6 +70,18 @@ pub fn layer_sounds(selections: &[LayerSelection]) -> Vec<LayerSound> {
 pub const CURVE_LOW_DB: f64 = -30.0;
 pub const CURVE_HIGH_DB: f64 = 160.0;
 
+const CURVE_POINTS: usize = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize + 1;
+
+fn a_weighting_energy() -> &'static [f64; THIRD_OCTAVES] {
+    static WEIGHTS: OnceLock<[f64; THIRD_OCTAVES]> = OnceLock::new();
+    WEIGHTS.get_or_init(|| A_WEIGHTING_DB.map(energy))
+}
+
+fn octave_a_energy() -> &'static [f64; BANDS] {
+    static WEIGHTS: OnceLock<[f64; BANDS]> = OnceLock::new();
+    WEIGHTS.get_or_init(|| OCTAVE_A_DB.map(energy))
+}
+
 /// One period's loudness by A-weighted level: its received spectrum set to each whole decibel,
 /// interpolated between; each whole decibel's loudness computed when first read (a place's levels
 /// visit a few dozen of the 191).
@@ -77,17 +89,16 @@ pub struct Curve {
     /// The spectrum's third-octave levels set to an A-weighted level of 0 dB (`-inf` silent);
     /// `None` for a spectrum without energy.
     shape_db: Option<[f64; THIRD_OCTAVES]>,
-    values: Vec<OnceLock<f64>>,
+    values: OnceLock<Box<[OnceLock<f64>; CURVE_POINTS]>>,
 }
 
 impl Curve {
     fn new(thirds: &[f64; THIRD_OCTAVES]) -> Self {
         let a_weighted: f64 = thirds
             .iter()
-            .zip(A_WEIGHTING_DB)
-            .map(|(value, weight)| value * energy(weight))
+            .zip(*a_weighting_energy())
+            .map(|(value, weight)| value * weight)
             .sum();
-        let steps = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
         Curve {
             shape_db: (a_weighted > 0.0).then(|| {
                 thirds.map(|value| {
@@ -98,7 +109,7 @@ impl Curve {
                     }
                 })
             }),
-            values: (0..=steps).map(|_| OnceLock::new()).collect(),
+            values: OnceLock::new(),
         }
     }
 
@@ -109,17 +120,24 @@ impl Curve {
 
     /// The loudness (sone) at the curve's `step`th whole decibel.
     fn value(&self, step: usize) -> f64 {
-        *self.values[step].get_or_init(|| {
-            self.shape_db.map_or(0.0, |shape| {
-                let level_db = CURVE_LOW_DB + step as f64;
-                zwicker_loudness_sone(&shape.map(|db| db + level_db))
-            })
+        let Some(shape) = &self.shape_db else {
+            return 0.0;
+        };
+        let table = self
+            .values
+            .get_or_init(|| Box::new(std::array::from_fn(|_| OnceLock::new())));
+        *table[step].get_or_init(|| {
+            let level_db = CURVE_LOW_DB + step as f64;
+            zwicker_loudness_sone(&shape.map(|db| db + level_db))
         })
     }
 
     /// The loudness (sone) at `level_db`.
     pub fn at(&self, level_db: f64) -> f64 {
-        let last = self.values.len() - 1;
+        if self.shape_db.is_none() {
+            return 0.0;
+        }
+        let last = CURVE_POINTS - 1;
         let position = (level_db - CURVE_LOW_DB).clamp(0.0, last as f64);
         let below = (position.floor() as usize).min(last - 1);
         let (low, high) = (self.value(below), self.value(below + 1));
@@ -303,8 +321,9 @@ fn unweighted_thirds(
         if layer <= 0.0 || sum <= 0.0 {
             continue;
         }
+        let octave_weights = octave_a_energy();
         for band in 0..BANDS {
-            let unweighted = layer * shape[band] / sum / energy(OCTAVE_A_DB[band]);
+            let unweighted = layer * shape[band] / sum / octave_weights[band];
             for third in 0..3 {
                 thirds[OCTAVE_START - 1 + 3 * band + third] += unweighted / 3.0;
             }

@@ -28,31 +28,52 @@ struct Edge {
     tangent: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SectorBand<const BANDS: usize> {
+    edges: [Option<Edge>; BANDS],
+    steepest: f64,
+}
+
+impl<const BANDS: usize> SectorBand<BANDS> {
+    const EMPTY: Self = SectorBand {
+        edges: [None; BANDS],
+        steepest: f64::NEG_INFINITY,
+    };
+
+    fn offer(&mut self, band: usize, edge: Edge) {
+        let slot = &mut self.edges[band];
+        if slot.is_none_or(|kept| edge.tangent > kept.tangent) {
+            *slot = Some(edge);
+        }
+        self.steepest = self.steepest.max(edge.tangent);
+    }
+
+    fn loss_db(&self, range_m: f64, up_m: f64) -> f64 {
+        if up_m >= self.steepest * range_m {
+            return 0.0;
+        }
+        self.edges
+            .iter()
+            .flatten()
+            .map(|edge| edge_loss_db(edge.range_m, edge.tangent * edge.range_m, range_m, up_m))
+            .fold(0.0, f64::max)
+    }
+}
+
 /// Per sector, the steepest edge of each band (`None`: the band holds nothing sampled), and the
 /// steepest tangent of each sector and of all: a point seen above it is screened by nothing.
 #[derive(Debug, Clone, PartialEq)]
 struct SectorEdges<const BANDS: usize> {
-    sectors: Vec<[Option<Edge>; BANDS]>,
-    steepest: Vec<f64>,
+    sectors: Vec<SectorBand<BANDS>>,
     steepest_of_all: f64,
 }
 
 impl<const BANDS: usize> SectorEdges<BANDS> {
     fn new(sectors: usize) -> Self {
         SectorEdges {
-            sectors: vec![[None; BANDS]; sectors],
-            steepest: vec![f64::NEG_INFINITY; sectors],
+            sectors: vec![SectorBand::EMPTY; sectors],
             steepest_of_all: f64::NEG_INFINITY,
         }
-    }
-
-    fn offer(&mut self, sector: usize, band: usize, edge: Edge) {
-        let slot = &mut self.sectors[sector][band];
-        if slot.is_none_or(|kept| edge.tangent > kept.tangent) {
-            *slot = Some(edge);
-        }
-        self.steepest[sector] = self.steepest[sector].max(edge.tangent);
-        self.steepest_of_all = self.steepest_of_all.max(edge.tangent);
     }
 
     /// The largest edge loss toward `point_m` (east, north, height above the receiver) over the
@@ -63,21 +84,7 @@ impl<const BANDS: usize> SectorEdges<BANDS> {
             return 0.0;
         }
         let sector = sector_of(point_m, self.sectors.len());
-        if point_m[2] >= self.steepest[sector] * range_m {
-            return 0.0;
-        }
-        self.sectors[sector]
-            .iter()
-            .flatten()
-            .map(|edge| {
-                edge_loss_db(
-                    edge.range_m,
-                    edge.tangent * edge.range_m,
-                    range_m,
-                    point_m[2],
-                )
-            })
-            .fold(0.0, f64::max)
+        self.sectors[sector].loss_db(range_m, point_m[2])
     }
 }
 
@@ -100,6 +107,68 @@ fn band_of(range_m: f64, limits: &[f64]) -> usize {
         .unwrap_or(limits.len() - 1)
 }
 
+fn build_terrain_sector(
+    ground: &Ground,
+    position: [f64; 2],
+    altitude_m: f64,
+    sector: usize,
+) -> Result<SectorBand<6>, String> {
+    let mut band = SectorBand::EMPTY;
+    let growth = (TERRAIN_BAND_LIMITS_M[5] / TERRAIN_FIRST_SAMPLE_M)
+        .powf(1.0 / (TERRAIN_SAMPLES - 1) as f64);
+    let [east, north] = sector_direction(sector, TERRAIN_SECTORS);
+    let mut range_m = TERRAIN_FIRST_SAMPLE_M;
+    for _ in 0..TERRAIN_SAMPLES {
+        let point = [position[0] + east * range_m, position[1] + north * range_m];
+        if let Some(height_m) = ground.read_height_m(point)? {
+            band.offer(
+                band_of(range_m, &TERRAIN_BAND_LIMITS_M),
+                Edge {
+                    range_m,
+                    tangent: (height_m - altitude_m) / range_m,
+                },
+            );
+        }
+        range_m *= growth;
+    }
+    Ok(band)
+}
+
+fn build_building_sector(
+    ground: &Ground,
+    obstacles: &Scene<'_>,
+    position: [f64; 2],
+    altitude_m: f64,
+    own_footprint: u64,
+    sector: usize,
+    crossings: &mut Vec<Crossing>,
+) -> Result<SectorBand<6>, String> {
+    let mut band = SectorBand::EMPTY;
+    let reach_m = BUILDING_BAND_LIMITS_M[5];
+    let [east, north] = sector_direction(sector, BUILDING_SECTORS);
+    let end = [position[0] + east * reach_m, position[1] + north * reach_m];
+    obstacles.crossings(position, end, crossings)?;
+    for crossing in crossings
+        .iter()
+        .filter(|crossing| crossing.building && crossing.footprint_id != own_footprint)
+    {
+        let range_m = crossing.t * reach_m;
+        if range_m <= BUILDING_NEAREST_EDGE_M {
+            continue;
+        }
+        let point = [position[0] + east * range_m, position[1] + north * range_m];
+        let roof_m = ground.at(point)?.height_m + crossing.height_m;
+        band.offer(
+            band_of(range_m, &BUILDING_BAND_LIMITS_M),
+            Edge {
+                range_m,
+                tangent: (roof_m - altitude_m) / range_m,
+            },
+        );
+    }
+    Ok(band)
+}
+
 /// Both horizons of one receiver.
 pub struct Horizons {
     terrain: SectorEdges<6>,
@@ -119,52 +188,25 @@ impl Horizons {
         own_footprint: u64,
     ) -> Result<Self, String> {
         let mut terrain = SectorEdges::new(TERRAIN_SECTORS);
-        let growth = (TERRAIN_BAND_LIMITS_M[5] / TERRAIN_FIRST_SAMPLE_M)
-            .powf(1.0 / (TERRAIN_SAMPLES - 1) as f64);
         for sector in 0..TERRAIN_SECTORS {
-            let [east, north] = sector_direction(sector, TERRAIN_SECTORS);
-            let mut range_m = TERRAIN_FIRST_SAMPLE_M;
-            for _ in 0..TERRAIN_SAMPLES {
-                let point = [position[0] + east * range_m, position[1] + north * range_m];
-                if let Some(height_m) = ground.read_height_m(point)? {
-                    terrain.offer(
-                        sector,
-                        band_of(range_m, &TERRAIN_BAND_LIMITS_M),
-                        Edge {
-                            range_m,
-                            tangent: (height_m - altitude_m) / range_m,
-                        },
-                    );
-                }
-                range_m *= growth;
-            }
+            let band = build_terrain_sector(ground, position, altitude_m, sector)?;
+            terrain.steepest_of_all = terrain.steepest_of_all.max(band.steepest);
+            terrain.sectors[sector] = band;
         }
         let mut buildings = SectorEdges::new(BUILDING_SECTORS);
         let mut crossings: Vec<Crossing> = Vec::new();
-        let reach_m = BUILDING_BAND_LIMITS_M[5];
         for sector in 0..BUILDING_SECTORS {
-            let [east, north] = sector_direction(sector, BUILDING_SECTORS);
-            let end = [position[0] + east * reach_m, position[1] + north * reach_m];
-            obstacles.crossings(position, end, &mut crossings)?;
-            for crossing in crossings
-                .iter()
-                .filter(|crossing| crossing.building && crossing.footprint_id != own_footprint)
-            {
-                let range_m = crossing.t * reach_m;
-                if range_m <= BUILDING_NEAREST_EDGE_M {
-                    continue;
-                }
-                let point = [position[0] + east * range_m, position[1] + north * range_m];
-                let roof_m = ground.at(point)?.height_m + crossing.height_m;
-                buildings.offer(
-                    sector,
-                    band_of(range_m, &BUILDING_BAND_LIMITS_M),
-                    Edge {
-                        range_m,
-                        tangent: (roof_m - altitude_m) / range_m,
-                    },
-                );
-            }
+            let band = build_building_sector(
+                ground,
+                obstacles,
+                position,
+                altitude_m,
+                own_footprint,
+                sector,
+                &mut crossings,
+            )?;
+            buildings.steepest_of_all = buildings.steepest_of_all.max(band.steepest);
+            buildings.sectors[sector] = band;
         }
         Ok(Horizons { terrain, buildings })
     }
@@ -177,6 +219,93 @@ impl ReceiverHorizons for Horizons {
 
     fn building_loss_db(&self, point_m: [f64; 3]) -> f64 {
         self.buildings.loss_db(point_m)
+    }
+}
+
+/// Per-sector horizon cache for a receiver, built on demand for the sectors queried.
+pub struct HorizonsCache {
+    terrain: [std::sync::OnceLock<Result<SectorBand<6>, String>>; TERRAIN_SECTORS],
+    buildings: [std::sync::OnceLock<Result<SectorBand<6>, String>>; BUILDING_SECTORS],
+}
+
+impl Default for HorizonsCache {
+    fn default() -> Self {
+        Self {
+            terrain: std::array::from_fn(|_| std::sync::OnceLock::new()),
+            buildings: std::array::from_fn(|_| std::sync::OnceLock::new()),
+        }
+    }
+}
+
+/// Receiver horizons evaluated and cached sector by sector on demand.
+pub struct LazyHorizons<'a> {
+    pub ground: &'a Ground,
+    pub obstacles: &'a Scene<'a>,
+    pub position: [f64; 2],
+    pub altitude_m: f64,
+    pub own_footprint: u64,
+    pub cache: &'a std::sync::OnceLock<Box<HorizonsCache>>,
+}
+
+impl LazyHorizons<'_> {
+    fn cache(&self) -> &HorizonsCache {
+        self.cache.get_or_init(Box::default)
+    }
+
+    pub fn check_error(&self) -> Result<(), String> {
+        let Some(cache) = self.cache.get() else {
+            return Ok(());
+        };
+        for slot in &cache.terrain {
+            if let Some(Err(err)) = slot.get() {
+                return Err(err.clone());
+            }
+        }
+        for slot in &cache.buildings {
+            if let Some(Err(err)) = slot.get() {
+                return Err(err.clone());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ReceiverHorizons for LazyHorizons<'_> {
+    fn terrain_loss_db(&self, point_m: [f64; 3]) -> f64 {
+        let range_m = point_m[0].hypot(point_m[1]);
+        if range_m <= 1.0 {
+            return 0.0;
+        }
+        let sector = sector_of(point_m, TERRAIN_SECTORS);
+        self.cache().terrain[sector]
+            .get_or_init(|| {
+                build_terrain_sector(self.ground, self.position, self.altitude_m, sector)
+            })
+            .as_ref()
+            .map_or(0.0, |band| band.loss_db(range_m, point_m[2]))
+    }
+
+    fn building_loss_db(&self, point_m: [f64; 3]) -> f64 {
+        let range_m = point_m[0].hypot(point_m[1]);
+        if range_m <= 1.0 {
+            return 0.0;
+        }
+        let sector = sector_of(point_m, BUILDING_SECTORS);
+        self.cache().buildings[sector]
+            .get_or_init(|| {
+                let mut crossings = Vec::new();
+                build_building_sector(
+                    self.ground,
+                    self.obstacles,
+                    self.position,
+                    self.altitude_m,
+                    self.own_footprint,
+                    sector,
+                    &mut crossings,
+                )
+            })
+            .as_ref()
+            .map_or(0.0, |band| band.loss_db(range_m, point_m[2]))
     }
 }
 

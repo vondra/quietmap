@@ -280,6 +280,7 @@ pub struct Square<'a> {
     pub obstacles: Scene<'a>,
     pub attributes: Attributes,
     pub candidates: Vec<Candidate>,
+    pub reaches: Vec<f64>,
     pub index: Index,
     pub aircraft: Vec<AircraftTile<'a>>,
     /// The source tiles the candidates came from (a candidate's `display.tile`), where its display
@@ -373,6 +374,7 @@ impl<'a> Square<'a> {
             obstacles,
             attributes,
             candidates,
+            reaches,
             index,
             aircraft,
             sources: sources.into_iter().map(|(_, file)| file).collect(),
@@ -384,8 +386,11 @@ impl<'a> Square<'a> {
     pub fn loud(&self, index: u32, position: [f64; 2], receiver: &ReceiverBound) -> bool {
         let candidate = &self.candidates[index as usize];
         let distance = candidate.distance_from(position);
+        let reach = self.reaches[index as usize];
         let source = &self.attributes[candidate.attribute];
-        distance <= GROUND_REACH_M && loud(&candidate.bound_at_distance(distance, source, receiver))
+        distance <= reach * (1.0 + 1e-12)
+            && distance <= GROUND_REACH_M
+            && loud(&candidate.bound_at_distance(distance, source, receiver))
     }
 }
 

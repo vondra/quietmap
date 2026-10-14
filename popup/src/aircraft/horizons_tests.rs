@@ -22,22 +22,21 @@ fn sectors_and_bands_follow_direction_and_range() {
 #[test]
 fn an_edge_screens_only_what_lies_behind_it() {
     let mut edges: SectorEdges<6> = SectorEdges::new(TERRAIN_SECTORS);
-    edges.offer(
-        0,
+    edges.sectors[0].offer(
         1,
         Edge {
             range_m: 900.0,
             tangent: 0.02,
         },
     );
-    edges.offer(
-        0,
+    edges.sectors[0].offer(
         1,
         Edge {
             range_m: 1_000.0,
             tangent: 0.04,
         },
     );
+    edges.steepest_of_all = edges.sectors[0].steepest;
     let behind = edges.loss_db([5_000.0, 10.0, 150.0]);
     let expected = edge_loss_db(1_000.0, 40.0, 5_000.0f64.hypot(10.0), 150.0);
     assert!(

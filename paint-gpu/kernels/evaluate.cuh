@@ -12,14 +12,9 @@
 // paint/src/exact.rs, popup/src/answer.rs RECEIVER_HEIGHT_M
 #define RECEIVER_HEIGHT_M 4.0f
 
-// physics::weather::PlaceWeather
-struct PlaceWeather {
-    float favourable[PERIODS][SECTORS];
-    float alpha_db_per_km[BANDS];
-};
-
-// weather::corners and weather::place_of over the whole table's nodes (without its magic).
-__device__ void place_weather(const u8* nodes, float lat, float lon, PlaceWeather* out) {
+// weather::corners, weather::place_of and weather::FavourableProbability::at at a point and ray
+// azimuth, interpolating only the two bounding sectors of `azimuth_rad` instead of all 16.
+__device__ void weather_at_azimuth(const u8* nodes, float lat, float lon, float azimuth_rad, float* p, float* alpha_db_per_km) {
     float per_degree = (float)WEATHER_NODES_PER_DEGREE;
     float y = clampf((90.0f - lat) * per_degree, 0.0f, (float)(WEATHER_ROWS - 1));
     float x = rem_euclidf(lon, 360.0f) * per_degree;
@@ -34,12 +29,21 @@ __device__ void place_weather(const u8* nodes, float lat, float lon, PlaceWeathe
         (row + 1) * WEATHER_COLUMNS + (column + 1) % WEATHER_COLUMNS,
     };
     float weight[4] = {(1.0f - fy) * (1.0f - fx), (1.0f - fy) * fx, fy * (1.0f - fx), fy * fx};
+    float bearing_deg = rem_euclidf(90.0f - azimuth_rad * (180.0f / QM_PI), 360.0f);
+    float position = bearing_deg / (360.0f / (float)SECTORS);
+    int lower = ((int)floorf(position)) % SECTORS;
+    int upper = (lower + 1) % SECTORS;
+    float fraction = position - floorf(position);
     for (int period = 0; period < PERIODS; period++) {
-        for (int sector = 0; sector < SECTORS; sector++) {
-            float sum = 0.0f;
-            for (int k = 0; k < 4; k++) sum += weight[k] * (float)nodes[(u64)index[k] * WEATHER_NODE_BYTES + period * SECTORS + sector];
-            out->favourable[period][sector] = sum / 100.0f;
+        float sum_lower = 0.0f, sum_upper = 0.0f;
+        for (int k = 0; k < 4; k++) {
+            u64 base = (u64)index[k] * WEATHER_NODE_BYTES + period * SECTORS;
+            sum_lower += weight[k] * (float)nodes[base + lower];
+            sum_upper += weight[k] * (float)nodes[base + upper];
         }
+        float row_lower = sum_lower / 100.0f;
+        float row_upper = sum_upper / 100.0f;
+        p[period] = row_lower + fraction * (row_upper - row_lower);
     }
     for (int band = 0; band < BANDS; band++) {
         float sum = 0.0f;
@@ -47,19 +51,8 @@ __device__ void place_weather(const u8* nodes, float lat, float lon, PlaceWeathe
             const u8* at = nodes + (u64)index[k] * WEATHER_NODE_BYTES + PERIODS * SECTORS + 2 * band;
             sum += weight[k] * (float)((u16)(at[0] | (at[1] << 8)));
         }
-        out->alpha_db_per_km[band] = sum / 100.0f;
+        alpha_db_per_km[band] = sum / 100.0f;
     }
-}
-
-// weather::FavourableProbability::at
-__device__ float favourable_at(const PlaceWeather& weather, int period, float azimuth_rad) {
-    float bearing_deg = rem_euclidf(90.0f - azimuth_rad * (180.0f / QM_PI), 360.0f);
-    float position = bearing_deg / (360.0f / (float)SECTORS);
-    int lower = ((int)floorf(position)) % SECTORS;
-    int upper = (lower + 1) % SECTORS;
-    float fraction = position - floorf(position);
-    const float* row = weather.favourable[period];
-    return row[lower] + fraction * (row[upper] - row[lower]);
 }
 
 // One receiver (popup::evaluate::Receiver without its reflection, which the painter applies to a
@@ -69,7 +62,6 @@ struct Receiver {
     float y;
     float altitude_m;
     u64 own_footprint;
-    PlaceWeather weather;
 };
 
 // One candidate: its geometry in the square's frame (popup::candidates::Candidate) and its
@@ -97,19 +89,17 @@ struct Attribute {
 // states); PAIR_SUMS floats a pair.
 #define PAIR_SUMS (3 * PERIODS)
 
-// evaluate.rs ray: one ray from (px, py) to the receiver, its transfer weighted by `weight` into the
-// pair's sums and its mixed band energies per period into the pair's `bands` (PERIODS x BANDS).
-__device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
-                       const Attribute& source, const RayEnds& ends, float px, float py, bool obstacles_on_ray, float weight,
-                       RayStream& s, float* sums, float* bands) {
-    Transfer transfer;
-    u32 failed = ray_transfer(ground, obstacles, px, py, receiver.x, receiver.y, receiver.own_footprint, obstacles_on_ray, ends, s, &transfer);
-    if (failed) return failed;
+// evaluate.rs ray: one ray's transfer from (px, py) to the receiver, weighted by `weight` into the
+// pair's `sums` (PAIR_SUMS) and its mixed band energies per period added into `bands` (PERIODS x BANDS).
+__device__ void add_ray_transfer(const u8* weather_nodes, float lat, float lon, const Receiver& receiver,
+                                 const Attribute& source, float px, float py, float weight,
+                                 const Transfer& transfer, float* sums, float* bands) {
+    for (int j = 0; j < PAIR_SUMS; j++) sums[j] = 0.0f;
     float azimuth = atan2f(receiver.y - py, receiver.x - px);
-    float p[PERIODS];
-    for (int period = 0; period < PERIODS; period++) p[period] = favourable_at(receiver.weather, period, azimuth);
+    float p[PERIODS], alpha_db_per_km[BANDS];
+    weather_at_azimuth(weather_nodes, lat, lon, azimuth, p, alpha_db_per_km);
     for (int band = 0; band < BANDS; band++) {
-        float air = weight * attenuation_energy(receiver.weather.alpha_db_per_km[band] * transfer.slant_m / 1000.0f);
+        float air = weight * attenuation_energy(alpha_db_per_km[band] * transfer.slant_m / 1000.0f);
         float homogeneous = attenuation_energy(state_attenuation_db(transfer.states[HOMOGENEOUS], band)
                                                + foliage_db(transfer.foliage_m[HOMOGENEOUS], band));
         float favourable = attenuation_energy(state_attenuation_db(transfer.states[FAVOURABLE], band)
@@ -121,10 +111,9 @@ __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacle
             sums[period] += mixed;
             sums[PERIODS + period] += calm;
             sums[2 * PERIODS + period] += downwind;
-            bands[period * BANDS + band] += mixed;
+            if (bands) atomicAdd(&bands[period * BANDS + band], mixed);
         }
     }
-    return 0;
 }
 
 // evaluate::ray_ends: a source's ray ends at the receiver, standing on the terrain under it.
@@ -188,14 +177,4 @@ __device__ u32 pair_rays_of(const ObstacleScene& obstacles, const Receiver& rece
         if (failed) return failed;
     }
     return 0;
-}
-
-// One listed ray at the receiver: its sums (PAIR_SUMS) and mixed bands (PERIODS x BANDS) added to
-// `sums` and `bands`; 0 or a failure.
-__device__ u32 ray_received(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
-                            const Attribute& source, const PairRay& ray, RayStream& s, float* sums, float* bands) {
-    RayEnds ends = source_ends(source, receiver);
-    if (!isnan(ray.source_ground_m)) ends.source_ground_m = ray.source_ground_m;
-    return add_ray(ground, obstacles, receiver, source, ends, ray.px, ray.py, ray.obstacles_on_ray != 0u, ray.weight, s, sums,
-                   bands);
 }

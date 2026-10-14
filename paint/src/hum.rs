@@ -71,6 +71,18 @@ impl Hum {
                 *total += value;
             }
         }
+        Self::from_points(square, pixels, spacing, &points, &loud_energy, batch)
+    }
+
+    pub(crate) fn from_points(
+        square: &Square,
+        pixels: usize,
+        spacing: usize,
+        points: &[Point],
+        loud_energy: &[[[f64; PERIODS]; LAYERS]],
+        batch: Option<&dyn Batch>,
+    ) -> Result<Self, String> {
+        let side = pixels / spacing + 1;
         let seeds: Vec<u64> = (0..points.len())
             .map(|at| {
                 // Shared world coordinates give neighbouring squares the same receiver sample.
@@ -79,7 +91,7 @@ impl Hum {
                 (x << 32) | y
             })
             .collect();
-        let quiet = sampled_hum(square, &points, &loud_energy, &seeds, batch)?;
+        let quiet = sampled_hum(square, points, loud_energy, &seeds, batch)?;
         Ok(Hum {
             side,
             spacing,

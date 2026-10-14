@@ -16,14 +16,20 @@ use popup::loudness::{
     Curve, FlightSound, LayerSound, PlacedLayer, curves, layer_curves, layers_loudness,
     place_layers,
 };
-use popup::percentiles::{Group, Passes, Resolution, Weather, flight_weather};
+use popup::percentiles::{
+    FLUCTUATING_SHARE_MIN, Group, Passes, Resolution, Weather, flight_weather,
+};
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::ops::Range;
 use tiles::sources::Layer;
 
 /// How every source group a square's candidates point at sounds in time, read once from its
 /// display record: where a line's traffic and events come from.
-pub(crate) struct Displays(HashMap<(u16, u32), Passes>);
+pub(crate) struct Displays {
+    by_record: HashMap<(u16, u32), Passes>,
+    by_candidate: Vec<Passes>,
+}
 
 impl Displays {
     pub fn of(square: &Square) -> Result<Self, String> {
@@ -38,7 +44,7 @@ impl Displays {
             .collect();
         keys.par_sort_unstable_by_key(|&(tile, attribute, _)| (tile, attribute));
         keys.dedup_by_key(|&mut (tile, attribute, _)| (tile, attribute));
-        let records = keys
+        let by_record: HashMap<(u16, u32), Passes> = keys
             .par_iter()
             .map(|&(tile, attribute, layer)| {
                 let record = popup::answer::display_fields_of(
@@ -49,14 +55,30 @@ impl Displays {
                 Ok(((tile, attribute), Passes::read(layer, &record)))
             })
             .collect::<Result<_, String>>()?;
-        Ok(Displays(records))
+        let by_candidate = (square.candidates.iter())
+            .map(|candidate| {
+                by_record
+                    .get(&(candidate.display.tile, candidate.display.attribute))
+                    .copied()
+                    .ok_or_else(|| {
+                        format!(
+                            "the display {}/{} was not read",
+                            candidate.display.tile, candidate.display.attribute
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Displays {
+            by_record,
+            by_candidate,
+        })
     }
 
     fn of_group(&self, group: &Group) -> Result<Passes, String> {
         let DisplayRef {
             tile, attribute, ..
         } = group.display;
-        (self.0.get(&(tile, attribute)).copied())
+        (self.by_record.get(&(tile, attribute)).copied())
             .ok_or_else(|| format!("the display {tile}/{attribute} was not read"))
     }
 }
@@ -73,16 +95,39 @@ pub(crate) struct Rest<'a> {
     pub flights: FlightSums,
 }
 
-/// One source group's exact pairs at a pixel, summed: its energy per period, and in calm air and
-/// downwind; its loudest pair's display record (as a click's contributor) and that pair's Lden
-/// energy.
-struct Heard {
+/// One source group's summed energy per period at a pixel before building its weather or distance,
+/// referencing its slice of sorted candidate indices and optional left-out group.
+struct GroupSum {
+    key: u64,
     layer: Layer,
     energy: [f64; PERIODS],
-    states: [[f64; PERIODS]; 2],
+    run: Range<usize>,
+    left: Option<(usize, [f64; PERIODS])>,
+}
+
+/// One active group's weather, nearest piece distance and display record for [`place_layers`].
+struct ActiveGroup {
+    key: u64,
+    layer: Layer,
+    energy: [f64; PERIODS],
     weather: Weather,
     distance_m: f64,
-    display: (DisplayRef, f64),
+    display: DisplayRef,
+}
+
+/// Blends four corners' per-period values with `weights` and `scale`.
+fn blend_corners(
+    at_corners: &[PairEnergy; 4],
+    weights: &[f64; 4],
+    scale: f64,
+    of: impl Fn(&PairEnergy) -> [f64; PERIODS],
+) -> [f64; PERIODS] {
+    std::array::from_fn(|p| {
+        scale
+            * (0..4)
+                .map(|c| weights[c] * of(&at_corners[c])[p])
+                .sum::<f64>()
+    })
 }
 
 /// The pixel's Nden per layer and in total (sone, 0 for silence) at `resolution` on the cores: its
@@ -132,18 +177,7 @@ impl PixelSound {
             out.extend(steady.map(|value| value as f32));
             out.push(lines.len() as f32);
             for line in lines {
-                let parts = line.parts(states);
-                out.extend(parts.energy.map(|value| value as f32));
-                for means in &parts.means {
-                    out.extend(means.iter().map(|&value| value as f32));
-                }
-                out.extend(parts.lambda.map(|value| value as f32));
-                out.push(parts.profile.map_or(-1.0, |profile| profile as f32));
-                out.extend(
-                    parts
-                        .duty
-                        .map_or([f32::NAN; PERIODS], |duty| duty.map(|value| value as f32)),
-                );
+                line.pack(states, out);
             }
         }
         let place = std::iter::once(&self.curves);
@@ -168,91 +202,112 @@ pub(crate) fn pixel_sound(
     (candidates, energies, bands): (&[u32], &[PairEnergy], &PointBands),
     (rest, flight_spectrum_db): (&Rest, &[f64; CLASS_THIRDS]),
 ) -> Result<PixelSound, String> {
-    let mut groups: HashMap<u64, Heard> = HashMap::new();
-    for (&index, energy) in candidates.iter().zip(energies) {
-        let candidate = &square.candidates[index as usize];
-        let heard = groups.entry(candidate.group_key).or_insert_with(|| Heard {
-            layer: candidate.layer,
-            energy: [0.0; PERIODS],
-            states: [[0.0; PERIODS]; 2],
-            weather: Weather::default(),
-            distance_m: f64::INFINITY,
-            display: (candidate.display, f64::NEG_INFINITY),
-        });
-        let lden = lden_energy(&energy.mixed);
-        let order = |d: DisplayRef| (d.ring, d.tile, d.attribute);
-        if lden > heard.display.1
-            || (lden == heard.display.1 && order(candidate.display) < order(heard.display.0))
-        {
-            heard.display = (candidate.display, lden);
-        }
-        let mixed = energy.mixed.map(|value| reflection * value);
-        let states = energy
-            .states
-            .map(|state| state.map(|value| reflection * value));
-        for p in 0..PERIODS {
-            heard.energy[p] += mixed[p];
-            heard.states[0][p] += states[0][p];
-            heard.states[1][p] += states[1][p];
-        }
-        heard.weather.add(&mixed, &states);
-        heard.distance_m = heard.distance_m.min(candidate.distance_from(position));
-    }
-    // What the block left out of a group sounds with its passes, and leaves the steady rest: its
-    // energy, in either weather state, joins the group's line, or is a line of its own taken from
-    // its loudest source left out.
+    let mut order: Vec<u32> = (0..candidates.len() as u32).collect();
+    order.sort_by_key(|&i| square.candidates[candidates[i as usize] as usize].group_key);
+
     let mut steady = rest
         .steady
         .map(|layer| layer.map(|value| reflection * value));
     let (left_groups, weights) = rest.left_groups;
-    for group in left_groups {
-        let blend = |of: &dyn Fn(&PairEnergy) -> [f64; PERIODS]| -> [f64; PERIODS] {
-            std::array::from_fn(|p| {
-                reflection
-                    * rest.left_reach
-                    * (0..4)
-                        .map(|c| weights[c] * of(&group.at_corners[c])[p])
-                        .sum::<f64>()
-            })
+    let scale = reflection * rest.left_reach;
+
+    let mut groups: Vec<GroupSum> =
+        Vec::with_capacity((candidates.len() / 8).max(left_groups.len()));
+    let (mut pos, mut left_at) = (0usize, 0usize);
+    while pos < order.len() || left_at < left_groups.len() {
+        let next_left = loop {
+            if left_at >= left_groups.len() {
+                break None;
+            }
+            let left = blend_corners(&left_groups[left_at].at_corners, &weights, scale, |e| {
+                e.mixed
+            });
+            if left.iter().any(|&value| value > 0.0) {
+                break Some((left_at, left_groups[left_at].key, left));
+            }
+            left_at += 1;
         };
-        let left = blend(&|energy| energy.mixed);
-        let states = [0, 1].map(|state| blend(&|energy| energy.states[state]));
-        if left.iter().all(|&value| value <= 0.0) {
-            continue;
-        }
-        let nearest_m = (group.nearest.iter())
-            .filter(|&&index| index != u32::MAX)
-            .map(|&index| square.candidates[index as usize].distance_from(position))
-            .fold(f64::INFINITY, f64::min);
-        let loudest = &square.candidates[group.loudest as usize];
-        let heard = groups.entry(group.key).or_insert_with(|| Heard {
-            layer: loudest.layer,
-            energy: [0.0; PERIODS],
-            states: [[0.0; PERIODS]; 2],
-            weather: Weather::default(),
-            distance_m: nearest_m,
-            display: (loudest.display, lden_energy(&left)),
+        let next_cand = (pos < order.len()).then(|| {
+            let first = &square.candidates[candidates[order[pos] as usize] as usize];
+            let key = first.group_key;
+            let mut end = pos + 1;
+            while end < order.len()
+                && square.candidates[candidates[order[end] as usize] as usize].group_key == key
+            {
+                end += 1;
+            }
+            (key, first.layer, pos..end)
         });
-        heard.distance_m = heard.distance_m.min(nearest_m);
-        heard.weather.add(&left, &states);
-        let layer = heard.layer as usize;
-        for p in 0..PERIODS {
-            heard.energy[p] += left[p];
-            heard.states[0][p] += states[0][p];
-            heard.states[1][p] += states[1][p];
-            steady[layer][p] = (steady[layer][p] - left[p]).max(0.0);
+        match (next_cand, next_left) {
+            (Some((key, layer, run)), Some((l_idx, l_key, left))) if key <= l_key => {
+                let mut energy = [0.0; PERIODS];
+                for &i in &order[run.clone()] {
+                    let mixed = energies[i as usize].mixed;
+                    for p in 0..PERIODS {
+                        energy[p] += reflection * mixed[p];
+                    }
+                }
+                let matched_left = if key == l_key {
+                    for p in 0..PERIODS {
+                        energy[p] += left[p];
+                        steady[layer as usize][p] = (steady[layer as usize][p] - left[p]).max(0.0);
+                    }
+                    left_at = l_idx + 1;
+                    Some((l_idx, left))
+                } else {
+                    None
+                };
+                pos = run.end;
+                groups.push(GroupSum {
+                    key,
+                    layer,
+                    energy,
+                    run,
+                    left: matched_left,
+                });
+            }
+            (_, Some((l_idx, l_key, left))) => {
+                let layer = square.candidates[left_groups[l_idx].loudest as usize].layer;
+                for p in 0..PERIODS {
+                    steady[layer as usize][p] = (steady[layer as usize][p] - left[p]).max(0.0);
+                }
+                left_at = l_idx + 1;
+                groups.push(GroupSum {
+                    key: l_key,
+                    layer,
+                    energy: left,
+                    run: pos..pos,
+                    left: Some((l_idx, left)),
+                });
+            }
+            (Some((key, layer, run)), None) => {
+                let mut energy = [0.0; PERIODS];
+                for &i in &order[run.clone()] {
+                    let mixed = energies[i as usize].mixed;
+                    for p in 0..PERIODS {
+                        energy[p] += reflection * mixed[p];
+                    }
+                }
+                pos = run.end;
+                groups.push(GroupSum {
+                    key,
+                    layer,
+                    energy,
+                    run,
+                    left: None,
+                });
+            }
+            (None, None) => break,
         }
     }
+
     // Each layer: its groups and its steady rest, its spectrum the exact bands and the rest's.
     let [flights, flights_lambda] = rest.flights;
     let sounds: Vec<LayerSound> = (0..LAYERS)
         .map(|layer| {
             let mut energy = steady[layer];
-            for heard in groups
-                .values()
-                .filter(|heard| heard.layer as usize == layer)
-            {
-                for (total, value) in energy.iter_mut().zip(heard.energy) {
+            for group in groups.iter().filter(|group| group.layer as usize == layer) {
+                for (total, value) in energy.iter_mut().zip(group.energy) {
                     *total += value;
                 }
             }
@@ -270,14 +325,97 @@ pub(crate) fn pixel_sound(
             }
         })
         .collect();
-    let views: Vec<Group> = (groups.iter())
-        .map(|(&key, heard)| Group {
-            key,
-            layer: heard.layer,
-            energy: heard.energy,
-            weather: &heard.weather,
-            distance_m: heard.distance_m,
-            display: heard.display.0,
+
+    // Only groups exceeding FLUCTUATING_SHARE_MIN of their layer's energy with known passes can
+    // become lines: build Weather and compute distance_from only for them.
+    let order_ref = |d: DisplayRef| (d.ring, d.tile, d.attribute);
+    let mut active = Vec::new();
+    for group in groups {
+        let total = &sounds[group.layer as usize].energy;
+        if !(0..PERIODS).any(|p| group.energy[p] > FLUCTUATING_SHARE_MIN * total[p]) {
+            continue;
+        }
+        let (winner_index, display) = if !group.run.is_empty() {
+            let mut best_index = 0u32;
+            let mut best_display = DisplayRef {
+                ring: 0,
+                tile: 0,
+                attribute: 0,
+            };
+            let mut best_lden = f64::NEG_INFINITY;
+            for &i in &order[group.run.clone()] {
+                let index = candidates[i as usize];
+                let candidate = &square.candidates[index as usize];
+                let lden = lden_energy(&energies[i as usize].mixed);
+                if lden > best_lden
+                    || (lden == best_lden && order_ref(candidate.display) < order_ref(best_display))
+                {
+                    best_index = index;
+                    best_display = candidate.display;
+                    best_lden = lden;
+                }
+            }
+            (best_index, best_display)
+        } else {
+            let loudest = left_groups[group.left.unwrap().0].loudest;
+            (loudest, square.candidates[loudest as usize].display)
+        };
+        let passes = displays.by_candidate[winner_index as usize];
+        if matches!(passes, Passes::Unknown) {
+            continue;
+        }
+        let mut weather = Weather::default();
+        for &i in &order[group.run.clone()] {
+            let energy = &energies[i as usize];
+            let mixed = energy.mixed.map(|value| reflection * value);
+            let states = energy
+                .states
+                .map(|state| state.map(|value| reflection * value));
+            weather.add(&mixed, &states);
+        }
+        if let Some((l_idx, left)) = group.left {
+            let left_group = &left_groups[l_idx];
+            let states = [0, 1].map(|state| {
+                blend_corners(&left_group.at_corners, &weights, scale, |e| e.states[state])
+            });
+            weather.add(&left, &states);
+        }
+        let distance_m = if matches!(passes, Passes::Steady(_)) {
+            f64::INFINITY
+        } else {
+            let mut near_m = f64::INFINITY;
+            for &i in &order[group.run] {
+                let index = candidates[i as usize];
+                near_m = near_m.min(square.candidates[index as usize].distance_from(position));
+            }
+            if let Some((l_idx, _)) = group.left {
+                for &index in &left_groups[l_idx].nearest {
+                    if index != u32::MAX {
+                        near_m =
+                            near_m.min(square.candidates[index as usize].distance_from(position));
+                    }
+                }
+            }
+            near_m
+        };
+        active.push(ActiveGroup {
+            key: group.key,
+            layer: group.layer,
+            energy: group.energy,
+            weather,
+            distance_m,
+            display,
+        });
+    }
+
+    let views: Vec<Group> = (active.iter())
+        .map(|group| Group {
+            key: group.key,
+            layer: group.layer,
+            energy: group.energy,
+            weather: &group.weather,
+            distance_m: group.distance_m,
+            display: group.display,
         })
         .collect();
     let weather = flight_weather(&(flights, flights_lambda));

@@ -45,15 +45,21 @@ impl Spread {
     /// whole power as a point, `L / (10^1.1 d^2)`: the point sum `theta / d_perp` equals the
     /// integral of ds / r^2 over the piece, and every point of it is at least `d` away.
     pub fn divergence_db(self, distance_m: f64) -> f64 {
+        -10.0 * self.divergence_energy(distance_m).log10()
+    }
+
+    /// Linear divergence factor `10^(-divergence_db / 10)` at horizontal distance `distance_m`.
+    pub fn divergence_energy(self, distance_m: f64) -> f64 {
         match self {
             Spread::Line { length_m } => {
                 let d = distance_m.max(LINE_PERPENDICULAR_FLOOR_M);
                 let infinite_line = std::f64::consts::PI / d;
                 let whole_power = length_m / (d * d);
-                -10.0 * (infinite_line.min(whole_power) / POINT_DIVERGENCE_LINEAR).log10()
+                infinite_line.min(whole_power) / POINT_DIVERGENCE_LINEAR
             }
             Spread::Point => {
-                20.0 * distance_m.max(POINT_DISTANCE_FLOOR_M).log10() + POINT_DIVERGENCE_OFFSET_DB
+                let d = distance_m.max(POINT_DISTANCE_FLOOR_M);
+                1.0 / (d * d * POINT_DIVERGENCE_LINEAR)
             }
         }
     }
@@ -96,7 +102,7 @@ pub fn received_energy_bound(
     distance_m: f64,
     receiver: &ReceiverBound,
 ) -> [f64; PERIODS] {
-    let divergence = energy(-spread.divergence_db(distance_m));
+    let divergence = spread.divergence_energy(distance_m);
     let air: [f64; BANDS] =
         std::array::from_fn(|band| energy(-receiver.alpha_db_per_km[band] * distance_m / 1000.0));
     std::array::from_fn(|period| {

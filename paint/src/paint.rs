@@ -14,14 +14,17 @@
 use crate::blocks::{Block, Corner};
 use crate::buildings::{building_levels, facade_candidates, fill_buildings};
 use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
+use crate::flight_boxes::HorizonsSlot;
 use crate::flights::{FlightSpectra, FlightSums, flights_at_corners};
 use crate::hum::Hum;
 use crate::points::PointPainter;
 use crate::sone::Displays;
 use crate::square::Square;
+use physics::bands::PERIODS;
 use rayon::prelude::*;
 use std::ops::Range;
 use std::sync::atomic::AtomicUsize;
+use std::time::Instant;
 use tiles::geo::Mercator;
 
 /// A cell not assessed: a building with no exposed façade in the square, or nothing painted there.
@@ -196,7 +199,7 @@ pub fn corners_of(
     let n = grid.pixels;
     let metres = |x: f64, y: f64| metres_at(square, n, x, y);
     let rectangle = |x0: f64, y0: f64, x1: f64, y1: f64| rectangle_at(square, n, x0, y0, x1, y1);
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let blocks = n / grid.block;
     let corner_side = blocks + 1;
     let corner_points: Vec<Point> = (0..corner_side * corner_side)
@@ -209,28 +212,6 @@ pub fn corners_of(
             )
         })
         .collect::<Result<_, String>>()?;
-    // The flights are the cores' work alone: they run beside the hum and the corners on the card.
-    let ((flights, flight_spectra), hum) = rayon::join(
-        || {
-            rayon::join(
-                || flights_at_corners(square, grid, &metres, &corner_points),
-                || FlightSpectra::new(square, n, 2 * grid.block),
-            )
-        },
-        || Hum::new(square, n, grid.hum, batch),
-    );
-    let (flights, flight_spectra, hum) = (flights?, flight_spectra?, hum?);
-    // A square no loud source reaches, no flight crosses and whose hum stays under 0 dB (the
-    // reflection adding at most 3 dB) has no level: most of the world.
-    let mut near = Vec::new();
-    let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);
-    square.index.reaching(low, high, &mut near);
-    let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
-    if near.is_empty() && no_flights && hum.silent() {
-        return Ok(None);
-    }
-    let displays = Displays::of(square)?;
-    // Every block corner evaluates every source loud there.
     let pairs: Vec<Pair> = (0..corner_points.len())
         .into_par_iter()
         .map_init(Vec::new, |near, k| {
@@ -244,27 +225,87 @@ pub fn corners_of(
         .flatten()
         .collect();
     let corner_pairs = pairs.len();
-    let mut corners: Vec<Corner> = (0..corner_points.len())
-        .map(|_| Corner::default())
-        .collect();
-    let evaluated = evaluate_all(square, &corner_points, &pairs, batch)?;
-    for (pair, energy) in pairs.iter().zip(&evaluated.pairs) {
-        let (k, index) = (pair.point, pair.candidate);
-        let candidate = &square.candidates[index as usize];
-        let distance_m = candidate.distance_from(corner_points[k as usize].position);
-        corners[k as usize].add(
-            candidate.layer as usize,
-            (index, candidate.group_key),
-            (*energy, distance_m),
-        );
+    // The flights are the cores' work alone: they run beside the corners and the hum on the card.
+    let (aircraft_res, ground_res) = rayon::join(
+        || -> Result<(Vec<FlightSums>, FlightSpectra), String> {
+            let horizons_cache: Vec<HorizonsSlot> = (0..corner_points.len())
+                .map(|_| HorizonsSlot::new())
+                .collect();
+            let flights = flights_at_corners(square, grid, &corner_points, &horizons_cache)?;
+            let flight_spectra =
+                FlightSpectra::with_corners(square, grid, &corner_points, &horizons_cache)?;
+            Ok((flights, flight_spectra))
+        },
+        || -> Result<(Hum, Vec<Corner>, Vec<PointBands>, usize), String> {
+            let mut corners: Vec<Corner> = (0..corner_points.len())
+                .map(|_| Corner::default())
+                .collect();
+            let evaluated = evaluate_all(square, &corner_points, &pairs, batch)?;
+            for (pair, energy) in pairs.iter().zip(&evaluated.pairs) {
+                let (k, index) = (pair.point, pair.candidate);
+                let candidate = &square.candidates[index as usize];
+                let distance_m = candidate.distance_from(corner_points[k as usize].position);
+                corners[k as usize].add(
+                    candidate.layer as usize,
+                    (index, candidate.group_key),
+                    (*energy, distance_m),
+                );
+            }
+            // A corner's bands: the normalized shape of what its blocks leave out there.
+            let mut corner_bands = evaluated.bands;
+            for point_bands in &mut corner_bands {
+                for layer_bands in point_bands {
+                    for period_bands in layer_bands {
+                        let sum: f64 = period_bands.iter().sum();
+                        if sum > 0.0 {
+                            for b in period_bands {
+                                *b /= sum;
+                            }
+                        }
+                    }
+                }
+            }
+            let ratio = grid.hum / grid.block;
+            let hum_side = n / grid.hum + 1;
+            let mut hum_points = Vec::with_capacity(hum_side * hum_side);
+            let mut hum_loud_energy = Vec::with_capacity(hum_side * hum_side);
+            for at in 0..hum_side * hum_side {
+                let (column, row) = (at % hum_side, at / hum_side);
+                let corner_at = (row * ratio) * corner_side + column * ratio;
+                hum_points.push(corner_points[corner_at].clone());
+                let mut loud_e = [[0.0; PERIODS]; LAYERS];
+                for (layer, ranked) in corners[corner_at].ranked.iter().enumerate() {
+                    for source in ranked {
+                        for (sum, val) in loud_e[layer].iter_mut().zip(source.energy.mixed) {
+                            *sum += val;
+                        }
+                    }
+                }
+                hum_loud_energy.push(loud_e);
+            }
+            corners.par_iter_mut().for_each(|corner| {
+                for ranked in &mut corner.ranked {
+                    ranked.sort_unstable_by(|a, b| {
+                        b.lden.total_cmp(&a.lden).then(a.index.cmp(&b.index))
+                    });
+                }
+            });
+            let hum = Hum::from_points(square, n, grid.hum, &hum_points, &hum_loud_energy, batch)?;
+            Ok((hum, corners, corner_bands, corner_pairs))
+        },
+    );
+    let ((flights, flight_spectra), (hum, corners, corner_bands, corner_pairs)) =
+        (aircraft_res?, ground_res?);
+    // A square no loud source reaches, no flight crosses and whose hum stays under 0 dB (the
+    // reflection adding at most 3 dB) has no level: most of the world.
+    let mut near = Vec::new();
+    let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);
+    square.index.reaching(low, high, &mut near);
+    let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
+    if near.is_empty() && no_flights && hum.silent() {
+        return Ok(None);
     }
-    // A corner's bands: the shape of what its blocks leave out there.
-    let corner_bands = evaluated.bands;
-    corners.par_iter_mut().for_each(|corner| {
-        for ranked in &mut corner.ranked {
-            ranked.sort_unstable_by(|a, b| b.lden.total_cmp(&a.lden).then(a.index.cmp(&b.index)));
-        }
-    });
+    let displays = Displays::of(square)?;
     Ok(Some(Corners {
         corner_points,
         flights,
@@ -287,7 +328,7 @@ pub fn paint_pixels(
 ) -> Result<Cells, String> {
     let n = grid.pixels;
     let metres = |x: f64, y: f64| metres_at(square, n, x, y);
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let (corners_s, corner_pairs) = (corners.seconds, corners.corner_pairs);
     let painter = PointPainter {
         square,
@@ -317,7 +358,9 @@ pub fn paint_pixels(
             })
             .collect();
         let points: Vec<Point> = (places.par_iter())
-            .map(|&(_, at)| Point::at(square, metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5)))
+            .map(|&(_, at)| {
+                Point::pixel(square, metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5))
+            })
             .collect::<Result<_, String>>()?;
         let walls: Vec<bool> = (0..block_ids.len())
             .map(|slot| {
@@ -342,7 +385,7 @@ pub fn paint_pixels(
             (row * blocks..(row + 1) * blocks)
                 .into_par_iter()
                 .map_init(Vec::new, |near, at| {
-                    painter.block(near, at).exact.len() * area
+                    painter.block_exact_count(near, at) * area
                 })
                 .collect::<Vec<usize>>()
         })
@@ -358,7 +401,10 @@ pub fn paint_pixels(
     }
     let candidates = facade_candidates(square, n, &pixels, &indoor)?;
     let levels = building_levels(&painter, &bounds, candidates)?;
+    let total_pairs = painter.pairs.load(std::sync::atomic::Ordering::Relaxed);
+    drop((painter, bounds));
     fill_buildings(&mut pixels, &indoor, &levels);
+    drop((indoor, levels));
     let cells = (pixels.par_iter())
         .map(|pixel| {
             pixel
@@ -367,9 +413,8 @@ pub fn paint_pixels(
         })
         .collect();
     eprintln!(
-        "qm-paint: hum and corners {corners_s:.1} s ({corner_pairs} pairs), pixels {:.1} s ({} pairs)",
+        "qm-paint: hum and corners {corners_s:.1} s ({corner_pairs} pairs), pixels {:.1} s ({total_pairs} pairs)",
         started.elapsed().as_secs_f64(),
-        painter.pairs.into_inner(),
     );
     Ok(cells)
 }

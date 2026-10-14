@@ -81,7 +81,7 @@ fn lattice_constants() -> String {
 }
 
 /// Floats a pair's sums take (kernels/evaluate.cuh PAIR_SUMS): mixed, calm and downwind per period.
-const PAIR_SUMS: usize = 3 * PERIODS;
+pub const PAIR_SUMS: usize = 3 * PERIODS;
 /// Floats a point's bands take: per layer, period and octave band.
 pub const POINT_BANDS: usize = LAYERS * PERIODS * BANDS;
 
@@ -321,9 +321,178 @@ impl Gpu {
         )
     }
 
+    /// Uploads a pass's reached receiver positions and building footprints once for all its
+    /// pair launches.
+    pub fn upload_points(&self, xy: &[f32], own_footprint: &[u64]) -> Result<DevicePoints, String> {
+        let count = own_footprint.len();
+        if xy.len() != 2 * count {
+            return Err("upload_points: two coordinates per owner".into());
+        }
+        let xy = driver(self.device.htod_sync_copy(xy))?;
+        let own = driver(self.device.htod_sync_copy(own_footprint))?;
+        Ok(DevicePoints { xy, own, count })
+    }
+
     /// The band sums as the pairs left them.
     pub fn download(&self, bands: &CudaSlice<f32>) -> Result<Vec<f32>, String> {
         driver(self.device.dtoh_sync_copy(bands))
+    }
+
+    /// Per pair (candidate index, its point's index in `device_points` and `bands`, optional
+    /// importance weight): what the candidate delivers there per period, mixed, calm and downwind
+    /// ([`PAIR_SUMS`] floats per pair), and the failure, 0 for none; its mixed bands added to the
+    /// point's when `need_bands` is set.
+    pub fn evaluate_indexed_pairs(
+        &self,
+        square: &DeviceSquare,
+        device_points: &DevicePoints,
+        (candidates, points, band_weights): (&[u32], &[u32], Option<&[f32]>),
+        need_bands: bool,
+        bands: &mut CudaSlice<f32>,
+    ) -> Result<(Vec<f32>, Vec<u32>), String> {
+        let count = candidates.len();
+        if points.len() != count || band_weights.is_some_and(|w| w.len() != count) {
+            return Err("evaluate_indexed_pairs: a point and weight per candidate".into());
+        }
+        if candidates.iter().any(|&index| index >= square.candidates)
+            || points.iter().any(|&point| {
+                point as usize >= device_points.count
+                    || (need_bands && (point as usize + 1) * POINT_BANDS > bands.len())
+            })
+        {
+            return Err(
+                "evaluate_indexed_pairs: a candidate outside the square or a point outside the bands"
+                    .into(),
+            );
+        }
+        if count == 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let device = &self.device;
+        let index = driver(device.htod_sync_copy(candidates))?;
+        let point_index = driver(device.htod_sync_copy(points))?;
+        let band_weights = match band_weights {
+            Some(w) if need_bands => Some(driver(device.htod_sync_copy(w))?),
+            _ => None,
+        };
+        let ray_counts = driver(device.alloc_zeros::<u32>(count))?;
+        let failed = driver(device.alloc_zeros::<u32>(count))?;
+        let kernel = |name: &str| {
+            device
+                .get_func("paint", name)
+                .ok_or(format!("kernel {name} missing"))
+        };
+        let threads = |n: usize| LaunchConfig {
+            grid_dim: ((n as u32).div_ceil(THREADS_PER_BLOCK), 1, 1),
+            block_dim: (THREADS_PER_BLOCK, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        // A null pointer: the listing kernel counts the rays instead of writing them.
+        let none = 0u64;
+        // The pairs' kernels on a stream of their own (once the buffers above are zeroed): another
+        // pass's or square's kernels run beside them on the card.
+        let stream = driver(device.fork_default_stream())?;
+        // SAFETY (each launch): every buffer holds what the kernel indexes: 2 receiver coordinates
+        // and an owner per point in `device_points`; a candidate and a point (within `device_points`
+        // and `bands`, checked) per pair; a count, an offset, PAIR_SUMS sums, PERIODS x BANDS bands
+        // and a failure per pair; a PairRay (24 bytes) per ray.
+        driver(unsafe {
+            kernel("pair_rays")?.launch_on_stream(
+                &stream,
+                threads(count),
+                (
+                    &square.scene,
+                    &device_points.xy,
+                    &device_points.own,
+                    &point_index,
+                    &index,
+                    count as u32,
+                    none,
+                    none,
+                    &ray_counts,
+                    &failed,
+                ),
+            )
+        })?;
+        let mut offsets = read_back(&stream, &ray_counts)?;
+        let mut total = 0u32;
+        for offset in &mut offsets {
+            (*offset, total) = (total, total + *offset);
+        }
+        let sums = driver(device.alloc_zeros::<f32>(PAIR_SUMS * count))?;
+        if total > 0 {
+            let offsets = driver(device.htod_sync_copy(&offsets))?;
+            let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
+            let pair_bands = if need_bands {
+                Some(driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?)
+            } else {
+                None
+            };
+            let pair_bands_ptr = pair_bands.as_ref().map_or(none, |b| *b.device_ptr());
+            let weights_ptr = band_weights.as_ref().map_or(none, |w| *w.device_ptr());
+            driver(stream.wait_for_default())?;
+            driver(unsafe {
+                kernel("pair_rays")?.launch_on_stream(
+                    &stream,
+                    threads(count),
+                    (
+                        &square.scene,
+                        &device_points.xy,
+                        &device_points.own,
+                        &point_index,
+                        &index,
+                        count as u32,
+                        &offsets,
+                        &rays,
+                        &ray_counts,
+                        &failed,
+                    ),
+                )
+            })?;
+            driver(unsafe {
+                kernel("ray_transfers")?.launch_on_stream(
+                    &stream,
+                    threads(total as usize),
+                    (
+                        &square.scene,
+                        &device_points.xy,
+                        &device_points.own,
+                        &point_index,
+                        &index,
+                        &rays,
+                        total,
+                        &sums,
+                        pair_bands_ptr,
+                        &failed,
+                    ),
+                )
+            })?;
+            if need_bands {
+                driver(unsafe {
+                    kernel("pair_bands_to_points")?.launch_on_stream(
+                        &stream,
+                        threads(count),
+                        (
+                            &square.scene,
+                            &index,
+                            &point_index,
+                            weights_ptr,
+                            count as u32,
+                            pair_bands_ptr,
+                            &failed,
+                            &mut *bands,
+                        ),
+                    )
+                })?;
+            }
+            // The rays' buffers are freed on the default stream as this block ends: their kernels
+            // finish first.
+            // SAFETY: a stream this function created and still holds.
+            driver(unsafe { result::stream::synchronize(stream.stream) })?;
+        }
+        let sums = read_back(&stream, &sums)?;
+        let failed = read_back(&stream, &failed)?;
+        Ok((sums, failed))
     }
 
     /// Per pair (receiver position in the square's frame, building it stands in or 0, candidate
@@ -344,131 +513,39 @@ impl Gpu {
         {
             return Err("evaluate_pairs: a receiver, an owner and a point per candidate".into());
         }
-        if candidates.iter().any(|&index| index >= square.candidates)
-            || points
-                .iter()
-                .any(|&point| (point as usize + 1) * POINT_BANDS > bands.len())
-        {
-            return Err(
-                "evaluate_pairs: a candidate outside the square or a point outside the bands"
-                    .into(),
-            );
-        }
         if count == 0 {
             return Ok((Vec::new(), Vec::new()));
         }
-        let xy: Vec<f32> = receivers.iter().flatten().map(|&v| v as f32).collect();
-        let device = &self.device;
-        let xy = driver(device.htod_sync_copy(&xy))?;
-        let own = driver(device.htod_sync_copy(own_footprint))?;
-        let index = driver(device.htod_sync_copy(candidates))?;
-        let point_index = driver(device.htod_sync_copy(points))?;
-        let band_weights = driver(device.htod_sync_copy(band_weights))?;
-        let ray_counts = driver(device.alloc_zeros::<u32>(count))?;
-        let failed = driver(device.alloc_zeros::<u32>(count))?;
-        let kernel = |name: &str| {
-            device
-                .get_func("paint", name)
-                .ok_or(format!("kernel {name} missing"))
-        };
-        let threads = |n: usize| LaunchConfig {
-            grid_dim: ((n as u32).div_ceil(THREADS_PER_BLOCK), 1, 1),
-            block_dim: (THREADS_PER_BLOCK, 1, 1),
-            shared_mem_bytes: 0,
-        };
-        // A null pointer: the listing kernel counts the rays instead of writing them.
-        let none = 0u64;
-        // The pairs' kernels on a stream of their own (once the buffers above are zeroed): another
-        // pass's or square's kernels run beside them on the card.
-        let stream = driver(device.fork_default_stream())?;
-        // SAFETY (each launch): every buffer holds what the kernel indexes: 2 receiver coordinates,
-        // an owner, a candidate and a point (within `bands`, checked) per pair; a count, an offset,
-        // PAIR_SUMS sums, PERIODS x BANDS bands and a failure per pair; a PairRay (24 bytes) per ray.
-        driver(unsafe {
-            kernel("pair_rays")?.launch_on_stream(
-                &stream,
-                threads(count),
-                (
-                    &square.scene,
-                    &xy,
-                    &own,
-                    &index,
-                    count as u32,
-                    none,
-                    none,
-                    &ray_counts,
-                    &failed,
-                ),
-            )
-        })?;
-        let mut offsets = read_back(&stream, &ray_counts)?;
-        let mut total = 0u32;
-        for offset in &mut offsets {
-            (*offset, total) = (total, total + *offset);
+        let point_count = points
+            .iter()
+            .copied()
+            .max()
+            .map_or(0, |m| m as usize + 1)
+            .max(count);
+        let mut xy = vec![0.0f32; 2 * point_count];
+        let mut own = vec![0u64; point_count];
+        for (i, (&pt, (&pos, &o))) in points
+            .iter()
+            .zip(receivers.iter().zip(own_footprint))
+            .enumerate()
+        {
+            let idx = if point_count == count { i } else { pt as usize };
+            xy[2 * idx] = pos[0] as f32;
+            xy[2 * idx + 1] = pos[1] as f32;
+            own[idx] = o;
         }
-        let sums = driver(device.alloc_zeros::<f32>(PAIR_SUMS * count))?;
-        if total > 0 {
-            let offsets = driver(device.htod_sync_copy(&offsets))?;
-            let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
-            let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
-            driver(stream.wait_for_default())?;
-            driver(unsafe {
-                kernel("pair_rays")?.launch_on_stream(
-                    &stream,
-                    threads(count),
-                    (
-                        &square.scene,
-                        &xy,
-                        &own,
-                        &index,
-                        count as u32,
-                        &offsets,
-                        &rays,
-                        &ray_counts,
-                        &failed,
-                    ),
-                )
-            })?;
-            driver(unsafe {
-                kernel("ray_transfers")?.launch_on_stream(
-                    &stream,
-                    threads(total as usize),
-                    (
-                        &square.scene,
-                        &xy,
-                        &own,
-                        &index,
-                        &rays,
-                        total,
-                        &sums,
-                        &pair_bands,
-                        &failed,
-                    ),
-                )
-            })?;
-            driver(unsafe {
-                kernel("pair_bands_to_points")?.launch_on_stream(
-                    &stream,
-                    threads(count),
-                    (
-                        &square.scene,
-                        &index,
-                        &point_index,
-                        &band_weights,
-                        count as u32,
-                        &pair_bands,
-                        &failed,
-                        &mut *bands,
-                    ),
-                )
-            })?;
-            // The rays' buffers are freed on the default stream as this block ends: their kernels
-            // finish first.
-            // SAFETY: a stream this function created and still holds.
-            driver(unsafe { result::stream::synchronize(stream.stream) })?;
-        }
-        let sums = read_back(&stream, &sums)?;
-        let failed = read_back(&stream, &failed)?;
+        let device_points = self.upload_points(&xy, &own)?;
+        let weights = band_weights
+            .iter()
+            .any(|&w| w != 1.0)
+            .then_some(band_weights);
+        let (sums, failed) = self.evaluate_indexed_pairs(
+            square,
+            &device_points,
+            (candidates, points, weights),
+            true,
+            bands,
+        )?;
         Ok((
             sums.chunks_exact(PAIR_SUMS)
                 .map(|chunk| std::array::from_fn(|k| chunk[k]))
@@ -476,6 +553,13 @@ impl Gpu {
             failed,
         ))
     }
+}
+
+/// A pass's reached receiver points on the card.
+pub struct DevicePoints {
+    xy: CudaSlice<f32>,
+    own: CudaSlice<u64>,
+    count: usize,
 }
 
 /// `source` read back once `stream`'s work so far is done.

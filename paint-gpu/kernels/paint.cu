@@ -40,7 +40,7 @@ __device__ void frame_degrees(const SquareScene& square, float x, float y, float
 }
 
 // The receiver at a point in the square's frame standing outdoors or in building `own_footprint`
-// (levels::Point::outdoors and Point::at): its ground plus the receiver height, its weather.
+// (levels::Point::outdoors and Point::at): its ground plus the receiver height.
 __device__ u32 receiver_at(const SquareScene& square, float x, float y, u64 own_footprint, Receiver* receiver) {
     GroundSample ground;
     u32 failed = ground_at(square.ground, x, y, &ground);
@@ -49,9 +49,6 @@ __device__ u32 receiver_at(const SquareScene& square, float x, float y, u64 own_
     receiver->y = y;
     receiver->altitude_m = ground.height_m + RECEIVER_HEIGHT_M;
     receiver->own_footprint = own_footprint;
-    float lat, lon;
-    frame_degrees(square, x, y, &lat, &lon);
-    place_weather(square.weather_nodes, lat, lon, &receiver->weather);
     return 0;
 }
 
@@ -66,17 +63,19 @@ struct RayLister {
     }
 };
 
-// Per pair (candidate `candidate_index[i]` at the receiver at (receiver_xy[2i], receiver_xy[2i + 1])
-// standing in building `own_footprint[i]`, 0 outdoors): with `rays` null its rays counted into
-// `ray_counts` and its failure into `failed`; else its rays written from `ray_offsets[i]`.
-extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
-                                     const u32* candidate_index, u32 pair_count, const u32* ray_offsets, PairRay* rays,
-                                     u32* ray_counts, u32* failed) {
+// Per pair (candidate `candidate_index[i]` at point `point_index[i]`, whose position in the
+// square's frame is `(point_xy[2 * pt], point_xy[2 * pt + 1])` and building `point_own[pt]`,
+// 0 outdoors): with `rays` null its rays counted into `ray_counts` and its failure into `failed`;
+// else its rays written from `ray_offsets[i]`.
+extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float* point_xy, const u64* point_own,
+                                     const u32* point_index, const u32* candidate_index, u32 pair_count,
+                                     const u32* ray_offsets, PairRay* rays, u32* ray_counts, u32* failed) {
     const SquareScene& square = *square_ptr;
     u32 pair = blockIdx.x * blockDim.x + threadIdx.x;
     if (pair >= pair_count || (rays && failed[pair])) return;
+    u32 pt = point_index[pair];
     Receiver receiver;
-    u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
+    u32 status = receiver_at(square, point_xy[2 * pt], point_xy[2 * pt + 1], point_own[pt], &receiver);
     const Candidate& candidate = square.candidates[candidate_index[pair]];
     RayLister lister{rays ? rays + ray_offsets[pair] : 0, 0u};
     if (status == 0) status = pair_rays_of(square.obstacles, receiver, candidate, square.attributes[candidate.attribute], pair, lister);
@@ -89,28 +88,37 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float*
 // Per listed ray, a thread each: its pair's sums (PAIR_SUMS a pair) and mixed bands (PERIODS x BANDS
 // a pair) added to, or its failure to the pair's. Sixteen one-warp blocks allow 128 registers per
 // thread; requiring more warps makes the register allowance too small for the walk's live state.
-extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, 16) ray_transfers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
-                                         const u32* candidate_index, const PairRay* rays, u32 ray_count, float* sums,
+extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, 16) ray_transfers(const SquareScene* square_ptr, const float* point_xy, const u64* point_own,
+                                         const u32* point_index, const u32* candidate_index, const PairRay* rays, u32 ray_count, float* sums,
                                          float* pair_bands, u32* failed) {
     const SquareScene& square = *square_ptr;
     u32 k = blockIdx.x * blockDim.x + threadIdx.x;
     if (k >= ray_count) return;
     const PairRay ray = rays[k];
     u32 pair = ray.pair;
+    u32 pt = point_index[pair];
     Receiver receiver;
-    u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
+    u32 status = receiver_at(square, point_xy[2 * pt], point_xy[2 * pt + 1], point_own[pt], &receiver);
     const Candidate& candidate = square.candidates[candidate_index[pair]];
-    RayStream s;
-    float out[PAIR_SUMS], ray_bands[PERIODS * BANDS];
-    for (int j = 0; j < PAIR_SUMS; j++) out[j] = 0.0f;
-    for (int j = 0; j < PERIODS * BANDS; j++) ray_bands[j] = 0.0f;
-    if (status == 0) status = ray_received(square.ground, square.obstacles, receiver, square.attributes[candidate.attribute], ray, s, out, ray_bands);
+    const Attribute& source = square.attributes[candidate.attribute];
+    Transfer transfer;
+    if (status == 0) {
+        RayEnds ends = source_ends(source, receiver);
+        if (!isnan(ray.source_ground_m)) ends.source_ground_m = ray.source_ground_m;
+        RayStream s;
+        status = ray_transfer(square.ground, square.obstacles, ray.px, ray.py, receiver.x, receiver.y,
+                              receiver.own_footprint, ray.obstacles_on_ray != 0u, ends, s, &transfer);
+    }
     if (status) {
         atomicOr(&failed[pair], status);
         return;
     }
+    float lat, lon;
+    frame_degrees(square, receiver.x, receiver.y, &lat, &lon);
+    float out[PAIR_SUMS];
+    float* bands = pair_bands ? &pair_bands[(u64)pair * (PERIODS * BANDS)] : 0;
+    add_ray_transfer(square.weather_nodes, lat, lon, receiver, source, ray.px, ray.py, ray.weight, transfer, out, bands);
     for (int j = 0; j < PAIR_SUMS; j++) atomicAdd(&sums[(u64)PAIR_SUMS * pair + j], out[j]);
-    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&pair_bands[(u64)pair * (PERIODS * BANDS) + j], ray_bands[j]);
 }
 
 // Per answered pair: its mixed bands added to point `point_index[i]`'s in `bands` (LAYERS x PERIODS
@@ -123,5 +131,6 @@ extern "C" __global__ void pair_bands_to_points(const SquareScene* square_ptr, c
     if (pair >= pair_count || failed[pair]) return;
     const Candidate& candidate = square.candidates[candidate_index[pair]];
     float* point_bands = bands + ((u64)point_index[pair] * LAYERS + candidate.layer) * (PERIODS * BANDS);
-    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&point_bands[j], band_weight[pair] * pair_bands[(u64)pair * (PERIODS * BANDS) + j]);
+    float w = band_weight ? band_weight[pair] : 1.0f;
+    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&point_bands[j], w * pair_bands[(u64)pair * (PERIODS * BANDS) + j]);
 }

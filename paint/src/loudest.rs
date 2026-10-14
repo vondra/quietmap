@@ -8,14 +8,15 @@
 //! thousand.
 
 use crate::exact::Point;
+use crate::flight_boxes::{HorizonsSlot, lazy_horizons};
 use crate::flights::tiles_heard;
-use crate::square::Square;
+use crate::square::{Square, gap_to_tile};
 use physics::doc29::atmosphere::receiver_impedance_db;
+use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{
     AIRCRAFT_REACH_M, AircraftReceiver, ReceiverArea, box_lamax_bound, box_lamax_bound_over,
 };
 use popup::aircraft::flights::FlightTotals;
-use popup::aircraft::horizons::Horizons;
 use popup::aircraft::{loudest_first, read_loudest_in_order};
 use rayon::prelude::*;
 use std::cmp::Ordering;
@@ -52,12 +53,39 @@ impl LoudestIndex {
             .max(receiver_impedance_db(area.altitudes_m[1]));
         let lists = (square.aircraft.par_iter())
             .map(|tile| {
-                [tile.fine.as_ref(), tile.far.as_ref()].map(|boxes| {
+                let gaps = [(0, 0), (0, 1), (1, 0), (1, 1)].map(|(east, north)| {
+                    gap_to_tile(
+                        &square.frame,
+                        tile.tile,
+                        [
+                            [area.low[0], area.high[0]][east],
+                            [area.low[1], area.high[1]][north],
+                        ],
+                    )
+                });
+                let uses_fine =
+                    tile.fine.is_some() && gaps.iter().any(|&gap| gap <= FINE_BOXES_WITHIN_M);
+                let uses_far =
+                    tile.fine.is_none() || gaps.iter().any(|&gap| gap > FINE_BOXES_WITHIN_M);
+                [
+                    uses_fine.then_some(tile.fine.as_ref()).flatten(),
+                    uses_far.then_some(tile.far.as_ref()).flatten(),
+                ]
+                .map(|boxes| {
                     let Some(boxes) = boxes else {
                         return Vec::new();
                     };
                     let mut list: Vec<(f64, u32)> = (0..boxes.box_count())
                         .filter_map(|index| {
+                            let global = tile.tile.global(boxes.box_centroid(index));
+                            let [cx, cy] = square
+                                .frame
+                                .metres_of_steps([global.x as f64, global.y as f64]);
+                            let dx = (area.low[0] - cx).max(cx - area.high[0]).max(0.0);
+                            let dy = (area.low[1] - cy).max(cy - area.high[1]).max(0.0);
+                            if dx.hypot(dy) > AIRCRAFT_REACH_M + 1e-6 {
+                                return None;
+                            }
                             let bound = box_lamax_bound_over(
                                 boxes,
                                 (tile.tile, index),
@@ -83,6 +111,7 @@ impl LoudestIndex {
         &self,
         square: &Square,
         point: &Point,
+        cached_horizons: Option<&HorizonsSlot>,
         flights: &mut FlightTotals,
     ) -> Result<(), String> {
         let receiver = AircraftReceiver {
@@ -122,19 +151,26 @@ impl LoudestIndex {
                 }
             }
         });
-        let horizons = Horizons::build(
-            &square.ground,
-            &square.obstacles,
-            point.position,
-            point.altitude_m,
-            point.own_footprint,
-        )?;
-        read_loudest_in_order(
-            ordered,
-            &tiles,
-            (&square.frame, receiver, &horizons),
-            flights,
-        );
+        let local_lock = HorizonsSlot::new();
+        let slot = cached_horizons.unwrap_or(&local_lock);
+        if let Some(full) = slot.full.get() {
+            let horizons = full.as_ref().map_err(Clone::clone)?;
+            read_loudest_in_order(
+                ordered,
+                &tiles,
+                (&square.frame, receiver, horizons),
+                flights,
+            );
+        } else {
+            let horizons = lazy_horizons(square, point, slot);
+            read_loudest_in_order(
+                ordered,
+                &tiles,
+                (&square.frame, receiver, &horizons),
+                flights,
+            );
+            horizons.check_error()?;
+        }
         Ok(())
     }
 }

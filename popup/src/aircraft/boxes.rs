@@ -171,16 +171,14 @@ fn centroid_offset_m(
     [at[0] - receiver.position[0], at[1] - receiver.position[1]]
 }
 
-fn box_at(
+fn box_at_offset(
     record: &AircraftBox,
-    tile: TileId,
-    frame: &LocalFrame,
+    [east_m, north_m]: [f64; 2],
+    distance_m: f64,
     receiver: AircraftReceiver,
     horizons: &impl ReceiverHorizons,
     (impedance_gain, heard): (f64, &dyn Fn(f64) -> bool),
 ) -> Option<(f64, [f64; PERIODS], BoxSel)> {
-    let [east_m, north_m] = centroid_offset_m(record.centroid, tile, frame, receiver);
-    let distance_m = east_m.hypot(north_m);
     if !heard(distance_m) {
         return None;
     }
@@ -211,6 +209,26 @@ fn box_at(
     Some((distance_m, energy, sel))
 }
 
+fn box_at(
+    record: &AircraftBox,
+    tile: TileId,
+    frame: &LocalFrame,
+    receiver: AircraftReceiver,
+    horizons: &impl ReceiverHorizons,
+    (impedance_gain, heard): (f64, &dyn Fn(f64) -> bool),
+) -> Option<(f64, [f64; PERIODS], BoxSel)> {
+    let [east_m, north_m] = centroid_offset_m(record.centroid, tile, frame, receiver);
+    let distance_m = east_m.hypot(north_m);
+    box_at_offset(
+        record,
+        [east_m, north_m],
+        distance_m,
+        receiver,
+        horizons,
+        (impedance_gain, heard),
+    )
+}
+
 /// A box's flights' Kurze lambda per period: the period's flights a day over its hours, times its
 /// closest slant over the flights' speed.
 fn box_lambda(record: &AircraftBox, sel: &BoxSel) -> [f64; PERIODS] {
@@ -218,6 +236,53 @@ fn box_lambda(record: &AircraftBox, sel: &BoxSel) -> [f64; PERIODS] {
         let flights = f64::from(record.flights[period]) / 365.25;
         flights / (PERIOD_HOURS[period] * 3_600.0) * sel.closest_slant_m / FLIGHT_SPEED_M_S
     })
+}
+
+/// Selected pre-decoded boxes of one tile within the aircraft reach: energy and energy times lambda per period.
+pub fn decoded_flight_sums<'a>(
+    boxes: impl Iterator<Item = &'a ([f64; 2], AircraftBox)>,
+    receiver: AircraftReceiver,
+    horizons: &impl ReceiverHorizons,
+    (weight, reach_m): (&dyn Fn(f64) -> f64, f64),
+) -> ([f64; PERIODS], [f64; PERIODS]) {
+    let heard = |distance_m: f64| distance_m <= reach_m.min(AIRCRAFT_REACH_M);
+    let ends = (
+        energy(receiver_impedance_db(receiver.altitude_m)),
+        &heard as &dyn Fn(f64) -> bool,
+    );
+    boxes
+        .filter_map(|&(at, ref record)| {
+            let [east_m, north_m] = [at[0] - receiver.position[0], at[1] - receiver.position[1]];
+            let distance = east_m.hypot(north_m);
+            let share = if heard(distance) {
+                weight(distance)
+            } else {
+                0.0
+            };
+            if share <= 0.0 {
+                return None;
+            }
+            let (_, energy, sel) = box_at_offset(
+                record,
+                [east_m, north_m],
+                distance,
+                receiver,
+                horizons,
+                ends,
+            )?;
+            let lambda = box_lambda(record, &sel);
+            let heard: [f64; PERIODS] = std::array::from_fn(|p| share * energy[p] * lambda[p]);
+            Some((energy.map(|value| share * value), heard))
+        })
+        .fold(
+            ([0.0; PERIODS], [0.0; PERIODS]),
+            |(energy, lambda), (e, l)| {
+                (
+                    std::array::from_fn(|p| energy[p] + e[p]),
+                    std::array::from_fn(|p| lambda[p] + l[p]),
+                )
+            },
+        )
 }
 
 /// Selected boxes of one tile within the aircraft reach: energy and energy times lambda per period.

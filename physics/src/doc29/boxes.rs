@@ -220,7 +220,15 @@ fn average_piece_sel(
     let scaled_distance_m = scaled_distance_at(aircraft_box.lg_scaled_distance, &position);
     let along_m = closest.along * closest.length_m;
     let stretch = aircraft_box.gradient.hypot(1.0);
+    let silent: [bool; PERIODS] = std::array::from_fn(|period| {
+        aircraft_box.levels_db[period]
+            .iter()
+            .all(|level| *level == f64::NEG_INFINITY)
+    });
     let finite: [f64; PERIODS] = std::array::from_fn(|period| {
+        if silent[period] {
+            return 0.0;
+        }
         let length_m = (aircraft_box.piece_length_m[period] * stretch).max(1.0);
         finite_segment_energy_fraction(
             along_m + 0.5 * (length_m - closest.length_m),
@@ -238,8 +246,11 @@ fn average_piece_sel(
         installations.map(|installation| installation_energy_gain(installation, height_m, slant_m));
     let [near, far] = INSTALLATION_SHARE_SLANTS_M;
     let fraction = ((slant_m / near).log10() / (far / near).log10()).clamp(0.0, 1.0);
-    let mixes = aircraft_box.installation_shares.map(|shares| {
-        let shares = shares_at(shares, fraction);
+    let mixes: [(f64, [f64; 3]); PERIODS] = std::array::from_fn(|period| {
+        if silent[period] {
+            return (1.0, [0.0; 3]);
+        }
+        let shares = shares_at(aircraft_box.installation_shares[period], fraction);
         let parts: [f64; 3] = std::array::from_fn(|k| shares[k] * corrections[k]);
         let installation_energy: f64 = parts.iter().sum();
         if installation_energy > 0.0 {
@@ -268,10 +279,7 @@ fn average_piece_sel(
             - lateral_attenuation,
     );
     let sel_energy: [f64; PERIODS] = std::array::from_fn(|period| {
-        if aircraft_box.levels_db[period]
-            .iter()
-            .all(|level| *level == f64::NEG_INFINITY)
-        {
+        if silent[period] {
             return 0.0;
         }
         energy(box_level_db(
