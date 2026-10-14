@@ -4,7 +4,7 @@ use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
 use crate::hum::HumPointSound;
 use crate::paint::PASS_PAIRS;
 use crate::square::Square;
-use physics::bands::PERIODS;
+use physics::bands::{PERIODS, lden_energy};
 use popup::candidates::{GROUND_REACH_M, loud};
 use popup::sampling::{BoundSample, SampleRound};
 use popup::selection::OMITTED_ENERGY_FRACTION;
@@ -40,16 +40,20 @@ pub(crate) fn sampled_hum(
             let mut pending: [Vec<(u32, f64)>; LAYERS] = std::array::from_fn(|_| Vec::new());
             let mut bounds = [[0.0; PERIODS]; LAYERS];
             for index in near {
-                let mut candidate = square.candidates[index as usize].clone();
-                if candidate.bound_at(
-                    point.position,
+                let candidate = &square.candidates[index as usize];
+                let distance_m = candidate.distance_from(point.position);
+                if distance_m > GROUND_REACH_M {
+                    continue;
+                }
+                let bound = candidate.bound_at_distance(
+                    distance_m,
                     &square.attributes[candidate.attribute],
                     &point.bound,
-                ) && !loud(&candidate.bound)
-                {
+                );
+                if !loud(&bound) {
                     let layer = candidate.layer as usize;
-                    pending[layer].push((index, candidate.order));
-                    for (sum, value) in bounds[layer].iter_mut().zip(candidate.bound) {
+                    pending[layer].push((index, lden_energy(&bound)));
+                    for (sum, value) in bounds[layer].iter_mut().zip(bound) {
                         *sum += value;
                     }
                 }
