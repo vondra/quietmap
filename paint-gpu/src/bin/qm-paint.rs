@@ -17,6 +17,7 @@ use paint_gpu::square_writer::{PaintedSquareCells, write_beside_painting};
 use physics::weather::WeatherTable;
 use popup::release::Release;
 use std::path::PathBuf;
+use std::sync::mpsc::sync_channel;
 use std::time::Instant;
 use tiles::geo::{Mercator, TileId};
 
@@ -133,39 +134,49 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let prepare = |&(number, tile): &(usize, TileId)| {
         prepare_square(&release, &weather, gpu.as_ref(), grid, number, tile)
     };
-    let prepare_beside =
-        |following: &(usize, TileId)| preparing_pool.install(|| prepare(following));
-    // While the card paints one square's pixels, the cores read the next and take its corners,
-    // unless the square on the card is heavy: two of those do not fit in memory.
+    let preparing_pool = &preparing_pool;
+    // Three stages, a thread each: the preparer reads the next square, uploads it and takes its
+    // corners (on its own cores) while this thread paints a square's pixels (the card) and the
+    // writer encodes and publishes the squares before. The preparer hands its square over when
+    // the card is free; preparing two ahead slowed Dobris's busiest squares by 3 % (2026-10-14).
+    // A heavy square paints alone: two of those do not fit in memory.
     write_beside_painting(&out, zoom, |sender| {
-        let finish = |prepared: Prepared| {
-            let cells = finish_square(&weather, gpu.as_ref(), grid, squares.len(), prepared)?;
-            sender
-                .send(cells)
-                .map_err(|_| "a square's writer stopped".to_string())
-        };
-        let mut next = todo.first().map(prepare).transpose()?;
-        for k in 0..todo.len() {
-            let current = next.take().ok_or("a square not prepared")?;
-            match todo.get(k + 1) {
-                Some(following) if current.candidates <= PIPELINE_CANDIDATES_MAX => {
-                    let (finished, prepared) = std::thread::scope(|scope| {
-                        let preparing = scope.spawn(|| prepare_beside(following));
-                        let finished = finish(current);
-                        let prepared = (preparing.join())
-                            .unwrap_or_else(|_| Err("a square's preparation panicked".into()));
-                        (finished, prepared)
-                    });
-                    finished?;
-                    next = Some(prepared?);
+        std::thread::scope(|scope| {
+            let (prepared_sender, prepared_receiver) = sync_channel(0);
+            let (heavy_done, heavy_painted) = sync_channel::<()>(0);
+            scope.spawn(move || {
+                // The first square and the one after a heavy square wait for no card: every core.
+                let mut card_idle = true;
+                for square in &todo {
+                    let prepared = match card_idle {
+                        true => prepare(square),
+                        false => preparing_pool.install(|| prepare(square)),
+                    };
+                    let heavy = prepared
+                        .as_ref()
+                        .is_ok_and(|prepared| prepared.candidates > PIPELINE_CANDIDATES_MAX);
+                    if prepared_sender.send(prepared).is_err()
+                        || (heavy && heavy_painted.recv().is_err())
+                    {
+                        return;
+                    }
+                    card_idle = heavy;
                 }
-                following => {
-                    finish(current)?;
-                    next = following.map(prepare).transpose()?;
+            });
+            for prepared in prepared_receiver {
+                let prepared: Prepared = prepared?;
+                let heavy = prepared.candidates > PIPELINE_CANDIDATES_MAX;
+                let cells = finish_square(&weather, gpu.as_ref(), grid, squares.len(), prepared)?;
+                if heavy {
+                    // The preparer waits on it; it may have stopped on an error of its own.
+                    let _ = heavy_done.send(());
                 }
+                sender
+                    .send(cells)
+                    .map_err(|_| "a square's writer stopped".to_string())?;
             }
-        }
-        Ok(())
+            Ok(())
+        })
     })
 }
 

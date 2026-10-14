@@ -8,6 +8,11 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 use std::time::Instant;
 use tiles::geo::TileId;
 
+/// Painted squares that may wait for the writer: the painter goes on while a square's encoding
+/// outlasts the next one's pixels (a square's cells, 7 MB at zoom 13). Light squares 3-7 % faster
+/// than with a rendezvous, the others the same (msas2, 2026-10-14).
+const SQUARES_WAITING: usize = 2;
+
 pub struct PaintedSquareCells {
     pub cells: Cells,
     pub tile: TileId,
@@ -38,15 +43,16 @@ impl PaintedSquareCells {
     }
 }
 
-/// One writer, as in dev1's surface runner; a rendezvous bounds residency to its square and
-/// the painter's next cells. Completion is reported only after the atomic bundle is durable.
+/// One writer, as in dev1's surface runner; its queue of [`SQUARES_WAITING`] bounds residency to
+/// its square, the waiting ones and the painter's next cells. Completion is reported only after
+/// the atomic bundle is durable.
 pub fn write_beside_painting(
     out: &Path,
     zoom: u32,
     paint: impl FnOnce(&SyncSender<PaintedSquareCells>) -> Result<(), String>,
 ) -> Result<(), String> {
     std::thread::scope(|scope| {
-        let (sender, receiver) = sync_channel::<PaintedSquareCells>(0);
+        let (sender, receiver) = sync_channel::<PaintedSquareCells>(SQUARES_WAITING);
         let writing = scope.spawn(move || -> Result<(), String> {
             for square in receiver {
                 square.write(out, zoom)?;
