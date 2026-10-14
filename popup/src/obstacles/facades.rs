@@ -17,7 +17,7 @@ const FACADE_RECEIVER_MAXIMUM_SPACING_M: f64 = 5.0;
 /// 2.8 case 1 (b): a remaining segment longer than this carries one receiver (m).
 const FACADE_SEGMENT_OWN_RECEIVER_MINIMUM_M: f64 = 2.5;
 /// 2.8: "0.1 m in front of the façade" (m).
-const FACADE_RECEIVER_OFFSET_M: f64 = 0.1;
+pub const FACADE_RECEIVER_OFFSET_M: f64 = 0.1;
 
 /// One façade receiver in click metres.
 #[derive(Clone, Copy, Debug, PartialEq)]

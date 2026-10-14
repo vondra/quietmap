@@ -218,3 +218,18 @@ fn an_open_rectangle_excludes_enclosing_footprints_and_nearby_reflectors() {
         });
     }
 }
+
+#[test]
+fn screening_edge_rectangles_keep_walls_and_require_an_outdoor_sample() {
+    for (lat, lon) in [(LAT, LON), (10.0, 179.998)] {
+        let mut stock = Stock::at(lat, lon);
+        stock.building(7, 15.0, &[square(0.0, 0.0, 10.0)]);
+        stock.with_scene(|scene| {
+            assert!(!scene.has_no_screening_edges([8.0, -2.0], [12.0, 2.0]));
+            assert!(scene.has_no_screening_edges([20.0, -2.0], [24.0, 2.0]));
+            assert!(scene.has_no_screening_edges([-1.0; 2], [1.0; 2]));
+            assert_eq!(scene.enclosing_building_id([0.0; 2]).unwrap(), Some(7));
+            assert!(!scene.has_no_screening_edges([0.0, 100_000.0], [1.0, 100_001.0]));
+        });
+    }
+}
