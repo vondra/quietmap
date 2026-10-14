@@ -1,19 +1,17 @@
 //! Background blocks and checked sub-block fields expanded from shared loudness and exact pixel probes.
 //!
 //! The obstacle proof precedes pixel receivers, as dev1's quiet-region shortcut precedes rasters.
-//! Background blocks reuse the existing corner blend. Source blocks check actual pixel receivers
-//! against sampled loudness; only patches away from sources and walls that agree omit work.
+//! Background blocks reuse the existing corner blend, loudness only. Source blocks check actual
+//! pixel receivers against sampled loudness; only patches away from sources and walls that agree
+//! omit work.
 //! Candidate source lists live in bounded chunks, while the retained lattice holds only sound.
 
 use crate::exact::LAYERS;
-use crate::flights::blend_flights;
 use crate::paint::{Cells, Painted, cells_of, corner_weights, rectangle_at};
 use crate::points::PointPainter;
 use crate::quiet_corners::loudness_at_corners;
 use crate::quiet_samples::{QuietSamples, sample_block_pixels};
-use physics::bands::lden_energy;
 use rayon::prelude::*;
-use tiles::sources::Layer;
 
 pub(crate) struct QuietBlocks {
     pub blocks: Vec<bool>,
@@ -105,12 +103,14 @@ impl QuietBlocks {
                 .is_some_and(|samples| samples.has_paint(x % grid.block, y % grid.block))
     }
 
-    pub fn at(&self, painter: &PointPainter, at: usize) -> Painted {
-        let (grid, corners) = (painter.grid, &painter.corners);
+    /// A pixel's loudness where it `has_paint`: its block's samples, else the background corners'
+    /// blend, without the energies a façade ranks by (the open proof keeps façades out of it).
+    pub fn loudness_at(&self, painter: &PointPainter, at: usize) -> [f64; LAYERS + 1] {
+        let grid = painter.grid;
         let (x, y) = (at % grid.pixels, at / grid.pixels);
         let block = (y / grid.block) * (grid.pixels / grid.block) + x / grid.block;
         if let Some(samples) = &self.samples[block] {
-            return samples.known_at(x % grid.block, y % grid.block).unwrap();
+            return samples.known_at(x % grid.block, y % grid.block).unwrap().1;
         }
         let side = grid.pixels / grid.block + 1;
         let first = (y / grid.block) * side + x / grid.block;
@@ -118,31 +118,30 @@ impl QuietBlocks {
         let fx = ((x % grid.block) as f64 + 0.5) / grid.block as f64;
         let fy = ((y % grid.block) as f64 + 0.5) / grid.block as f64;
         let weights = corner_weights(fx, fy);
-        let ndens = std::array::from_fn(|layer| {
+        std::array::from_fn(|layer| {
             (0..4)
                 .map(|corner| weights[corner] * self.loudness[around[corner]][layer])
                 .sum()
-        });
-        let mut energies = corners
-            .hum
-            .energies_at(x, y)
-            .map(|energy| lden_energy(&energy));
-        energies[Layer::Aircraft as usize] +=
-            lden_energy(&blend_flights(around.map(|corner| corners.flights[corner]), fx, fy)[0]);
-        (energies, ndens)
+        })
     }
 
     pub fn cells(&self, painter: &PointPainter) -> Cells {
         (0..painter.grid.pixels * painter.grid.pixels)
             .into_par_iter()
-            .map(|at| cells_of(&self.at(painter, at).1))
+            .map(|at| cells_of(&self.loudness_at(painter, at)))
             .collect()
     }
 
+    /// The sampled blocks' pixels with their energies, which a façade in front of one ranks by.
     pub fn fill(&self, painter: &PointPainter, pixels: &mut [Option<Painted>]) {
+        let grid = painter.grid;
         pixels.par_iter_mut().enumerate().for_each(|(at, pixel)| {
-            if self.has_paint(painter, at) {
-                *pixel = Some(self.at(painter, at));
+            let (x, y) = (at % grid.pixels, at / grid.pixels);
+            let block = (y / grid.block) * (grid.pixels / grid.block) + x / grid.block;
+            if let Some(paint) = (self.samples[block].as_ref())
+                .and_then(|samples| samples.known_at(x % grid.block, y % grid.block))
+            {
+                *pixel = Some(paint);
             }
         });
     }
