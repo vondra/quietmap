@@ -226,14 +226,28 @@ fn sample_positions(b: usize) -> ([usize; 5], Vec<(usize, usize)>) {
     (axis, positions)
 }
 
-/// One half-phon cell step in every layer and total; silence is already quantized.
+/// A layer quieter than this at the probe and in the blend needs only [`QUIET_LAYER_SONE`] there
+/// (sone): the map shows it clear under 1 sone and the etalon scores a layer from 1 sone, while the
+/// total keeps the half phon. In Dobris such layers alone rejected a sixth of the probed patches of
+/// its busiest square, 2207/1394 (2026-10-14).
+const QUIET_LAYER_UNDER_SONE: f64 = 0.5;
+/// How far a quiet layer may differ from its blend (sone): what the map's hover reads stays within
+/// a tenth of a sone, never a quiet place's silence read as a few tenths.
+const QUIET_LAYER_SONE: f64 = 0.1;
+
+/// One half-phon cell step in the total and in every layer not quieter than
+/// [`QUIET_LAYER_UNDER_SONE`], a tenth of a sone in the quieter; silence is already quantized.
 fn agrees_with_interpolation(heard: &[f64; LAYERS + 1], blended: &[f64; LAYERS + 1]) -> bool {
-    heard.iter().zip(blended).all(|(&heard, &blended)| {
+    (0..=LAYERS).all(|layer| {
+        let (heard, blended) = (heard[layer], blended[layer]);
         if !heard.is_finite() || !blended.is_finite() || heard < 0.0 || blended < 0.0 {
             return false;
         }
         if cell(heard) == SILENCE && cell(blended) == SILENCE {
             return true;
+        }
+        if layer < LAYERS && heard.max(blended) < QUIET_LAYER_UNDER_SONE {
+            return (heard - blended).abs() <= QUIET_LAYER_SONE;
         }
         heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log2()).abs() <= 0.5
     })

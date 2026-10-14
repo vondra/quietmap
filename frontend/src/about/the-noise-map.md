@@ -42,7 +42,8 @@ upper bound there reaches 20 dB.
 An open block hearing only the hum and flights takes its loudness from shared corners, without
 constructing a receiver at every pixel. Other blocks use a 5 × 5 grid of actual pixel receivers,
 with one further pixel probe for each of its sixteen patches. A patch interpolates energy
-and loudness only when its probe agrees within half a phon in every layer and total, and no
+and loudness only when its probe agrees within half a phon in the total and in every layer of
+half a sone or more (a tenth of a sone in a quieter layer, which the map shows clear), and no
 source or screening edge crosses it or the margin protecting the pixels used to rank façades.
 The other pixels keep their ray computations; exact lattice and probe results are reused.
 Between samples, a shadow cast from outside the patch can still change sharply.

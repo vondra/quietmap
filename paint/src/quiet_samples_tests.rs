@@ -90,3 +90,19 @@ fn a_probe_checks_each_layer_and_rejects_undefined_loudness() {
         &[0.0; LAYERS + 1]
     ));
 }
+
+#[test]
+fn a_layer_under_half_a_sone_agrees_within_a_tenth_of_a_sone_but_the_total_by_half_a_phon() {
+    let mut heard = [1.0; LAYERS + 1];
+    heard[1] = 0.3;
+    let mut blended = heard;
+    blended[1] = 0.38;
+    assert!(agrees_with_interpolation(&heard, &blended));
+    blended[1] = 0.45;
+    assert!(!agrees_with_interpolation(&heard, &blended));
+    blended[1] = 0.6;
+    assert!(!agrees_with_interpolation(&heard, &blended));
+    let (quiet_total, mut blended_total) = ([0.3; LAYERS + 1], [0.3; LAYERS + 1]);
+    blended_total[LAYERS] = 0.45;
+    assert!(!agrees_with_interpolation(&quiet_total, &blended_total));
+}
