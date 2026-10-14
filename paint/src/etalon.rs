@@ -11,7 +11,7 @@ use crate::flight_spectra::FlightSpectra;
 use crate::flights::aircraft_sums;
 use crate::hum::Hum;
 use crate::paint::{Cells, Grid, NO_LEVEL, Painted, cells_of};
-use crate::sone::{Displays, PixelSound, Rest, pixel_ndens, pixel_sound};
+use crate::sone::{Displays, PixelSound, PixelSoundScratch, Rest, pixel_ndens, pixel_sound};
 use crate::square::Square;
 use physics::bands::lden_energy;
 use popup::evaluate::Scratch;
@@ -217,6 +217,7 @@ pub fn sounds_at(
             pixel_sound(
                 square,
                 &displays,
+                &mut PixelSoundScratch::default(),
                 (point.position, point.reflection()),
                 (&loud, &energies, &bands),
                 (&rest, &flight_spectra.at(at % n, at / n)),

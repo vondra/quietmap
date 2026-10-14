@@ -108,7 +108,10 @@ for 99 % of them and 0.03 dB for 99.9 %.
 `paint/` is the method and `paint-gpu/` (`qm-paint`) runs it, a square of zoom 12 at a time: its
 files read once to the reach of its farthest pixel, the exact pairs on the first CUDA card
 (`paint-gpu/kernels/`, the popup's physics in single precision, each function citing its Rust) or on
-the cores. Each file's header says what it does; the blocks are `paint/src/blocks.rs`, their quiet
+the cores. Four passes share the card. The cores assemble sounds directly into chunks of at most
+8,192 pixels, preparing the next chunk while the card computes the current chunk's loudness.
+The passes return in spatial order, so equal façade energies keep the same first candidate.
+Each file's header says what it does; the blocks are `paint/src/blocks.rs`, their quiet
 interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, the aircraft spectra
 `paint/src/flight_spectra.rs`, a
 building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
