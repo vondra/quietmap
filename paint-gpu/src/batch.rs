@@ -5,13 +5,17 @@
 //! take (a buffer too small, a tile it would refuse) is evaluated on the CPU.
 //! Sampled quiet pairs carry importance weights for their bands; their energies stay unweighted.
 
+use crate::aircraft::DeviceFlightBoxes;
 use crate::device::{DeviceSquare, Gpu};
 use crate::loudness::LOUDNESS_FLOATS;
 use paint::exact::{Batch, Evaluated, LAYERS, Pair, PairEnergy, Point, add_bands, whole_energy};
+use paint::flight_boxes::{FlightBoxes, FlightRequest};
+use paint::flights::FlightSums;
 use paint::square::Square;
 use physics::bands::{BANDS, PERIODS};
 use popup::evaluate::Scratch;
 use rayon::prelude::*;
+use std::sync::OnceLock;
 
 /// Pairs one launch takes: 172 bytes per pair, 24 per ray and 576 per reached point.
 const PAIRS_PER_LAUNCH: usize = 2_000_000;
@@ -20,6 +24,19 @@ pub struct GpuBatch<'a> {
     pub gpu: &'a Gpu,
     pub device_square: &'a DeviceSquare,
     pub square: &'a Square<'a>,
+    /// The square's aircraft boxes, uploaded at the first flights asked.
+    flight_boxes: OnceLock<DeviceFlightBoxes>,
+}
+
+impl<'a> GpuBatch<'a> {
+    pub fn new(gpu: &'a Gpu, device_square: &'a DeviceSquare, square: &'a Square<'a>) -> Self {
+        GpuBatch {
+            gpu,
+            device_square,
+            square,
+            flight_boxes: OnceLock::new(),
+        }
+    }
 }
 
 impl Batch for GpuBatch<'_> {
@@ -125,5 +142,21 @@ impl Batch for GpuBatch<'_> {
         offsets: &[u64],
     ) -> Result<Vec<[f32; LOUDNESS_FLOATS]>, String> {
         self.gpu.pixel_loudness(input, offsets)
+    }
+
+    fn flight_sums(
+        &self,
+        square: &Square,
+        boxes: &FlightBoxes,
+        requests: &[FlightRequest],
+    ) -> Result<Vec<[FlightSums; 2]>, String> {
+        let device_boxes = match self.flight_boxes.get() {
+            Some(device_boxes) => device_boxes,
+            None => {
+                let uploaded = DeviceFlightBoxes::upload(self.gpu, square, boxes)?;
+                self.flight_boxes.get_or_init(|| uploaded)
+            }
+        };
+        self.gpu.flight_sums(square, boxes, device_boxes, requests)
     }
 }

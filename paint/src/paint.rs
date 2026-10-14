@@ -158,7 +158,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
 }
 
 /// The square's point at pixel coordinates (x, y), in the square's frame.
-pub(crate) fn metres_at(square: &Square, n: usize, x: f64, y: f64) -> [f64; 2] {
+pub fn metres_at(square: &Square, n: usize, x: f64, y: f64) -> [f64; 2] {
     square.frame.to_metres(Mercator {
         x: f64::from(square.tile.x) + x / n as f64,
         y: f64::from(square.tile.y) + y / n as f64,
@@ -233,7 +233,7 @@ pub fn corners_of(
     let ((flights, flight_spectra), hum) = rayon::join(
         || {
             rayon::join(
-                || flights_at_corners(square, grid, &metres, &corner_points),
+                || flights_at_corners(square, grid, &corner_points, batch),
                 || FlightSpectra::new(square, n, 2 * grid.block),
             )
         },

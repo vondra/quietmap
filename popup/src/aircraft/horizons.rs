@@ -11,12 +11,20 @@ use std::f64::consts::TAU;
 
 /// Terrain: 32 sectors of 11.25 deg; per sector the steepest edge within each of six range
 /// bands, sampled at 48 points from 30 m to 8 km, growing geometrically (dev4).
-const TERRAIN_SECTORS: usize = 32;
+pub const TERRAIN_SECTORS: usize = 32;
 const TERRAIN_BAND_LIMITS_M: [f64; 6] = [500.0, 1_000.0, 2_000.0, 3_500.0, 5_500.0, 8_000.0];
 const TERRAIN_SAMPLES: usize = 48;
 const TERRAIN_FIRST_SAMPLE_M: f64 = 30.0;
 /// Buildings: 256 sectors of 1.41 deg; bands doubling from 16 m to 512 m (dev4).
-const BUILDING_SECTORS: usize = 256;
+pub const BUILDING_SECTORS: usize = 256;
+/// Range bands of each sector, terrain and buildings alike.
+pub const HORIZON_BANDS: usize = 6;
+/// Floats of the terrain horizon in [`Horizons::write_f32`]: the steepest tangent of all, then per
+/// sector its steepest and each band's edge as range and tangent (NaN for an empty band).
+pub const TERRAIN_HORIZON_FLOATS: usize = 1 + TERRAIN_SECTORS * (1 + 2 * HORIZON_BANDS);
+/// Floats of both horizons in [`Horizons::write_f32`]: the terrain's, then the buildings' alike.
+pub const HORIZON_FLOATS: usize =
+    TERRAIN_HORIZON_FLOATS + 1 + BUILDING_SECTORS * (1 + 2 * HORIZON_BANDS);
 const BUILDING_BAND_LIMITS_M: [f64; 6] = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0];
 /// A crossing at the receiver itself is its footprint's boundary, not an edge (dev4).
 const BUILDING_NEAREST_EDGE_M: f64 = 0.01;
@@ -38,6 +46,20 @@ struct SectorEdges<const BANDS: usize> {
 }
 
 impl<const BANDS: usize> SectorEdges<BANDS> {
+    /// The steepest tangent of all, then per sector its steepest and its bands' edges as range and
+    /// tangent (NaN for an empty band), in single precision.
+    fn write_f32(&self, out: &mut Vec<f32>) {
+        out.push(self.steepest_of_all as f32);
+        for (edges, steepest) in self.sectors.iter().zip(&self.steepest) {
+            out.push(*steepest as f32);
+            for edge in edges {
+                out.extend(edge.map_or([f32::NAN; 2], |edge| {
+                    [edge.range_m as f32, edge.tangent as f32]
+                }));
+            }
+        }
+    }
+
     fn new(sectors: usize) -> Self {
         SectorEdges {
             sectors: vec![[None; BANDS]; sectors],
@@ -102,8 +124,8 @@ fn band_of(range_m: f64, limits: &[f64]) -> usize {
 
 /// Both horizons of one receiver.
 pub struct Horizons {
-    terrain: SectorEdges<6>,
-    buildings: SectorEdges<6>,
+    terrain: SectorEdges<HORIZON_BANDS>,
+    buildings: SectorEdges<HORIZON_BANDS>,
 }
 
 impl Horizons {
@@ -167,6 +189,15 @@ impl Horizons {
             }
         }
         Ok(Horizons { terrain, buildings })
+    }
+}
+
+impl Horizons {
+    /// Both horizons as [`HORIZON_FLOATS`] floats for the painter's card: the terrain's, then the
+    /// buildings'.
+    pub fn write_f32(&self, out: &mut Vec<f32>) {
+        self.terrain.write_f32(out);
+        self.buildings.write_f32(out);
     }
 }
 

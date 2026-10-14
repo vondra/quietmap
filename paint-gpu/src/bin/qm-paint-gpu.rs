@@ -22,6 +22,11 @@
 //! 500) against the cores' (`PixelSound::ndens`): the differences in phon per layer and in total,
 //! the worst, and both times.
 //!
+//! `qm-paint-gpu check-flights ... --square X,Y [--device D]`: the card's aircraft sums at the
+//! square's hum lattice (far and distant boxes) and every second block corner (near boxes),
+//! `paint_gpu::aircraft`, against the cores' (`paint::flight_boxes::FlightBoxes::sums`): the
+//! differences in dB per band, kind and period, the worst, and both times.
+//!
 //! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a painted map against
 //! a reference (an etalon, or the popup's sparse answers) cell by cell where the reference assesses
 //! one, per layer and the total by the owner's z13 contract in loudness level (rungs over 0.5, 1, 3
@@ -61,9 +66,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let command = arguments.first().map(String::as_str);
     if !matches!(
         command,
-        Some("check" | "check-loudness" | "popup" | "etalon" | "compare")
+        Some("check" | "check-loudness" | "check-flights" | "popup" | "etalon" | "compare")
     ) {
-        return Err("usage: qm-paint-gpu check|check-loudness|popup|etalon|compare --prepared DIR --year YYYY ... (--square X,Y; compare: --painted DIR --reference DIR --squares X,Y;...)".into());
+        return Err("usage: qm-paint-gpu check|check-loudness|check-flights|popup|etalon|compare --prepared DIR --year YYYY ... (--square X,Y; compare: --painted DIR --reference DIR --squares X,Y;...)".into());
     }
     let required = |name: &str| option(arguments, name).ok_or(format!("--{name} is required"));
     let parse = |name: &str, default: u64| -> Result<u64, String> {
@@ -108,6 +113,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let started = Instant::now();
     let files = Files::read(&release, tile)?;
     let square = Square::new(&weather, tile, &files)?;
+    if command == Some("check-flights") {
+        return check_flights(&square, &files, &weather, parse("device", 0)? as usize);
+    }
     if command == Some("check-loudness") {
         return check_loudness(
             &square,
@@ -125,11 +133,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         let started = Instant::now();
         let gpu = Gpu::new(parse("device", 0)? as usize)?;
         let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather)?;
-        let batch = paint_gpu::batch::GpuBatch {
-            gpu: &gpu,
-            device_square: &device_square,
-            square: &square,
-        };
+        let batch = paint_gpu::batch::GpuBatch::new(&gpu, &device_square, &square);
         let grid = paint::paint::Grid::at_zoom(13).ok_or("no grid at zoom 13")?;
         let cells = paint::etalon::etalon(&square, grid, Some(&batch), sample_step)?;
         paint::hm3::write(&out, 13, (tile.x, tile.y), &cells)?;
@@ -661,6 +665,97 @@ fn check_loudness(square: &Square, count: usize, seed: u64, device: usize) -> Re
         rayon::current_num_threads(),
         gpu.name,
         input.len()
+    );
+    Ok(())
+}
+
+/// The card's aircraft sums at the hum lattice and every second block corner against the cores'.
+fn check_flights(
+    square: &Square,
+    files: &Files,
+    weather: &WeatherTable,
+    device: usize,
+) -> Result<(), String> {
+    use paint::flight_boxes::{FlightBoxes, FlightRequest, FlightWeight};
+    let grid = paint::paint::Grid::at_zoom(13).ok_or("no grid at zoom 13")?;
+    let (n, side) = (grid.pixels, grid.pixels / grid.block + 1);
+    let corners: Vec<Point> = (0..side * side)
+        .into_par_iter()
+        .map(|at| {
+            let (i, j) = ((at % side) * grid.block, (at / side) * grid.block);
+            Point::at(
+                square,
+                paint::paint::metres_at(square, n, i as f64, j as f64),
+            )
+        })
+        .collect::<Result<_, String>>()?;
+    let coarse_m = square.frame.east_m_per_unit / n as f64 * grid.hum as f64;
+    let boxes = FlightBoxes::new(square, &corners, coarse_m);
+    let (ratio, coarse_side, air_side) = (grid.hum / grid.block, n / grid.hum + 1, side / 2 + 1);
+    let mut requests: Vec<FlightRequest> = (0..coarse_side * coarse_side)
+        .map(|at| {
+            let (column, row) = (at % coarse_side, at / coarse_side);
+            FlightRequest {
+                point: &corners[(row * ratio) * side + column * ratio],
+                weights: [
+                    Some(FlightWeight::Far),
+                    (column.is_multiple_of(4) && row.is_multiple_of(4))
+                        .then_some(FlightWeight::One),
+                ],
+                within_m: popup::aircraft::boxes::AIRCRAFT_REACH_M,
+            }
+        })
+        .collect();
+    requests.extend((0..air_side * air_side).map(|at| FlightRequest {
+        point: &corners[(at / air_side) * 2 * side + (at % air_side) * 2],
+        weights: [Some(FlightWeight::Near), None],
+        within_m: 3.0 * coarse_m,
+    }));
+    let started = Instant::now();
+    let cpu: Vec<_> = requests
+        .par_iter()
+        .map(|request| boxes.sums(square, request))
+        .collect::<Result<_, String>>()?;
+    let cpu_s = started.elapsed().as_secs_f64();
+    let gpu = Gpu::new(device)?;
+    let device_square = DeviceSquare::upload(&gpu, square, files, weather)?;
+    let batch = paint_gpu::batch::GpuBatch::new(&gpu, &device_square, square);
+    let started = Instant::now();
+    let card = paint::exact::Batch::flight_sums(&batch, square, &boxes, &requests)?;
+    let gpu_s = started.elapsed().as_secs_f64();
+    for (band, kind) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        let mut differences: Vec<f64> = (cpu.iter().zip(&card))
+            .flat_map(|(cpu, card)| {
+                (0..PERIODS).filter_map(move |p| {
+                    let (c, g) = (cpu[band][kind][p], card[band][kind][p]);
+                    (c > 0.0 || g > 0.0).then(|| {
+                        if c > 0.0 && g > 0.0 {
+                            (10.0 * (g / c).log10()).abs()
+                        } else {
+                            f64::INFINITY
+                        }
+                    })
+                })
+            })
+            .collect();
+        if differences.is_empty() {
+            continue;
+        }
+        differences.sort_unstable_by(f64::total_cmp);
+        let at = |q: f64| differences[((differences.len() - 1) as f64 * q) as usize];
+        println!(
+            "check-flights: band {band} {}: {} sums, |dB| median {:.7}, 99 % {:.6}, 99.9 % {:.6}, worst {:.6}",
+            ["energy", "energy x lambda"][kind],
+            differences.len(),
+            at(0.5),
+            at(0.99),
+            at(0.999),
+            differences[differences.len() - 1]
+        );
+    }
+    println!(
+        "check-flights: {} requests, cores {cpu_s:.2} s, card {gpu_s:.2} s",
+        requests.len()
     );
     Ok(())
 }

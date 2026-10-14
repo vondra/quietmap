@@ -290,6 +290,22 @@ impl Gpu {
         )
         .map_err(|error| format!("nvrtc (loudness): {error}"))?;
         driver(device.load_ptx(ptx, "loudness", &["pixel_mixtures", "pixel_ndens"]))?;
+        // The aircraft boxes' sums at the corners' lattices, with the Rust's constants.
+        let aircraft = format!(
+            "{COMMON}{}{}",
+            crate::aircraft::aircraft_constants(),
+            include_str!("../kernels/aircraft.cuh")
+        );
+        let ptx = compile_ptx_with_opts(
+            aircraft,
+            CompileOptions {
+                arch: Some(arch),
+                options: vec!["--use_fast_math".into(), "-lineinfo".into()],
+                ..Default::default()
+            },
+        )
+        .map_err(|error| format!("nvrtc (aircraft): {error}"))?;
+        driver(device.load_ptx(ptx, "aircraft", &["flight_sums", "flight_struct_sizes"]))?;
         let sizes = driver(device.alloc_zeros::<u64>(HOST_STRUCT_SIZES.len()))?;
         let function = device
             .get_func("paint", "struct_sizes")
@@ -304,6 +320,23 @@ impl Gpu {
         {
             return Err(format!(
                 "struct layouts differ: device {device_sizes:?}, host {HOST_STRUCT_SIZES:?}"
+            ));
+        }
+        let sizes = driver(device.alloc_zeros::<u64>(3))?;
+        let function = device
+            .get_func("aircraft", "flight_struct_sizes")
+            .ok_or("kernel flight_struct_sizes missing")?;
+        // SAFETY: the kernel writes one u64 per struct into `sizes`.
+        driver(unsafe { function.launch(ONE_THREAD, (&sizes,)) })?;
+        let device_sizes = driver(device.dtoh_sync_copy(&sizes))?;
+        let host_sizes = crate::aircraft::FLIGHT_STRUCT_SIZES;
+        if device_sizes
+            .iter()
+            .zip(host_sizes)
+            .any(|(&d, h)| d != h as u64)
+        {
+            return Err(format!(
+                "flight struct layouts differ: device {device_sizes:?}, host {host_sizes:?}"
             ));
         }
         let name = driver(device.name())?;

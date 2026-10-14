@@ -5,9 +5,9 @@
 //! wavelength (0.685 m): Quiet Map's approximation, ISO 9613-2 excludes aircraft in flight.
 
 /// `(C2 / lambda) C3` of ISO 9613-2 7.4 at lambda = 0.685 m: 20 / 0.685 per metre.
-const PATH_DIFFERENCE_SLOPE_PER_M: f64 = 29.2;
+pub const PATH_DIFFERENCE_SLOPE_PER_M: f64 = 29.2;
 /// 10 lg 3, removed so the loss is 0 dB at grazing: no step at the shadow boundary.
-const GRAZING_LOSS_DB: f64 = 4.771_212_547_196_624;
+pub const GRAZING_LOSS_DB: f64 = 4.771_212_547_196_624;
 /// AEDT's line-of-sight-blockage cap.
 pub const SCREENING_CAP_DB: f64 = 18.0;
 /// Sources at least this high above the ground are not screened (dev4's airborne/cruise boundary,

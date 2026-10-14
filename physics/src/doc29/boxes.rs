@@ -98,18 +98,19 @@ pub fn minimum_line_slant_m(
 }
 
 /// The average piece's length (m): the periods' lengths weighted by their energy at 1,000 ft.
-fn average_length_m(aircraft_box: &AircraftBoxAtReceiver) -> f64 {
-    let weights = aircraft_box
-        .levels_db
-        .map(|levels| energy(levels[GEOMETRY_DISTANCE]));
+pub fn average_length_m(
+    levels_db: &[[f64; NPD_DISTANCES]; PERIODS],
+    piece_length_m: &[f64; PERIODS],
+) -> f64 {
+    let weights = levels_db.map(|levels| energy(levels[GEOMETRY_DISTANCE]));
     let total: f64 = weights.iter().sum();
     if total > 0.0 {
         (0..PERIODS)
-            .map(|period| weights[period] * aircraft_box.piece_length_m[period])
+            .map(|period| weights[period] * piece_length_m[period])
             .sum::<f64>()
             / total
     } else {
-        aircraft_box.piece_length_m[0]
+        piece_length_m[0]
     }
 }
 
@@ -165,7 +166,7 @@ pub fn box_sel_at_receiver(
     aircraft_box: &AircraftBoxAtReceiver,
     horizons: &impl ReceiverHorizons,
 ) -> BoxSel {
-    let length_m = average_length_m(aircraft_box);
+    let length_m = average_length_m(aircraft_box.levels_db, &aircraft_box.piece_length_m);
     let spread = aircraft_box.gradient_spread;
     if spread <= 0.0 {
         return average_piece_sel(aircraft_box, horizons, length_m);

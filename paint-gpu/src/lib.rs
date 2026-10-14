@@ -4,11 +4,13 @@
 //! the card equal to the CPU on random pairs.
 //!
 //! Map: [`device`] (the card, the kernels, a square's buffers and the pair evaluation), [`loudness`]
-//! (the pixels' loudness), [`batch`] (the card as the painter's batch).
+//! (the pixels' loudness), [`aircraft`] (the aircraft boxes at the corners' lattices), [`batch`]
+//! (the card as the painter's batch).
 //!
 //! For visitors, down to this code: the About page The noise map
 //! (`frontend/src/about/the-noise-map.md`).
 
+pub mod aircraft;
 pub mod batch;
 pub mod device;
 pub mod loudness;

@@ -5,6 +5,8 @@
 //! layer, computed here or by a card ([`Batch`]).
 //! Importance weights apply to sampled pairs' spectra, not the energies used for confidence.
 
+use crate::flight_boxes::{FlightBoxes, FlightRequest};
+use crate::flights::FlightSums;
 use crate::square::Square;
 use physics::bands::{BANDS, PERIODS, energy, lden_energy};
 use physics::bound::{ReceiverBound, receiver_bound};
@@ -144,6 +146,13 @@ pub trait Batch: Sync {
     /// (`crate::sone::PixelSound::pack`): `input` all the pixels' floats, `offsets` where each
     /// pixel's begin.
     fn loudness(&self, input: &[f32], offsets: &[u64]) -> Result<Vec<[f32; LAYERS + 1]>, String>;
+    /// The flights of each request (`crate::flight_boxes::FlightBoxes::sums` on the cores).
+    fn flight_sums(
+        &self,
+        square: &Square,
+        boxes: &FlightBoxes,
+        requests: &[FlightRequest],
+    ) -> Result<Vec<[FlightSums; 2]>, String>;
 }
 
 /// What candidate `index` delivers at `point` on the CPU, and its bands.

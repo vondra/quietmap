@@ -208,11 +208,7 @@ fn prepare_square(
         };
         let batch = gpu
             .zip(device_square.as_ref())
-            .map(|(gpu, device_square)| GpuBatch {
-                gpu,
-                device_square,
-                square: &square,
-            });
+            .map(|(gpu, device_square)| GpuBatch::new(gpu, device_square, &square));
         let corners = corners_of(&square, grid, batch.as_ref().map(|b| b as &dyn Batch))?;
         (device_square, corners, square.candidates.len(), built_s)
     };
@@ -252,11 +248,7 @@ fn finish_square(
             let square = Square::new(weather, tile, &files)?;
             let batch = gpu
                 .zip(device_square.as_ref())
-                .map(|(gpu, device_square)| GpuBatch {
-                    gpu,
-                    device_square,
-                    square: &square,
-                });
+                .map(|(gpu, device_square)| GpuBatch::new(gpu, device_square, &square));
             paint_pixels(
                 &square,
                 grid,
