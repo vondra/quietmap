@@ -1,7 +1,7 @@
 //! Prepared z12 tiles: numbering and coordinates ([`geo`]) and one module per kind with its
 //! file format, writer and reader ([`terrain`], [`terrain_fine`], [`obstacles`], [`sources`],
-//! [`aircraft`]); [`stored`] is a file as stored (its kind's contents, framed for most kinds) and
-//! [`read`] reads whole files; [`aircraft_tracks`] holds the year's flights as the map draws them.
+//! [`aircraft`]); [`read`] reads whole files, [`write_tile`] writes one; [`aircraft_tracks`] holds
+//! the year's flights as the map draws them.
 //!
 //! For visitors, down to this code: the About page Data preparation, The files
 //! (`frontend/src/about/data-preparation.md`).
@@ -13,7 +13,6 @@ pub mod geo;
 pub mod obstacles;
 pub mod read;
 pub mod sources;
-pub mod stored;
 pub mod terrain;
 pub mod terrain_fine;
 
@@ -46,12 +45,6 @@ impl Kind {
             Kind::AircraftEvents => "aircraft-events",
         }
     }
-
-    /// Whether the kind's file stores its contents in one zstd frame: every kind but the
-    /// terrain's, whose formats carry their own coder (a planar predictor's residual planes).
-    pub fn framed(self) -> bool {
-        !matches!(self, Kind::Terrain | Kind::TerrainFine)
-    }
 }
 
 /// `<year root>/<x9>/<y9>/<x12>_<y12>.<kind>`.
@@ -61,6 +54,23 @@ pub fn tile_path(year_root: &Path, tile: geo::TileId, kind: Kind) -> PathBuf {
         .join(x9.to_string())
         .join(y9.to_string())
         .join(format!("{}_{}.{}", tile.x, tile.y, kind.name()))
+}
+
+/// Writes one tile file atomically (a temporary name renamed into place).
+pub fn write_tile(
+    year_root: &Path,
+    tile: geo::TileId,
+    kind: Kind,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let path = tile_path(year_root, tile, kind);
+    let directory = path.parent().expect("tile paths have a directory");
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    let temporary = path.with_extension(format!("{}.partial", kind.name()));
+    std::fs::write(&temporary, bytes)
+        .map_err(|error| format!("{}: {error}", temporary.display()))?;
+    std::fs::rename(&temporary, &path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// Written last by a builder: only a year root holding it is served, and only there does an

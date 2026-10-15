@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use tiles::aircraft::Aircraft;
 use tiles::geo::TileId;
-use tiles::read::TileFile;
 
 /// Boxes listed for a diagnosed point.
 const DIAGNOSED_BOXES: usize = 40;
@@ -39,8 +38,8 @@ fn same_list(a: &FlightTotals, b: &FlightTotals) -> bool {
     named(a) == named(b)
 }
 
-/// Per ring, its tiles' files as read.
-type RingFiles = Vec<Vec<(TileId, TileFile)>>;
+/// Per ring, its tiles' files.
+type RingFiles = Vec<Vec<(TileId, Vec<u8>)>>;
 
 /// The aircraft files of `kind` of each ring (0 ..= [`REACH_RINGS`]) around `centre`; a file that
 /// cannot be read or decoded is an error, never an empty tile.
@@ -54,8 +53,8 @@ fn read_rings(
             let mut files = Vec::new();
             for tile in centre.ring(ring) {
                 let path = tiles::tile_path(aircraft_root, tile, kind);
-                if let Some(file) = tiles::read::read_tile(&path, kind)? {
-                    files.push((tile, file));
+                if let Some(bytes) = tiles::read::read_tile(&path)? {
+                    files.push((tile, bytes));
                 }
             }
             Ok(files)
@@ -64,15 +63,13 @@ fn read_rings(
 }
 
 fn parse_rings(
-    rings: &[Vec<(TileId, TileFile)>],
+    rings: &[Vec<(TileId, Vec<u8>)>],
 ) -> Result<Vec<Vec<(TileId, Aircraft<'_>)>>, String> {
     rings
         .iter()
         .map(|ring| {
             ring.iter()
-                .map(|(tile, file)| {
-                    Aircraft::parse(&file.contents).map(|aircraft| (*tile, aircraft))
-                })
+                .map(|(tile, bytes)| Aircraft::parse(bytes).map(|aircraft| (*tile, aircraft)))
                 .collect::<Result<_, _>>()
         })
         .collect::<Result<_, _>>()
@@ -143,12 +140,12 @@ pub(super) fn report(
     let fine_files = read_rings(aircraft_root, centre, tiles::Kind::Aircraft)?;
     let far_files = read_rings(aircraft_root, centre, tiles::Kind::AircraftFar)?;
     let (fine, far) = (parse_rings(&fine_files)?, parse_rings(&far_files)?);
-    let megabytes = |rings: &[&Vec<(TileId, TileFile)>]| {
+    let megabytes = |rings: &[&Vec<(TileId, Vec<u8>)>]| {
         rings
             .iter()
             .flat_map(|ring| ring.iter())
-            .map(|(_, file)| file.stored_bytes)
-            .sum::<u64>() as f64
+            .map(|(_, bytes)| bytes.len())
+            .sum::<usize>() as f64
             / 1e6
     };
     // As the popup reads them: fine boxes of the tiles near the click, far boxes elsewhere.
@@ -166,10 +163,10 @@ pub(super) fn report(
                 .iter()
                 .filter(|(tile, _)| fine_here(tile))
                 .chain(far_files[ring].iter().filter(|(tile, _)| !fine_here(tile)))
-                .map(|(_, file)| file.stored_bytes)
-                .sum::<u64>()
+                .map(|(_, bytes)| bytes.len())
+                .sum::<usize>()
         })
-        .sum::<u64>() as f64
+        .sum::<usize>() as f64
         / 1e6;
     let fine_bytes = megabytes(&fine_files.iter().collect::<Vec<_>>());
     let fine_energy = box_energy(fine.iter().flatten(), receiver);

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::obstacles::{EnvelopeClass, Outline, OutlineKind, encode as encode_obstacles};
 use tiles::sources::{Attribute, Deck, Layer, Piece, encode};
-use tiles::stored::write_tile;
+use tiles::write_tile;
 use tiles::{COMPLETION_MARKER, Kind};
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };

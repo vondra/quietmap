@@ -12,10 +12,9 @@ use tiles::geo::{Mercator, TileId};
 pub fn events_at(year_root: &Path, position: Mercator) -> Result<(EventCell, u64), String> {
     let tile = TileId::containing(position);
     let path = tiles::tile_path(year_root, tile, tiles::Kind::AircraftEvents);
-    let Some(file) = tiles::read::read_tile(&path, tiles::Kind::AircraftEvents)? else {
+    let Some(bytes) = tiles::read::read_tile(&path)? else {
         return Ok((EventCell::default(), 0));
     };
-    let bytes = file.contents;
     let events = AircraftEvents::parse(&bytes).map_err(|error| error.to_string())?;
     let side = CELLS_PER_SIDE as f64;
     // Cell-centre coordinates of the position, and the four cells around it.
@@ -71,7 +70,7 @@ pub fn events_at(year_root: &Path, position: Mercator) -> Result<(EventCell, u64
         bands,
         helicopters_per_day: blend(&|cell| f64::from(cell.helicopters_per_day)) as f32,
     };
-    Ok((cell, file.stored_bytes))
+    Ok((cell, bytes.len() as u64))
 }
 
 #[cfg(test)]
@@ -94,7 +93,7 @@ mod tests {
         };
         cells[5 * CELLS_PER_SIDE + 5].bands[0] = band(100.0, 600, b"A320");
         cells[5 * CELLS_PER_SIDE + 6].bands[0] = band(300.0, 200, b"B738");
-        tiles::stored::write_tile(
+        tiles::write_tile(
             &root,
             tile,
             tiles::Kind::AircraftEvents,

@@ -95,7 +95,7 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
     ];
     std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
     let write = |kind, bytes: Vec<u8>| {
-        tiles::stored::write_tile(&root.join("2026"), TILE, kind, &bytes).unwrap();
+        tiles::write_tile(&root.join("2026"), TILE, kind, &bytes).unwrap();
     };
     let steps = steps_per_metre();
     let half = (125.0 * steps[1]).round() as i16;

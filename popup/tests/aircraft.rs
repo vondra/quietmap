@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use tiles::aircraft::{AircraftBox, Group, encode};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::sources::Layer;
-use tiles::stored::write_tile;
+use tiles::write_tile;
 use tiles::{COMPLETION_MARKER, Kind};
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };
