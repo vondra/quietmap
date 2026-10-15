@@ -7,6 +7,7 @@ use pmtiles::TileCoord;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Mutex;
 
 pub(crate) const MIN_ZOOM: u8 = 2;
 
@@ -110,6 +111,9 @@ impl AssessedLoudnessMeans {
     }
 }
 
+/// Where the pyramid's tiles go: a tile's coordinate and its compressed layers, from any thread.
+type TileWriter<'a> = dyn Fn(TileCoord, &[Vec<u8>]) -> Result<(), String> + Sync + 'a;
+
 struct Pyramid<'a> {
     out: &'a Path,
     painted_zoom: u8,
@@ -118,12 +122,14 @@ struct Pyramid<'a> {
 }
 
 impl Pyramid<'_> {
+    /// The tile's means from its children's, the four subtrees on the cores at once (each holds at
+    /// most a tile's means a level, so memory stays bounded by depth times the threads).
     fn visit(
         &self,
         zoom: u8,
         x: u32,
         y: u32,
-        write: &mut impl FnMut(TileCoord, &[Vec<u8>]) -> Result<(), String>,
+        write: &TileWriter,
     ) -> Result<AssessedLoudnessMeans, String> {
         let means = if zoom == 12 {
             AssessedLoudnessMeans::from_painted(
@@ -132,15 +138,17 @@ impl Pyramid<'_> {
                 &self.loudness,
             )
         } else {
+            let children: Vec<(u32, u32, AssessedLoudnessMeans)> = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                .into_par_iter()
+                .filter(|&(qx, qy)| {
+                    self.covered_tile_coordinates_by_zoom[zoom as usize + 1]
+                        .contains(&(2 * x + qx, 2 * y + qy))
+                })
+                .map(|(qx, qy)| Ok((qx, qy, self.visit(zoom + 1, 2 * x + qx, 2 * y + qy, write)?)))
+                .collect::<Result<_, String>>()?;
             let mut means = AssessedLoudnessMeans::empty();
-            for (qx, qy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let (child_x, child_y) = (2 * x + qx, 2 * y + qy);
-                if self.covered_tile_coordinates_by_zoom[zoom as usize + 1]
-                    .contains(&(child_x, child_y))
-                {
-                    let child = self.visit(zoom + 1, child_x, child_y, write)?;
-                    means.place_child(qx, qy, &child);
-                }
+            for (qx, qy, child) in &children {
+                means.place_child(*qx, *qy, child);
             }
             means
         };
@@ -162,7 +170,7 @@ pub(crate) fn write(
     out: &Path,
     zoom: u8,
     squares: &BTreeSet<(u32, u32)>,
-    mut write: impl FnMut(TileCoord, &[Vec<u8>]) -> Result<(), String>,
+    write: impl FnMut(TileCoord, &[Vec<u8>]) -> Result<(), String> + Send,
 ) -> Result<(), String> {
     let mut covered_tile_coordinates_by_zoom = vec![BTreeSet::new(); 13];
     covered_tile_coordinates_by_zoom[12] = squares.clone();
@@ -178,10 +186,15 @@ pub(crate) fn write(
         covered_tile_coordinates_by_zoom,
         loudness: cell_byte_loudness_sone(),
     };
-    for &(x, y) in &pyramid.covered_tile_coordinates_by_zoom[MIN_ZOOM as usize] {
-        pyramid.visit(MIN_ZOOM, x, y, &mut write)?;
-    }
-    Ok(())
+    // The tiles come back in no order (the archive sorts them); one writer at a time.
+    let write = Mutex::new(write);
+    let write = |coordinate: TileCoord, tiles: &[Vec<u8>]| {
+        (write
+            .lock()
+            .map_err(|_| "a tile's writer panicked".to_string())?)(coordinate, tiles)
+    };
+    (pyramid.covered_tile_coordinates_by_zoom[MIN_ZOOM as usize].par_iter())
+        .try_for_each(|&(x, y)| pyramid.visit(MIN_ZOOM, x, y, &write).map(drop))
 }
 
 #[cfg(test)]
