@@ -13,7 +13,7 @@
 //!   key as its boxes carry it), u32 offset of its points, u32 their bytes
 //! per part's points: the first i32 latitude and longitude (1e-5 deg), each next as i16 steps
 //!   from the one before, or i16::MIN and 0 then the point as the first (a step an i16 cannot
-//!   hold: 5 in 100 of r064's, `events-tracks-ranges-r064.txt`)
+//!   hold: 5 in 100 of r064's, measured 2026-10-15)
 //! ```
 //!
 //! A point keeps the 1e-5 deg lattice point nearest it (within 0.8 m, as the f32 positions it was

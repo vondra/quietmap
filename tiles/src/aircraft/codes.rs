@@ -20,7 +20,7 @@ const TAIL_DROP_CODES: i64 = 10;
 const LG_SCALE: f64 = 10_000.0;
 /// The next scaled distances as their lg's steps from the one before, in 0.004 (40 codes of the
 /// first's), from -0.3 (code 0) to +0.72 (code 255): r064's steps lie within -0.21 and +0.56
-/// (325 million of the stratified sample, `lg-steps-r064.txt`).
+/// (325 million of a stratified sample of r064, measured 2026-10-15).
 const LG_STEP_CODES: i64 = 40;
 const LG_STEP_BIAS: i64 = 75;
 
@@ -178,7 +178,7 @@ pub(super) fn in_cell(code: u8, cell: u8, edge: i32) -> i16 {
 /// The tile steps of a piece end's code at each scale: a byte holds +-254, +-1,016 and +-4,064
 /// steps from the box's centroid (within 0.3, 1.2 and 4.8 m, under ADS-B's positions' 10 m).
 /// r064's ends lie within 2,083 steps of their centroid but for one in a thousand, within 3,261 but
-/// for one in ten thousand (`box-ranges-r064.txt`); a piece farther keeps its ends exact.
+/// for one in ten thousand (measured 2026-10-15); a piece farther keeps its ends exact.
 const OFFSET_STEPS: [i32; 3] = [2, 8, 32];
 /// The scale of a piece whose ends are kept exact in the file's table of wide pieces.
 pub(super) const WIDE_SCALE: u8 = OFFSET_STEPS.len() as u8;

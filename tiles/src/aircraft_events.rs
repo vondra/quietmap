@@ -14,7 +14,7 @@
 //! ```
 //!
 //! A rate is a u16 float (`rate`: within 0.025 %); a file names at most 29 types in r064
-//! (`events-tracks-ranges-r064.txt`).
+//! (measured 2026-10-15).
 
 use crate::FormatError;
 

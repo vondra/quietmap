@@ -1,7 +1,7 @@
 //! Rates a day (flights over a cell, through a box) as u16 floats: 0 none, else an 11-bit mantissa
 //! and a 5-bit exponent, rate = (2048 + m) * 2^(e - 27), from 3.1e-5 to 65,520 a day within
 //! 0.025 %. One flight in a year of data is 0.0027 a day; r064's busiest cell sees 477 a day
-//! above 50 dB (`events-tracks-ranges-r064.txt`).
+//! above 50 dB (measured 2026-10-15).
 
 const MANTISSA_BITS: u32 = 11;
 const EXPONENT_BIAS: i32 = 27;
