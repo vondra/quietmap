@@ -1,15 +1,12 @@
-//! The aircraft file round trip and its refusals.
+//! The aircraft file round trip within its codes' steps, and its refusals.
 
 use super::*;
 
+/// A box at zoom 19 in cell (127, 3), heard in all three periods.
 fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
-    let mut energy_db = [[f64::NEG_INFINITY; NPD_DISTANCES]; PERIODS];
-    for (period, levels) in energy_db.iter_mut().enumerate() {
-        for (distance, level) in levels.iter_mut().enumerate() {
-            *level = 120.0 - 3.0 * distance as f64 - period as f64;
-        }
-    }
-    energy_db[2][9] = f64::NEG_INFINITY;
+    let energy_db = std::array::from_fn(|period| {
+        std::array::from_fn(|distance| 120.0 - 3.0 * distance as f64 - period as f64)
+    });
     AircraftBox {
         zoom: 19,
         cell: [127, 3],
@@ -17,7 +14,7 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         ground_m: 301.0,
         clearance_m: 49.0,
         height_m: 49.0,
-        centroid: [-16_000, 12_345],
+        centroid: [16_200, -15_500],
         centroid_altitude_m: 371.0,
         axis_rad: 2.5,
         gradient: -0.052,
@@ -26,10 +23,10 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         flights: [123_456, 7, 16_777_215],
         energy_db,
         lg_scaled_distance: [
-            61.0f64, 150.0, 288.0, 500.0, 1_100.0, 2_566.5, 4_259.3, 6_780.3, 9_000.0, 1e6,
+            61.0f64, 150.0, 288.0, 500.0, 1_100.0, 2_566.5, 4_259.3, 6_780.3, 9_000.0, 1e4,
         ]
         .map(f64::log10),
-        tail_energy_db: [61.23, f64::NEG_INFINITY, 55.0],
+        tail_energy_db: [80.77, 79.0, 70.31],
         installation_shares: [
             [[0.2, 0.4, 0.4], [0.1, 0.3, 0.6]],
             [[1.0, 0.0, 0.0], [0.9, 0.1, 0.0]],
@@ -54,10 +51,11 @@ fn a_flight(icao: u32) -> Flight {
     }
 }
 
+/// A piece across a_box's cell.
 fn a_piece(flight: u32) -> FlightPiece {
     FlightPiece {
         flight,
-        ends: [[-5, 7], [100, -300]],
+        ends: [[16_150, -15_490], [16_420, -15_620]],
         altitudes_m: [420.0, 455.0],
         speed_kt: 142.3,
         class: 11,
@@ -67,16 +65,21 @@ fn a_piece(flight: u32) -> FlightPiece {
     }
 }
 
+fn close(read: f64, written: f64, step: f64) -> bool {
+    read == written || (read - written).abs() <= step
+}
+
 #[test]
-fn boxes_flights_and_pieces_round_trip_at_their_steps() {
+fn boxes_flights_and_pieces_round_trip_within_their_steps() {
     let boxes = [a_box(0, 2), a_box(2, 0)];
     let flights = [a_flight(0x4b_a9_c1), a_flight(0x00_00_01)];
     let pieces = [a_piece(1), a_piece(0)];
     let bytes = encode(&boxes, &flights, &pieces);
-    // One band, one block of the index, two heads and boxes, three heard periods each.
+    // One band, three mixes, one block of the index, two heads and boxes, three heard periods
+    // each.
     assert_eq!(
         bytes.len(),
-        28 + 5 + 8 + 2 * (1 + 40) + 6 * 31 + 2 * 19 + 2 * 21
+        32 + 5 + 3 * 4 + 8 + 2 * (1 + 27) + 6 * 18 + 2 * 19 + 2 * 17
     );
     let parsed = Aircraft::parse(&bytes).unwrap();
     assert_eq!(
@@ -97,30 +100,36 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
         (read.ground_m, read.clearance_m, read.height_m),
         (301.0, 49.0, 49.0)
     );
+    // Zoom 19: a cell of 256 steps keeps every step of its centroid.
     assert_eq!(
         (read.centroid, read.centroid_altitude_m),
-        ([-16_000, 12_345], 371.0)
+        ([16_200, -15_500], 371.0)
     );
+    assert_eq!(parsed.box_centroid(0), read.centroid);
     assert!((read.axis_rad - 2.5).abs() < 1e-4);
     assert!((read.gradient - -0.052).abs() < 1e-4);
-    assert_eq!(
-        (read.piece_length_m, read.flights),
-        ([44.0, 51.0, 38.0], [123_456, 7, 16_777_215])
-    );
+    assert_eq!(read.piece_length_m, [44.0, 51.0, 38.0]);
+    for (r, w) in read.flights.iter().zip(written.flights) {
+        assert!(
+            close(f64::from(*r), f64::from(w), f64::from(w) * 1.3e-4),
+            "{r} vs {w}"
+        );
+    }
+    assert_eq!(read.flights[1], 7);
     for (read_levels, written_levels) in read.energy_db.iter().zip(&written.energy_db) {
         for (r, w) in read_levels.iter().zip(written_levels) {
-            assert!(r == w || (r - w).abs() <= 0.005, "{r} vs {w}");
+            assert!(close(*r, *w, 0.0251), "{r} vs {w}");
         }
     }
     for (r, w) in read.tail_energy_db.iter().zip(written.tail_energy_db) {
-        assert!(r == &w || (r - w).abs() <= 0.005, "{r} vs {w}");
+        assert!(close(*r, w, 0.0751), "{r} vs {w}");
     }
     for (r, w) in read
         .lg_scaled_distance
         .iter()
         .zip(written.lg_scaled_distance)
     {
-        assert!((r - w).abs() <= 0.5e-4, "{r} vs {w}");
+        assert!(close(*r, w, 0.00201), "{r} vs {w}");
     }
     for (read, written) in read
         .installation_shares
@@ -129,7 +138,7 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
         .zip(written.installation_shares.iter().flatten())
     {
         for (r, w) in read.iter().zip(written) {
-            assert!((r - w).abs() <= 1.0 / 255.0, "{r} vs {w}");
+            assert!(close(*r, *w, 1.0 / 255.0), "{r} vs {w}");
         }
     }
     assert_eq!((read.first_piece, read.piece_count), (0, 2));
@@ -137,8 +146,17 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     assert_eq!(read.loudest_lamax_db, 91.5);
     assert_eq!(parsed.flight(0), flights[0]);
     assert_eq!(parsed.flight(1), flights[1]);
-    let piece = parsed.piece(0);
-    assert_eq!((piece.flight, piece.ends), (1, [[-5, 7], [100, -300]]));
+    let piece = parsed.piece(&read, 0);
+    assert_eq!(piece.flight, 1);
+    // 1/64 of a 256-step cell: within 2 steps.
+    for (r, w) in piece
+        .ends
+        .iter()
+        .flatten()
+        .zip(a_piece(0).ends.iter().flatten())
+    {
+        assert!((i32::from(*r) - i32::from(*w)).abs() <= 2, "{r} vs {w}");
+    }
     assert_eq!(piece.altitudes_m, [420.0, 455.0]);
     assert!((piece.speed_kt - 142.3).abs() < 1e-9);
     assert_eq!(
@@ -159,10 +177,6 @@ fn a_silent_period_is_left_out_and_reads_back_silent() {
         &[a_flight(1)],
         &[a_piece(0), a_piece(0)],
     );
-    assert_eq!(
-        bytes.len(),
-        28 + 5 + 8 + 2 * (1 + 40) + 5 * 31 + 19 + 2 * 21
-    );
     let parsed = Aircraft::parse(&bytes).unwrap();
     let read = parsed.aircraft_box(0);
     assert_eq!(read.energy_db[1], [f64::NEG_INFINITY; NPD_DISTANCES]);
@@ -173,11 +187,10 @@ fn a_silent_period_is_left_out_and_reads_back_silent() {
         "a silent period keeps no length"
     );
     assert_eq!(read.installation_shares[1], [[0.0, 0.0, 1.0]; 2]);
-    assert_eq!(read.flights[2], quiet_evening.flights[2]);
     // The next box finds its own periods and pieces after the left-out evening.
     let next = parsed.aircraft_box(1);
     assert_eq!((next.first_piece, next.piece_count), (1, 1));
-    assert_eq!(next.flights, loud.flights);
+    assert_eq!(next.flights[1], loud.flights[1]);
     assert_eq!(next.piece_length_m, loud.piece_length_m);
 }
 
@@ -227,22 +240,31 @@ fn a_file_that_does_not_add_up_is_refused() {
     let mut wrong_magic = bytes.clone();
     wrong_magic[0] = b'x';
     assert!(Aircraft::parse(&wrong_magic).is_err());
-    // The head after the band and the block: three pieces where the table has one.
-    let head = 28 + 5 + 8;
+    // The head after the band, the three mixes and the block: three pieces where the table has
+    // one, then a bit above the piece count.
+    let head = 32 + 5 + 3 * 4 + 8;
     let mut missing_piece = bytes.clone();
     missing_piece[head] = missing_piece[head] & 0x0f | 3 << 4;
     assert!(Aircraft::parse(&missing_piece).is_err());
+    let mut high_head = bytes.clone();
+    high_head[head] |= 1 << 6;
+    assert!(Aircraft::parse(&high_head).is_err());
     // A box of a band the table lacks.
     let mut missing_band = bytes.clone();
     missing_band[head + 1] = 1;
     assert!(Aircraft::parse(&missing_band).is_err());
     // An index block counting pieces before the first box.
     let mut miscounted = bytes.clone();
-    miscounted[28 + 5 + 4] = 1;
+    miscounted[32 + 5 + 3 * 4 + 4] = 1;
     assert!(Aircraft::parse(&miscounted).is_err());
+    // A period naming a mix beyond the table.
+    let period = head + 1 + 27;
+    let mut missing_mix = bytes.clone();
+    missing_mix[period + 16] = 9;
+    assert!(Aircraft::parse(&missing_mix).is_err());
     // A piece naming a flight beyond the table.
     let mut missing_flight = bytes;
-    missing_flight[head + 1 + 40 + 3 * 31 + 19] = 9;
+    missing_flight[period + 3 * 18 + 19] = 9;
     assert!(Aircraft::parse(&missing_flight).is_err());
 }
 
