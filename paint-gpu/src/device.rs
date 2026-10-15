@@ -16,7 +16,7 @@ use physics::bands::{BAND_FREQUENCY_HZ, BANDS, PERIODS, SPEED_OF_SOUND_M_PER_S};
 use physics::weather::WeatherTable;
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tiles::Kind;
 use tiles::geo::{Mercator, TILES_PER_AXIS, TileId};
 use tiles::sources::GROUND_FROM_TERRAIN;
@@ -238,6 +238,8 @@ pub(crate) fn driver<T>(result: Result<T, cudarc::driver::DriverError>) -> Resul
 pub struct Gpu {
     pub(crate) device: Arc<CudaDevice>,
     pub name: String,
+    /// Held while cudarc records and waits on the device's one event (`crate::stream`).
+    pub(crate) event: Mutex<()>,
 }
 
 impl Gpu {
@@ -343,6 +345,7 @@ impl Gpu {
         Ok(Gpu {
             device,
             name: format!("{name} (sm_{major}{minor}, {multiprocessors} SMs)"),
+            event: Mutex::new(()),
         })
     }
 
@@ -413,7 +416,7 @@ impl Gpu {
         let none = 0u64;
         // The pairs' kernels on a stream of their own (once the buffers above are zeroed): another
         // pass's or square's kernels run beside them on the card.
-        let stream = driver(device.fork_default_stream())?;
+        let stream = self.fork()?;
         // SAFETY (each launch): every buffer holds what the kernel indexes: 2 receiver coordinates,
         // an owner, a candidate and a point (within `bands`, checked) per pair; a count, an offset,
         // PAIR_SUMS sums, PERIODS x BANDS bands and a failure per pair; a PairRay (24 bytes) per ray.
@@ -444,7 +447,7 @@ impl Gpu {
             let offsets = driver(device.htod_sync_copy(&offsets))?;
             let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
             let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
-            driver(stream.wait_for_default())?;
+            stream.wait_for_default()?;
             driver(unsafe {
                 kernel("pair_rays")?.launch_on_stream(
                     &stream,

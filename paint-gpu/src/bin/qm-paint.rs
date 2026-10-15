@@ -196,7 +196,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
                                 }))
                                 .unwrap_or_else(|_| Err("a square's painting panicked".into()))
                             });
-                            card.change(|state| state.squares -= 1);
+                            // A failed square stops the run as it leaves the card: the preparer
+                            // waiting for an empty card must not hand the next square over.
+                            card.change(|state| {
+                                state.squares -= 1;
+                                state.stopped |= cells.is_err();
+                            });
                             let sent = cells.and_then(|cells| {
                                 (sender.send(cells))
                                     .map_err(|_| "a square's writer stopped".to_string())

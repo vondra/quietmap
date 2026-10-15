@@ -213,7 +213,7 @@ impl Gpu {
         let task_count = (count * tasks().len()) as u32;
         // On a stream of their own (once the buffers above are zeroed): the pairs' kernels of
         // another pass run beside them on the card.
-        let stream = driver(device.fork_default_stream())?;
+        let stream = self.fork()?;
         let tasks_config = LaunchConfig {
             grid_dim: (task_count.div_ceil(TASK_WARPS), 1, 1),
             block_dim: (TASK_WARPS * 32, 1, 1),

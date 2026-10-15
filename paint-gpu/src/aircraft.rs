@@ -291,7 +291,7 @@ impl Gpu {
         let segment_count = segments.len() as u32;
         let segments = driver(device.htod_sync_copy(&segments))?;
         let totals = driver(device.alloc_zeros::<f64>(4 * PERIODS * requests.len()))?;
-        let stream = driver(device.fork_default_stream())?;
+        let stream = self.fork()?;
         let kernel = device
             .get_func("aircraft", "flight_sums")
             .ok_or("kernel flight_sums missing")?;
