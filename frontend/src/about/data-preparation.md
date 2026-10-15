@@ -323,9 +323,9 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
 | `terrain-fine` | `tiles/src/terrain_fine.rs` | a national model's detail on the 1/6" lattice, its height less its own 1" average, faded towards its edges and voids; blocks of 128 x 128 cells, each one zstd frame behind a directory, so a click decodes only the blocks its rays' ends touch |
 | `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile) through a cell -> offset table |
 | `sources` | `tiles/src/sources.rs` | 12-byte pieces, 80-byte records, 8-byte deck entries (a bridge piece's deck altitude at its ends), each distinct display text once; emission per octave band and period as u16 in 0.01 dB |
-| `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with its two loudest flight pieces, and the tile's flight table |
+| `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with only the periods it is heard in and its two loudest flight pieces, its slab a row of the tile's band table; the tile's flight table; a box finds its periods and pieces from the counts every 32 boxes |
 | `aircraft-events` | `tiles/src/aircraft_events.rs` | 16 x 16 z16 cells a tile; no file where no flight reaches 50 dB |
-| `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start |
+| `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start behind a fence of every 256th part's key, so a listed flight reads one 4 KB page of the directory |
 | `weather` | `physics/src/weather.rs` | 0.5 deg nodes: favourable probability per period and 16 sectors in percent, absorption per octave in 0.01 dB/km |
 
 - `tiles::tile_path` names a tile's file in the standard web-map XYZ numbering (y grows

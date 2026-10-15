@@ -53,10 +53,12 @@ pub struct BoxValues {
     pub gradient: f64,
     /// The spread (standard deviation) of the pieces' gradients along the axis about it.
     pub gradient_spread: f64,
-    /// Per period, the energy-weighted mean horizontal length of the pieces.
+    /// Per period, the energy-weighted mean horizontal length of the pieces (0 for a period
+    /// without pieces: no reader takes a silent period's, and an aircraft file keeps none).
     pub piece_length_m: [f64; PERIODS],
     /// Per period, the energy shares of the installations at each of
-    /// [`INSTALLATION_SHARE_SLANTS_M`] (a period without pieces the whole day's).
+    /// [`INSTALLATION_SHARE_SLANTS_M`] (all propeller for a period without pieces, as an aircraft
+    /// file reads back what it does not keep).
     pub installation_shares: [[[f64; 3]; 2]; PERIODS],
 }
 
@@ -212,36 +214,23 @@ impl BoxSums {
             axis_rad,
             gradient,
             gradient_spread: (mean_square - gradient * gradient).max(0.0).sqrt(),
-            piece_length_m: {
-                let (weights, lengths) = (
-                    self.period_weight.iter().sum::<f64>(),
-                    self.period_weighted_length_m.iter().sum::<f64>(),
-                );
-                std::array::from_fn(|period| {
-                    if self.period_weight[period] > 0.0 {
-                        self.period_weighted_length_m[period] / self.period_weight[period]
+            piece_length_m: std::array::from_fn(|period| {
+                if self.period_weight[period] > 0.0 {
+                    self.period_weighted_length_m[period] / self.period_weight[period]
+                } else {
+                    0.0
+                }
+            }),
+            installation_shares: self.installation_energy.map(|period| {
+                period.map(|energies| {
+                    let total: f64 = energies.iter().sum();
+                    if total > 0.0 {
+                        energies.map(|energy| energy / total)
                     } else {
-                        lengths / weights
+                        [0.0, 0.0, 1.0]
                     }
                 })
-            },
-            installation_shares: {
-                let shares = |energies: [f64; 3]| {
-                    let total: f64 = energies.iter().sum();
-                    (total > 0.0).then(|| energies.map(|energy| energy / total))
-                };
-                let day: [[f64; 3]; 2] = std::array::from_fn(|slant| {
-                    let all = std::array::from_fn(|k| {
-                        (0..PERIODS)
-                            .map(|period| self.installation_energy[period][slant][k])
-                            .sum()
-                    });
-                    shares(all).unwrap_or([0.0; 3])
-                });
-                self.installation_energy.map(|period| {
-                    std::array::from_fn(|slant| shares(period[slant]).unwrap_or(day[slant]))
-                })
-            },
+            }),
         })
     }
 }

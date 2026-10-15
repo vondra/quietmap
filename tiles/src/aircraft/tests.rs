@@ -73,7 +73,11 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     let flights = [a_flight(0x4b_a9_c1), a_flight(0x00_00_01)];
     let pieces = [a_piece(1), a_piece(0)];
     let bytes = encode(&boxes, &flights, &pieces);
-    assert_eq!(bytes.len(), 24 + 2 * 142 + 2 * 20 + 2 * 24);
+    // One band, one block of the index, two heads and boxes, three heard periods each.
+    assert_eq!(
+        bytes.len(),
+        28 + 5 + 8 + 2 * (1 + 40) + 6 * 31 + 2 * 19 + 2 * 21
+    );
     let parsed = Aircraft::parse(&bytes).unwrap();
     assert_eq!(
         (
@@ -144,18 +148,101 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
 }
 
 #[test]
+fn a_silent_period_is_left_out_and_reads_back_silent() {
+    let mut quiet_evening = a_box(0, 1);
+    quiet_evening.energy_db[1] = [f64::NEG_INFINITY; NPD_DISTANCES];
+    quiet_evening.tail_energy_db[1] = f64::NEG_INFINITY;
+    quiet_evening.flights[1] = 0;
+    let loud = a_box(1, 1);
+    let bytes = encode(
+        &[quiet_evening.clone(), loud.clone()],
+        &[a_flight(1)],
+        &[a_piece(0), a_piece(0)],
+    );
+    assert_eq!(
+        bytes.len(),
+        28 + 5 + 8 + 2 * (1 + 40) + 5 * 31 + 19 + 2 * 21
+    );
+    let parsed = Aircraft::parse(&bytes).unwrap();
+    let read = parsed.aircraft_box(0);
+    assert_eq!(read.energy_db[1], [f64::NEG_INFINITY; NPD_DISTANCES]);
+    assert_eq!(read.tail_energy_db[1], f64::NEG_INFINITY);
+    assert_eq!(
+        (read.flights[1], read.piece_length_m[1]),
+        (0, 0.0),
+        "a silent period keeps no length"
+    );
+    assert_eq!(read.installation_shares[1], [[0.0, 0.0, 1.0]; 2]);
+    assert_eq!(read.flights[2], quiet_evening.flights[2]);
+    // The next box finds its own periods and pieces after the left-out evening.
+    let next = parsed.aircraft_box(1);
+    assert_eq!((next.first_piece, next.piece_count), (1, 1));
+    assert_eq!(next.flights, loud.flights);
+    assert_eq!(next.piece_length_m, loud.piece_length_m);
+}
+
+#[test]
+fn boxes_beyond_a_block_find_their_periods_and_pieces() {
+    let boxes: Vec<AircraftBox> = (0..70u32)
+        .map(|index| {
+            let mut record = a_box(0, (index % 2) as u8);
+            // Evening or night silent in two boxes of three.
+            for period in 1..PERIODS {
+                if (index as usize + period).is_multiple_of(3) {
+                    record.energy_db[period] = [f64::NEG_INFINITY; NPD_DISTANCES];
+                    record.tail_energy_db[period] = f64::NEG_INFINITY;
+                    record.flights[period] = 0;
+                }
+            }
+            record.flights[0] = index;
+            record
+        })
+        .scan(0u32, |first, mut record| {
+            record.first_piece = *first;
+            *first += u32::from(record.piece_count);
+            Some(record)
+        })
+        .collect();
+    let pieces = vec![a_piece(0); 35];
+    let bytes = encode(&boxes, &[a_flight(1)], &pieces);
+    let parsed = Aircraft::parse(&bytes).unwrap();
+    for (index, written) in boxes.iter().enumerate() {
+        let read = parsed.aircraft_box(index);
+        assert_eq!(read.flights[0], index as u32);
+        assert_eq!(
+            (read.first_piece, read.piece_count),
+            (written.first_piece, written.piece_count)
+        );
+        for period in 0..PERIODS {
+            assert_eq!(read.heard(period), written.heard(period));
+        }
+    }
+}
+
+#[test]
 fn a_file_that_does_not_add_up_is_refused() {
     let bytes = encode(&[a_box(0, 1)], &[a_flight(1)], &[a_piece(0)]);
+    assert!(Aircraft::parse(&bytes).is_ok());
     assert!(Aircraft::parse(&bytes[..bytes.len() - 1]).is_err());
     let mut wrong_magic = bytes.clone();
     wrong_magic[0] = b'x';
     assert!(Aircraft::parse(&wrong_magic).is_err());
-    // A box naming a piece beyond the table, a piece naming a flight beyond it.
+    // The head after the band and the block: three pieces where the table has one.
+    let head = 28 + 5 + 8;
     let mut missing_piece = bytes.clone();
-    missing_piece[24 + 122] = 7;
+    missing_piece[head] = missing_piece[head] & 0x0f | 3 << 4;
     assert!(Aircraft::parse(&missing_piece).is_err());
+    // A box of a band the table lacks.
+    let mut missing_band = bytes.clone();
+    missing_band[head + 1] = 1;
+    assert!(Aircraft::parse(&missing_band).is_err());
+    // An index block counting pieces before the first box.
+    let mut miscounted = bytes.clone();
+    miscounted[28 + 5 + 4] = 1;
+    assert!(Aircraft::parse(&miscounted).is_err());
+    // A piece naming a flight beyond the table.
     let mut missing_flight = bytes;
-    missing_flight[24 + 142 + 20] = 9;
+    missing_flight[head + 1 + 40 + 3 * 31 + 19] = 9;
     assert!(Aircraft::parse(&missing_flight).is_err());
 }
 
@@ -163,4 +250,14 @@ fn a_file_that_does_not_add_up_is_refused() {
 #[should_panic(expected = "names a missing piece")]
 fn encoding_a_box_without_its_pieces_panics() {
     encode(&[a_box(0, 3)], &[a_flight(1)], &[a_piece(0)]);
+}
+
+#[test]
+#[should_panic(expected = "must follow the boxes before it")]
+fn encoding_pieces_out_of_box_order_panics() {
+    encode(
+        &[a_box(1, 1), a_box(0, 1)],
+        &[a_flight(1)],
+        &[a_piece(0), a_piece(0)],
+    );
 }

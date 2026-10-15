@@ -258,12 +258,15 @@ fn a_box_of_one_flow_reads_as_the_sum_of_its_pieces() {
     }
     let behind = box_error_db(&pieces, ON_THE_EXTENSION[0]);
     assert!(behind.abs() < 1.1, "behind: {behind:+.3} dB");
+    // Its heard periods' mix is the flow's wing-mounted jets.
     let values = box_of(&pieces);
     assert!(
         values
             .installation_shares
             .iter()
-            .flatten()
+            .zip(&values.levels_db)
+            .filter(|(_, levels)| levels.iter().any(|level| level.is_finite()))
+            .flat_map(|(shares, _)| shares)
             .all(|shares| shares[0] > 0.99),
         "{:?}",
         values.installation_shares
