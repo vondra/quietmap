@@ -69,7 +69,7 @@ pub fn encode(cells: &[EventCell]) -> Vec<u8> {
     designators.sort_unstable();
     designators.dedup();
     assert!(
-        designators.len() < usize::from(NO_DESIGNATOR),
+        designators.len() <= usize::from(NO_DESIGNATOR),
         "{} designators in a tile",
         designators.len()
     );

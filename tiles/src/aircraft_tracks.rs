@@ -107,6 +107,10 @@ fn points_of(bytes: &[u8]) -> Option<Vec<TrackPoint>> {
     let mut code = [i32_at(0)?, i32_at(4)?];
     let mut at = 8;
     loop {
+        // A latitude and longitude of the world, or the bytes are not a part's points.
+        if code[0].unsigned_abs() > 9_000_000 || code[1].unsigned_abs() > 18_000_000 {
+            return None;
+        }
         points.push(code.map(|code| f64::from(code) / POINT_SCALE));
         if at == bytes.len() {
             return Some(points);
@@ -117,7 +121,10 @@ fn points_of(bytes: &[u8]) -> Option<Vec<TrackPoint>> {
             code = [i32_at(at)?, i32_at(at + 4)?];
             at += 8;
         } else {
-            code = [code[0] + i32::from(step[0]), code[1] + i32::from(step[1])];
+            code = [
+                code[0].checked_add(i32::from(step[0]))?,
+                code[1].checked_add(i32::from(step[1]))?,
+            ];
         }
     }
 }
