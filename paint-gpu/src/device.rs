@@ -633,9 +633,7 @@ impl DeviceSquare {
                     Some(bytes) => {
                         let terrain = Terrain::parse(bytes).map_err(|e| e.to_string())?;
                         let window = terrain.window();
-                        let column_at_origin = frame.origin.x * columns_per_unit
-                            - f64::from(180 * NODES_PER_DEGREE)
-                            - f64::from(window.west_node);
+                        let column_at_origin = window.column_of(frame.origin.x);
                         let nodes_offset = append_aligned(&mut nodes, terrain.node_bytes());
                         let canopy_offset = append_aligned(&mut nodes, terrain.canopy_bytes());
                         let fine_offset = fine_codes

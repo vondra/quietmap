@@ -50,6 +50,16 @@ pub struct Window {
 }
 
 impl Window {
+    /// The column (fractional, 0 at `west_node`) of Mercator x: across the antimeridian from the
+    /// window (a ray's end west of -180 degrees, the frame of a square at its other side) the same
+    /// meridian a world away, the column nearest the window.
+    pub fn column_of(&self, x: f64) -> f64 {
+        let world = f64::from(360 * NODES_PER_DEGREE);
+        let column =
+            x * world / f64::from(TILES_PER_AXIS) - world / 2.0 - f64::from(self.west_node);
+        (column + world / 2.0).rem_euclid(world) - world / 2.0
+    }
+
     /// The floor/ceil node window of a tile.
     pub fn of_tile(tile: TileId) -> Self {
         let axis = i64::from(TILES_PER_AXIS);
@@ -250,10 +260,7 @@ impl Terrain {
     /// Where a point falls among the window's nodes, `None` outside the window: rows found on
     /// Mercator y, so a row's fraction is linear in y between two rows (as the walk's).
     pub fn locate(&self, position: Mercator) -> Option<NodePosition> {
-        let columns_per_unit = f64::from(360 * NODES_PER_DEGREE) / f64::from(TILES_PER_AXIS);
-        let column_position = position.x * columns_per_unit
-            - f64::from(180 * NODES_PER_DEGREE)
-            - f64::from(self.window.west_node);
+        let column_position = self.window.column_of(position.x);
         // A point on the window's west edge may land a rounding error outside it.
         let column_position = if column_position > -1e-6 {
             column_position.max(0.0)
@@ -368,6 +375,23 @@ mod tests {
             f64::from(window.north_node) >= north * 3600.0
                 && f64::from(window.west_node) <= west * 3600.0
         );
+    }
+
+    /// A point just west of -180 degrees lies in the easternmost tile's window, a point at the
+    /// square's own side of the antimeridian in the westernmost's (Fiji's squares read both).
+    #[test]
+    fn columns_wrap_across_the_antimeridian() {
+        let (west, east) = (
+            Window::of_tile(TileId { x: 0, y: 2241 }),
+            Window::of_tile(TileId { x: 4095, y: 2241 }),
+        );
+        let world = f64::from(TILES_PER_AXIS);
+        let just_west = -0.001;
+        let column = east.column_of(just_west);
+        assert!((0.0..f64::from(east.columns)).contains(&column), "{column}");
+        assert!((east.column_of(world + just_west) - column).abs() < 1e-6);
+        assert!((0.0..f64::from(west.columns)).contains(&west.column_of(0.001)));
+        assert!((west.column_of(0.001) - west.column_of(world + 0.001)).abs() < 1e-6);
     }
 
     #[test]
