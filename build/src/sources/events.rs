@@ -5,7 +5,7 @@
 
 use super::Converted;
 use super::cells::{Site, Z30Ring, push_site_points, site_points};
-use super::{group_key, object_key};
+use super::{fields, group_key, object_key};
 use physics::bands::{BANDS, PERIOD_HOURS};
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
@@ -104,7 +104,7 @@ pub fn push_event_source(
         footprint_id,
         group_key: group_key(&[label, key]),
         emission: sound.band_levels_db(),
-        display: json!([
+        display: fields(json!([
             name,
             label,
             decibels(height_m),
@@ -116,8 +116,7 @@ pub fn push_event_source(
             schedule.events_per_day.map(|e| (e * 100.0).round() / 100.0),
             duty.map(|d| (d * 1e5).round() / 1e5),
             object.map(object_key),
-        ])
-        .to_string(),
+        ])),
     };
     push_site_points(&site_points(&site), 1.0, &attribute, out);
 }

@@ -186,8 +186,7 @@ impl DeviceFlightBoxes {
                             .installation_shares
                             .map(|slants| slants.map(|shares| shares.map(|s| s as f32))),
                         lambda_per_slant: std::array::from_fn(|period| {
-                            (f64::from(record.flights[period])
-                                / 365.25
+                            (record.flights_per_day[period]
                                 / (PERIOD_HOURS[period] * 3_600.0)
                                 / FLIGHT_SPEED_M_S) as f32
                         }),

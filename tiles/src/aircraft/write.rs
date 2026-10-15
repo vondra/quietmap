@@ -2,14 +2,16 @@
 //! boxes), then the boxes' heads and records, their heard periods, the flights and the pieces.
 
 use super::codes::{
-    cell_steps, curve_codes, flights_code, in_cell, in_cell_code, lamax_code, lg_distance_codes,
-    offset_code, tail_code,
+    WIDE_SCALE, cell_steps, curve_codes, in_cell, in_cell_code, lamax_code, lg_distance_codes,
+    offset_code, offset_scale, tail_code,
 };
 use super::{
     AircraftBox, BAND_BYTES, BLOCK_BYTES, BOX_BYTES, BOXES_PER_BLOCK, FLIGHT_BYTES, Flight,
-    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEADER_BYTES, INSTALLATIONS, MAGIC,
-    MAXIMUM_ZOOM, MIX_BYTES, PERIOD_BYTES, PERIODS, PIECE_BYTES,
+    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEADER_BYTES, INSTALLATIONS,
+    KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM, MIX_BYTES,
+    PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
 };
+use crate::rate::rate_code;
 use std::collections::HashMap;
 
 fn metres_i16(value: f64) -> i16 {
@@ -119,9 +121,9 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox, band: u8) {
         record.gradient_spread
     );
     bytes.extend_from_slice(&(spread as u16).to_le_bytes());
-    let (first, changes) = lg_distance_codes(&record.lg_scaled_distance);
+    let (first, steps) = lg_distance_codes(&record.lg_scaled_distance);
     bytes.extend_from_slice(&first.to_le_bytes());
-    bytes.extend(changes.map(|change| change as u8));
+    bytes.extend_from_slice(&steps);
     bytes.push(lamax_code(record.loudest_lamax_db));
     assert_eq!(bytes.len() - start, BOX_BYTES);
 }
@@ -132,21 +134,23 @@ fn write_period(bytes: &mut Vec<u8>, record: &AircraftBox, period: usize, mix: u
     bytes.extend_from_slice(&first.to_le_bytes());
     bytes.extend_from_slice(&drops);
     bytes.push(tail_code(end, record.tail_energy_db[period]));
-    bytes.extend_from_slice(&flights_code(record.flights[period]).to_le_bytes());
+    bytes.extend_from_slice(&rate_code(record.flights_per_day[period]).to_le_bytes());
     bytes.extend_from_slice(&metres_u16(record.piece_length_m[period]).to_le_bytes());
     bytes.extend_from_slice(&mix.to_le_bytes());
     assert_eq!(bytes.len() - start, PERIOD_BYTES);
 }
 
-/// A piece, its ends from its box's stored centroid.
-fn write_piece(bytes: &mut Vec<u8>, piece: &FlightPiece, owner: &AircraftBox) {
+/// A piece, its ends from its box's stored centroid at `scale` (a wide piece's in its table).
+fn write_piece(bytes: &mut Vec<u8>, piece: &FlightPiece, centroid: [i16; 2], scale: u8) {
     let start = bytes.len();
-    let (_, _, centroid) = place_of(owner);
-    let edge = cell_steps(owner.zoom);
     u24(bytes, piece.flight, "flight");
     for end in piece.ends {
         for axis in 0..2 {
-            bytes.push(offset_code(end[axis], centroid[axis], edge) as u8);
+            bytes.push(if scale == WIDE_SCALE {
+                0
+            } else {
+                offset_code(end[axis], centroid[axis], scale) as u8
+            });
         }
     }
     for altitude in piece.altitudes_m {
@@ -157,13 +161,16 @@ fn write_piece(bytes: &mut Vec<u8>, piece: &FlightPiece, owner: &AircraftBox) {
         .clamp(0.0, f64::from(u16::MAX));
     bytes.extend_from_slice(&(speed as u16).to_le_bytes());
     assert!(
-        piece.class < 1 << 12 && piece.flags < 4 && piece.period < 4,
+        piece.class < 1 << KIND_FLAGS_SHIFT && piece.flags < 4 && piece.period < 4,
         "piece class {} flags {} period {}",
         piece.class,
         piece.flags,
         piece.period
     );
-    let kind = piece.class | u16::from(piece.flags) << 12 | u16::from(piece.period) << 14;
+    let kind = piece.class
+        | u16::from(piece.flags) << KIND_FLAGS_SHIFT
+        | u16::from(piece.period) << KIND_PERIOD_SHIFT
+        | u16::from(scale) << KIND_SCALE_SHIFT;
     bytes.extend_from_slice(&kind.to_le_bytes());
     bytes.extend_from_slice(&piece.power_code.to_le_bytes());
     assert_eq!(bytes.len() - start, PIECE_BYTES);
@@ -185,7 +192,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             if !record.heard(period) {
                 assert!(
                     record.tail_energy_db[period] == f64::NEG_INFINITY
-                        && record.flights[period] == 0,
+                        && record.flights_per_day[period] == 0.0,
                     "a silent period with energy or flights"
                 );
                 continue;
@@ -198,6 +205,26 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             periods.push((index, period, row));
         }
     }
+    // Each box's pieces follow the boxes before it; a piece's scale, the wide ones' ends exact.
+    let (mut scales, mut wide) = (Vec::with_capacity(pieces.len()), Vec::new());
+    for record in boxes {
+        assert_eq!(
+            record.first_piece as usize,
+            scales.len(),
+            "a box's pieces must follow the boxes before it"
+        );
+        let (first, count) = (record.first_piece as usize, usize::from(record.piece_count));
+        assert!(first + count <= pieces.len(), "a box names a missing piece");
+        let (_, _, centroid) = place_of(record);
+        for (piece, index) in pieces[first..first + count].iter().zip(first..) {
+            let scale = offset_scale(&piece.ends, centroid);
+            if scale == WIDE_SCALE {
+                wide.push((index as u32, piece.ends));
+            }
+            scales.push(scale);
+        }
+    }
+    assert!(scales.len() == pieces.len(), "a piece no box names");
     let blocks = boxes.len().div_ceil(BOXES_PER_BLOCK);
     let mut bytes = Vec::with_capacity(
         HEADER_BYTES
@@ -207,7 +234,8 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             + (1 + BOX_BYTES) * boxes.len()
             + PERIOD_BYTES * periods.len()
             + FLIGHT_BYTES * flights.len()
-            + PIECE_BYTES * pieces.len(),
+            + PIECE_BYTES * pieces.len()
+            + WIDE_BYTES * wide.len(),
     );
     bytes.extend_from_slice(MAGIC);
     for count in [
@@ -217,6 +245,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
         pieces.len(),
         bands.len(),
         mixes.len(),
+        wide.len(),
     ] {
         bytes.extend_from_slice(&u32::try_from(count).expect("tile too large").to_le_bytes());
     }
@@ -234,17 +263,9 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             bytes.extend_from_slice(&periods_before.to_le_bytes());
             bytes.extend_from_slice(&pieces_before.to_le_bytes());
         }
-        assert_eq!(
-            record.first_piece, pieces_before,
-            "a box's pieces must follow the boxes before it"
-        );
         periods_before += (head & 7).count_ones();
         pieces_before += u32::from(record.piece_count);
     }
-    assert!(
-        pieces_before as usize <= pieces.len(),
-        "a box names a missing piece"
-    );
     bytes.extend_from_slice(&heads);
     for record in boxes {
         let band = bands.binary_search(&band_of(record)).expect("its band");
@@ -260,18 +281,23 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
         bytes.extend_from_slice(&flight.start_unix.to_le_bytes());
     }
     for record in boxes {
-        let first = record.first_piece as usize;
-        for piece in &pieces[first..first + usize::from(record.piece_count)] {
+        let (first, (_, _, centroid)) = (record.first_piece as usize, place_of(record));
+        for (piece, &scale) in pieces[first..first + usize::from(record.piece_count)]
+            .iter()
+            .zip(&scales[first..])
+        {
             assert!(
                 (piece.flight as usize) < flights.len(),
                 "a piece names a missing flight"
             );
-            write_piece(&mut bytes, piece, record);
+            write_piece(&mut bytes, piece, centroid, scale);
         }
     }
-    assert!(
-        pieces_before as usize == pieces.len(),
-        "a piece no box names"
-    );
+    for (index, ends) in &wide {
+        bytes.extend_from_slice(&index.to_le_bytes());
+        for coordinate in ends.iter().flatten() {
+            bytes.extend_from_slice(&coordinate.to_le_bytes());
+        }
+    }
     bytes
 }

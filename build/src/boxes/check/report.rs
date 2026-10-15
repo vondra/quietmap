@@ -358,7 +358,7 @@ fn diagnose(
                         distance_m: east.hypot(north),
                         zoom: record.zoom,
                         clearance_m: record.clearance_m,
-                        flights: 0,
+                        flights_per_day: 0.0,
                         axis_deg: record.axis_rad.to_degrees(),
                         gradient: record.gradient,
                         gradient_spread: record.gradient_spread,
@@ -381,7 +381,7 @@ fn diagnose(
             for (total, value) in entry.0.iter_mut().zip(energy) {
                 *total += value;
             }
-            entry.1.flights += record.flights.iter().sum::<u32>();
+            entry.1.flights_per_day += record.flights_per_day.iter().sum::<f64>();
         }
     }
     let mut found: Vec<(f64, BoxDiagnosis)> = boxed

@@ -20,7 +20,7 @@ fn attribute(level_db: f64) -> Attribute {
         footprint_id: 0,
         group_key: 1,
         emission: [[level_db; BANDS]; PERIODS],
-        display: "[]".into(),
+        display: Vec::new(),
     }
 }
 

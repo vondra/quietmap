@@ -63,7 +63,7 @@ fn write_roads_on(root: &Path, distances: &[f64], separate: bool, deck_m: Option
             footprint_id: 0,
             group_key: index as u64 + 1,
             emission: [[70.0; BANDS]; PERIODS],
-            display: format!(r#"["test road {index}"]"#),
+            display: vec![serde_json::Value::from(format!("test road {index}"))],
         })
         .collect();
     let decks: Vec<Deck> = deck_m
@@ -359,7 +359,7 @@ fn a_source_on_the_edge_of_the_read_block_is_answered() {
         footprint_id: 0,
         group_key: 2,
         emission: [[80.0; BANDS]; PERIODS],
-        display: r#"["edge"]"#.into(),
+        display: vec![serde_json::Value::from("edge")],
     }];
     // Many points along the edge: whether one rounds across it depends on its position.
     let pieces: Vec<Piece> = (-16_384..16_384)
@@ -435,7 +435,7 @@ fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
             footprint_id: 0,
             group_key: 10 + level,
             emission: [[70.0 + 20.0 * level as f64 / 3.0; BANDS]; PERIODS],
-            display: r#"["point"]"#.into(),
+            display: vec![serde_json::Value::from("point")],
         })
         .collect();
     write_tile(
@@ -532,7 +532,7 @@ fn a_sampled_layer_sounds_as_the_exact_one() {
             footprint_id: 0,
             group_key: 20 + k as u64,
             emission,
-            display: r#"["point"]"#.into(),
+            display: vec![serde_json::Value::from("point")],
         })
         .collect();
     write_tile(

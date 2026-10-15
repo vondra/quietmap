@@ -20,7 +20,7 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         gradient: -0.052,
         gradient_spread: 0.0412,
         piece_length_m: [44.0, 51.0, 38.0],
-        flights: [123_456, 7, 16_777_215],
+        flights_per_day: [338.2, 7.0 / 354.0, 61_000.0],
         energy_db,
         lg_scaled_distance: [
             61.0f64, 150.0, 288.0, 500.0, 1_100.0, 2_566.5, 4_259.3, 6_780.3, 9_000.0, 1e4,
@@ -79,7 +79,7 @@ fn boxes_flights_and_pieces_round_trip_within_their_steps() {
     // each.
     assert_eq!(
         bytes.len(),
-        32 + 5 + 3 * 4 + 8 + 2 * (1 + 27) + 6 * 18 + 2 * 19 + 2 * 17
+        36 + 5 + 3 * 4 + 8 + 2 * (1 + 27) + 6 * 18 + 2 * 19 + 2 * 17
     );
     let parsed = Aircraft::parse(&bytes).unwrap();
     assert_eq!(
@@ -109,13 +109,9 @@ fn boxes_flights_and_pieces_round_trip_within_their_steps() {
     assert!((read.axis_rad - 2.5).abs() < 1e-4);
     assert!((read.gradient - -0.052).abs() < 1e-4);
     assert_eq!(read.piece_length_m, [44.0, 51.0, 38.0]);
-    for (r, w) in read.flights.iter().zip(written.flights) {
-        assert!(
-            close(f64::from(*r), f64::from(w), f64::from(w) * 1.3e-4),
-            "{r} vs {w}"
-        );
+    for (r, w) in read.flights_per_day.iter().zip(written.flights_per_day) {
+        assert!(close(*r, w, w * 2.5e-4), "{r} vs {w}");
     }
-    assert_eq!(read.flights[1], 7);
     for (read_levels, written_levels) in read.energy_db.iter().zip(&written.energy_db) {
         for (r, w) in read_levels.iter().zip(written_levels) {
             assert!(close(*r, *w, 0.0251), "{r} vs {w}");
@@ -129,7 +125,7 @@ fn boxes_flights_and_pieces_round_trip_within_their_steps() {
         .iter()
         .zip(written.lg_scaled_distance)
     {
-        assert!(close(*r, w, 0.00201), "{r} vs {w}");
+        assert!(close(*r, w, 0.00205), "{r} vs {w}");
     }
     for (read, written) in read
         .installation_shares
@@ -148,14 +144,14 @@ fn boxes_flights_and_pieces_round_trip_within_their_steps() {
     assert_eq!(parsed.flight(1), flights[1]);
     let piece = parsed.piece(&read, 0);
     assert_eq!(piece.flight, 1);
-    // 1/64 of a 256-step cell: within 2 steps.
+    // The finest scale: within a step.
     for (r, w) in piece
         .ends
         .iter()
         .flatten()
         .zip(a_piece(0).ends.iter().flatten())
     {
-        assert!((i32::from(*r) - i32::from(*w)).abs() <= 2, "{r} vs {w}");
+        assert!((i32::from(*r) - i32::from(*w)).abs() <= 1, "{r} vs {w}");
     }
     assert_eq!(piece.altitudes_m, [420.0, 455.0]);
     assert!((piece.speed_kt - 142.3).abs() < 1e-9);
@@ -170,7 +166,7 @@ fn a_silent_period_is_left_out_and_reads_back_silent() {
     let mut quiet_evening = a_box(0, 1);
     quiet_evening.energy_db[1] = [f64::NEG_INFINITY; NPD_DISTANCES];
     quiet_evening.tail_energy_db[1] = f64::NEG_INFINITY;
-    quiet_evening.flights[1] = 0;
+    quiet_evening.flights_per_day[1] = 0.0;
     let loud = a_box(1, 1);
     let bytes = encode(
         &[quiet_evening.clone(), loud.clone()],
@@ -182,15 +178,19 @@ fn a_silent_period_is_left_out_and_reads_back_silent() {
     assert_eq!(read.energy_db[1], [f64::NEG_INFINITY; NPD_DISTANCES]);
     assert_eq!(read.tail_energy_db[1], f64::NEG_INFINITY);
     assert_eq!(
-        (read.flights[1], read.piece_length_m[1]),
-        (0, 0.0),
+        (read.flights_per_day[1], read.piece_length_m[1]),
+        (0.0, 0.0),
         "a silent period keeps no length"
     );
     assert_eq!(read.installation_shares[1], [[0.0, 0.0, 1.0]; 2]);
     // The next box finds its own periods and pieces after the left-out evening.
     let next = parsed.aircraft_box(1);
     assert_eq!((next.first_piece, next.piece_count), (1, 1));
-    assert_eq!(next.flights[1], loud.flights[1]);
+    assert!(close(
+        next.flights_per_day[1],
+        loud.flights_per_day[1],
+        loud.flights_per_day[1] * 2.5e-4
+    ));
     assert_eq!(next.piece_length_m, loud.piece_length_m);
 }
 
@@ -204,10 +204,10 @@ fn boxes_beyond_a_block_find_their_periods_and_pieces() {
                 if (index as usize + period).is_multiple_of(3) {
                     record.energy_db[period] = [f64::NEG_INFINITY; NPD_DISTANCES];
                     record.tail_energy_db[period] = f64::NEG_INFINITY;
-                    record.flights[period] = 0;
+                    record.flights_per_day[period] = 0.0;
                 }
             }
-            record.flights[0] = index;
+            record.flights_per_day[0] = f64::from(index);
             record
         })
         .scan(0u32, |first, mut record| {
@@ -221,7 +221,7 @@ fn boxes_beyond_a_block_find_their_periods_and_pieces() {
     let parsed = Aircraft::parse(&bytes).unwrap();
     for (index, written) in boxes.iter().enumerate() {
         let read = parsed.aircraft_box(index);
-        assert_eq!(read.flights[0], index as u32);
+        assert_eq!(read.flights_per_day[0], index as f64, "whole rates exact");
         assert_eq!(
             (read.first_piece, read.piece_count),
             (written.first_piece, written.piece_count)
@@ -242,7 +242,7 @@ fn a_file_that_does_not_add_up_is_refused() {
     assert!(Aircraft::parse(&wrong_magic).is_err());
     // The head after the band, the three mixes and the block: three pieces where the table has
     // one, then a bit above the piece count.
-    let head = 32 + 5 + 3 * 4 + 8;
+    let head = 36 + 5 + 3 * 4 + 8;
     let mut missing_piece = bytes.clone();
     missing_piece[head] = missing_piece[head] & 0x0f | 3 << 4;
     assert!(Aircraft::parse(&missing_piece).is_err());
@@ -255,7 +255,7 @@ fn a_file_that_does_not_add_up_is_refused() {
     assert!(Aircraft::parse(&missing_band).is_err());
     // An index block counting pieces before the first box.
     let mut miscounted = bytes.clone();
-    miscounted[32 + 5 + 3 * 4 + 4] = 1;
+    miscounted[36 + 5 + 3 * 4 + 4] = 1;
     assert!(Aircraft::parse(&miscounted).is_err());
     // A period naming a mix beyond the table.
     let period = head + 1 + 27;
@@ -281,5 +281,27 @@ fn encoding_pieces_out_of_box_order_panics() {
         &[a_box(1, 1), a_box(0, 1)],
         &[a_flight(1)],
         &[a_piece(0), a_piece(0)],
+    );
+}
+
+/// A piece beyond the coarsest scale keeps its ends exact in the wide table and reads back by its
+/// index; a wide piece without its entry is refused.
+#[test]
+fn a_wide_piece_keeps_its_ends_exact() {
+    let mut far = a_piece(0);
+    far.ends = [[16_383, 16_383], [-16_384, -16_384]];
+    let boxes = [a_box(0, 2), a_box(2, 1)];
+    let pieces = [a_piece(0), far.clone(), far.clone()];
+    let bytes = encode(&boxes, &[a_flight(1)], &pieces);
+    let parsed = Aircraft::parse(&bytes).unwrap();
+    let first = parsed.aircraft_box(0);
+    assert_eq!(parsed.piece(&first, 1).ends, far.ends);
+    assert_eq!(parsed.piece(&parsed.aircraft_box(1), 0).ends, far.ends);
+    assert_ne!(parsed.piece(&first, 0).ends, far.ends);
+    let mut lost = bytes.clone();
+    lost[32] = 1;
+    assert!(
+        Aircraft::parse(&lost).is_err(),
+        "a wide piece without its ends"
     );
 }

@@ -181,6 +181,15 @@ pub fn group_key(parts: &[&str]) -> u64 {
     hash
 }
 
+/// A display's positional fields, as a converter writes them: one JSON array of its layer's fields
+/// (`tiles::sources::display_fields`).
+pub fn fields(display: serde_json::Value) -> Vec<serde_json::Value> {
+    let serde_json::Value::Array(fields) = display else {
+        panic!("a display is a JSON array: {display}")
+    };
+    fields
+}
+
 /// A source's object as its display writes it: the group key of the source it is a part of, as
 /// the popup writes a group's id.
 pub fn object_key(group_key: u64) -> String {

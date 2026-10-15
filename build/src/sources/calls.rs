@@ -338,7 +338,7 @@ mod tests {
             convert_calls((&refs, square), &hosts, iso(b"TR"), &mut out),
             1
         );
-        let display = &out[0].attribute.display;
+        let display = serde_json::Value::from(out[0].attribute.display.clone()).to_string();
         assert!(
             display.starts_with(r#"["Yeni Cami","call_to_prayer",30.0"#),
             "{display}"

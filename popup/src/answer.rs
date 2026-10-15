@@ -94,12 +94,10 @@ pub fn display_fields_of(
     attribute: u32,
     layer: Layer,
 ) -> Result<serde_json::Value, String> {
-    let values: Vec<serde_json::Value> =
-        serde_json::from_str(sources.display(attribute).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+    let values = sources.display(attribute).map_err(|e| e.to_string())?;
     let object: serde_json::Map<String, serde_json::Value> = display_fields(layer)
         .iter()
-        .map(|field| field.to_string())
+        .map(|field| field.name.to_string())
         .zip(values)
         .collect();
     Ok(serde_json::Value::Object(object))

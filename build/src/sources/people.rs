@@ -7,7 +7,7 @@
 use super::Converted;
 use super::cells::{Site, Z30Ring, push_site_points, site_points};
 use super::venues::{VenueKind, VenueSite, cluster_weight, customs, hours, seats};
-use super::{group_key, metres, object_key};
+use super::{fields, group_key, metres, object_key};
 use crate::climate::Climate;
 use crate::dev4::{degrees_to_z30, z30_corner_degrees};
 use physics::emission::people::{
@@ -137,7 +137,7 @@ pub fn convert_people(
                 &format!("{:.6},{:.6}", site.lat, site.lon),
             ]),
             emission: sound.band_levels_db(),
-            display: json!([
+            display: fields(json!([
                 site.name,
                 label(site.kind),
                 PEOPLE_HEIGHT_M,
@@ -149,8 +149,7 @@ pub fn convert_people(
                 null,
                 null,
                 host.map(object_key)
-            ])
-            .to_string(),
+            ])),
         };
         push_site_points(&site_points(&point), 1.0, &attribute, out);
         emitting += 1;

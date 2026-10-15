@@ -4,6 +4,24 @@
 //! A cell is a z19 tile: 256 steps, 128 x 128 per tile (49 m in Prague, 76 m at the equator).
 //! Tile-local coordinates are exact shifts of the global step lattice, so every tile storing an
 //! outline stores bit-identical global vertices under the same global footprint id.
+//!
+//! Most cells hold nothing (96 % of the world's): a bitmap marks the occupied ones and counts them
+//! before every 64, so a cell finds its runs in place. A footprint id is its z9 square (the high 32
+//! bits) and its ordinal there: an outline keeps the ordinal and the row of its square in the
+//! file's table of them, and its vertices run to where the next outline's begin. Every section
+//! starts 4-aligned, as the GPU reads it.
+//!
+//! ```text
+//! magic "qmobs2\n\0", u32 outlines, vertices, runs, occupied cells, footprint squares, 0
+//! 256 x u64: bit c % 64 of word c / 64 set for an occupied cell c (row * 128 + column)
+//! 256 x u16: the occupied cells before each word
+//! per occupied cell and one more, u32: its first run (the last: the runs)
+//! per footprint square, u32: the high half of its footprint ids, ascending
+//! per run, 8 B: outline u32, first edge u16, edge count u16
+//! per outline, sorted by footprint id, 12 B: first vertex u32, ordinal u32, height u16 (dm),
+//!   square row u8, kind | envelope << 2 u8
+//! per vertex, 4 B: 2 x i16
+//! ```
 
 mod cells;
 mod parse;
@@ -11,11 +29,18 @@ mod parse;
 pub use cells::{for_each_edge_cell, tiles_crossed};
 pub use parse::Obstacles;
 
-const MAGIC: &[u8; 8] = b"qmobs1\n\0";
+const MAGIC: &[u8; 8] = b"qmobs2\n\0";
 const HEADER_BYTES: usize = 32;
+/// The occupied-cell bitmap's words, and the bytes of it and of the counts before each word.
+const CELL_WORDS: usize = CELLS / 64;
+const CELL_INDEX_BYTES: usize = CELL_WORDS * (8 + 2);
 const RUN_BYTES: usize = 8;
-const OUTLINE_BYTES: usize = 20;
+const OUTLINE_BYTES: usize = 12;
 const VERTEX_BYTES: usize = 4;
+/// The most footprint squares a file names: an outline keeps its square's row in a byte.
+const MAXIMUM_SQUARES: usize = 256;
+/// An outline's kind is its last byte's low two bits, its envelope the rest.
+const ENVELOPE_SHIFT: u8 = 2;
 /// Steps per cell side.
 pub const CELL_STEPS: i64 = 256;
 /// Cells per tile side; a tile's cells are row-major, row 0 the northernmost (y grows south).
@@ -120,9 +145,10 @@ fn height_code(height_m: f64) -> u16 {
     code as u16
 }
 
-/// The bytes of an obstacles file: header, cell offsets, runs, outline records, vertices.
-/// `outlines` are stored in the given order, which must be sorted by footprint id so the rings of
-/// one footprint are consecutive; the cell table follows from their edges.
+/// The bytes of an obstacles file: header, the occupied cells' index, the footprint squares, runs,
+/// outline records, vertices. `outlines` are stored in the given order, which must be sorted by
+/// footprint id so the rings of one footprint are consecutive; the cell index follows from their
+/// edges.
 pub fn encode(outlines: &[Outline]) -> Vec<u8> {
     let mut cells: Vec<Vec<Run>> = vec![Vec::new(); CELLS];
     for (index, outline) in outlines.iter().enumerate() {
@@ -168,23 +194,62 @@ pub fn encode(outlines: &[Outline]) -> Vec<u8> {
     }
     let vertex_count: usize = outlines.iter().map(|outline| outline.vertices.len()).sum();
     let run_count: usize = cells.iter().map(Vec::len).sum();
+    let occupied = cells.iter().filter(|runs| !runs.is_empty()).count();
+    let mut squares: Vec<u32> = outlines
+        .iter()
+        .map(|outline| (outline.footprint_id >> 32) as u32)
+        .collect();
+    squares.dedup();
+    assert!(
+        squares.len() <= MAXIMUM_SQUARES,
+        "{} footprint squares in a tile",
+        squares.len()
+    );
     let mut bytes = Vec::with_capacity(
         HEADER_BYTES
-            + 4 * (CELLS + 1)
+            + CELL_INDEX_BYTES
+            + 4 * (occupied + 1)
+            + 4 * squares.len()
             + RUN_BYTES * run_count
             + OUTLINE_BYTES * outlines.len()
             + VERTEX_BYTES * vertex_count,
     );
     bytes.extend_from_slice(MAGIC);
-    for count in [outlines.len(), vertex_count, run_count] {
+    for count in [
+        outlines.len(),
+        vertex_count,
+        run_count,
+        occupied,
+        squares.len(),
+        0,
+    ] {
         bytes.extend_from_slice(&u32::try_from(count).expect("tile too large").to_le_bytes());
     }
-    bytes.extend_from_slice(&[0; 12]);
-    let mut offset = 0u32;
-    bytes.extend_from_slice(&offset.to_le_bytes());
-    for runs in &cells {
-        offset += runs.len() as u32;
-        bytes.extend_from_slice(&offset.to_le_bytes());
+    let words: Vec<u64> = cells
+        .chunks_exact(64)
+        .map(|word| {
+            word.iter()
+                .enumerate()
+                .filter(|(_, runs)| !runs.is_empty())
+                .fold(0, |bits, (bit, _)| bits | 1 << bit)
+        })
+        .collect();
+    for word in &words {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    let mut before = 0u16;
+    for word in &words {
+        bytes.extend_from_slice(&before.to_le_bytes());
+        before += word.count_ones() as u16;
+    }
+    let mut first_run = 0u32;
+    for runs in cells.iter().filter(|runs| !runs.is_empty()) {
+        bytes.extend_from_slice(&first_run.to_le_bytes());
+        first_run += runs.len() as u32;
+    }
+    bytes.extend_from_slice(&first_run.to_le_bytes());
+    for square in &squares {
+        bytes.extend_from_slice(&square.to_le_bytes());
     }
     for run in cells.iter().flatten() {
         bytes.extend_from_slice(&run.outline.to_le_bytes());
@@ -193,11 +258,14 @@ pub fn encode(outlines: &[Outline]) -> Vec<u8> {
     }
     let mut first_vertex = 0u32;
     for outline in outlines {
-        bytes.extend_from_slice(&outline.footprint_id.to_le_bytes());
+        let square = squares
+            .binary_search(&((outline.footprint_id >> 32) as u32))
+            .expect("its square");
         bytes.extend_from_slice(&first_vertex.to_le_bytes());
-        bytes.extend_from_slice(&(outline.vertices.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&(outline.footprint_id as u32).to_le_bytes());
         bytes.extend_from_slice(&height_code(outline.height_m).to_le_bytes());
-        bytes.extend_from_slice(&[outline.kind as u8, outline.envelope as u8, 0, 0]);
+        bytes.push(square as u8);
+        bytes.push(outline.kind as u8 | (outline.envelope as u8) << ENVELOPE_SHIFT);
         first_vertex += outline.vertices.len() as u32;
     }
     for coordinate in outlines

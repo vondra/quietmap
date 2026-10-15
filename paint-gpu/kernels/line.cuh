@@ -141,8 +141,8 @@ __device__ void skyline_mark(const ObstacleScene& scene, float origin_x, float o
             int index = 0;
             if (scene_locate(scene, column, row, &tile, &index) != TILE_READ) continue;
             if (scene.cell_max_height[tile->cell_max_offset + index] <= los_floor_m) continue;
-            const u8* cells = tile_cells(scene, *tile);
-            u32 run_begin = read_u32(cells + 4 * index), run_end = read_u32(cells + 4 * (index + 1));
+            u32 run_begin, run_end;
+            tile_cell_runs(scene, *tile, index, &run_begin, &run_end);
             const u8* runs = tile_runs(scene, *tile);
             for (u32 run_index = run_begin; run_index < run_end; run_index++) {
                 const u8* run = runs + (u64)RUN_BYTES * run_index;

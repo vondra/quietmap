@@ -243,7 +243,7 @@ mod tests {
         let here = (&refs[..], sites[0].square());
         let mut out = Vec::new();
         assert_eq!(convert_bells(here, &hosts, iso(b"CZ"), &mut out), 1);
-        let display = &out[0].attribute.display;
+        let display = serde_json::Value::from(out[0].attribute.display.clone()).to_string();
         assert!(
             display.starts_with(r#"["St Nicholas","church_bells",15.0"#),
             "{display}"
@@ -251,7 +251,8 @@ mod tests {
         assert!(display.contains("[2.14,0.0,1.0]"), "{display}");
         out.clear();
         assert_eq!(convert_bells(here, &hosts, iso(b"GR"), &mut out), 1);
-        assert!(out[0].attribute.display.contains("[0.29,0.0,0.0]"));
+        let display = serde_json::Value::from(out[0].attribute.display.clone()).to_string();
+        assert!(display.contains("[0.29,0.0,0.0]"), "{display}");
         // A church and its tower 1.4 m apart across a square's edge (14.0625 E) ring once, from
         // the tower's square.
         let edge = [

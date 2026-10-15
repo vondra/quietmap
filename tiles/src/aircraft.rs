@@ -8,25 +8,28 @@
 //! Each number takes the fewest bytes its meaning needs (`codes`): a box stores only the periods
 //! it is heard in, its slab as a row of the tile's band table, its centroid as its place in its
 //! cell, an NPD curve as its first level and nine drops, its installation mix as a row of the
-//! tile's table of them, its pieces from its centroid. A box finds its periods and pieces by
-//! counting: every 32 boxes the counts before them, then the boxes' one-byte heads up to it.
+//! tile's table of them, its pieces from its centroid (the rare farthest piece exact, in a table of
+//! its own). A box finds its periods and pieces by counting: every 32 boxes the counts before them,
+//! then the boxes' one-byte heads up to it.
 //!
 //! ```text
-//! magic "qmair5\n\0", u32 boxes, heard periods, flights, pieces, bands, installation mixes
+//! magic "qmair5\n\0", u32 boxes, heard periods, flights, pieces, bands, installation mixes, wide
+//!   pieces
 //! per band, 5 B: zoom u8, clearance u16 (m), height u16 (m)
 //! per installation mix, 4 B: wing and fuselage shares at 1,000 ft and at the tail anchor (1/255)
 //! per 32 boxes, 8 B: the heard periods and the pieces of the boxes before them, u32 each
 //! per box, 1 B (its head): bit p the period p heard, bit 3 a helicopter, bits 4-5 its pieces
 //! per box, 27 B: band u8, cell 2 x u8, ground i16 (m), centroid in its cell 2 x u8 (1/256), its
 //!   altitude i16 (m), axis u16, gradient i16, spread u16, lg scaled distance u16 (1e-4) and nine
-//!   changes i8 (0.004), loudest LAmax u8 (0.5 dB)
+//!   steps u8 (0.004 from -0.3), loudest LAmax u8 (0.5 dB)
 //! per heard period, in box order, 18 B: energy u16 (0.01 dB) and nine drops u8 (0.05 dB), the
-//!   tail anchor's drop below the last u8 (0.1 dB), flights u16 (exact below 4,096, then a 4-bit
-//!   exponent and 12-bit mantissa), piece length u16 (m), installation mix u16
+//!   tail anchor's drop below the last u8 (0.1 dB), flights a day u16 (a rate, `crate::rate`),
+//!   piece length u16 (m), installation mix u16
 //! per flight, 19 B: ICAO address u24, callsign 8, type designator 4, start u32
-//! per piece, in box order, 17 B: flight u24, ends 2 x 2 x i8 (1/64 of the cell's edge from the
-//!   box's centroid), altitudes 2 x i16 (m), speed u16 (0.1 kt), class | flags << 12 | period <<
-//!   14 u16, power code u16
+//! per piece, in box order, 17 B: flight u24, ends 2 x 2 x i8 from the box's centroid (in 2, 8 or
+//!   32 tile steps by its scale; scale 3: wide, 0), altitudes 2 x i16 (m), speed u16 (0.1 kt),
+//!   class | flags << 8 | period << 10 | scale << 12 u16, power code u16
+//! per wide piece, by piece, 12 B: piece u32, ends 2 x 2 x i16
 //! ```
 
 mod codes;
@@ -37,7 +40,7 @@ pub use parse::Aircraft;
 pub use write::encode;
 
 const MAGIC: &[u8; 8] = b"qmair5\n\0";
-const HEADER_BYTES: usize = 32;
+const HEADER_BYTES: usize = 36;
 const BAND_BYTES: usize = 5;
 const MIX_BYTES: usize = 4;
 /// Boxes a block of the index counts: what finding a box's periods and pieces adds up at most.
@@ -47,9 +50,14 @@ const BOX_BYTES: usize = 27;
 const PERIOD_BYTES: usize = 18;
 const FLIGHT_BYTES: usize = 19;
 const PIECE_BYTES: usize = 17;
+const WIDE_BYTES: usize = 12;
 /// A box head's bits: the heard periods (bit p), a helicopter, then the piece count.
 const HEAD_HELICOPTER: u8 = 1 << 3;
 const HEAD_PIECES_SHIFT: u32 = 4;
+/// A piece's kind field: its class below bit 8, then its flags, period and the scale of its ends.
+const KIND_FLAGS_SHIFT: u32 = 8;
+const KIND_PERIOD_SHIFT: u32 = 10;
+const KIND_SCALE_SHIFT: u32 = 12;
 /// The NPD distances of Doc 29 (200 ft .. 25,000 ft).
 pub const NPD_DISTANCES: usize = 10;
 /// Day, evening, night.
@@ -92,9 +100,9 @@ pub struct AircraftBox {
     pub gradient_spread: f64,
     /// Per period, the energy-weighted mean length of the pieces (1 m steps; 0 silent).
     pub piece_length_m: [f64; PERIODS],
-    /// Per period, the flights that crossed the box in a year of average days (the period of
-    /// each flight's first piece in the box; exact below 4,096, within 0.013 % above).
-    pub flights: [u32; PERIODS],
+    /// Per period, the flights a day that crossed the box, each by the days of data of its day
+    /// (the period of each flight's first piece in the box; within 0.025 %, 0 silent).
+    pub flights_per_day: [f64; PERIODS],
     /// Per period, the average day's summed SEL energy at each NPD distance (dB; all -inf silent,
     /// all finite heard; within 0.025 dB), and at the tail anchor past them (16 km; within 0.05
     /// dB).
@@ -138,8 +146,9 @@ pub struct Flight {
     pub start_unix: u32,
 }
 
-/// One flight piece a box names: its ends in tile-local steps (within 1/128 of its box's cell
-/// edge) and altitudes, and what the Doc 29 kernel needs to compute its level at a click.
+/// One flight piece a box names: its ends in tile-local steps (within a step of the true ones for
+/// all but one in a thousand, within half the coarser step a longer piece takes) and altitudes,
+/// and what the Doc 29 kernel needs to compute its level at a click.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FlightPiece {
     /// Index into the tile's flight table.

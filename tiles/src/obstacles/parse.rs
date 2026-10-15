@@ -1,15 +1,18 @@
 //! Reading `obstacles` files: every count, offset and index checked once, then plain accessors.
 
 use super::{
-    CELLS, EnvelopeClass, HEADER_BYTES, MAGIC, OUTLINE_BYTES, OutlineKind, OutlineRecord,
-    RUN_BYTES, Run, VERTEX_BYTES,
+    CELL_WORDS, CELLS, ENVELOPE_SHIFT, EnvelopeClass, HEADER_BYTES, MAGIC, MAXIMUM_SQUARES,
+    OUTLINE_BYTES, OutlineKind, OutlineRecord, RUN_BYTES, Run, VERTEX_BYTES,
 };
 use crate::FormatError;
 
 /// A parsed obstacles file borrowing its bytes; every index in it was checked by [`Self::parse`].
 #[derive(Clone, Copy)]
 pub struct Obstacles<'a> {
-    cell_offsets: &'a [u8],
+    occupied_words: &'a [u8],
+    occupied_before: &'a [u8],
+    first_runs: &'a [u8],
+    squares: &'a [u8],
     runs: &'a [u8],
     outlines: &'a [u8],
     vertices: &'a [u8],
@@ -28,52 +31,95 @@ impl<'a> Obstacles<'a> {
         if bytes.len() < HEADER_BYTES || &bytes[..8] != MAGIC {
             return Err(FormatError("obstacles: bad magic"));
         }
-        if bytes[20..HEADER_BYTES].iter().any(|&byte| byte != 0) {
-            return Err(FormatError("obstacles: reserved header bytes set"));
-        }
         let count = |at: usize| u32_at(bytes, at) as usize;
-        let (outlines, vertices, runs) = (count(8), count(12), count(16));
-        let offsets_end = HEADER_BYTES + 4 * (CELLS + 1);
-        let runs_end = offsets_end + RUN_BYTES * runs;
-        let outlines_end = runs_end + OUTLINE_BYTES * outlines;
-        if bytes.len() != outlines_end + VERTEX_BYTES * vertices {
+        let (outlines, vertices, runs, occupied, squares) =
+            (count(8), count(12), count(16), count(20), count(24));
+        if count(28) != 0 || occupied > CELLS || squares > MAXIMUM_SQUARES {
+            return Err(FormatError("obstacles: bad header"));
+        }
+        let lengths = [
+            8 * CELL_WORDS,
+            2 * CELL_WORDS,
+            4 * (occupied + 1),
+            4 * squares,
+            RUN_BYTES.saturating_mul(runs),
+            OUTLINE_BYTES.saturating_mul(outlines),
+            VERTEX_BYTES.saturating_mul(vertices),
+        ];
+        let mut end = HEADER_BYTES;
+        let sections = lengths.map(|length| {
+            let start = end;
+            end = end.saturating_add(length);
+            start..end
+        });
+        if bytes.len() != end {
             return Err(FormatError("obstacles: length does not match the counts"));
         }
+        let [
+            words_at,
+            before_at,
+            first_runs_at,
+            squares_at,
+            runs_at,
+            outlines_at,
+            vertices_at,
+        ] = sections;
         let parsed = Obstacles {
-            cell_offsets: &bytes[HEADER_BYTES..offsets_end],
-            runs: &bytes[offsets_end..runs_end],
-            outlines: &bytes[runs_end..outlines_end],
-            vertices: &bytes[outlines_end..],
+            occupied_words: &bytes[words_at],
+            occupied_before: &bytes[before_at],
+            first_runs: &bytes[first_runs_at],
+            squares: &bytes[squares_at],
+            runs: &bytes[runs_at],
+            outlines: &bytes[outlines_at],
+            vertices: &bytes[vertices_at],
         };
-        parsed.check_indices()?;
+        parsed.check_indices(occupied)?;
         Ok(parsed)
     }
 
-    fn check_indices(&self) -> Result<(), FormatError> {
-        if self.offset(0) != 0
-            || self.offset(CELLS) != self.run_count()
-            || (0..CELLS).any(|cell| self.offset(cell + 1) < self.offset(cell))
+    fn check_indices(&self, occupied: usize) -> Result<(), FormatError> {
+        let mut before = 0;
+        for word in 0..CELL_WORDS {
+            if usize::from(u16_at(self.occupied_before, 2 * word)) != before {
+                return Err(FormatError("obstacles: occupied cells miscounted"));
+            }
+            before += self.word(word).count_ones() as usize;
+        }
+        if before != occupied
+            || self.first_run(0) != 0
+            || self.first_run(occupied) != self.run_count()
+            || (0..occupied).any(|rank| self.first_run(rank + 1) <= self.first_run(rank))
         {
-            return Err(FormatError("obstacles: cell offsets out of order"));
+            return Err(FormatError("obstacles: cell runs out of order"));
+        }
+        let squares = self.squares.len() / 4;
+        if (1..squares)
+            .any(|row| u32_at(self.squares, 4 * row) <= u32_at(self.squares, 4 * row - 4))
+        {
+            return Err(FormatError("obstacles: footprint squares out of order"));
+        }
+        if self.outline_count() > 0 && self.first_vertex(0) != 0 {
+            return Err(FormatError("obstacles: vertices before the first outline"));
         }
         let mut previous_id = 0;
         for index in 0..self.outline_count() {
-            let record = &self.outlines[index * OUTLINE_BYTES..][..OUTLINE_BYTES];
-            let (first, count) = (u32_at(record, 8) as usize, usize::from(u16_at(record, 12)));
-            let id = u64::from_le_bytes(record[..8].try_into().unwrap());
-            let kind = OutlineKind::ALL.get(usize::from(record[16])).copied();
-            if kind.is_none() || EnvelopeClass::from_code(record[17]).is_none() {
+            let record = self.outline_bytes(index);
+            let kind = OutlineKind::ALL.get(usize::from(record[11] & 3)).copied();
+            if kind.is_none() || EnvelopeClass::from_code(record[11] >> ENVELOPE_SHIFT).is_none() {
                 return Err(FormatError("obstacles: unknown outline kind or envelope"));
             }
-            if u16_at(record, 14) == 0 || record[18..].iter().any(|&byte| byte != 0) {
-                return Err(FormatError("obstacles: zero height or reserved bytes set"));
+            if u16_at(record, 8) == 0 || usize::from(record[10]) >= squares {
+                return Err(FormatError("obstacles: zero height or a missing square"));
             }
-            if first + count > self.vertex_count() || id < previous_id {
+            let (first, end) = (self.first_vertex(index), self.end_vertex(index));
+            let id = self.footprint_id(record);
+            if end < first || end > self.vertex_count() || id < previous_id {
                 return Err(FormatError("obstacles: outline out of range or order"));
             }
+            let count = end - first;
             let well_formed = match kind {
                 Some(OutlineKind::Wall) => count >= 2,
-                _ => count >= 4 && self.vertex(first) == self.vertex(first + count - 1),
+                _ => count >= 4 && self.vertex(first) == self.vertex(end - 1),
             };
             if !well_formed {
                 return Err(FormatError("obstacles: open ring or short outline"));
@@ -94,8 +140,39 @@ impl<'a> Obstacles<'a> {
         Ok(())
     }
 
-    fn offset(&self, cell: usize) -> usize {
-        u32_at(self.cell_offsets, 4 * cell) as usize
+    fn word(&self, word: usize) -> u64 {
+        u64::from_le_bytes(
+            self.occupied_words[8 * word..8 * word + 8]
+                .try_into()
+                .unwrap(),
+        )
+    }
+
+    fn first_run(&self, rank: usize) -> usize {
+        u32_at(self.first_runs, 4 * rank) as usize
+    }
+
+    fn outline_bytes(&self, index: usize) -> &'a [u8] {
+        &self.outlines[index * OUTLINE_BYTES..][..OUTLINE_BYTES]
+    }
+
+    fn first_vertex(&self, outline: usize) -> usize {
+        u32_at(self.outline_bytes(outline), 0) as usize
+    }
+
+    /// Where an outline's vertices end: where the next one's begin, the last's at the end.
+    fn end_vertex(&self, outline: usize) -> usize {
+        if outline + 1 < self.outline_count() {
+            self.first_vertex(outline + 1)
+        } else {
+            self.vertex_count()
+        }
+    }
+
+    /// An outline record's footprint id: its square's high half and its ordinal.
+    fn footprint_id(&self, record: &[u8]) -> u64 {
+        u64::from(u32_at(self.squares, 4 * usize::from(record[10]))) << 32
+            | u64::from(u32_at(record, 4))
     }
 
     pub fn run(&self, index: usize) -> Run {
@@ -119,9 +196,16 @@ impl<'a> Obstacles<'a> {
         self.runs.len() / RUN_BYTES
     }
 
-    /// The indices of one cell's runs (cell `row * 128 + column`).
+    /// The indices of one cell's runs (cell `row * 128 + column`): none for an empty cell, else
+    /// those its rank among the occupied cells names.
     pub fn cell_run_range(&self, cell: usize) -> std::ops::Range<usize> {
-        self.offset(cell)..self.offset(cell + 1)
+        let (word, bit) = (self.word(cell / 64), cell % 64);
+        if word & 1 << bit == 0 {
+            return 0..0;
+        }
+        let rank = usize::from(u16_at(self.occupied_before, 2 * (cell / 64)))
+            + (word & ((1 << bit) - 1)).count_ones() as usize;
+        self.first_run(rank)..self.first_run(rank + 1)
     }
 
     /// The runs of one cell.
@@ -133,14 +217,15 @@ impl<'a> Obstacles<'a> {
     }
 
     pub fn outline(&self, index: usize) -> OutlineRecord {
-        let record = &self.outlines[index * OUTLINE_BYTES..][..OUTLINE_BYTES];
+        let record = self.outline_bytes(index);
+        let first_vertex = self.first_vertex(index);
         OutlineRecord {
-            footprint_id: u64::from_le_bytes(record[..8].try_into().unwrap()),
-            kind: OutlineKind::ALL[usize::from(record[16])],
-            envelope: EnvelopeClass::ALL[usize::from(record[17])],
-            height_m: f64::from(u16_at(record, 14)) / 10.0,
-            first_vertex: u32_at(record, 8) as usize,
-            vertex_count: usize::from(u16_at(record, 12)),
+            footprint_id: self.footprint_id(record),
+            kind: OutlineKind::ALL[usize::from(record[11] & 3)],
+            envelope: EnvelopeClass::ALL[usize::from(record[11] >> ENVELOPE_SHIFT)],
+            height_m: f64::from(u16_at(record, 8)) / 10.0,
+            first_vertex,
+            vertex_count: self.end_vertex(index) - first_vertex,
         }
     }
 

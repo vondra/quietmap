@@ -266,9 +266,9 @@ pub struct BoxPiece {
 
 /// A segment from `start` to `end` (Mercator, altitude above sea level) cut into the pieces of
 /// the boxes it crosses: first at z12 tile edges (so a tile's pieces depend on nothing outside
-/// it and its neighbours), then within each tile sampled every quarter of the current box's
-/// edge, each stretch between two samples going to the box of its middle, consecutive stretches
-/// of one box joined.
+/// it and its neighbours), then within each tile sampled every quarter of the edge of the box a
+/// stretch's middle lies in, each stretch going to that box, consecutive stretches of one box
+/// joined: a piece reaches past its box by an eighth of its edge at most.
 pub fn cut_into_pieces(
     placement: &Placement,
     start: (Mercator, f64),
@@ -295,13 +295,23 @@ pub fn cut_into_pieces(
                 / SAMPLES_PER_EDGE
         };
         while t < until {
-            let next = if length_m > 0.0 {
-                (t + step_m / length_m).min(until)
-            } else {
-                until
+            // A stretch is a quarter of the edge of the box its middle lies in: where the step
+            // carried from a coarser box puts the middle in a finer one, the stretch shortens to
+            // the finer box's step, so no piece reaches past its box by more than an eighth.
+            let (next, key, ground_m) = loop {
+                let next = if length_m > 0.0 {
+                    (t + step_m / length_m).min(until)
+                } else {
+                    until
+                };
+                let (middle, middle_altitude) = at(0.5 * (t + next));
+                let (key, ground_m) = placement.box_of(middle, middle_altitude, helicopter);
+                let box_step_m = placement.edge_m(&key) / SAMPLES_PER_EDGE;
+                if box_step_m >= step_m || next == t {
+                    break (next, key, ground_m);
+                }
+                step_m = box_step_m;
             };
-            let (middle, middle_altitude) = at(0.5 * (t + next));
-            let (key, ground_m) = placement.box_of(middle, middle_altitude, helicopter);
             step_m = placement.edge_m(&key) / SAMPLES_PER_EDGE;
             match pieces.last_mut() {
                 Some(piece) if piece.key == key => piece.end = at(next),

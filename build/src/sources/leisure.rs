@@ -13,7 +13,7 @@ use super::cells::{
 };
 use super::facilities::{Tags, parse_tags};
 use super::venues::{Seating, Venues};
-use super::{Converted, group_key};
+use super::{Converted, fields, group_key};
 use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
 use crate::traffic::{GRID_SIDE, grid_cell, street_parking_shares};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
@@ -249,7 +249,7 @@ pub fn convert(
                 footprint_id: 0,
                 group_key: group_key(&["leisure", &row.osm_kind, &row.osm_id.to_string()]),
                 emission: sound.band_levels_db(),
-                display: if spaces > 0.0 {
+                display: fields(if spaces > 0.0 {
                     json!([
                         row.name,
                         class_label(row.class),
@@ -270,8 +270,7 @@ pub fn convert(
                         "",
                         decibels
                     ])
-                }
-                .to_string(),
+                }),
             };
             push_site_points(&site_points(&site), area_m2, &attribute, out);
             emitting += 1;

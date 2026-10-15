@@ -483,7 +483,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                                 "distance_m": found.distance_m,
                                 "zoom": found.zoom,
                                 "clearance_m": found.clearance_m,
-                                "flights": found.flights,
+                                "flights_per_day": found.flights_per_day,
                                 "axis_deg": found.axis_deg,
                                 "gradient": found.gradient,
                                 "gradient_spread": found.gradient_spread,

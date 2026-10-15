@@ -11,6 +11,7 @@ pub mod aircraft_events;
 pub mod aircraft_tracks;
 pub mod geo;
 pub mod obstacles;
+mod rate;
 pub mod read;
 pub mod sources;
 pub mod terrain;

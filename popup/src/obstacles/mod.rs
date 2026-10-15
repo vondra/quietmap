@@ -103,7 +103,8 @@ enum Slot<'a> {
     NotRead,
     /// Read, and no obstacles file.
     Empty,
-    Read(SceneTile<'a>),
+    /// Boxed: most of a scene's slots are not read.
+    Read(Box<SceneTile<'a>>),
 }
 
 /// One slot of a scene's layout: its tile, the scene steps of the tile's local origin and its
@@ -180,7 +181,7 @@ impl<'a> Scene<'a> {
             match prepared {
                 Some((scene_tile, widest)) => {
                     self.widest_footprint_steps = self.widest_footprint_steps.max(widest);
-                    self.put(tile, Slot::Read(scene_tile));
+                    self.put(tile, Slot::Read(Box::new(scene_tile)));
                 }
                 None => self.put(tile, Slot::Empty),
             }
@@ -317,7 +318,7 @@ impl<'a> Scene<'a> {
                             x,
                             y: (i64::from(self.centre.y) + dy) as u32,
                         },
-                        tile,
+                        &**tile,
                     ))
                 }
                 _ => None,
