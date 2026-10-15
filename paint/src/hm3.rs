@@ -319,33 +319,69 @@ pub fn painted(out: &Path, zoom: u32, square: (u32, u32)) -> Result<bool, String
     }
 }
 
+fn listed(path: &Path) -> Result<Vec<PathBuf>, String> {
+    std::fs::read_dir(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .map(|entry| entry.map(|e| e.path()).map_err(|e| e.to_string()))
+        .collect()
+}
+
+/// The squares of one bundle directory's files.
+fn squares_of(
+    out: &Path,
+    zoom: u32,
+    directory: &Path,
+    squares: &mut BTreeSet<(u32, u32)>,
+) -> Result<(), String> {
+    for path in listed(directory)? {
+        if let Some((x, y)) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".hm3"))
+            .and_then(|name| name.split_once('_'))
+            .and_then(|(x, y)| Some((x.parse::<u32>().ok()?, y.parse::<u32>().ok()?)))
+        {
+            if x >= 4096 || y >= 4096 || path != square_path(out, zoom, (x, y)) {
+                return Err(format!("{}: not a canonical HM3 square", path.display()));
+            }
+            squares.insert((x, y));
+        }
+    }
+    Ok(())
+}
+
 pub fn squares(out: &Path, zoom: u32) -> Result<BTreeSet<(u32, u32)>, String> {
     tiles_per_side(zoom)?;
-    let listed = |path: &Path| -> Result<Vec<PathBuf>, String> {
-        std::fs::read_dir(path)
-            .map_err(|e| format!("{}: {e}", path.display()))?
-            .map(|entry| entry.map(|e| e.path()).map_err(|e| e.to_string()))
-            .collect()
-    };
     let mut squares = BTreeSet::new();
     for column in listed(&out.join(zoom.to_string()))? {
         for row in listed(&column)? {
-            for path in listed(&row)? {
-                if let Some((x, y)) = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .and_then(|name| name.strip_suffix(".hm3"))
-                    .and_then(|name| name.split_once('_'))
-                    .and_then(|(x, y)| Some((x.parse::<u32>().ok()?, y.parse::<u32>().ok()?)))
-                {
-                    if x >= 4096 || y >= 4096 || path != square_path(out, zoom, (x, y)) {
-                        return Err(format!("{}: not a canonical HM3 square", path.display()));
-                    }
-                    squares.insert((x, y));
-                }
+            squares_of(out, zoom, &row, &mut squares)?;
+        }
+    }
+    Ok(squares)
+}
+
+/// The painted squares with x in `columns` and y in `rows`, reading only their directories.
+pub fn squares_within(
+    out: &Path,
+    zoom: u32,
+    columns: std::ops::Range<u32>,
+    rows: std::ops::Range<u32>,
+) -> Result<BTreeSet<(u32, u32)>, String> {
+    tiles_per_side(zoom)?;
+    let mut squares = BTreeSet::new();
+    for column in columns.start / 8..columns.end.div_ceil(8) {
+        for row in rows.start / 8..rows.end.div_ceil(8) {
+            let directory = out
+                .join(zoom.to_string())
+                .join(column.to_string())
+                .join(row.to_string());
+            if directory.is_dir() {
+                squares_of(out, zoom, &directory, &mut squares)?;
             }
         }
     }
+    squares.retain(|(x, y)| columns.contains(x) && rows.contains(y));
     Ok(squares)
 }
 

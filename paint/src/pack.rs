@@ -1,8 +1,9 @@
 //! Publish immutable, deduplicated PMTiles archives by copying the painter's compressed streams.
 
 use crate::exact::LAYERS;
-use crate::hm3::{HEADER, PaintedSquare, layer_names, squares};
+use crate::hm3::{HEADER, PaintedSquare, layer_names, squares, squares_within};
 use crate::pyramid::{self, MIN_ZOOM};
+use crate::region::REGION_ZOOM;
 use pmtiles::{Compression, PmTilesWriter, TileCoord, TileId, TileType};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, Write};
@@ -14,7 +15,16 @@ struct ParentTile {
     ranges: [(u64, usize); LAYERS + 1],
 }
 
-pub fn pack(out: &Path, zoom: u8, tiles_dir: &Path, build: &str) -> Result<(), String> {
+/// The map's archives and manifest from the painted squares in `out`; with `regions`, each zoom-8
+/// region's part kept there (`pack_region`) is reused while its bundles are the same, else folded
+/// and kept.
+pub fn pack(
+    out: &Path,
+    zoom: u8,
+    tiles_dir: &Path,
+    build: &str,
+    regions: Option<&Path>,
+) -> Result<(), String> {
     if !matches!(zoom, 12 | 13)
         || !build
             .strip_prefix('b')
@@ -45,7 +55,7 @@ pub fn pack(out: &Path, zoom: u8, tiles_dir: &Path, build: &str) -> Result<(), S
     let temporary = tempfile::tempdir_in(tiles_dir).map_err(|e| e.to_string())?;
     let mut parents_file = tempfile::tempfile_in(temporary.path()).map_err(|e| e.to_string())?;
     let mut parents = Vec::new();
-    pyramid::write(out, zoom, &squares, |coordinate, tiles| {
+    pyramid::write(out, zoom, &squares, regions, |coordinate, tiles| {
         let mut ranges = [(0, 0); LAYERS + 1];
         for (layer, bytes) in tiles.iter().enumerate() {
             let offset = parents_file.stream_position().map_err(|e| e.to_string())?;
@@ -143,6 +153,28 @@ pub fn pack(out: &Path, zoom: u8, tiles_dir: &Path, build: &str) -> Result<(), S
         painted.len()
     );
     Ok(())
+}
+
+/// Folds and keeps the zoom-8 region `(x, y)` of the painted squares in `out` for the pack: its
+/// tiles from zoom 12 to 8 and its means. The squares it held.
+pub fn pack_region(
+    out: &Path,
+    zoom: u8,
+    regions: &Path,
+    (x, y): (u32, u32),
+) -> Result<usize, String> {
+    let span = 1 << (12 - REGION_ZOOM);
+    let squares = squares_within(
+        out,
+        u32::from(zoom),
+        x * span..(x + 1) * span,
+        y * span..(y + 1) * span,
+    )?;
+    let count = squares.len();
+    if count > 0 {
+        pyramid::keep_region(out, zoom, squares, regions, (x, y))?;
+    }
+    Ok(count)
 }
 
 #[cfg(test)]

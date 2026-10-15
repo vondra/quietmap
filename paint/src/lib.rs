@@ -31,5 +31,6 @@ mod pyramid;
 mod quiet;
 mod quiet_corners;
 mod quiet_samples;
+mod region;
 pub mod sone;
 pub mod square;

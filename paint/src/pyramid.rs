@@ -3,6 +3,7 @@
 use crate::exact::LAYERS;
 use crate::hm3::{TILE_PX, encode_tile, read};
 use crate::paint::{Cells, NO_LEVEL, SILENCE, cell};
+use crate::region::{self, REGION_ZOOM};
 use pmtiles::TileCoord;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
@@ -11,7 +12,7 @@ use std::sync::Mutex;
 
 pub(crate) const MIN_ZOOM: u8 = 2;
 
-struct AssessedLoudnessMeans {
+pub(crate) struct AssessedLoudnessMeans {
     assessed_pixel_counts: Vec<u32>,
     mean_layer_loudness_sone: Vec<[f32; LAYERS + 1]>,
 }
@@ -96,6 +97,41 @@ impl AssessedLoudnessMeans {
         }
     }
 
+    /// The counts, then the means, little-endian: exact, so a stored region's parents fold the same.
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(TILE_PX * TILE_PX * 4 * (LAYERS + 2));
+        for count in &self.assessed_pixel_counts {
+            bytes.extend(count.to_le_bytes());
+        }
+        for means in &self.mean_layer_loudness_sone {
+            for mean in means {
+                bytes.extend(mean.to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let cells = TILE_PX * TILE_PX;
+        if bytes.len() != cells * 4 * (LAYERS + 2) {
+            return Err("stored means of another size".into());
+        }
+        let word = |at: usize| [bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]];
+        let means_at = cells * 4;
+        Ok(Self {
+            assessed_pixel_counts: (0..cells)
+                .map(|k| u32::from_le_bytes(word(4 * k)))
+                .collect(),
+            mean_layer_loudness_sone: (0..cells)
+                .map(|k| {
+                    std::array::from_fn(|layer| {
+                        f32::from_le_bytes(word(means_at + 4 * (k * (LAYERS + 1) + layer)))
+                    })
+                })
+                .collect(),
+        })
+    }
+
     fn layer_cells(&self, layer: usize) -> Vec<u8> {
         self.assessed_pixel_counts
             .iter()
@@ -119,12 +155,77 @@ struct Pyramid<'a> {
     painted_zoom: u8,
     covered_tile_coordinates_by_zoom: Vec<BTreeSet<(u32, u32)>>,
     loudness: [f32; 256],
+    /// Where the regions' parts are kept (`crate::region`), if they are.
+    regions: Option<&'a Path>,
 }
 
-impl Pyramid<'_> {
+impl<'a> Pyramid<'a> {
+    fn new(
+        out: &'a Path,
+        painted_zoom: u8,
+        squares: BTreeSet<(u32, u32)>,
+        regions: Option<&'a Path>,
+    ) -> Self {
+        let mut covered_tile_coordinates_by_zoom = vec![BTreeSet::new(); 13];
+        covered_tile_coordinates_by_zoom[12] = squares;
+        for level in (MIN_ZOOM as usize..12).rev() {
+            covered_tile_coordinates_by_zoom[level] = covered_tile_coordinates_by_zoom[level + 1]
+                .iter()
+                .map(|&(x, y)| (x / 2, y / 2))
+                .collect();
+        }
+        Pyramid {
+            out,
+            painted_zoom,
+            covered_tile_coordinates_by_zoom,
+            loudness: cell_byte_loudness_sone(),
+            regions,
+        }
+    }
+
+    /// The tile's means and tiles; a region's from its kept part when its bundles are the same,
+    /// else folded and kept.
+    fn visit(
+        &self,
+        zoom: u8,
+        x: u32,
+        y: u32,
+        write: &TileWriter,
+    ) -> Result<AssessedLoudnessMeans, String> {
+        let Some(directory) = self.regions.filter(|_| zoom == REGION_ZOOM) else {
+            return self.fold(zoom, x, y, write);
+        };
+        let span = 1 << (12 - REGION_ZOOM);
+        let squares = (self.covered_tile_coordinates_by_zoom[12]
+            .range((x * span, 0)..((x + 1) * span, 0)))
+        .filter(|&&(_, square_y)| square_y / span == y)
+        .copied();
+        let bundles = region::bundles(self.out, u32::from(self.painted_zoom), squares)?;
+        if let Some(kept) = region::load(directory, (x, y), &bundles)? {
+            for (coordinate, tiles) in &kept.tiles {
+                write(*coordinate, tiles)?;
+            }
+            return Ok(kept.means);
+        }
+        let tiles = Mutex::new(Vec::new());
+        let keep = |coordinate: TileCoord, compressed: &[Vec<u8>]| {
+            (tiles
+                .lock()
+                .map_err(|_| "a region's tiles' writer panicked".to_string())?)
+            .push((coordinate, compressed.to_vec()));
+            write(coordinate, compressed)
+        };
+        let means = self.fold(zoom, x, y, &keep)?;
+        let tiles = tiles
+            .into_inner()
+            .map_err(|_| "a region's tiles' writer panicked".to_string())?;
+        region::store(directory, (x, y), &tiles, &means, &bundles)?;
+        Ok(means)
+    }
+
     /// The tile's means from its children's, the four subtrees on the cores at once (each holds at
     /// most a tile's means a level, so memory stays bounded by depth times the threads).
-    fn visit(
+    fn fold(
         &self,
         zoom: u8,
         x: u32,
@@ -170,22 +271,10 @@ pub(crate) fn write(
     out: &Path,
     zoom: u8,
     squares: &BTreeSet<(u32, u32)>,
+    regions: Option<&Path>,
     write: impl FnMut(TileCoord, &[Vec<u8>]) -> Result<(), String> + Send,
 ) -> Result<(), String> {
-    let mut covered_tile_coordinates_by_zoom = vec![BTreeSet::new(); 13];
-    covered_tile_coordinates_by_zoom[12] = squares.clone();
-    for level in (MIN_ZOOM as usize..12).rev() {
-        covered_tile_coordinates_by_zoom[level] = covered_tile_coordinates_by_zoom[level + 1]
-            .iter()
-            .map(|&(x, y)| (x / 2, y / 2))
-            .collect();
-    }
-    let pyramid = Pyramid {
-        out,
-        painted_zoom: zoom,
-        covered_tile_coordinates_by_zoom,
-        loudness: cell_byte_loudness_sone(),
-    };
+    let pyramid = Pyramid::new(out, zoom, squares.clone(), regions);
     // The tiles come back in no order (the archive sorts them); one writer at a time.
     let write = Mutex::new(write);
     let write = |coordinate: TileCoord, tiles: &[Vec<u8>]| {
@@ -195,6 +284,19 @@ pub(crate) fn write(
     };
     (pyramid.covered_tile_coordinates_by_zoom[MIN_ZOOM as usize].par_iter())
         .try_for_each(|&(x, y)| pyramid.visit(MIN_ZOOM, x, y, &write).map(drop))
+}
+
+/// Folds and keeps the region `(x, y)` (zoom 8) of the painted `squares` in `regions`.
+pub(crate) fn keep_region(
+    out: &Path,
+    zoom: u8,
+    squares: BTreeSet<(u32, u32)>,
+    regions: &Path,
+    (x, y): (u32, u32),
+) -> Result<(), String> {
+    Pyramid::new(out, zoom, squares, Some(regions))
+        .visit(REGION_ZOOM, x, y, &|_, _| Ok(()))
+        .map(drop)
 }
 
 #[cfg(test)]

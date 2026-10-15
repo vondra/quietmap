@@ -4,7 +4,10 @@
 //! already painted, the next one prepared on the cores while two paint their pixels (the exact
 //! evaluations on the first CUDA card when there is one) and a writer publishes those before; one
 //! line per square on stdout.
-//! `qm-paint pack --out DIR --zoom Z --tiles DIR --build bNNN`: the map's archives and manifest.
+//! `qm-paint pack --out DIR --zoom Z --tiles DIR --build bNNN [--regions DIR]`: the map's archives
+//! and manifest, reusing the zoom-8 regions' parts kept in `--regions`.
+//! `qm-paint pack-region --out DIR --zoom Z --regions DIR --region X,Y`: a zoom-8 region's part of
+//! the pack (its tiles from zoom 12 to 8 and its means), kept for the pack once its squares are painted.
 //! `qm-paint merge --from DIR --out DIR --zoom Z`: atomic byte copies of completed squares.
 
 use paint::exact::Batch;
@@ -97,7 +100,25 @@ fn run(arguments: &[String]) -> Result<(), String> {
             zoom,
             &PathBuf::from(required("tiles")?),
             required("build")?,
+            value(arguments, "regions").map(PathBuf::from).as_deref(),
         );
+    }
+    if arguments.first().map(String::as_str) == Some("pack-region") {
+        let zoom: u8 = required("zoom")?
+            .parse()
+            .map_err(|_| "--zoom is a number")?;
+        let region = numbers(required("region")?)?;
+        let [x, y] = region[..] else {
+            return Err("--region is X,Y at zoom 8".into());
+        };
+        let squares = paint::pack::pack_region(
+            &PathBuf::from(required("out")?),
+            zoom,
+            &PathBuf::from(required("regions")?),
+            (x as u32, y as u32),
+        )?;
+        println!("qm-paint: region {x}/{y} kept, {squares} squares");
+        return Ok(());
     }
     let release = Release::open(&PathBuf::from(required("prepared")?), required("year")?)?;
     let weather = WeatherTable::read(&release.weather_path)?;

@@ -142,7 +142,10 @@ waiting, two painted), and a square is complete only after its bundle is durable
 independent painters' bundles into one tree atomically, without decoding or replacing completed
 squares. Identical completed copies are skipped on retry; conflicting squares stop the merge.
 `paint/src/pyramid.rs` reads each compressed square once and carries the assessed-pixel counts and
-unrounded loudness through the same means, one branch at a time; it compresses each lower tile once.
+unrounded loudness through the same means, the branches on all cores at once; it compresses each lower
+tile once. A region of 16 × 16 squares (a tile of zoom 8) is packed as soon as it is painted
+(`qm-paint pack-region`, `paint/src/region.rs`): its tiles from zoom 12 to 8 and its exact means are
+kept, and the pack reuses them while the region's bundles are unchanged.
 `pack.rs` copies these streams into one immutable PMTiles archive per layer, zooms down to 2,
 ordered by zoom and Hilbert tile id. Identical streams share an archive range; gzip compresses its
 index. An archive is read by byte range, so a tile needs no scan or server decompression, and the
