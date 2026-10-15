@@ -70,7 +70,7 @@ with no exposed façade gets no answer. No indoor attenuation is applied.
 The click reads the clicked tile and its eight neighbours, computes and sends a first answer. Then
 it reads one more ring of tiles at a time until every ground source within 12 km and every flight
 within 16 km is covered, sending the whole answer again after each ring. At náměstí Míru in Prague a
-click reads 136 files, 182 MB.
+click reads 136 files, 131 MB.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 268" role="img" aria-label="Seven by seven tiles around a click in Prague: the inner three by three give the first answer, five by five cover the ground sources within 12 km, seven by seven the flights within 16 km" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">

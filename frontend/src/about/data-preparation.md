@@ -214,8 +214,10 @@ Everything a click or the painter reads lies in one tree of files. The world is 
 standard web-map tiles of zoom 12, 6.3 km wide in Prague and 9.8 km at the equator. Each tile has
 one file per kind of data, the 64 tiles of a zoom-9 square share a directory, and a tile with
 nothing of a kind has no file of it: the open sea has no terrain file. A file holds its kind's
-records each number in the fewest bytes its meaning needs, read in place without decoding; only
-the terrain's files carry a coder, the residual of a planar prediction of the heights in zstd.
+records each number in the fewest bytes its meaning needs, to a step below what moves an answer,
+read in place without decoding: no text, no general compressor, a value repeated in a file kept
+once in a table of it. Only the terrain's files carry a coder: a smooth field's information is
+the residual of a planar prediction of its heights, stored in zstd.
 The world takes 1.5 TB (October 2026).
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
@@ -285,10 +287,10 @@ altitude at its two ends.
 <g fill="none" stroke="currentColor" stroke-opacity=".5" marker-end="url(#hiw-arrow-records)"><path d="M46 160Q117 110 187 159"/><path d="M70 160Q129 118 187 159"/><path d="M142 160Q165 142 187 159"/><path d="M94 160Q170 106 245 159"/><path d="M118 160Q182 114 245 159"/><path d="M189 184Q262 222 334 186"/><path d="M247 184Q291 206 334 186"/></g>
 <g fill="#d9622b" fill-opacity=".15" stroke="currentColor" stroke-opacity=".6"><rect x="34" y="160" width="24" height="24"/><rect x="58" y="160" width="24" height="24"/><rect x="82" y="160" width="24" height="24"/><rect x="106" y="160" width="24" height="24"/><rect x="130" y="160" width="24" height="24"/></g>
 <g fill="currentColor" fill-opacity=".08" stroke="currentColor" stroke-opacity=".6"><rect x="160" y="160" width="58" height="24"/><rect x="218" y="160" width="58" height="24"/><rect x="284" y="160" width="108" height="24"/></g>
-<g fill="currentColor" text-anchor="middle" font-size="11.5"><text x="46" y="176">0</text><text x="70" y="176">0</text><text x="94" y="176">1</text><text x="118" y="176">1</text><text x="142" y="176">0</text><text x="189" y="176">record 0</text><text x="247" y="176">record 1</text><text x="338" y="176">text</text></g>
-<g fill="currentColor" fill-opacity=".7" text-anchor="middle" font-size="11.5"><text x="94" y="232">pieces, 12 bytes</text><text x="218" y="232">records, 36 bytes</text><text x="338" y="232">texts</text></g>
+<g fill="currentColor" text-anchor="middle" font-size="11.5"><text x="46" y="176">0</text><text x="70" y="176">0</text><text x="94" y="176">1</text><text x="118" y="176">1</text><text x="142" y="176">0</text><text x="189" y="176">record 0</text><text x="247" y="176">record 1</text><text x="338" y="176">display</text></g>
+<g fill="currentColor" fill-opacity=".7" text-anchor="middle" font-size="11.5"><text x="94" y="232">pieces, 12 bytes</text><text x="218" y="232">records, 32 bytes</text><text x="338" y="232">display</text></g>
 </svg>
-<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A way's straight segments become pieces of at most 250 m, cut where the way leaves the tile. In the tile's sources file the five pieces point to two records, the stretch on a slope having its own, and both records point to one text.</figcaption>
+<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A way's straight segments become pieces of at most 250 m, cut where the way leaves the tile. In the tile's sources file the five pieces point to two records, the stretch on a slope having its own, and both records point to one display: what the click panel shows of the road, its fields typed by the roads' schema, its name kept once in the file's table of texts.</figcaption>
 </figure>
 
 | Layer | A piece | A source in the click's list |
@@ -323,11 +325,11 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
 |---|---|---|
 | `terrain` | `tiles/src/terrain.rs` | the one-arc-second node window that brackets the tile: neighbours share their seam nodes; a sample touching a node without data is refused, never guessed; height, sealing, tree cover and crown height a node |
 | `terrain-fine` | `tiles/src/terrain_fine.rs` | a national model's detail on the 1/6" lattice, its height less its own 1" average, faded towards its edges and voids; blocks of 128 x 128 cells, each one zstd frame behind a directory, so a click decodes only the blocks its rays' ends touch |
-| `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile) through a cell -> offset table |
-| `sources` | `tiles/src/sources.rs` | 12-byte pieces, 36-byte records, each distinct emission row (per octave band and period a u16 in 0.01 dB) and display text once, 8-byte deck entries (a bridge piece's deck altitude at its ends) |
-| `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with only the periods it is heard in and its two loudest flight pieces, its slab a row of the tile's band table; the tile's flight table; a box finds its periods and pieces from the counts every 32 boxes |
-| `aircraft-events` | `tiles/src/aircraft_events.rs` | 16 x 16 z16 cells a tile; no file where no flight reaches 50 dB |
-| `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start behind a fence of every 256th part's key, so a listed flight reads one 4 KB page of the directory |
+| `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile): a bitmap marks the occupied cells and counts them before every 64, so a cell finds its runs in place; an outline's footprint id is its square's row in the file's table and its ordinal |
+| `sources` | `tiles/src/sources.rs` | 12-byte lines and 8-byte points, 32-byte records, each distinct emission row (per octave band and period a u16 in 0.01 dB) and display once, 8-byte deck entries (a bridge line's deck altitude at its ends); a display is its layer's fields typed by one schema (`tiles/src/sources/display.rs`: texts in the file's table, numbers as whole counts of their field's decimal step), as the builder wrote them |
+| `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with only the periods it is heard in and its loudest flight pieces, its slab a row of the tile's band table, its flights a day as a 16-bit rate; the tile's flight table; a piece's ends from its box's centroid (the farthest exact); a box finds its periods and pieces from the counts every 32 boxes |
+| `aircraft-events` | `tiles/src/aircraft_events.rs` | 16 x 16 z16 cells a tile, the flights a day as 16-bit rates; no file where no flight reaches 50 dB |
+| `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start behind a fence of every 256th part's key, so a listed flight reads one 4 KB page of the directory; a part's points as 2-byte steps at 1e-5 deg |
 | `weather` | `physics/src/weather.rs` | 0.5 deg nodes: favourable probability per period and 16 sectors in percent, absorption per octave in 0.01 dB/km |
 
 - `tiles::tile_path` names a tile's file in the standard web-map XYZ numbering (y grows
