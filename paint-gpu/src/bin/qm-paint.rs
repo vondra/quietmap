@@ -17,7 +17,9 @@ use paint_gpu::square_writer::{PaintedSquareCells, write_beside_painting};
 use physics::weather::WeatherTable;
 use popup::release::Release;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::sync_channel;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 use tiles::geo::{Mercator, TileId};
 
@@ -135,19 +137,38 @@ fn run(arguments: &[String]) -> Result<(), String> {
         prepare_square(&release, &weather, gpu.as_ref(), grid, number, tile)
     };
     let preparing_pool = &preparing_pool;
-    // Three stages, a thread each: the preparer reads the next square, uploads it and takes its
-    // corners (on its own cores) while this thread paints a square's pixels (the card) and the
-    // writer encodes and publishes the squares before. The preparer hands its square over when
-    // the card is free; preparing two ahead slowed Dobris's busiest squares by 3 % (2026-10-14).
+    // Three stages: the preparer reads the next square, uploads it and takes its corners (on its
+    // own cores), the painters paint [`SQUARES_ON_THE_CARD`] squares' pixels at once (the card),
+    // the writer encodes and publishes the squares before. The preparer hands a square to the
+    // first free painter; preparing two ahead slowed Dobris's busiest squares by 3 % (2026-10-14).
     // A heavy square paints alone: two of those do not fit in memory.
     write_beside_painting(&out, zoom, |sender| {
+        let (prepared_sender, prepared_receiver) = sync_channel::<Result<Prepared, String>>(0);
+        // The painters own the receiver: when the last one ends, the preparer's next hand-over fails.
+        let prepared_receiver = Arc::new(Mutex::new(prepared_receiver));
+        // The squares on the card, counted when handed over, and the stop after an error.
+        let on_the_card = (Mutex::new(0usize), Condvar::new());
+        let stopped = AtomicBool::new(false);
+        let until_card_holds = |most: usize| {
+            let (count, changed) = &on_the_card;
+            let count = count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            drop(changed.wait_while(count, |count| {
+                *count > most && !stopped.load(Ordering::Relaxed)
+            }));
+        };
+        let (weather, gpu, todo, squares) = (&weather, gpu.as_ref(), &todo, &squares);
+        let (on_the_card, stopped, until_card_holds) = (&on_the_card, &stopped, &until_card_holds);
+        let prepare = &prepare;
         std::thread::scope(|scope| {
-            let (prepared_sender, prepared_receiver) = sync_channel(0);
-            let (heavy_done, heavy_painted) = sync_channel::<()>(0);
             scope.spawn(move || {
                 // The first square and the one after a heavy square wait for no card: every core.
                 let mut card_idle = true;
-                for square in &todo {
+                for square in todo {
+                    if stopped.load(Ordering::Relaxed) {
+                        return;
+                    }
                     let prepared = match card_idle {
                         true => prepare(square),
                         false => preparing_pool.install(|| prepare(square)),
@@ -155,30 +176,70 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     let heavy = prepared
                         .as_ref()
                         .is_ok_and(|prepared| prepared.candidates > PIPELINE_CANDIDATES_MAX);
-                    if prepared_sender.send(prepared).is_err()
-                        || (heavy && heavy_painted.recv().is_err())
-                    {
+                    if heavy {
+                        until_card_holds(0);
+                    }
+                    *on_the_card
+                        .0
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+                    if prepared_sender.send(prepared).is_err() {
                         return;
+                    }
+                    if heavy {
+                        until_card_holds(0);
                     }
                     card_idle = heavy;
                 }
             });
-            for prepared in prepared_receiver {
-                let prepared: Prepared = prepared?;
-                let heavy = prepared.candidates > PIPELINE_CANDIDATES_MAX;
-                let cells = finish_square(&weather, gpu.as_ref(), grid, squares.len(), prepared)?;
-                if heavy {
-                    // The preparer waits on it; it may have stopped on an error of its own.
-                    let _ = heavy_done.send(());
-                }
-                sender
-                    .send(cells)
-                    .map_err(|_| "a square's writer stopped".to_string())?;
-            }
-            Ok(())
+            let painters: Vec<_> = (0..SQUARES_ON_THE_CARD)
+                .map(|_| {
+                    let (sender, prepared_receiver) = (sender.clone(), prepared_receiver.clone());
+                    scope.spawn(move || -> Result<(), String> {
+                        loop {
+                            let received = (prepared_receiver.lock())
+                                .map_err(|_| "a painter panicked".to_string())?
+                                .recv();
+                            let Ok(prepared) = received else {
+                                return Ok(());
+                            };
+                            let cells = prepared.and_then(|prepared| {
+                                finish_square(weather, gpu, grid, squares.len(), prepared)
+                            });
+                            {
+                                let (count, changed) = on_the_card;
+                                *count
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner()) -= 1;
+                                changed.notify_all();
+                            }
+                            let sent = cells.and_then(|cells| {
+                                (sender.send(cells))
+                                    .map_err(|_| "a square's writer stopped".to_string())
+                            });
+                            if sent.is_err() {
+                                stopped.store(true, Ordering::Relaxed);
+                                on_the_card.1.notify_all();
+                                return sent;
+                            }
+                        }
+                    })
+                })
+                .collect();
+            drop(prepared_receiver);
+            painters.into_iter().try_for_each(|painter| {
+                painter
+                    .join()
+                    .unwrap_or_else(|_| Err("a painter panicked".into()))
+            })
         })
     })
 }
+
+/// Squares whose pixels are painted at once: one square's passes leave the card idle between them
+/// (two painter processes on one card: light squares 1.4x, 30-300 KB 1.17x, Dobris 1.12x,
+/// 2026-10-14); two processes also kept two copies of the kernels' card memory.
+const SQUARES_ON_THE_CARD: usize = 2;
 
 /// A square's sources at most this many candidates paint while the next one is prepared (Dobris's
 /// about 130,000 do; Prague's centre, 470,000 and 30-45 GB, paints alone).
