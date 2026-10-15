@@ -14,8 +14,11 @@ use std::collections::HashMap;
 pub enum FieldKind {
     /// A text: the u32 offset of its entry in the string table (u32::MAX: null).
     Text,
-    /// A whole number in `bytes` (1 or 2) unsigned bytes; the largest is null.
+    /// A whole number in `bytes` (1, 2 or 4) unsigned bytes, every value of its builder's type
+    /// (a byte's 0 to 255): never null.
     Whole(u8),
+    /// A whole number in `bytes` unsigned bytes or null, the largest.
+    WholeOrNull(u8),
     /// A decimal number to `decimals` places as a signed whole count of 10^-decimals in `bytes`
     /// (2 or 4) bytes; the smallest is null.
     Decimal { decimals: u8, bytes: u8 },
@@ -31,7 +34,9 @@ impl FieldKind {
     pub fn bytes(self) -> usize {
         match self {
             FieldKind::Text => 4,
-            FieldKind::Whole(bytes) | FieldKind::Decimal { bytes, .. } => usize::from(bytes),
+            FieldKind::Whole(bytes)
+            | FieldKind::WholeOrNull(bytes)
+            | FieldKind::Decimal { bytes, .. } => usize::from(bytes),
             FieldKind::Real => 8,
             FieldKind::Flag => 1,
             FieldKind::Three { bytes, .. } => 3 * usize::from(bytes),
@@ -50,7 +55,7 @@ const fn field(name: &'static str, kind: FieldKind) -> Field {
     Field { name, kind }
 }
 
-use FieldKind::{Flag, Real, Text, Whole};
+use FieldKind::{Flag, Real, Text, Whole, WholeOrNull};
 
 /// A count of tenths in 4 bytes (vehicles a day), of hundredths, of whole units (areas).
 const TENTHS_4: FieldKind = FieldKind::Decimal {
@@ -76,7 +81,7 @@ const ROAD: [Field; 19] = [
     field("aadt_moto", TENTHS_4),
     field("traffic_estimated", Whole(1)),
     field("cross_section_aadt", WHOLE_4),
-    field("speed_posted_kmh", Whole(1)),
+    field("speed_posted_kmh", WholeOrNull(2)),
     // The mean speed the emission takes (a limit times 0.845 is not a decimal of its own).
     field("speed_kmh", TENTHS_2),
     field("speed_source", Text),
@@ -119,7 +124,7 @@ const INDUSTRY: [Field; 9] = [
     field("source_type", Text),
     field("area_m2", WHOLE_4),
     field("nace", Text),
-    field("grid_points", Whole(2)),
+    field("grid_points", Whole(4)),
     // A wind turbine's hub and rating as its register gives them.
     field("hub_height_m", Real),
     field("rated_power_kw", Real),
@@ -258,13 +263,14 @@ impl DisplayTable {
                 };
                 record.extend_from_slice(&at.to_le_bytes());
             }
-            Whole(bytes) => {
+            Whole(bytes) | WholeOrNull(bytes) => {
                 let largest = (1u64 << (8 * bytes)) - 1;
+                let nullable = matches!(field.kind, WholeOrNull(_));
                 let whole = match value {
-                    Value::Null => largest,
+                    Value::Null if nullable => largest,
                     _ => value
                         .as_u64()
-                        .filter(|&whole| whole < largest)
+                        .filter(|&whole| whole < largest || (!nullable && whole == largest))
                         .unwrap_or_else(|| cannot_hold(field.name, value)),
                 };
                 record.extend_from_slice(&whole.to_le_bytes()[..usize::from(bytes)]);
@@ -373,11 +379,11 @@ fn read_field(kind: FieldKind, bytes: &[u8], strings: &[u8]) -> Result<Value, Fo
                     .to_string(),
             )
         }
-        Whole(_) => {
+        Whole(_) | WholeOrNull(_) => {
             let mut wide = [0u8; 8];
             wide[..bytes.len()].copy_from_slice(bytes);
             let whole = u64::from_le_bytes(wide);
-            if whole == (1u64 << (8 * bytes.len())) - 1 {
+            if matches!(kind, WholeOrNull(_)) && whole == (1u64 << (8 * bytes.len())) - 1 {
                 Value::Null
             } else {
                 Value::from(whole)
