@@ -3,18 +3,32 @@
 //! layer, the geometry of emission (height, ground, platform), emission per octave band and period
 //! computed at build time, and the display fields the popup shows for its contributors. Records
 //! sharing their display text point at one copy of it: the rows of a road differ in emission by
-//! their gradient and junction corrections, not in what the popup shows of them. A piece on a
-//! bridge has an entry in the deck table: the deck's altitude at its two ends, which its source
-//! stands on instead of the terrain under it.
+//! their gradient and junction corrections, not in what the popup shows of them. Records sharing
+//! their emission point at one row of it: a city's buildings, each its own record by its footprint
+//! and group, share a few spectra. A piece on a bridge has an entry in the deck table: the deck's
+//! altitude at its two ends, which its source stands on instead of the terrain under it.
+//!
+//! ```text
+//! magic "qmsrc4\n\0", u32 pieces, attributes, emission rows, decks, text bytes
+//! per piece, 12 B: ends 4 x i16, attribute u32
+//! per attribute, 36 B: layer u8, ground u8, platform half-width u16 (0.1 m), height u16 (0.01 m),
+//!   exclusion radius u16 (0.1 m), footprint u64, group u64, emission row u32, text start u32,
+//!   text length u32
+//! per emission row, 48 B: per period and octave band a level code u16
+//! per deck, in piece order, 8 B: piece u32, the deck's altitude at its ends 2 x u16 (terrain codes)
+//! display texts, each distinct text once
+//! ```
 
 use crate::FormatError;
 use crate::terrain::{code_of_height_m, height_m_of_code};
 use std::collections::HashMap;
 
-const MAGIC: &[u8; 8] = b"qmsrc3\n\0";
-const HEADER_BYTES: usize = 24;
+const MAGIC: &[u8; 8] = b"qmsrc4\n\0";
+const HEADER_BYTES: usize = 28;
 const PIECE_BYTES: usize = 12;
-const ATTRIBUTE_BYTES: usize = 80;
+const ATTRIBUTE_BYTES: usize = 36;
+/// An emission row: a level code per period and octave band.
+const EMISSION_BYTES: usize = 2 * BANDS * PERIODS;
 /// A deck entry: the piece's index (u32) and the deck's altitude at its two ends (terrain codes).
 const DECK_BYTES: usize = 8;
 /// Octave bands 63 Hz .. 8 kHz.
@@ -279,32 +293,49 @@ fn level_db(code: u16) -> f64 {
     }
 }
 
-fn write_attribute_record(bytes: &mut Vec<u8>, attribute: &Attribute, text_start: u32) {
+fn emission_row(emission: &Emission) -> [u8; EMISSION_BYTES] {
+    let mut row = [0; EMISSION_BYTES];
+    for (code, level) in row.chunks_exact_mut(2).zip(emission.iter().flatten()) {
+        code.copy_from_slice(&level_code(*level).to_le_bytes());
+    }
+    row
+}
+
+/// A length in `step_m` steps as u16, refused beyond its range.
+fn steps_u16(value_m: f64, step_m: f64, what: &str) -> [u8; 2] {
+    let code = (value_m / step_m).round();
+    assert!(
+        (0.0..=f64::from(u16::MAX)).contains(&code),
+        "{what} {value_m} m outside the u16 range"
+    );
+    (code as u16).to_le_bytes()
+}
+
+fn write_attribute_record(bytes: &mut Vec<u8>, attribute: &Attribute, row: u32, text_start: u32) {
     bytes.push(attribute.layer as u8);
     bytes.push(attribute.ground_percent);
-    bytes.push((attribute.platform_half_width_m * 10.0).round() as u8);
-    bytes.push(0);
-    bytes.extend_from_slice(&((attribute.height_m * 100.0).round() as u16).to_le_bytes());
-    bytes.extend_from_slice(&((attribute.exclusion_radius_m * 10.0).round() as u16).to_le_bytes());
+    bytes.extend_from_slice(&steps_u16(attribute.platform_half_width_m, 0.1, "platform"));
+    bytes.extend_from_slice(&steps_u16(attribute.height_m, 0.01, "height"));
+    bytes.extend_from_slice(&steps_u16(attribute.exclusion_radius_m, 0.1, "exclusion"));
     bytes.extend_from_slice(&attribute.footprint_id.to_le_bytes());
     bytes.extend_from_slice(&attribute.group_key.to_le_bytes());
-    for level in attribute.emission.iter().flatten() {
-        bytes.extend_from_slice(&level_code(*level).to_le_bytes());
-    }
+    bytes.extend_from_slice(&row.to_le_bytes());
     bytes.extend_from_slice(&text_start.to_le_bytes());
     bytes.extend_from_slice(&(attribute.display.len() as u32).to_le_bytes());
 }
 
-/// Two attributes with equal keys are stored once: the record as written plus the display text.
+/// Two attributes with equal keys are stored once: the record as written, its emission and its
+/// display text.
 pub fn attribute_key(attribute: &Attribute) -> Vec<u8> {
-    let mut key = Vec::with_capacity(ATTRIBUTE_BYTES + attribute.display.len());
-    write_attribute_record(&mut key, attribute, 0);
+    let mut key = Vec::with_capacity(ATTRIBUTE_BYTES + EMISSION_BYTES + attribute.display.len());
+    write_attribute_record(&mut key, attribute, 0, 0);
+    key.extend_from_slice(&emission_row(&attribute.emission));
     key.extend_from_slice(attribute.display.as_bytes());
     key
 }
 
-/// The bytes of a sources file: header, 12-byte pieces, 80-byte attributes, the 8-byte deck
-/// entries in piece order, display texts (each distinct text once).
+/// The bytes of a sources file: header, pieces, attributes, emission rows and display texts (each
+/// distinct row and text once, in first use's order), the deck entries in piece order.
 pub fn encode(pieces: &[Piece], attributes: &[Attribute], decks: &[Deck]) -> Vec<u8> {
     let mut text: Vec<u8> = Vec::new();
     let mut starts: HashMap<&str, u32> = HashMap::new();
@@ -318,15 +349,34 @@ pub fn encode(pieces: &[Piece], attributes: &[Attribute], decks: &[Deck]) -> Vec
             })
         })
         .collect();
+    let mut rows: Vec<[u8; EMISSION_BYTES]> = Vec::new();
+    let mut row_of: HashMap<[u8; EMISSION_BYTES], u32> = HashMap::new();
+    let row_indices: Vec<u32> = attributes
+        .iter()
+        .map(|attribute| {
+            let row = emission_row(&attribute.emission);
+            *row_of.entry(row).or_insert_with(|| {
+                rows.push(row);
+                u32::try_from(rows.len() - 1).expect("tile too large")
+            })
+        })
+        .collect();
     let mut bytes = Vec::with_capacity(
         HEADER_BYTES
             + PIECE_BYTES * pieces.len()
             + ATTRIBUTE_BYTES * attributes.len()
+            + EMISSION_BYTES * rows.len()
             + DECK_BYTES * decks.len()
             + text.len(),
     );
     bytes.extend_from_slice(MAGIC);
-    for count in [pieces.len(), attributes.len(), text.len(), decks.len()] {
+    for count in [
+        pieces.len(),
+        attributes.len(),
+        rows.len(),
+        decks.len(),
+        text.len(),
+    ] {
         bytes.extend_from_slice(&u32::try_from(count).expect("tile too large").to_le_bytes());
     }
     for piece in pieces {
@@ -336,8 +386,11 @@ pub fn encode(pieces: &[Piece], attributes: &[Attribute], decks: &[Deck]) -> Vec
         }
         bytes.extend_from_slice(&piece.attribute.to_le_bytes());
     }
-    for (attribute, &start) in attributes.iter().zip(&text_starts) {
-        write_attribute_record(&mut bytes, attribute, start);
+    for ((attribute, &row), &start) in attributes.iter().zip(&row_indices).zip(&text_starts) {
+        write_attribute_record(&mut bytes, attribute, row, start);
+    }
+    for row in &rows {
+        bytes.extend_from_slice(row);
     }
     for (k, deck) in decks.iter().enumerate() {
         assert!((deck.piece as usize) < pieces.len());
@@ -358,6 +411,7 @@ pub fn encode(pieces: &[Piece], attributes: &[Attribute], decks: &[Deck]) -> Vec
 pub struct Sources<'a> {
     pieces: &'a [u8],
     attributes: &'a [u8],
+    emissions: &'a [u8],
     decks: &'a [u8],
     text: &'a [u8],
 }
@@ -368,17 +422,20 @@ impl<'a> Sources<'a> {
             return Err(FormatError("sources: bad magic"));
         }
         let count = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
-        let (pieces, attributes, text, decks) = (count(8), count(12), count(16), count(20));
+        let (pieces, attributes, rows, decks, text) =
+            (count(8), count(12), count(16), count(20), count(24));
         let pieces_end = HEADER_BYTES + PIECE_BYTES * pieces;
         let attributes_end = pieces_end + ATTRIBUTE_BYTES * attributes;
-        let decks_end = attributes_end + DECK_BYTES * decks;
+        let emissions_end = attributes_end + EMISSION_BYTES * rows;
+        let decks_end = emissions_end + DECK_BYTES * decks;
         if bytes.len() != decks_end + text {
             return Err(FormatError("sources: length does not match the counts"));
         }
         Ok(Sources {
             pieces: &bytes[HEADER_BYTES..pieces_end],
             attributes: &bytes[pieces_end..attributes_end],
-            decks: &bytes[attributes_end..decks_end],
+            emissions: &bytes[attributes_end..emissions_end],
+            decks: &bytes[emissions_end..decks_end],
             text: &bytes[decks_end..],
         })
     }
@@ -435,16 +492,24 @@ impl<'a> Sources<'a> {
         let record = self.attribute_record(index)?;
         let u16_at = |at: usize| u16::from_le_bytes([record[at], record[at + 1]]);
         let u64_at = |at: usize| u64::from_le_bytes(record[at..at + 8].try_into().unwrap());
+        let row = u32::from_le_bytes(record[24..28].try_into().unwrap()) as usize;
+        let row = self
+            .emissions
+            .get(row * EMISSION_BYTES..(row + 1) * EMISSION_BYTES)
+            .ok_or(FormatError("sources: emission row out of range"))?;
         Ok(Attribute {
             layer: Layer::from_code(record[0])?,
             ground_percent: record[1],
-            platform_half_width_m: f64::from(record[2]) / 10.0,
+            platform_half_width_m: f64::from(u16_at(2)) / 10.0,
             height_m: f64::from(u16_at(4)) / 100.0,
             exclusion_radius_m: f64::from(u16_at(6)) / 10.0,
             footprint_id: u64_at(8),
             group_key: u64_at(16),
             emission: std::array::from_fn(|period| {
-                std::array::from_fn(|band| level_db(u16_at(24 + 2 * (period * BANDS + band))))
+                std::array::from_fn(|band| {
+                    let at = 2 * (period * BANDS + band);
+                    level_db(u16::from_le_bytes([row[at], row[at + 1]]))
+                })
             }),
             display: String::new(),
         })
@@ -464,8 +529,8 @@ impl<'a> Sources<'a> {
     /// The display fields of an attribute as a JSON array text.
     pub fn display(&self, index: u32) -> Result<&'a str, FormatError> {
         let record = self.attribute_record(index)?;
-        let start = u32::from_le_bytes(record[72..76].try_into().unwrap()) as usize;
-        let length = u32::from_le_bytes(record[76..80].try_into().unwrap()) as usize;
+        let start = u32::from_le_bytes(record[28..32].try_into().unwrap()) as usize;
+        let length = u32::from_le_bytes(record[32..36].try_into().unwrap()) as usize;
         let text = self
             .text
             .get(start..start + length)
@@ -574,6 +639,42 @@ mod tests {
             assert_eq!(parsed.display(index).unwrap(), road().display);
         }
         let single = encode(&pieces[..1], &[road()], &[]);
-        assert_eq!(bytes.len(), single.len() + PIECE_BYTES + ATTRIBUTE_BYTES);
+        assert_eq!(
+            bytes.len(),
+            single.len() + PIECE_BYTES + ATTRIBUTE_BYTES + EMISSION_BYTES
+        );
+    }
+
+    /// Buildings of one spectrum keep a record each and one copy of their emission; a platform
+    /// wider than a byte's 25.5 m keeps its width.
+    #[test]
+    fn a_shared_emission_is_stored_once() {
+        let building = |footprint_id| Attribute {
+            layer: Layer::Building,
+            footprint_id,
+            group_key: footprint_id,
+            display: "[]".into(),
+            ..road()
+        };
+        let pieces = [0, 1, 2].map(|attribute| Piece {
+            ends: [[3, 3], [3, 3]],
+            attribute,
+        });
+        let wide = Attribute {
+            platform_half_width_m: 36.5,
+            ..road()
+        };
+        let bytes = encode(&pieces, &[building(1), building(2), wide.clone()], &[]);
+        let parsed = Sources::parse(&bytes).unwrap();
+        assert_eq!(parsed.attribute(1).unwrap().footprint_id, 2);
+        assert_eq!(parsed.attribute(1).unwrap().emission, road().emission);
+        assert_eq!(parsed.attribute(2).unwrap().platform_half_width_m, 36.5);
+        let one = encode(&pieces[..1], &[building(1)], &[]);
+        assert_eq!(
+            bytes.len(),
+            one.len()
+                + 2 * (PIECE_BYTES + ATTRIBUTE_BYTES)
+                + r#"["Legerova","","secondary"]"#.len()
+        );
     }
 }

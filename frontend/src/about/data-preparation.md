@@ -284,7 +284,7 @@ altitude at its two ends.
 <g fill="#d9622b" fill-opacity=".15" stroke="currentColor" stroke-opacity=".6"><rect x="34" y="160" width="24" height="24"/><rect x="58" y="160" width="24" height="24"/><rect x="82" y="160" width="24" height="24"/><rect x="106" y="160" width="24" height="24"/><rect x="130" y="160" width="24" height="24"/></g>
 <g fill="currentColor" fill-opacity=".08" stroke="currentColor" stroke-opacity=".6"><rect x="160" y="160" width="58" height="24"/><rect x="218" y="160" width="58" height="24"/><rect x="284" y="160" width="108" height="24"/></g>
 <g fill="currentColor" text-anchor="middle" font-size="11.5"><text x="46" y="176">0</text><text x="70" y="176">0</text><text x="94" y="176">1</text><text x="118" y="176">1</text><text x="142" y="176">0</text><text x="189" y="176">record 0</text><text x="247" y="176">record 1</text><text x="338" y="176">text</text></g>
-<g fill="currentColor" fill-opacity=".7" text-anchor="middle" font-size="11.5"><text x="94" y="232">pieces, 12 bytes</text><text x="218" y="232">records, 80 bytes</text><text x="338" y="232">texts</text></g>
+<g fill="currentColor" fill-opacity=".7" text-anchor="middle" font-size="11.5"><text x="94" y="232">pieces, 12 bytes</text><text x="218" y="232">records, 36 bytes</text><text x="338" y="232">texts</text></g>
 </svg>
 <figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A way's straight segments become pieces of at most 250 m, cut where the way leaves the tile. In the tile's sources file the five pieces point to two records, the stretch on a slope having its own, and both records point to one text.</figcaption>
 </figure>
@@ -322,7 +322,7 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
 | `terrain` | `tiles/src/terrain.rs` | the one-arc-second node window that brackets the tile: neighbours share their seam nodes; a sample touching a node without data is refused, never guessed; height, sealing, tree cover and crown height a node |
 | `terrain-fine` | `tiles/src/terrain_fine.rs` | a national model's detail on the 1/6" lattice, its height less its own 1" average, faded towards its edges and voids; blocks of 128 x 128 cells, each one zstd frame behind a directory, so a click decodes only the blocks its rays' ends touch |
 | `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile) through a cell -> offset table |
-| `sources` | `tiles/src/sources.rs` | 12-byte pieces, 80-byte records, 8-byte deck entries (a bridge piece's deck altitude at its ends), each distinct display text once; emission per octave band and period as u16 in 0.01 dB |
+| `sources` | `tiles/src/sources.rs` | 12-byte pieces, 36-byte records, each distinct emission row (per octave band and period a u16 in 0.01 dB) and display text once, 8-byte deck entries (a bridge piece's deck altitude at its ends) |
 | `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with only the periods it is heard in and its two loudest flight pieces, its slab a row of the tile's band table; the tile's flight table; a box finds its periods and pieces from the counts every 32 boxes |
 | `aircraft-events` | `tiles/src/aircraft_events.rs` | 16 x 16 z16 cells a tile; no file where no flight reaches 50 dB |
 | `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start behind a fence of every 256th part's key, so a listed flight reads one 4 KB page of the directory |
