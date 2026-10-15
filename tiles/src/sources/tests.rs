@@ -193,11 +193,32 @@ fn displays_keep_their_fields_types_and_steps() {
         ..road()
     };
     let house = building(5, json!(["", "house", 6.0, 2, 120.0, "Na Výsluní 7", 61.2]));
+    let tower = building(6, json!(["", "tower", 828.0, 255, 3_000.0, "", 90.1]));
+    let quarry = Attribute {
+        layer: Layer::Industry,
+        display: json!([
+            "",
+            "quarry",
+            7_394_341.0,
+            "0810",
+            89_024,
+            null,
+            null,
+            118.2,
+            0
+        ])
+        .as_array()
+        .unwrap()
+        .clone(),
+        ..road()
+    };
     let short = Attribute {
         display: vec![json!("test road")],
         ..road()
     };
-    let attributes = [speed, rail, turbine, ship, ground, house, short];
+    let attributes = [
+        speed, rail, turbine, ship, ground, house, short, tower, quarry,
+    ];
     let pieces: Vec<Piece> = (0..attributes.len() as u32)
         .map(|attribute| Piece {
             ends: [[1, 1], [2, 2]],
