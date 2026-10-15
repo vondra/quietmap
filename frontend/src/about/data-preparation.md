@@ -213,7 +213,7 @@ and walls, and every source.
 Everything a click or the painter reads lies in one tree of files. The world is cut into the
 standard web-map tiles of zoom 12, 6.3 km wide in Prague and 9.8 km at the equator. Each tile has
 one file per kind of data, the 64 tiles of a zoom-9 square share a directory, and a tile with
-nothing of a kind has no file of it: the open sea has no terrain file. The world takes 1.9 TB
+nothing of a kind has no file of it: the open sea has no terrain file. The world takes 1.5 TB
 (October 2026).
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
@@ -254,8 +254,8 @@ nothing of a kind has no file of it: the open sea has no terrain file. The world
 | `terrain-fine` | where a 5 m national model exists, what the arc-second grid misses, every sixth of an arc-second | 6.2 GB in 15,289 files |
 | `obstacles` | the outlines and heights of buildings and walls, listed by cells 49 m wide in Prague | 233 GB in 1.4 million |
 | `sources` | every ground source, as points and straight pieces | 229 GB in 2.2 million |
-| `aircraft` | a year of flights, summed into boxes of airspace | 1,025 GB in 2.6 million |
-| `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 141 GB in 2.6 million |
+| `aircraft` | a year of flights, summed into boxes of airspace | 674 GB in 2.6 million |
+| `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 91 GB in 2.6 million |
 | `aircraft-events` | per cell 390 m wide in Prague, the flights of a day whose loudest moment reaches 50, 60 and 70 dB | 17 GB in 1.6 million |
 
 Beside the tiles lie the year's flight tracks, 50 GB in 256 files, read only to draw a listed
