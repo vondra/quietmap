@@ -71,17 +71,20 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
         32_768.0 / LocalFrame::at(TILE.centre()).east_m_per_unit,
         32_768.0 / LocalFrame::at(TILE.centre()).north_m_per_unit,
     ];
+    let centroid = [
+        (values.centroid_m[0] * steps_per_metre[0]).round() as i16,
+        (-values.centroid_m[1] * steps_per_metre[1]).round() as i16,
+    ];
+    // The zoom-18 cell (512 steps) holding the centroid.
+    let cell = centroid.map(|c| ((i32::from(c) + 16_384) / 512) as u16);
     AircraftBox {
         zoom: 18,
-        cell: [10, 10],
+        cell,
         group: Group::FixedWing,
         ground_m: 0.0,
         clearance_m: 588.0,
         height_m: 98.0,
-        centroid: [
-            (values.centroid_m[0] * steps_per_metre[0]).round() as i16,
-            (-values.centroid_m[1] * steps_per_metre[1]).round() as i16,
-        ],
+        centroid,
         centroid_altitude_m: values.centroid_m[2],
         axis_rad: values.axis_rad,
         gradient: values.gradient,

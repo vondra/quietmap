@@ -1,9 +1,12 @@
 //! Reading an aircraft file in place: the records decode on demand.
 
+use super::codes::{
+    cell_steps, curve_levels, flights, in_cell, lamax_db, lg_distances, offset, tail_db,
+};
 use super::{
     AircraftBox, BAND_BYTES, BLOCK_BYTES, BOX_BYTES, BOXES_PER_BLOCK, FLIGHT_BYTES, Flight,
     FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEADER_BYTES, INSTALLATIONS, MAGIC,
-    NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES, lamax_db, level_db,
+    MAXIMUM_ZOOM, MIX_BYTES, NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES,
 };
 use crate::FormatError;
 
@@ -11,6 +14,7 @@ use crate::FormatError;
 #[derive(Clone, Copy)]
 pub struct Aircraft<'a> {
     bands: &'a [u8],
+    mixes: &'a [u8],
     blocks: &'a [u8],
     heads: &'a [u8],
     boxes: &'a [u8],
@@ -40,7 +44,7 @@ fn heard_periods(head: u8) -> u32 {
 }
 
 fn piece_count(head: u8) -> u32 {
-    u32::from(head >> HEAD_PIECES_SHIFT)
+    u32::from(head >> HEAD_PIECES_SHIFT & 3)
 }
 
 impl<'a> Aircraft<'a> {
@@ -49,16 +53,17 @@ impl<'a> Aircraft<'a> {
             return Err(FormatError("aircraft: bad magic"));
         }
         let count = |at: usize| u32_at(bytes, at) as usize;
-        let (boxes, periods, flights, pieces, bands) =
-            (count(8), count(12), count(16), count(20), count(24));
-        let mut end = HEADER_BYTES;
-        let mut section = |length: usize| {
-            let start = end;
-            end = end.saturating_add(length);
-            (start, end)
-        };
+        let (boxes, periods, flights, pieces, bands, mixes) = (
+            count(8),
+            count(12),
+            count(16),
+            count(20),
+            count(24),
+            count(28),
+        );
         let lengths = [
             BAND_BYTES * bands,
+            MIX_BYTES * mixes,
             BLOCK_BYTES * boxes.div_ceil(BOXES_PER_BLOCK),
             boxes,
             BOX_BYTES * boxes,
@@ -66,29 +71,37 @@ impl<'a> Aircraft<'a> {
             FLIGHT_BYTES * flights,
             PIECE_BYTES * pieces,
         ];
+        let mut end = HEADER_BYTES;
+        let sections = lengths.map(|length| {
+            let start = end;
+            end = end.saturating_add(length);
+            start..end
+        });
+        if bands > 256 || bytes.len() != end {
+            return Err(FormatError("aircraft: length does not match the counts"));
+        }
         let [
             bands_at,
+            mixes_at,
             blocks_at,
             heads_at,
             boxes_at,
             periods_at,
             flights_at,
             pieces_at,
-        ] = lengths.map(&mut section);
-        if bands > 256 || bytes.len() != end {
-            return Err(FormatError("aircraft: length does not match the counts"));
-        }
+        ] = sections;
         let parsed = Aircraft {
-            bands: &bytes[bands_at.0..bands_at.1],
-            blocks: &bytes[blocks_at.0..blocks_at.1],
-            heads: &bytes[heads_at.0..heads_at.1],
-            boxes: &bytes[boxes_at.0..boxes_at.1],
-            periods: &bytes[periods_at.0..periods_at.1],
-            flights: &bytes[flights_at.0..flights_at.1],
-            pieces: &bytes[pieces_at.0..pieces_at.1],
+            bands: &bytes[bands_at],
+            mixes: &bytes[mixes_at],
+            blocks: &bytes[blocks_at],
+            heads: &bytes[heads_at],
+            boxes: &bytes[boxes_at],
+            periods: &bytes[periods_at],
+            flights: &bytes[flights_at],
+            pieces: &bytes[pieces_at],
         };
         for band in 0..bands {
-            if !(12..=super::MAXIMUM_ZOOM).contains(&parsed.bands[BAND_BYTES * band]) {
+            if !(12..=MAXIMUM_ZOOM).contains(&parsed.bands[BAND_BYTES * band]) {
                 return Err(FormatError("aircraft: bad band zoom"));
             }
         }
@@ -102,20 +115,27 @@ impl<'a> Aircraft<'a> {
             }
             let (head, record) = (parsed.heads[index], parsed.box_record(index));
             let band = usize::from(record[0]);
-            if band >= bands || head & 7 == 0 {
-                return Err(FormatError("aircraft: a box of no band or no period"));
+            if band >= bands || head & 7 == 0 || head >> 6 != 0 {
+                return Err(FormatError(
+                    "aircraft: a box of no band, no period or a bad head",
+                ));
             }
-            let cells = 1u32 << (parsed.bands[BAND_BYTES * band] - 12);
-            if u32::from(u16_at(record, 1)) >= cells || u32::from(u16_at(record, 3)) >= cells {
+            let edge = cell_steps(parsed.bands[BAND_BYTES * band]);
+            if i32::from(record[1].max(record[2])) * edge >= 32_768 {
                 return Err(FormatError("aircraft: box cell outside the tile"));
             }
             periods_before += heard_periods(head);
             pieces_before += piece_count(head);
         }
-        if periods_before as usize != periods || pieces_before as usize > pieces {
+        if periods_before as usize != periods || pieces_before as usize != pieces {
             return Err(FormatError(
-                "aircraft: the boxes name missing periods or pieces",
+                "aircraft: the boxes do not name their periods and pieces",
             ));
+        }
+        for index in 0..periods {
+            if usize::from(u16_at(parsed.period_record(index), 16)) >= mixes {
+                return Err(FormatError("aircraft: a period names a missing mix"));
+            }
         }
         for index in 0..pieces {
             if u24_at(parsed.piece_record(index), 0) as usize >= flights {
@@ -141,6 +161,10 @@ impl<'a> Aircraft<'a> {
         &self.boxes[index * BOX_BYTES..(index + 1) * BOX_BYTES]
     }
 
+    fn period_record(&self, index: usize) -> &'a [u8] {
+        &self.periods[index * PERIOD_BYTES..(index + 1) * PERIOD_BYTES]
+    }
+
     fn piece_record(&self, index: usize) -> &'a [u8] {
         &self.pieces[index * PIECE_BYTES..(index + 1) * PIECE_BYTES]
     }
@@ -161,11 +185,20 @@ impl<'a> Aircraft<'a> {
         )
     }
 
+    /// The zoom of a box record's band.
+    fn zoom(&self, record: &[u8]) -> u8 {
+        self.bands[BAND_BYTES * usize::from(record[0])]
+    }
+
     /// A box's emission-weighted centroid alone (tile-local steps): where it is, without the rest
     /// of its record.
     pub fn box_centroid(&self, index: usize) -> [i16; 2] {
         let record = self.box_record(index);
-        [i16_at(record, 7), i16_at(record, 9)]
+        let edge = cell_steps(self.zoom(record));
+        [
+            in_cell(record[5], record[1], edge),
+            in_cell(record[6], record[2], edge),
+        ]
     }
 
     pub fn aircraft_box(&self, index: usize) -> AircraftBox {
@@ -174,23 +207,20 @@ impl<'a> Aircraft<'a> {
         let (mut next_period, first_piece) = self.firsts(index);
         let mut energy_db = [[f64::NEG_INFINITY; NPD_DISTANCES]; PERIODS];
         let mut tail_energy_db = [f64::NEG_INFINITY; PERIODS];
-        let mut flights = [0; PERIODS];
+        let mut flights_per_period = [0; PERIODS];
         let mut piece_length_m = [0.0; PERIODS];
         let mut installation_shares = [[[0.0, 0.0, 1.0]; 2]; PERIODS];
         for period in (0..PERIODS).filter(|period| head & 1 << period != 0) {
-            let at = PERIOD_BYTES * next_period;
-            let record = &self.periods[at..at + PERIOD_BYTES];
+            let record = self.period_record(next_period);
             next_period += 1;
-            energy_db[period] =
-                std::array::from_fn(|distance| level_db(u16_at(record, 2 * distance)));
-            tail_energy_db[period] = level_db(u16_at(record, 20));
-            flights[period] = u24_at(record, 22);
-            piece_length_m[period] = f64::from(u16_at(record, 25));
-            installation_shares[period] = [27, 29].map(|at| {
-                let (wing, fuselage) = (
-                    f64::from(record[at]) / 255.0,
-                    f64::from(record[at + 1]) / 255.0,
-                );
+            let (levels, end) = curve_levels(u16_at(record, 0), &record[2..11]);
+            energy_db[period] = levels;
+            tail_energy_db[period] = tail_db(end, record[11]);
+            flights_per_period[period] = flights(u16_at(record, 12));
+            piece_length_m[period] = f64::from(u16_at(record, 14));
+            let mix = &self.mixes[MIX_BYTES * usize::from(u16_at(record, 16))..];
+            installation_shares[period] = [0, 2].map(|at| {
+                let (wing, fuselage) = (f64::from(mix[at]) / 255.0, f64::from(mix[at + 1]) / 255.0);
                 let mut shares = [wing, fuselage, 0.0];
                 shares[INSTALLATIONS - 1] = (1.0 - wing - fuselage).max(0.0);
                 shares
@@ -198,31 +228,29 @@ impl<'a> Aircraft<'a> {
         }
         AircraftBox {
             zoom: band[0],
-            cell: [u16_at(record, 1), u16_at(record, 3)],
+            cell: [u16::from(record[1]), u16::from(record[2])],
             group: if head & HEAD_HELICOPTER == 0 {
                 Group::FixedWing
             } else {
                 Group::Helicopter
             },
-            ground_m: f64::from(i16_at(record, 5)),
+            ground_m: f64::from(i16_at(record, 3)),
             clearance_m: f64::from(u16_at(band, 1)),
             height_m: f64::from(u16_at(band, 3)),
-            centroid: [i16_at(record, 7), i16_at(record, 9)],
-            centroid_altitude_m: f64::from(i16_at(record, 11)),
-            axis_rad: f64::from(u16_at(record, 13)) / 65_536.0 * std::f64::consts::PI,
-            gradient: f64::from(i16_at(record, 15)) / 10_000.0,
-            gradient_spread: f64::from(u16_at(record, 17)) / 10_000.0,
+            centroid: self.box_centroid(index),
+            centroid_altitude_m: f64::from(i16_at(record, 7)),
+            axis_rad: f64::from(u16_at(record, 9)) / 65_536.0 * std::f64::consts::PI,
+            gradient: f64::from(i16_at(record, 11)) / 10_000.0,
+            gradient_spread: f64::from(u16_at(record, 13)) / 10_000.0,
             piece_length_m,
-            flights,
+            flights: flights_per_period,
             energy_db,
-            lg_scaled_distance: std::array::from_fn(|distance| {
-                f64::from(u16_at(record, 19 + 2 * distance)) / 10_000.0
-            }),
+            lg_scaled_distance: lg_distances(u16_at(record, 15), &record[17..26]),
             tail_energy_db,
             installation_shares,
             first_piece,
-            piece_count: head >> HEAD_PIECES_SHIFT,
-            loudest_lamax_db: lamax_db(record[39]),
+            piece_count: (head >> HEAD_PIECES_SHIFT) & 3,
+            loudest_lamax_db: lamax_db(record[26]),
         }
     }
 
@@ -236,23 +264,27 @@ impl<'a> Aircraft<'a> {
         }
     }
 
-    pub fn piece(&self, index: usize) -> FlightPiece {
-        let record = self.piece_record(index);
+    /// The `k`th of `owner`'s pieces (`owner` as [`Self::aircraft_box`] read it): its ends are
+    /// stored from the box's centroid.
+    pub fn piece(&self, owner: &AircraftBox, k: usize) -> FlightPiece {
+        assert!(k < usize::from(owner.piece_count), "box piece {k}");
+        let record = self.piece_record(owner.first_piece as usize + k);
+        let edge = cell_steps(owner.zoom);
+        let end =
+            |at: usize| [0, 1].map(|axis| offset(record[at + axis], owner.centroid[axis], edge));
+        let kind = u16_at(record, 13);
         FlightPiece {
             flight: u24_at(record, 0),
-            ends: [
-                [i16_at(record, 3), i16_at(record, 5)],
-                [i16_at(record, 7), i16_at(record, 9)],
-            ],
-            altitudes_m: [f64::from(i16_at(record, 11)), f64::from(i16_at(record, 13))],
-            speed_kt: f64::from(u16_at(record, 15)) / 10.0,
-            class: u16::from(record[17]),
-            power_code: u16_at(record, 18),
-            flags: record[20] & 3,
-            period: record[20] >> 2,
+            ends: [end(3), end(5)],
+            altitudes_m: [f64::from(i16_at(record, 7)), f64::from(i16_at(record, 9))],
+            speed_kt: f64::from(u16_at(record, 11)) / 10.0,
+            class: kind & 0x0fff,
+            power_code: u16_at(record, 15),
+            flags: (kind >> 12 & 3) as u8,
+            period: (kind >> 14) as u8,
         }
     }
 }
 
-const _: () = assert!(19 + 2 * NPD_DISTANCES + 1 == BOX_BYTES);
-const _: () = assert!(2 * NPD_DISTANCES + 2 + 3 + 2 + 2 * 2 == PERIOD_BYTES && PERIODS == 3);
+const _: () = assert!(17 + NPD_DISTANCES - 1 + 1 == BOX_BYTES);
+const _: () = assert!(2 + NPD_DISTANCES - 1 + 1 + 2 + 2 + 2 == PERIOD_BYTES && PERIODS == 3);

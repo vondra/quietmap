@@ -175,10 +175,9 @@ impl FlightTotals {
     ) {
         for &index in boxes {
             let record = aircraft.aircraft_box(index);
-            let first = record.first_piece as usize;
             let count = usize::from(record.piece_count).min(self.pieces_per_box);
-            for piece_index in first..first + count {
-                let piece = aircraft.piece(piece_index);
+            for k in 0..count {
+                let piece = aircraft.piece(&record, k);
                 let flight = aircraft.flight(piece.flight as usize);
                 let designator = text(&flight.type_designator);
                 let emission = emission_of(&piece, &designator, &self.place);
