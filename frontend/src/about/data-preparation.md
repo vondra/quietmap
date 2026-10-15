@@ -213,8 +213,10 @@ and walls, and every source.
 Everything a click or the painter reads lies in one tree of files. The world is cut into the
 standard web-map tiles of zoom 12, 6.3 km wide in Prague and 9.8 km at the equator. Each tile has
 one file per kind of data, the 64 tiles of a zoom-9 square share a directory, and a tile with
-nothing of a kind has no file of it: the open sea has no terrain file. The world takes 1.5 TB
-(October 2026).
+nothing of a kind has no file of it: the open sea has no terrain file. A file holds its kind's
+records in one zstd frame, decoded once as it is read, so only the records stay in memory; the
+terrain's files carry their own coder, the residual of a planar prediction of the heights. The
+world takes 1.5 TB (October 2026).
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 242" role="img" aria-label="A zoom-9 square of eight by eight tiles with tile 2212/1387 of Prague's centre marked, and the directory holding its seven files, beside the weather table and the flight tracks" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -312,7 +314,9 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
   them one input at a time. Its other steps: `weather`, `terrain-fine`, `traffic` (the trips buildings
   make), `airport-traffic`, `geoid`, the aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.
-- `tiles/` holds each kind's file format, writer and reader, the only code that knows the bytes.
+- `tiles/` holds each kind's file format, writer and reader, the only code that knows the bytes;
+  `tiles/src/stored.rs` frames a file's records, `tiles/src/read.rs` reads files whole and decodes
+  them.
 
 <details>
 <summary><strong>What the readers rely on</strong></summary>

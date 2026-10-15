@@ -16,7 +16,8 @@ use std::path::PathBuf;
 use tiles::aircraft::{AircraftBox, Group, encode};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::sources::Layer;
-use tiles::{COMPLETION_MARKER, Kind, tile_path};
+use tiles::stored::write_tile;
+use tiles::{COMPLETION_MARKER, Kind};
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };
 /// The receiver stands 4 m above the ocean.
@@ -34,9 +35,7 @@ fn release_with_boxes(name: &str, tile: TileId, kind: Kind, boxes: &[AircraftBox
         ROWS * COLUMNS
     ];
     std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
-    let path = tile_path(&root.join("2026"), tile, kind);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode(boxes, &[], &[])).unwrap();
+    write_tile(&root.join("2026"), tile, kind, &encode(boxes, &[], &[])).unwrap();
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     root
 }
