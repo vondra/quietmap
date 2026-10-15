@@ -87,8 +87,9 @@ impl ReceiverArea {
     }
 }
 
-/// The nearest a box's model can come to a receiver of `area` (m): its cell and slab widened by a
-/// quarter edge, the first band down to any depth.
+/// The nearest a box's model, and its pieces where none reaches past it by more than an eighth of
+/// its edge, can come to a receiver of `area` (m): its cell and slab widened by a quarter edge,
+/// the first band down to any depth.
 fn nearest_slant_m(
     record: &AircraftBox,
     tile: TileId,
@@ -289,19 +290,25 @@ fn nearest_piece_slant_m(
 
 /// The most maximum level (dB) a box's kept pieces can reach at a receiver of `area` (Eq. 4-8a:
 /// Delta_I adds at most [`INSTALLATION_CORRECTION_MAX_DB`], Lambda only attenuates); `None` for a
-/// box keeping none. `impedance_db` is the receivers' elevations' at most, which helicopters do
-/// not take.
+/// box keeping none. Its pieces' nearest is its cell's and slab's, or where a piece reaches past
+/// them (1.4 % of r064's boxes, by a climb through the slab mostly) their own. `impedance_db` is
+/// the receivers' elevations' at most, which helicopters do not take.
 fn lamax_bound(
     aircraft: &Aircraft<'_>,
+    (tile, index): (TileId, usize),
     record: &AircraftBox,
-    tile: TileId,
     frame: &LocalFrame,
     area: ReceiverArea,
     impedance_db: f64,
 ) -> Option<f64> {
     (record.piece_count > 0).then(|| {
+        let nearest_m = if aircraft.box_reaches_past(index) {
+            nearest_piece_slant_m(aircraft, record, tile, frame, area)
+        } else {
+            nearest_slant_m(record, tile, frame, area)
+        };
         record.loudest_lamax_db
-            + lamax_rise_bound_db(nearest_piece_slant_m(aircraft, record, tile, frame, area))
+            + lamax_rise_bound_db(nearest_m)
             + INSTALLATION_CORRECTION_MAX_DB
             + match record.group {
                 Group::FixedWing => impedance_db,
@@ -327,8 +334,8 @@ pub fn box_lamax_bound(
     let area = ReceiverArea::of(receiver);
     lamax_bound(
         aircraft,
+        (tile, index),
         &aircraft.aircraft_box(index),
-        tile,
         frame,
         area,
         impedance_db,
@@ -346,8 +353,8 @@ pub fn box_lamax_bound_over(
 ) -> Option<f64> {
     lamax_bound(
         aircraft,
+        (tile, index),
         &aircraft.aircraft_box(index),
-        tile,
         frame,
         area,
         impedance_db,
@@ -386,8 +393,8 @@ pub fn tile_energy(
             let lambda = box_lambda(&record, &sel);
             let bound = lamax_bound(
                 aircraft,
+                (tile, index),
                 &record,
-                tile,
                 frame,
                 ReceiverArea::of(receiver),
                 impedance_db,

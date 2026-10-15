@@ -7,9 +7,9 @@ use super::codes::{
 };
 use super::{
     AircraftBox, BAND_BYTES, BLOCK_BYTES, BOX_BYTES, BOXES_PER_BLOCK, FLIGHT_BYTES, Flight,
-    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEADER_BYTES, INSTALLATIONS,
-    KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM, MIX_BYTES,
-    PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
+    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEAD_REACHING, HEADER_BYTES,
+    INSTALLATIONS, KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM,
+    MIX_BYTES, PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
 };
 use crate::rate::rate_code;
 use std::collections::HashMap;
@@ -63,7 +63,38 @@ fn mix_of(shares: &[[f64; INSTALLATIONS]; 2]) -> [u8; MIX_BYTES] {
     mix
 }
 
-fn head_of(record: &AircraftBox) -> u8 {
+/// Whether a piece of a box reaches past its cell or its slab by more than an eighth of the edge
+/// (the slab as stored, to the metre): a reader bounds the others by their box alone.
+fn reaches_past(record: &AircraftBox, pieces: &[FlightPiece]) -> bool {
+    let edge = cell_steps(record.zoom);
+    let (ground, clearance, height) = (
+        f64::from(metres_i16(record.ground_m)),
+        f64::from(metres_u16(record.clearance_m)),
+        f64::from(metres_u16(record.height_m)),
+    );
+    let floor = if clearance == 0.0 {
+        f64::NEG_INFINITY
+    } else {
+        ground + clearance
+    };
+    let top = ground + clearance + height;
+    pieces.iter().any(|piece| {
+        let outside_cell = piece.ends.iter().any(|end| {
+            (0..2).any(|axis| {
+                let west = -16_384 + i32::from(record.cell[axis]) * edge;
+                let coordinate = i32::from(end[axis]);
+                coordinate < west - edge / 8 || coordinate > west + edge + edge / 8
+            })
+        });
+        let outside_slab = piece
+            .altitudes_m
+            .iter()
+            .any(|&altitude| altitude < floor - height / 8.0 || altitude > top + height / 8.0);
+        outside_cell || outside_slab
+    })
+}
+
+fn head_of(record: &AircraftBox, reaching: bool) -> u8 {
     assert!(record.piece_count <= 3, "{} pieces", record.piece_count);
     let heard = (0..PERIODS)
         .filter(|&period| record.heard(period))
@@ -73,7 +104,10 @@ fn head_of(record: &AircraftBox) -> u8 {
         Group::FixedWing => 0,
         Group::Helicopter => HEAD_HELICOPTER,
     };
-    heard | helicopter | record.piece_count << HEAD_PIECES_SHIFT
+    heard
+        | helicopter
+        | record.piece_count << HEAD_PIECES_SHIFT
+        | if reaching { HEAD_REACHING } else { 0 }
 }
 
 /// A box's cell and centroid as stored, and the centroid they read back as (what its pieces are
@@ -183,7 +217,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
     bands.sort_unstable();
     bands.dedup();
     assert!(bands.len() <= 256, "{} bands in a tile", bands.len());
-    let heads: Vec<u8> = boxes.iter().map(head_of).collect();
+
     let mut mixes: Vec<[u8; MIX_BYTES]> = Vec::new();
     let mut mix_rows: HashMap<[u8; MIX_BYTES], u16> = HashMap::new();
     let mut periods: Vec<(usize, usize, u16)> = Vec::new();
@@ -225,6 +259,14 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
         }
     }
     assert!(scales.len() == pieces.len(), "a piece no box names");
+    let heads: Vec<u8> = boxes
+        .iter()
+        .map(|record| {
+            let first = record.first_piece as usize;
+            let mine = &pieces[first..first + usize::from(record.piece_count)];
+            head_of(record, reaches_past(record, mine))
+        })
+        .collect();
     let blocks = boxes.len().div_ceil(BOXES_PER_BLOCK);
     let mut bytes = Vec::with_capacity(
         HEADER_BYTES
