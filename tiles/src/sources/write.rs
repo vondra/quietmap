@@ -139,7 +139,9 @@ pub fn encode(pieces: &[Piece], attributes: &[Attribute], decks: &[Deck]) -> Vec
         bytes.extend_from_slice(row);
     }
     for (k, deck) in decks.iter().enumerate() {
-        let line = line_of[deck.piece as usize];
+        let line = *line_of
+            .get(deck.piece as usize)
+            .expect("a deck under a missing piece");
         assert!(line != u32::MAX, "a deck under a point");
         assert!(
             k == 0 || decks[k - 1].piece < deck.piece,
