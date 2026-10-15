@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use tiles::aircraft::{AircraftBox, Group, encode as encode_aircraft};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::sources::{Attribute, Layer, Piece, encode as encode_sources};
-use tiles::{COMPLETION_MARKER, Kind, tile_path};
+use tiles::{COMPLETION_MARKER, Kind};
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };
 
@@ -92,9 +92,7 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
     ];
     std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
     let write = |kind, bytes: Vec<u8>| {
-        let path = tile_path(&root.join("2026"), TILE, kind);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, bytes).unwrap();
+        tiles::stored::write_tile(&root.join("2026"), TILE, kind, &bytes).unwrap();
     };
     let steps = steps_per_metre();
     let half = (125.0 * steps[1]).round() as i16;

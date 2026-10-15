@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::obstacles::{EnvelopeClass, Outline, OutlineKind, encode as encode_obstacles};
 use tiles::sources::{Attribute, Deck, Layer, Piece, encode};
-use tiles::{COMPLETION_MARKER, Kind, tile_path};
+use tiles::stored::write_tile;
+use tiles::{COMPLETION_MARKER, Kind};
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };
 
@@ -65,8 +66,6 @@ fn write_roads_on(root: &Path, distances: &[f64], separate: bool, deck_m: Option
             display: format!(r#"["test road {index}"]"#),
         })
         .collect();
-    let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let decks: Vec<Deck> = deck_m
         .map(|altitude_m| {
             (0..pieces.len() as u32)
@@ -74,7 +73,13 @@ fn write_roads_on(root: &Path, distances: &[f64], separate: bool, deck_m: Option
                 .collect()
         })
         .unwrap_or_default();
-    std::fs::write(path, encode(&pieces, &attributes, &decks)).unwrap();
+    write_tile(
+        &root.join("2026"),
+        TILE,
+        Kind::Sources,
+        &encode(&pieces, &attributes, &decks),
+    )
+    .unwrap();
 }
 
 /// Int16 steps per metre east in the tile's frame.
@@ -92,9 +97,13 @@ fn write_building(root: &Path) {
         height_m: 15.0,
         vertices: vec![[-s, s], [s, s], [s, -s], [-s, -s], [-s, s]],
     };
-    let path = tile_path(&root.join("2026"), TILE, Kind::Obstacles);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode_obstacles(&[outline])).unwrap();
+    write_tile(
+        &root.join("2026"),
+        TILE,
+        Kind::Obstacles,
+        &encode_obstacles(&[outline]),
+    )
+    .unwrap();
 }
 
 /// The last update of a click `east_m` east of the tile centre: road Lden energy and the
@@ -360,9 +369,13 @@ fn a_source_on_the_edge_of_the_read_block_is_answered() {
             attribute: 0,
         })
         .collect();
-    let path = tile_path(&root.join("2026"), north, Kind::Sources);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode(&pieces, &attributes, &[])).unwrap();
+    write_tile(
+        &root.join("2026"),
+        north,
+        Kind::Sources,
+        &encode(&pieces, &attributes, &[]),
+    )
+    .unwrap();
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let mut building_energy = 0.0;
@@ -425,9 +438,13 @@ fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
             display: r#"["point"]"#.into(),
         })
         .collect();
-    let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode(&pieces, &attributes, &[])).unwrap();
+    write_tile(
+        &root.join("2026"),
+        TILE,
+        Kind::Sources,
+        &encode(&pieces, &attributes, &[]),
+    )
+    .unwrap();
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let industry = |exact: bool| {
@@ -518,9 +535,13 @@ fn a_sampled_layer_sounds_as_the_exact_one() {
             display: r#"["point"]"#.into(),
         })
         .collect();
-    let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode(&pieces, &attributes, &[])).unwrap();
+    write_tile(
+        &root.join("2026"),
+        TILE,
+        Kind::Sources,
+        &encode(&pieces, &attributes, &[]),
+    )
+    .unwrap();
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let sone = |exact: bool| {

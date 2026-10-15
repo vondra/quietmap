@@ -1,7 +1,7 @@
 //! Prepared z12 tiles: numbering and coordinates ([`geo`]) and one module per kind with its
 //! file format, writer and reader ([`terrain`], [`terrain_fine`], [`obstacles`], [`sources`],
-//! [`aircraft`]); [`read`] reads whole files; [`aircraft_tracks`] holds the year's flights as the
-//! map draws them.
+//! [`aircraft`]); [`stored`] is a file as stored (its kind's contents, framed for most kinds) and
+//! [`read`] reads whole files; [`aircraft_tracks`] holds the year's flights as the map draws them.
 //!
 //! For visitors, down to this code: the About page Data preparation, The files
 //! (`frontend/src/about/data-preparation.md`).
@@ -13,6 +13,7 @@ pub mod geo;
 pub mod obstacles;
 pub mod read;
 pub mod sources;
+pub mod stored;
 pub mod terrain;
 pub mod terrain_fine;
 
@@ -44,6 +45,12 @@ impl Kind {
             Kind::AircraftFar => "aircraft-far",
             Kind::AircraftEvents => "aircraft-events",
         }
+    }
+
+    /// Whether the kind's file stores its contents in one zstd frame: every kind but the
+    /// terrain's, whose formats carry their own coder (a planar predictor's residual planes).
+    pub fn framed(self) -> bool {
+        !matches!(self, Kind::Terrain | Kind::TerrainFine)
     }
 }
 

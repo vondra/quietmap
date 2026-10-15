@@ -30,12 +30,14 @@ impl Release {
     }
 }
 
-/// The files of one ring, read whole and at once: per tile, one slot per requested kind.
+/// The files of one ring, read whole and at once and decoded: per tile, one slot per requested
+/// kind holding its contents.
 pub struct RingFiles {
     pub tiles: Vec<TileId>,
     pub kinds: Vec<Kind>,
     /// `files[tile * kinds.len() + kind]`; `None` is an absent file.
     pub files: Vec<Option<Vec<u8>>>,
+    /// The bytes read from the disk.
     pub bytes: u64,
     pub file_count: usize,
     pub read_seconds: f64,
@@ -55,23 +57,24 @@ impl RingFiles {
             .iter()
             .flat_map(|&tile| kinds.iter().map(move |&kind| (tile, kind)))
             .collect();
-        let paths: Vec<PathBuf> = slots
+        let paths: Vec<(PathBuf, Kind)> = slots
             .iter()
             .filter(|&&(tile, kind)| wanted(tile, kind))
-            .map(|&(tile, kind)| tile_path(&release.year_root, tile, kind))
+            .map(|&(tile, kind)| (tile_path(&release.year_root, tile, kind), kind))
             .collect();
         let mut read = read_all(&paths)?.into_iter();
+        let mut bytes = 0;
         let files: Vec<Option<Vec<u8>>> = slots
             .iter()
             .map(|&(tile, kind)| {
-                if wanted(tile, kind) {
-                    read.next().expect("one read per wanted file")
-                } else {
-                    None
+                if !wanted(tile, kind) {
+                    return None;
                 }
+                let file = read.next().expect("one read per wanted file")?;
+                bytes += file.stored_bytes;
+                Some(file.contents)
             })
             .collect();
-        let bytes = files.iter().flatten().map(|file| file.len() as u64).sum();
         let file_count = files.iter().filter(|file| file.is_some()).count();
         Ok(RingFiles {
             tiles,

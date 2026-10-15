@@ -772,8 +772,11 @@ mod tests {
         .unwrap();
         assert!(written >= 1);
         let tile = TileId::containing(cell);
-        let bytes =
-            std::fs::read(tiles::tile_path(&out, tile, tiles::Kind::AircraftEvents)).unwrap();
+        let path = tiles::tile_path(&out, tile, tiles::Kind::AircraftEvents);
+        let bytes = tiles::read::read_tile(&path, tiles::Kind::AircraftEvents)
+            .unwrap()
+            .unwrap()
+            .contents;
         let events = AircraftEvents::parse(&bytes).unwrap();
         let heard = events.cell(column % CELLS_PER_SIDE, row % CELLS_PER_SIDE);
         // The night pass overhead: its segment over the cell, 596 m above the receiver.

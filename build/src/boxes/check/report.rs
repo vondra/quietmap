@@ -50,9 +50,10 @@ fn read_rings(
                 .ring(ring)
                 .into_iter()
                 .filter_map(|tile| {
-                    std::fs::read(tiles::tile_path(aircraft_root, tile, kind))
+                    tiles::read::read_tile(&tiles::tile_path(aircraft_root, tile, kind), kind)
                         .ok()
-                        .map(|bytes| (tile, bytes))
+                        .flatten()
+                        .map(|file| (tile, file.contents))
                 })
                 .collect()
         })
