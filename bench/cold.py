@@ -21,7 +21,7 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Every tile kind a click reads (`tiles::Kind`).
-KINDS = ("terrain", "obstacles", "sources", "aircraft", "aircraft-far", "aircraft-events")
+KINDS = ("terrain", "terrain-fine", "obstacles", "sources", "aircraft", "aircraft-far", "aircraft-events")
 EVICT_RINGS = 4
 LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
 LIBC.mincore.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_ubyte)]
