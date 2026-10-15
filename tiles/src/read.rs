@@ -78,7 +78,7 @@ mod tests {
         assert!(read[2].is_none());
         // A framed kind's file reads as its contents; one that is not a frame is an error.
         let framed = directory.join("framed");
-        let stored = crate::stored::stored(Kind::Sources, b"tile bytes");
+        let stored = crate::stored::stored(Kind::Sources, b"tile bytes").into_owned();
         std::fs::write(&framed, &stored).unwrap();
         assert_eq!(
             read_tile(&framed, Kind::Sources).unwrap(),

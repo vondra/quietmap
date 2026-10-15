@@ -301,9 +301,9 @@ fn emission_row(emission: &Emission) -> [u8; EMISSION_BYTES] {
     row
 }
 
-/// A length in `step_m` steps as u16, refused beyond its range.
-fn steps_u16(value_m: f64, step_m: f64, what: &str) -> [u8; 2] {
-    let code = (value_m / step_m).round();
+/// A length in steps of `1 / steps_per_m` metres as u16, refused beyond its range.
+fn steps_u16(value_m: f64, steps_per_m: f64, what: &str) -> [u8; 2] {
+    let code = (value_m * steps_per_m).round();
     assert!(
         (0.0..=f64::from(u16::MAX)).contains(&code),
         "{what} {value_m} m outside the u16 range"
@@ -314,9 +314,13 @@ fn steps_u16(value_m: f64, step_m: f64, what: &str) -> [u8; 2] {
 fn write_attribute_record(bytes: &mut Vec<u8>, attribute: &Attribute, row: u32, text_start: u32) {
     bytes.push(attribute.layer as u8);
     bytes.push(attribute.ground_percent);
-    bytes.extend_from_slice(&steps_u16(attribute.platform_half_width_m, 0.1, "platform"));
-    bytes.extend_from_slice(&steps_u16(attribute.height_m, 0.01, "height"));
-    bytes.extend_from_slice(&steps_u16(attribute.exclusion_radius_m, 0.1, "exclusion"));
+    bytes.extend_from_slice(&steps_u16(
+        attribute.platform_half_width_m,
+        10.0,
+        "platform",
+    ));
+    bytes.extend_from_slice(&steps_u16(attribute.height_m, 100.0, "height"));
+    bytes.extend_from_slice(&steps_u16(attribute.exclusion_radius_m, 10.0, "exclusion"));
     bytes.extend_from_slice(&attribute.footprint_id.to_le_bytes());
     bytes.extend_from_slice(&attribute.group_key.to_le_bytes());
     bytes.extend_from_slice(&row.to_le_bytes());

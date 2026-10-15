@@ -205,12 +205,14 @@ impl TracksFile {
 
     /// The parts of the flight `(address, start)` in their order along it, and the bytes read;
     /// none when the file holds no such flight. Its first part lies in the last page whose first
-    /// key is before it (a flight's parts may run on into the next pages).
+    /// key is before it (a flight's parts may run on into the next pages); a page read must begin
+    /// with its fence's key, or a corrupt fence would skip parts.
     pub fn flight(&self, address: u32, start: u32) -> Result<(Vec<Vec<TrackPoint>>, u64), String> {
         let key = (address, start);
         let (fence, _) = self.fence.as_chunks::<{ FENCE_BYTES as usize }>();
+        let first_key = |entry: &[u8]| (u32_at(entry, 0), u32_at(entry, 4));
         let mut page = fence
-            .partition_point(|first| (u32_at(first, 0), u32_at(first, 4)) < key)
+            .partition_point(|first| first_key(first) < key)
             .saturating_sub(1) as u64;
         let (mut found, mut read) = (Vec::new(), 0);
         while page * PAGE_PARTS < self.parts {
@@ -219,6 +221,12 @@ impl TracksFile {
             let directory =
                 self.read_at(PART_BYTES * count, self.directory_at + PART_BYTES * first)?;
             read += directory.len() as u64;
+            if first_key(&fence[page as usize]) != first_key(&directory) {
+                return Err(format!(
+                    "{}: the fence misses a page's first key",
+                    self.path.display()
+                ));
+            }
             for entry in directory.chunks_exact(PART_BYTES as usize) {
                 let [entry_address, entry_start, from, points] =
                     std::array::from_fn(|field| u32_at(entry, 4 * field));
@@ -328,9 +336,13 @@ mod tests {
         assert!(tracks.flight(11, 0).unwrap().0.is_empty());
         assert!(tracks.flight(u32::MAX, 0).unwrap().0.is_empty());
         assert_eq!(decode(&bytes).unwrap().len(), 605);
+        // The second page's fence key one address low: the lookup would start there and miss
+        // the flight's two parts in the first page.
         let mut wrong_fence = bytes;
         wrong_fence[12 + 8] ^= 1;
         assert!(decode(&wrong_fence).is_err());
+        std::fs::write(&path, &wrong_fence).unwrap();
+        assert!(TracksFile::open(&path).unwrap().flight(517, 0).is_err());
         std::fs::remove_file(&path).unwrap();
     }
 }

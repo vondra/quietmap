@@ -206,8 +206,11 @@ fn each_period_counts_its_own_flights() {
     use popup::aircraft::boxes::{AircraftReceiver, tile_energy};
     let (emission, start, end) = departure(1_000.0);
     let mut record = box_of(&emission, start, end);
+    // The night flies the day's pieces 10 dB quieter.
     record.energy_db[2] = record.energy_db[0].map(|level| level - 10.0);
     record.tail_energy_db[2] = record.tail_energy_db[0] - 10.0;
+    record.piece_length_m[2] = record.piece_length_m[0];
+    record.installation_shares[2] = record.installation_shares[0];
     record.flights = [731, 0, 731];
     let bytes = encode(&[record], &[], &[]);
     let aircraft = tiles::aircraft::Aircraft::parse(&bytes).unwrap();

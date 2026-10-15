@@ -5,7 +5,12 @@
 
 use crate::geo::TileId;
 use crate::{Kind, tile_path};
+use std::borrow::Cow;
 use std::path::Path;
+
+/// The most a frame may state it holds: a tile's contents are tens of megabytes (the largest, an
+/// aircraft file at an airport, 43 MB), and a corrupt size must not allocate gigabytes.
+const MAXIMUM_CONTENTS: u64 = 1 << 30;
 
 /// zstd level of a framed file, written once and read at every click: on an aircraft-far file of 3
 /// MB, 17 stores 2.35x (19: 2.36x, 15: 2.17x) and decodes at 1.37 GB/s a core (19: 1.19, 15:
@@ -13,11 +18,11 @@ use std::path::Path;
 const FRAME_LEVEL: i32 = 17;
 
 /// The bytes a file of `kind` stores for `contents`.
-pub fn stored(kind: Kind, contents: &[u8]) -> Vec<u8> {
+pub fn stored(kind: Kind, contents: &[u8]) -> Cow<'_, [u8]> {
     if kind.framed() {
-        zstd::bulk::compress(contents, FRAME_LEVEL).expect("zstd compresses a buffer")
+        Cow::Owned(zstd::bulk::compress(contents, FRAME_LEVEL).expect("zstd compresses a buffer"))
     } else {
-        contents.to_vec()
+        Cow::Borrowed(contents)
     }
 }
 
@@ -28,7 +33,7 @@ pub fn contents(kind: Kind, stored: Vec<u8>) -> Result<Vec<u8>, String> {
         return Ok(stored);
     }
     let size = match zstd::zstd_safe::get_frame_content_size(&stored) {
-        Ok(Some(size)) if size <= u64::from(u32::MAX) => size as usize,
+        Ok(Some(size)) if size <= MAXIMUM_CONTENTS => size as usize,
         _ => return Err(format!("{}: not one zstd frame of a size", kind.name())),
     };
     let contents = zstd::bulk::decompress(&stored, size)
@@ -65,10 +70,10 @@ mod tests {
     #[test]
     fn contents_round_trip_through_what_a_file_stores() {
         let bytes: Vec<u8> = (0..10_000u32).flat_map(|k| (k % 7).to_le_bytes()).collect();
-        let framed = stored(Kind::Aircraft, &bytes);
+        let framed = stored(Kind::Aircraft, &bytes).into_owned();
         assert!(framed.len() < bytes.len() / 4);
         assert_eq!(contents(Kind::Aircraft, framed).unwrap(), bytes);
-        assert_eq!(stored(Kind::Terrain, &bytes), bytes);
+        assert_eq!(stored(Kind::Terrain, &bytes), bytes.as_slice());
         assert_eq!(contents(Kind::Terrain, bytes.clone()).unwrap(), bytes);
         assert!(contents(Kind::Sources, bytes.clone()).is_err());
     }
