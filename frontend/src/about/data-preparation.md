@@ -218,7 +218,7 @@ records each number in the fewest bytes its meaning needs, to a step below what 
 read in place without decoding: no text, no general compressor, a value repeated in a file kept
 once in a table of it. Only the terrain's files carry a coder: a smooth field's information is
 the residual of a planar prediction of its heights, stored in zstd.
-The world takes 1.5 TB (October 2026).
+The world takes 1.08 TB (October 2026).
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 242" role="img" aria-label="A zoom-9 square of eight by eight tiles with tile 2212/1387 of Prague's centre marked, and the directory holding its seven files, beside the weather table and the flight tracks" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -256,13 +256,13 @@ The world takes 1.5 TB (October 2026).
 |---|---|---|
 | `terrain` | the ground's height every arc-second (31 m north to south), how much of it is sealed, its tree cover and how tall the trees stand | 202 GB in 7.0 million files |
 | `terrain-fine` | where a 5 m national model exists, what the arc-second grid misses, every sixth of an arc-second | 6.2 GB in 15,289 files |
-| `obstacles` | the outlines and heights of buildings and walls, listed by cells 49 m wide in Prague | 233 GB in 1.4 million |
-| `sources` | every ground source, as points and straight pieces | 229 GB in 2.2 million |
-| `aircraft` | a year of flights, summed into boxes of airspace | 674 GB in 2.6 million |
-| `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 91 GB in 2.6 million |
-| `aircraft-events` | per cell 390 m wide in Prague, the flights of a day whose loudest moment reaches 50, 60 and 70 dB | 17 GB in 1.6 million |
+| `obstacles` | the outlines and heights of buildings and walls, listed by cells 49 m wide in Prague | 130 GB in 1.4 million |
+| `sources` | every ground source, as points and straight pieces | 170 GB in 2.2 million |
+| `aircraft` | a year of flights, summed into boxes of airspace | 466 GB in 2.6 million |
+| `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 64 GB in 2.6 million |
+| `aircraft-events` | per cell 390 m wide in Prague, the flights of a day whose loudest moment reaches 50, 60 and 70 dB | 9.6 GB in 1.6 million |
 
-Beside the tiles lie the year's flight tracks, 50 GB in 256 files, read only to draw a listed
+Beside the tiles lie the year's flight tracks, 28 GB in 256 files, read only to draw a listed
 flight, and the weather table, 16.6 MB for every half degree.
 
 A sources file holds pieces and the records they share. A piece is a point or a straight line —
