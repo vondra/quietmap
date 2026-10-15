@@ -1,9 +1,9 @@
 //! The numbers an aircraft file stores, each code beside its inverse: levels and LAmax, the NPD
 //! curves as drops, the scaled distances as steps, a centroid's place in its cell and a piece's
 //! ends from it (flights a day are `crate::rate`'s). Where a code is coarser than the value, its step is far below what
-//! the value moves: a level within 0.025 dB, a scaled distance within 0.002 of its lg (a finite
-//! piece's correction within 0.02 dB), a piece's end within a step (0.3 m) for nearly every piece
-//! and exact for the farthest.
+//! the value moves: a level within 0.025 dB (the tail anchor 0.05 dB), a scaled distance within
+//! 0.002 of its lg, a piece's end within a step (0.3 m) for nearly every piece and exact for the
+//! farthest.
 
 use super::NPD_DISTANCES;
 
@@ -62,8 +62,8 @@ pub(super) fn lamax_db(code: u8) -> f64 {
 }
 
 /// An NPD curve's ten levels (falling with distance) as the first level's code and nine drops;
-/// each drop is taken from the level the stored ones reach, so no level strays more than half a
-/// step. Also the code the stored curve ends at.
+/// each drop is taken from the level the stored ones reach to the next level itself (one
+/// rounding), so no level strays more than half a step. Also the code the stored curve ends at.
 pub(super) fn curve_codes(levels: &[f64; NPD_DISTANCES]) -> (u16, [u8; NPD_DISTANCES - 1], i64) {
     assert!(
         levels.iter().all(|level| level.is_finite()),
@@ -72,8 +72,7 @@ pub(super) fn curve_codes(levels: &[f64; NPD_DISTANCES]) -> (u16, [u8; NPD_DISTA
     let first = level_code(levels[0]);
     let mut reached = i64::from(first);
     let drops = std::array::from_fn(|k| {
-        let drop = (reached - i64::from(level_code(levels[k + 1])) + DROP_CODES / 2)
-            .div_euclid(DROP_CODES);
+        let drop = ((level_db(reached) - levels[k + 1]) * 100.0 / DROP_CODES as f64).round() as i64;
         assert!(
             (0..=255).contains(&drop) && reached - drop * DROP_CODES >= 1,
             "an NPD curve dropping {} dB to {} dB",
@@ -98,10 +97,9 @@ pub(super) fn curve_levels(first: u16, drops: &[u8]) -> ([f64; NPD_DISTANCES], i
     (levels, reached)
 }
 
-/// The tail anchor's level as its drop below the curve's last stored code.
+/// The tail anchor's level as its drop below the curve's last stored code, rounded once.
 pub(super) fn tail_code(curve_end: i64, tail_db: f64) -> u8 {
-    let drop = (curve_end - i64::from(level_code(tail_db)) + TAIL_DROP_CODES / 2)
-        .div_euclid(TAIL_DROP_CODES);
+    let drop = ((level_db(curve_end) - tail_db) * 100.0 / TAIL_DROP_CODES as f64).round() as i64;
     assert!(
         tail_db.is_finite() && (0..=255).contains(&drop) && curve_end - drop * TAIL_DROP_CODES >= 1,
         "a tail anchor {tail_db} dB below a curve ending at code {curve_end}"
@@ -125,7 +123,9 @@ pub(super) fn lg_distance_codes(lg: &[f64; NPD_DISTANCES]) -> (u16, [u8; NPD_DIS
     );
     let mut reached = first;
     let steps = std::array::from_fn(|k| {
-        let step = (code(lg[k + 1]) - reached + LG_STEP_CODES / 2).div_euclid(LG_STEP_CODES);
+        // From the value the stored ones reach to the next value itself: one rounding.
+        let step = ((lg[k + 1].max(0.0) * LG_SCALE - reached as f64) / LG_STEP_CODES as f64).round()
+            as i64;
         let stored = step + LG_STEP_BIAS;
         assert!(
             (0..=255).contains(&stored),
@@ -159,8 +159,8 @@ fn cell_start(cell: u8, edge: i32) -> i32 {
 }
 
 /// A centroid coordinate as its place in its cell, in 1/256 of the edge (exact where the edge is
-/// 256 steps or less: zoom 19 and 20). The centroid of a box's pieces lies in its cell, its far
-/// edge included.
+/// 256 steps or less, zoom 19 and 20, but on the cell's far edge, a step short there). The
+/// centroid of a box's pieces lies in its cell, its far edge included.
 pub(super) fn in_cell_code(coordinate: i16, cell: u8, edge: i32) -> u8 {
     let place = i32::from(coordinate) - cell_start(cell, edge);
     assert!(
@@ -256,8 +256,13 @@ mod tests {
         ];
         let (first, steps) = lg_distance_codes(&lg);
         for (read, written) in lg_distances(first, &steps).iter().zip(lg) {
-            assert!((read - written).abs() <= 0.00205, "{read} vs {written}");
+            assert!(
+                (read - written).abs() <= 0.002 + 1e-9,
+                "{read} vs {written}"
+            );
         }
+        let (first, steps) = lg_distance_codes(&std::array::from_fn(|k| 2.0 + 0.40196 * k as f64));
+        assert!((lg_distances(first, &steps)[1] - 2.40196).abs() <= 0.002 + 1e-9);
     }
 
     #[test]
@@ -268,10 +273,12 @@ mod tests {
         let (read, read_end) = curve_levels(first, &drops);
         assert_eq!(end, read_end);
         for (r, l) in read.iter().zip(levels) {
-            assert!((r - l).abs() <= 0.0251, "{r} vs {l}");
+            assert!((r - l).abs() <= 0.025 + 1e-9, "{r} vs {l}");
         }
         let tail = tail_db(end, tail_code(end, levels[9] - 12.34));
-        assert!((tail - (levels[9] - 12.34)).abs() <= 0.051, "{tail}");
+        assert!((tail - (levels[9] - 12.34)).abs() <= 0.05 + 1e-9, "{tail}");
+        // A tail of 93.554 dB below a curve ending at 100 dB: once rounded, 93.55 is 93.6 not 93.5.
+        assert!((tail_db(20_000, tail_code(20_000, 93.554)) - 93.554).abs() <= 0.05);
     }
 
     #[test]
@@ -286,6 +293,12 @@ mod tests {
                 assert!((i32::from(read) - i32::from(coordinate)).abs() <= step / 2 + 1);
                 if edge <= 256 {
                     assert_eq!(read, coordinate, "exact at zoom {zoom}");
+                }
+                if place == 0 && edge <= 256 {
+                    // The far edge: a step short.
+                    let far = (i32::from(coordinate) + edge) as i16;
+                    let back = in_cell(in_cell_code(far, cell, edge), cell, edge);
+                    assert!((i32::from(back) - i32::from(far)).abs() <= 1);
                 }
             }
         }
