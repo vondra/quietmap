@@ -18,7 +18,8 @@
 //! per band, 5 B: zoom u8, clearance u16 (m), height u16 (m)
 //! per installation mix, 4 B: wing and fuselage shares at 1,000 ft and at the tail anchor (1/255)
 //! per 32 boxes, 8 B: the heard periods and the pieces of the boxes before them, u32 each
-//! per box, 1 B (its head): bit p the period p heard, bit 3 a helicopter, bits 4-5 its pieces
+//! per box, 1 B (its head): bit p the period p heard, bit 3 a helicopter, bits 4-5 its pieces,
+//!   bit 6 a piece reaching past its cell or slab by more than an eighth of the edge
 //! per box, 27 B: band u8, cell 2 x u8, ground i16 (m), centroid in its cell 2 x u8 (1/256), its
 //!   altitude i16 (m), axis u16, gradient i16, spread u16, lg scaled distance u16 (1e-4) and nine
 //!   steps u8 (0.004 from -0.3), loudest LAmax u8 (0.5 dB)
@@ -51,9 +52,11 @@ const PERIOD_BYTES: usize = 18;
 const FLIGHT_BYTES: usize = 19;
 const PIECE_BYTES: usize = 17;
 const WIDE_BYTES: usize = 12;
-/// A box head's bits: the heard periods (bit p), a helicopter, then the piece count.
+/// A box head's bits: the heard periods (bit p), a helicopter, then the piece count, and whether
+/// a piece reaches past the box by more than an eighth of its edge.
 const HEAD_HELICOPTER: u8 = 1 << 3;
 const HEAD_PIECES_SHIFT: u32 = 4;
+const HEAD_REACHING: u8 = 1 << 6;
 /// A piece's kind field: its class below bit 8, then its flags, period and the scale of its ends.
 const KIND_FLAGS_SHIFT: u32 = 8;
 const KIND_PERIOD_SHIFT: u32 = 10;

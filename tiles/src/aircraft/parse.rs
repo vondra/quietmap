@@ -5,9 +5,9 @@ use super::codes::{
 };
 use super::{
     AircraftBox, BAND_BYTES, BLOCK_BYTES, BOX_BYTES, BOXES_PER_BLOCK, FLIGHT_BYTES, Flight,
-    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEADER_BYTES, INSTALLATIONS,
-    KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM, MIX_BYTES,
-    NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
+    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEAD_REACHING, HEADER_BYTES,
+    INSTALLATIONS, KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM,
+    MIX_BYTES, NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
 };
 use crate::FormatError;
 use crate::rate::rate;
@@ -122,7 +122,7 @@ impl<'a> Aircraft<'a> {
             }
             let (head, record) = (parsed.heads[index], parsed.box_record(index));
             let band = usize::from(record[0]);
-            if band >= bands || head & 7 == 0 || head >> 6 != 0 {
+            if band >= bands || head & 7 == 0 || head >> 7 != 0 {
                 return Err(FormatError(
                     "aircraft: a box of no band, no period or a bad head",
                 ));
@@ -230,6 +230,12 @@ impl<'a> Aircraft<'a> {
     /// The zoom of a box record's band.
     fn zoom(&self, record: &[u8]) -> u8 {
         self.bands[BAND_BYTES * usize::from(record[0])]
+    }
+
+    /// Whether a piece of box `index` reaches past its cell or slab by more than an eighth of its
+    /// edge: a bound on its pieces takes their own ends, any other box's its cell and slab.
+    pub fn box_reaches_past(&self, index: usize) -> bool {
+        self.heads[index] & HEAD_REACHING != 0
     }
 
     /// A box's emission-weighted centroid alone (tile-local steps): where it is, without the rest

@@ -247,7 +247,7 @@ fn a_file_that_does_not_add_up_is_refused() {
     missing_piece[head] = missing_piece[head] & 0x0f | 3 << 4;
     assert!(Aircraft::parse(&missing_piece).is_err());
     let mut high_head = bytes.clone();
-    high_head[head] |= 1 << 6;
+    high_head[head] |= 1 << 7;
     assert!(Aircraft::parse(&high_head).is_err());
     // A box of a band the table lacks.
     let mut missing_band = bytes.clone();
@@ -296,6 +296,15 @@ fn a_wide_piece_keeps_its_ends_exact() {
     let parsed = Aircraft::parse(&bytes).unwrap();
     let first = parsed.aircraft_box(0);
     assert_eq!(parsed.piece(&first, 1).ends, far.ends);
+    assert!(parsed.box_reaches_past(0) && parsed.box_reaches_past(1));
+    // a_piece ends 36 steps east of its cell and 56 m above its slab; one within both does not.
+    let past = encode(&[a_box(0, 1)], &[a_flight(1)], &[a_piece(0)]);
+    assert!(Aircraft::parse(&past).unwrap().box_reaches_past(0));
+    let mut inside = a_piece(0);
+    inside.ends = [[16_200, -15_500], [16_400, -15_380]];
+    inside.altitudes_m = [345.0, 404.0];
+    let near = encode(&[a_box(0, 1)], &[a_flight(1)], &[inside]);
+    assert!(!Aircraft::parse(&near).unwrap().box_reaches_past(0));
     assert_eq!(parsed.piece(&parsed.aircraft_box(1), 0).ends, far.ends);
     assert_ne!(parsed.piece(&first, 0).ends, far.ends);
     let mut lost = bytes.clone();

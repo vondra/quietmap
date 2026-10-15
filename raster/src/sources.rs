@@ -287,9 +287,15 @@ pub fn render(
 mod tests {
     use super::*;
 
-    /// A display array of `layer` with the named fields set, the rest null.
+    /// A display array of `layer` with the named fields set, the rest null (a whole count 0).
     fn display(layer: SourceLayer, set: &[(&str, Value)]) -> Vec<Value> {
-        let mut fields = vec![Value::Null; display_fields(layer).len()];
+        let mut fields: Vec<Value> = display_fields(layer)
+            .iter()
+            .map(|field| match field.kind {
+                tiles::sources::FieldKind::Whole(_) => Value::from(0),
+                _ => Value::Null,
+            })
+            .collect();
         for (name, value) in set {
             fields[field_index(layer, name)] = value.clone();
         }
