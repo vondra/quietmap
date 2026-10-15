@@ -188,6 +188,16 @@ impl<'a> Obstacles<'a> {
         self.outlines.len() / OUTLINE_BYTES
     }
 
+    /// The cells with runs: the bitmap's set bits.
+    pub fn occupied_count(&self) -> usize {
+        self.first_runs.len() / 4 - 1
+    }
+
+    /// The footprint squares the file names.
+    pub fn square_count(&self) -> usize {
+        self.squares.len() / 4
+    }
+
     pub fn vertex_count(&self) -> usize {
         self.vertices.len() / VERTEX_BYTES
     }

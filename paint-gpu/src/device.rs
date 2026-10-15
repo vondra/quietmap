@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tiles::Kind;
 use tiles::geo::{Mercator, TILES_PER_AXIS, TileId};
+use tiles::obstacles::Obstacles;
 use tiles::sources::GROUND_FROM_TERRAIN;
 use tiles::terrain::{NODES_PER_DEGREE, Terrain, Window};
 
@@ -673,15 +674,15 @@ impl DeviceSquare {
                         let bytes = rings
                             .file(*index, Kind::Obstacles)
                             .ok_or("an obstacles tile without its file")?;
-                        let count =
-                            |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                        let obstacles = Obstacles::parse(bytes).map_err(|e| e.to_string())?;
+                        let count = |count: usize| count as u32;
                         device_tile = ObstacleTile {
                             state: TILE_READ,
-                            outline_count: count(8),
-                            vertex_count: count(12),
-                            run_count: count(16),
-                            occupied_count: count(20),
-                            square_count: count(24),
+                            outline_count: count(obstacles.outline_count()),
+                            vertex_count: count(obstacles.vertex_count()),
+                            run_count: count(obstacles.run_count()),
+                            occupied_count: count(obstacles.occupied_count()),
+                            square_count: count(obstacles.square_count()),
                             offset_x: slot.offset[0] as f32,
                             offset_y: slot.offset[1] as f32,
                             base: append_aligned(&mut blob, bytes),

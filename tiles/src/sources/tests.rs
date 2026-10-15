@@ -127,6 +127,13 @@ fn sources_round_trip_with_lines_before_points() {
     assert_eq!(parsed.display(0).unwrap(), road().display);
     assert_eq!(parsed.display(1).unwrap(), bell.display);
     assert!(Sources::parse(&bytes[..bytes.len() - 1]).is_err());
+    // The deck after the header, two lines, a point, two attributes and their row: one under a
+    // line beyond the lines is refused.
+    let deck = HEADER_BYTES + 2 * LINE_BYTES + POINT_BYTES + 2 * ATTRIBUTE_BYTES + EMISSION_BYTES;
+    let mut beyond = bytes.clone();
+    beyond[deck] = 2;
+    assert!(Sources::parse(&beyond).is_err());
+    assert!(parsed.piece(3).is_err());
 }
 
 /// Every layer's fields come back as written, nulls and a short array included; a number keeps its

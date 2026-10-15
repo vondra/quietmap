@@ -7,7 +7,7 @@ use super::{
     LEVEL_OFFSET_DB, LINE_BYTES, Layer, MAGIC, POINT_BYTES, Piece,
 };
 use crate::FormatError;
-use crate::terrain::height_m_of_code;
+use crate::terrain::{HEIGHT_MISSING, height_m_of_code};
 
 fn level_db(code: u16) -> f64 {
     if code == 0 {
@@ -65,6 +65,20 @@ impl<'a> Sources<'a> {
             displays,
             strings,
         ] = sections.map(|section| &bytes[section]);
+        // The few decks checked here, as the lookup's binary search relies on their order.
+        let line_count = lines.len() / LINE_BYTES;
+        let mut previous = None;
+        for entry in decks.chunks_exact(DECK_BYTES) {
+            let line = u32_at(entry, 0) as usize;
+            let codes = [4, 6].map(|at| u16::from_le_bytes([entry[at], entry[at + 1]]));
+            if line >= line_count
+                || previous.is_some_and(|previous| previous >= line)
+                || codes.contains(&HEIGHT_MISSING)
+            {
+                return Err(FormatError("sources: a deck out of order or range"));
+            }
+            previous = Some(line);
+        }
         Ok(Sources {
             lines,
             points,
@@ -111,6 +125,9 @@ impl<'a> Sources<'a> {
 
     /// Piece `index`: the lines first, then the points (a point's two ends are its place).
     pub fn piece(&self, index: usize) -> Result<Piece, FormatError> {
+        if index >= self.piece_count() {
+            return Err(FormatError("sources: piece index out of range"));
+        }
         let i16_at = |record: &[u8], at: usize| i16::from_le_bytes([record[at], record[at + 1]]);
         let (ends, attribute) = if index < self.line_count() {
             let record = &self.lines[index * LINE_BYTES..(index + 1) * LINE_BYTES];
