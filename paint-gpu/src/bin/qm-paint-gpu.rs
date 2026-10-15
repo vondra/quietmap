@@ -114,7 +114,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let files = Files::read(&release, tile)?;
     let square = Square::new(&weather, tile, &files)?;
     if command == Some("check-flights") {
-        return check_flights(&square, &files, &weather, parse("device", 0)? as usize);
+        return check_flights(&square, parse("device", 0)? as usize);
     }
     if command == Some("check-loudness") {
         return check_loudness(
@@ -670,47 +670,11 @@ fn check_loudness(square: &Square, count: usize, seed: u64, device: usize) -> Re
 }
 
 /// The card's aircraft sums at the hum lattice and every second block corner against the cores'.
-fn check_flights(
-    square: &Square,
-    files: &Files,
-    weather: &WeatherTable,
-    device: usize,
-) -> Result<(), String> {
-    use paint::flight_boxes::{FlightBoxes, FlightRequest, FlightWeight};
+fn check_flights(square: &Square, device: usize) -> Result<(), String> {
     let grid = paint::paint::Grid::at_zoom(13).ok_or("no grid at zoom 13")?;
-    let (n, side) = (grid.pixels, grid.pixels / grid.block + 1);
-    let corners: Vec<Point> = (0..side * side)
-        .into_par_iter()
-        .map(|at| {
-            let (i, j) = ((at % side) * grid.block, (at / side) * grid.block);
-            Point::at(
-                square,
-                paint::paint::metres_at(square, n, i as f64, j as f64),
-            )
-        })
-        .collect::<Result<_, String>>()?;
-    let coarse_m = square.frame.east_m_per_unit / n as f64 * grid.hum as f64;
-    let boxes = FlightBoxes::new(square, &corners, coarse_m);
-    let (ratio, coarse_side, air_side) = (grid.hum / grid.block, n / grid.hum + 1, side / 2 + 1);
-    let mut requests: Vec<FlightRequest> = (0..coarse_side * coarse_side)
-        .map(|at| {
-            let (column, row) = (at % coarse_side, at / coarse_side);
-            FlightRequest {
-                point: &corners[(row * ratio) * side + column * ratio],
-                weights: [
-                    Some(FlightWeight::Far),
-                    (column.is_multiple_of(4) && row.is_multiple_of(4))
-                        .then_some(FlightWeight::One),
-                ],
-                within_m: popup::aircraft::boxes::AIRCRAFT_REACH_M,
-            }
-        })
-        .collect();
-    requests.extend((0..air_side * air_side).map(|at| FlightRequest {
-        point: &corners[(at / air_side) * 2 * side + (at % air_side) * 2],
-        weights: [Some(FlightWeight::Near), None],
-        within_m: 3.0 * coarse_m,
-    }));
+    let corners = paint::paint::corner_points(square, grid)?;
+    let boxes = paint::flight_boxes::FlightBoxes::new(square, grid, &corners);
+    let requests = paint::flights::lattice_requests(grid, &corners, &boxes);
     let started = Instant::now();
     let cpu: Vec<_> = requests
         .par_iter()
@@ -718,10 +682,9 @@ fn check_flights(
         .collect::<Result<_, String>>()?;
     let cpu_s = started.elapsed().as_secs_f64();
     let gpu = Gpu::new(device)?;
-    let device_square = DeviceSquare::upload(&gpu, square, files, weather)?;
-    let batch = paint_gpu::batch::GpuBatch::new(&gpu, &device_square, square);
     let started = Instant::now();
-    let card = paint::exact::Batch::flight_sums(&batch, square, &boxes, &requests)?;
+    let device_boxes = paint_gpu::aircraft::DeviceFlightBoxes::upload(&gpu, square, &boxes)?;
+    let card = gpu.flight_sums(square, &boxes, &device_boxes, &requests)?;
     let gpu_s = started.elapsed().as_secs_f64();
     for (band, kind) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
         let mut differences: Vec<f64> = (cpu.iter().zip(&card))

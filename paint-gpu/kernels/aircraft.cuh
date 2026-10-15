@@ -3,7 +3,7 @@
 // (one point's boxes of one tile, file and lattice) a thread, summed per point in double.
 
 // The constants (NPD_DISTANCES, LOG10_NPD_DISTANCES_FT, the installation slants, the screening's
-// ceiling and slope, PERIOD_SECONDS, ...) come from device.rs aircraft_constants, from the Rust.
+// ceiling and slope, PERIOD_SECONDS, ...) come from aircraft.rs aircraft_constants, from the Rust.
 
 // tiles::aircraft::AircraftBox at the square's frame, with what boxes.rs derives once a box:
 // the centroid in the square's frame (m), the average length (boxes.rs average_length_m), whether
@@ -12,7 +12,6 @@
 struct FlightBox {
     float east_m, north_m;
     float centroid_altitude_m;
-    float ground_m;
     float sin_axis, cos_axis;
     float gradient, gradient_spread;
     float average_length_m;
@@ -52,8 +51,8 @@ struct FlightSegment {
 #define FLIGHT_WEIGHT_FAR 1u
 #define FLIGHT_WEIGHT_NEAR 2u
 
-// paint/src/flights.rs flights_at_corners `far`, `near` and `one`: the smoothstep from 1.5 to 3
-// times the hum's spacing.
+// paint/src/flight_boxes.rs FlightWeight::at: the smoothstep from 1.5 to 3 times the hum's
+// spacing.
 __device__ float flight_weight(u32 kind, float distance_m, float coarse_m) {
     if (kind == FLIGHT_WEIGHT_ONE) return 1.0f;
     float fraction = clampf((distance_m - 1.5f * coarse_m) / (1.5f * coarse_m), 0.0f, 1.0f);
@@ -133,14 +132,17 @@ __device__ float box_level_db(const float* levels, float tail_db, const NpdPosit
     return last - 20.0f * log10f(slant_m / NPD_LAST_DISTANCE_M) - absorption_db_per_m * (slant_m - NPD_LAST_DISTANCE_M);
 }
 
-// physics::doc29::corrections::finite_segment_energy_fraction
+// physics::doc29::corrections::finite_segment_energy_fraction. The arctangents' difference is
+// taken as one arctangent while both ends lie on one side: two single-precision values near pi/2
+// (a far segment pointing at the receiver) would cancel to nothing.
 __device__ float finite_segment_energy_fraction(float along_m, float length_m, float scaled_distance_m) {
     if (length_m < 1.0f || scaled_distance_m < 1.0f) return 1.0f;
     float alpha_start = -along_m / scaled_distance_m;
     float alpha_end = -(along_m - length_m) / scaled_distance_m;
-    float end = alpha_end / (1.0f + alpha_end * alpha_end) + atanf(alpha_end);
-    float start = alpha_start / (1.0f + alpha_start * alpha_start) + atanf(alpha_start);
-    return fmaxf((end - start) / QM_PI, 1e-15f);
+    float product = alpha_start * alpha_end;
+    float angle = product > -1.0f ? atanf((alpha_end - alpha_start) / (1.0f + product)) : atanf(alpha_end) - atanf(alpha_start);
+    float rational = alpha_end / (1.0f + alpha_end * alpha_end) - alpha_start / (1.0f + alpha_start * alpha_start);
+    return fmaxf((rational + angle) / QM_PI, 1e-15f);
 }
 
 // physics::doc29::corrections::lateral_attenuation_db

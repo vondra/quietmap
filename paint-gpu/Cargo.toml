@@ -18,7 +18,6 @@ physics = { path = "../physics" }
 popup = { path = "../popup" }
 paint = { path = "../paint" }
 rayon = "1.12"
-libc = "0.2"
 mimalloc = { version = "0.1.52", default-features = false }
 # The driver and NVRTC are loaded at run time: the crate builds and lints on a host without CUDA,
 # and the kernels compile for the card they run on (dev1's aircraft crate pinned the same 0.12).

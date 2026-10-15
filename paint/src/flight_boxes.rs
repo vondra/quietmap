@@ -2,6 +2,7 @@
 
 use crate::exact::{Batch, Point};
 use crate::flights::{FlightSums, HeardTile, tiles_heard};
+use crate::paint::Grid;
 use crate::square::{Square, gap_to_tile};
 use physics::bands::PERIODS;
 use popup::aircraft::FINE_BOXES_WITHIN_M;
@@ -51,7 +52,9 @@ pub struct FlightBoxes {
 }
 
 impl FlightBoxes {
-    pub fn new(square: &Square, corners: &[Point], coarse_m: f64) -> Self {
+    /// The boxes the square's block `corners` hear, at `grid`'s hum spacing.
+    pub fn new(square: &Square, grid: Grid, corners: &[Point]) -> Self {
+        let coarse_m = square.frame.east_m_per_unit / grid.pixels as f64 * grid.hum as f64;
         let mut area = ReceiverArea {
             low: [f64::INFINITY; 2],
             high: [f64::NEG_INFINITY; 2],

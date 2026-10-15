@@ -190,9 +190,7 @@ impl Horizons {
         }
         Ok(Horizons { terrain, buildings })
     }
-}
 
-impl Horizons {
     /// Both horizons as [`HORIZON_FLOATS`] floats for the painter's card: the terrain's, then the
     /// buildings'.
     pub fn write_f32(&self, out: &mut Vec<f32>) {

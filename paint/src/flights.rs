@@ -102,25 +102,18 @@ pub(crate) fn aircraft_sums(square: &Square, point: &Point) -> Result<FlightSums
     Ok(total)
 }
 
-/// Flights beyond a minimum slant of 8 km use 5² nodes; the closer boxes keep the near/far split.
-/// The lattices' sums are asked of the card when there is one (`batch`), else of the cores.
-pub(crate) fn flights_at_corners(
-    square: &Square,
+/// The lattices' requests, all block corners: at the hum's points (every `hum / block`th corner)
+/// the far boxes and at every fourth of them the distant ones, then at every second corner the
+/// near boxes.
+pub fn lattice_requests<'a>(
     grid: Grid,
-    corners: &[Point],
-    batch: Option<&dyn Batch>,
-) -> Result<Vec<FlightSums>, String> {
-    let coarse_m = square.frame.east_m_per_unit / grid.pixels as f64 * grid.hum as f64;
-    let boxes = FlightBoxes::new(square, corners, coarse_m);
-    if boxes.occupied.iter().all(|&occupied| !occupied) {
-        return Ok(vec![[[0.0; PERIODS]; 2]; corners.len()]);
-    }
-    let near_within_m = 3.0 * coarse_m;
+    corners: &'a [Point],
+    boxes: &FlightBoxes,
+) -> Vec<FlightRequest<'a>> {
     let corner_side = grid.pixels / grid.block + 1;
     let ratio = grid.hum / grid.block;
     let coarse_side = grid.pixels / grid.hum + 1;
     let air_side = grid.pixels / (2 * grid.block) + 1;
-    // The hum's points (every `ratio`th corner) and every second corner are block corners.
     let coarse = (0..coarse_side * coarse_side).map(|at| {
         let (column, row) = (at % coarse_side, at / coarse_side);
         FlightRequest {
@@ -133,15 +126,46 @@ pub(crate) fn flights_at_corners(
             within_m: AIRCRAFT_REACH_M,
         }
     });
-    let near = |point| FlightRequest {
+    let air = (0..air_side * air_side).map(|at| {
+        near_request(
+            &corners[(at / air_side) * 2 * corner_side + (at % air_side) * 2],
+            boxes,
+        )
+    });
+    coarse.chain(air).collect()
+}
+
+/// A point's near boxes, heard within three of the hum's spacings.
+fn near_request<'a>(point: &'a Point, boxes: &FlightBoxes) -> FlightRequest<'a> {
+    FlightRequest {
         point,
         weights: [boxes.occupied[0].then_some(FlightWeight::Near), None],
-        within_m: near_within_m,
-    };
-    let air = (0..air_side * air_side)
-        .map(|at| near(&corners[(at / air_side) * 2 * corner_side + (at % air_side) * 2]));
-    let requests: Vec<FlightRequest> = coarse.chain(air).collect();
-    let sums = flight_sums(square, &boxes, &requests, batch)?;
+        within_m: 3.0 * boxes.coarse_m,
+    }
+}
+
+/// Flights beyond a minimum slant of 8 km use 5² nodes; the closer boxes keep the near/far split.
+/// The lattices' sums are asked of the card when there is one (`batch`), else of the cores.
+pub(crate) fn flights_at_corners(
+    square: &Square,
+    grid: Grid,
+    corners: &[Point],
+    batch: Option<&dyn Batch>,
+) -> Result<Vec<FlightSums>, String> {
+    let boxes = FlightBoxes::new(square, grid, corners);
+    if boxes.occupied.iter().all(|&occupied| !occupied) {
+        return Ok(vec![[[0.0; PERIODS]; 2]; corners.len()]);
+    }
+    let corner_side = grid.pixels / grid.block + 1;
+    let ratio = grid.hum / grid.block;
+    let coarse_side = grid.pixels / grid.hum + 1;
+    let air_side = grid.pixels / (2 * grid.block) + 1;
+    let sums = flight_sums(
+        square,
+        &boxes,
+        &lattice_requests(grid, corners, &boxes),
+        batch,
+    )?;
     let (coarse, air) = sums.split_at(coarse_side * coarse_side);
     let blend = |i: usize, j: usize, step: usize, lookup: &dyn Fn(usize, usize) -> FlightSums| {
         let limit = (corner_side - 1) / step - 1;
@@ -177,10 +201,10 @@ pub(crate) fn flights_at_corners(
             (high <= 1.258_925_411_794_167_2 * low).then_some(blended)
         })
         .collect();
-    let exact: Vec<usize> = (0..corners.len())
-        .filter(|&at| near_energy[at].is_none())
+    let requests: Vec<FlightRequest> = (near_energy.iter().zip(corners))
+        .filter(|(sums, _)| sums.is_none())
+        .map(|(_, corner)| near_request(corner, &boxes))
         .collect();
-    let requests: Vec<FlightRequest> = exact.iter().map(|&at| near(&corners[at])).collect();
     let mut exact_sums = flight_sums(square, &boxes, &requests, batch)?.into_iter();
     let near_energy: Vec<FlightSums> = near_energy
         .into_iter()

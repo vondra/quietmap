@@ -158,7 +158,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
 }
 
 /// The square's point at pixel coordinates (x, y), in the square's frame.
-pub fn metres_at(square: &Square, n: usize, x: f64, y: f64) -> [f64; 2] {
+pub(crate) fn metres_at(square: &Square, n: usize, x: f64, y: f64) -> [f64; 2] {
     square.frame.to_metres(Mercator {
         x: f64::from(square.tile.x) + x / n as f64,
         y: f64::from(square.tile.y) + y / n as f64,
@@ -196,6 +196,18 @@ pub(crate) fn rectangle_at(
     )
 }
 
+/// The square's block corners as points, row-major from the north-west, `pixels / block + 1` a side.
+pub fn corner_points(square: &Square, grid: Grid) -> Result<Vec<Point>, String> {
+    let side = grid.pixels / grid.block + 1;
+    (0..side * side)
+        .into_par_iter()
+        .map(|at| {
+            let (i, j) = ((at % side) * grid.block, (at / side) * grid.block);
+            Point::at(square, metres_at(square, grid.pixels, i as f64, j as f64))
+        })
+        .collect()
+}
+
 /// The square's corners: each one's sources loud there evaluated exactly and ranked, its flights,
 /// the hum, the flights' spectra; `None` for a square that is silent everywhere.
 pub fn corners_of(
@@ -204,7 +216,6 @@ pub fn corners_of(
     batch: Option<&dyn Batch>,
 ) -> Result<Option<Corners>, String> {
     let n = grid.pixels;
-    let metres = |x: f64, y: f64| metres_at(square, n, x, y);
     let rectangle = |x0: f64, y0: f64, x1: f64, y1: f64| rectangle_at(square, n, x0, y0, x1, y1);
     let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
     if square.candidates.is_empty() {
@@ -217,19 +228,9 @@ pub fn corners_of(
         }
     }
     let started = std::time::Instant::now();
-    let blocks = n / grid.block;
-    let corner_side = blocks + 1;
-    let corner_points: Vec<Point> = (0..corner_side * corner_side)
-        .into_par_iter()
-        .map(|at| {
-            let (i, j) = (at % corner_side, at / corner_side);
-            Point::at(
-                square,
-                metres((i * grid.block) as f64, (j * grid.block) as f64),
-            )
-        })
-        .collect::<Result<_, String>>()?;
-    // The flights are the cores' work alone: they run beside the hum and the corners on the card.
+    let corner_points = corner_points(square, grid)?;
+    // The flights, their spectra and the hum side by side; the flights' and the hum's sums go to the
+    // card when there is one.
     let ((flights, flight_spectra), hum) = rayon::join(
         || {
             rayon::join(

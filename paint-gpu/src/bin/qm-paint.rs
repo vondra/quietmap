@@ -1,8 +1,9 @@
 //! Paint squares, merge their compressed bundles and publish immutable heatmap archives.
 //! `qm-paint --prepared DIR --year YYYY --zoom 12|13 --out DIR (--squares X,Y[;X,Y...] | --bbox
-//! SOUTH,WEST,NORTH,EAST)`: paints the z12 squares one after another (each on every core, its exact
-//! evaluations on the first CUDA card when there is one) into heatmap tiles at `--zoom`, skipping
-//! squares already painted; one line per square on stdout.
+//! SOUTH,WEST,NORTH,EAST)`: paints the z12 squares into heatmap tiles at `--zoom`, skipping squares
+//! already painted, the next one prepared on the cores while two paint their pixels (the exact
+//! evaluations on the first CUDA card when there is one) and a writer publishes those before; one
+//! line per square on stdout.
 //! `qm-paint pack --out DIR --zoom Z --tiles DIR --build bNNN`: the map's archives and manifest.
 //! `qm-paint merge --from DIR --out DIR --zoom Z`: atomic byte copies of completed squares.
 
@@ -16,10 +17,10 @@ use paint_gpu::device::{DeviceSquare, Gpu};
 use paint_gpu::square_writer::{PaintedSquareCells, write_beside_painting};
 use physics::weather::WeatherTable;
 use popup::release::Release;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::sync_channel;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Instant;
 use tiles::geo::{Mercator, TileId};
 
@@ -146,48 +147,29 @@ fn run(arguments: &[String]) -> Result<(), String> {
         let (prepared_sender, prepared_receiver) = sync_channel::<Result<Prepared, String>>(0);
         // The painters own the receiver: when the last one ends, the preparer's next hand-over fails.
         let prepared_receiver = Arc::new(Mutex::new(prepared_receiver));
-        // The squares on the card, counted when handed over, and the stop after an error.
-        let on_the_card = (Mutex::new(0usize), Condvar::new());
-        let stopped = AtomicBool::new(false);
-        let until_card_holds = |most: usize| {
-            let (count, changed) = &on_the_card;
-            let count = count
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            drop(changed.wait_while(count, |count| {
-                *count > most && !stopped.load(Ordering::Relaxed)
-            }));
-        };
-        let (weather, gpu, todo, squares) = (&weather, gpu.as_ref(), &todo, &squares);
-        let (on_the_card, stopped, until_card_holds) = (&on_the_card, &stopped, &until_card_holds);
+        let card = Card::default();
+        let (weather, gpu, todo, squares, card) = (&weather, gpu.as_ref(), &todo, &squares, &card);
         let prepare = &prepare;
         std::thread::scope(|scope| {
             scope.spawn(move || {
                 // The first square and the one after a heavy square wait for no card: every core.
                 let mut card_idle = true;
                 for square in todo {
-                    if stopped.load(Ordering::Relaxed) {
+                    if card.stopped() {
                         return;
                     }
                     let prepared = match card_idle {
                         true => prepare(square),
                         false => preparing_pool.install(|| prepare(square)),
                     };
-                    let heavy = prepared
-                        .as_ref()
+                    let heavy = (prepared.as_ref())
                         .is_ok_and(|prepared| prepared.candidates > PIPELINE_CANDIDATES_MAX);
-                    if heavy {
-                        until_card_holds(0);
-                    }
-                    *on_the_card
-                        .0
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
-                    if prepared_sender.send(prepared).is_err() {
+                    if heavy && !card.emptied() {
                         return;
                     }
-                    if heavy {
-                        until_card_holds(0);
+                    card.change(|state| state.squares += 1);
+                    if prepared_sender.send(prepared).is_err() || heavy && !card.emptied() {
+                        return;
                     }
                     card_idle = heavy;
                 }
@@ -203,23 +185,24 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             let Ok(prepared) = received else {
                                 return Ok(());
                             };
-                            let cells = prepared.and_then(|prepared| {
-                                finish_square(weather, gpu, grid, squares.len(), prepared)
-                            });
-                            {
-                                let (count, changed) = on_the_card;
-                                *count
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner()) -= 1;
-                                changed.notify_all();
+                            if card.stopped() {
+                                card.change(|state| state.squares -= 1);
+                                return Ok(());
                             }
+                            // A panic is this square's error: the preparer may wait for the card.
+                            let cells = prepared.and_then(|prepared| {
+                                catch_unwind(AssertUnwindSafe(|| {
+                                    finish_square(weather, gpu, grid, squares.len(), prepared)
+                                }))
+                                .unwrap_or_else(|_| Err("a square's painting panicked".into()))
+                            });
+                            card.change(|state| state.squares -= 1);
                             let sent = cells.and_then(|cells| {
                                 (sender.send(cells))
                                     .map_err(|_| "a square's writer stopped".to_string())
                             });
                             if sent.is_err() {
-                                stopped.store(true, Ordering::Relaxed);
-                                on_the_card.1.notify_all();
+                                card.change(|state| state.stopped = true);
                                 return sent;
                             }
                         }
@@ -234,6 +217,41 @@ fn run(arguments: &[String]) -> Result<(), String> {
             })
         })
     })
+}
+
+/// The squares handed to the painters and not yet painted, and whether a painter stopped on an
+/// error: the preparer waits for an empty card before and after a heavy square.
+#[derive(Default)]
+struct Card {
+    state: Mutex<CardState>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct CardState {
+    squares: usize,
+    stopped: bool,
+}
+
+impl Card {
+    fn change(&self, change: impl FnOnce(&mut CardState)) {
+        change(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner));
+        self.changed.notify_all();
+    }
+
+    fn stopped(&self) -> bool {
+        (self.state.lock().unwrap_or_else(PoisonError::into_inner)).stopped
+    }
+
+    /// Waits until no square is on the card: false when a painter stopped first.
+    fn emptied(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = (self
+            .changed
+            .wait_while(state, |state| state.squares > 0 && !state.stopped))
+        .unwrap_or_else(PoisonError::into_inner);
+        !state.stopped
+    }
 }
 
 /// Squares whose pixels are painted at once: one square's passes leave the card idle between them
@@ -342,14 +360,6 @@ fn finish_square(
 }
 
 fn main() {
-    // A square's large buffers, freed, serve the next square from the heap instead of going back to
-    // the system and being faulted in again: the Sahara's quiet squares in about half the time
-    // (2026-10-11).
-    unsafe {
-        libc::mallopt(libc::M_MMAP_THRESHOLD, 1 << 30);
-        libc::mallopt(libc::M_TRIM_THRESHOLD, 1 << 30);
-        libc::mallopt(libc::M_TOP_PAD, 1 << 30);
-    }
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if let Err(error) = run(&arguments) {
         eprintln!("qm-paint: {error}");

@@ -38,7 +38,6 @@ pub(crate) struct DeviceFlightBox {
     east_m: f32,
     north_m: f32,
     centroid_altitude_m: f32,
-    ground_m: f32,
     sin_axis: f32,
     cos_axis: f32,
     gradient: f32,
@@ -171,7 +170,6 @@ impl DeviceFlightBoxes {
                         east_m: east_m as f32,
                         north_m: north_m as f32,
                         centroid_altitude_m: record.centroid_altitude_m as f32,
-                        ground_m: record.ground_m as f32,
                         sin_axis: sin_axis as f32,
                         cos_axis: cos_axis as f32,
                         gradient: record.gradient as f32,
@@ -271,20 +269,17 @@ impl Gpu {
         let (mut horizons, mut points, mut segments) = (Vec::new(), Vec::new(), Vec::new());
         for (request, prepared) in requests.iter().zip(prepared) {
             let point = request.point;
-            let mut device_point = DeviceFlightPoint {
+            points.push(DeviceFlightPoint {
                 x: point.position[0] as f32,
                 y: point.position[1] as f32,
                 altitude_m: point.altitude_m as f32,
                 impedance_gain: energy(receiver_impedance_db(point.altitude_m)) as f32,
                 horizons: horizons.len() as u64,
-            };
+            });
             if let Some((floats, request_segments)) = prepared {
                 horizons.extend(floats);
                 segments.extend(request_segments);
-            } else {
-                device_point.horizons = 0;
             }
-            points.push(device_point);
         }
         let mut sums = vec![[[[0.0; PERIODS]; 2]; 2]; requests.len()];
         if segments.is_empty() {

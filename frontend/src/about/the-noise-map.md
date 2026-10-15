@@ -111,11 +111,14 @@ for 99 % of them and 0.03 dB for 99.9 %.
 
 ## In the code
 
-`paint/` is the method and `paint-gpu/` (`qm-paint`) runs it, a square of zoom 12 at a time: its
-files read once to the reach of its farthest pixel, the exact pairs and the aircraft boxes' sums at
-the block corners' lattices on the first CUDA card (`paint-gpu/kernels/`, the popup's physics in
-single precision, each function citing its Rust) or on the cores. Four passes share the card. The cores assemble sounds directly into chunks of at most
-8,192 pixels, preparing the next chunk while the card computes the current chunk's loudness.
+`paint/` is the method and `paint-gpu/` (`qm-paint`) runs it by squares of zoom 12 in three stages:
+the cores read the next square's files once, to the reach of its farthest pixel, and take its
+corners; two squares paint their pixels at once (a square of many sources alone); a writer
+publishes the squares before. The exact pairs and the aircraft boxes' sums at the block corners'
+lattices run on the first CUDA card (`paint-gpu/kernels/`, the popup's physics in single
+precision, each function citing its Rust) or on the cores. Four passes of a square share the card.
+The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
+while the card computes the current chunk's loudness.
 The passes return in spatial order, so equal façade energies keep the same first candidate.
 Each file's header says what it does; the blocks are `paint/src/blocks.rs`, their quiet
 interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, the aircraft spectra
@@ -133,8 +136,9 @@ every cell, including silence and not assessed, returns exactly.
 
 The painter writes one atomic HM3 square bundle, its directory pointing at these compressed tile
 streams, identical tile grids encoded and stored once. A writer compresses and publishes it while
-the next square is painted; at most two squares' cell buffers are resident, and a square is complete
-only after its bundle is durable (`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies
+the next squares are painted; at most five squares' cell buffers are resident (one written, two
+waiting, two painted), and a square is complete only after its bundle is durable
+(`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies
 independent painters' bundles into one tree atomically, without decoding or replacing completed
 squares. Identical completed copies are skipped on retry; conflicting squares stop the merge.
 `paint/src/pyramid.rs` reads each compressed square once and carries the assessed-pixel counts and
@@ -149,5 +153,6 @@ until the page is refreshed.
 
 Loud is one rule for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB). `qm-paint-gpu check` holds the card equal to the cores
-on random pairs, `check-flights` on a square's aircraft lattices, `etalon` paints the reference, `compare` scores a map against it, and `popup` writes
-the click's loudness at random pixels as a sparse reference.
+on random pairs, `check-flights` on a square's aircraft lattices; `etalon` paints the reference,
+`compare` scores a map against it, and `popup` writes the click's loudness at random pixels as a
+sparse reference.

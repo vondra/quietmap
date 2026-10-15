@@ -789,7 +789,6 @@ name = "paint-gpu"
 version = "0.1.0"
 dependencies = [
  "cudarc",
- "libc",
  "mimalloc",
  "paint",
  "physics",

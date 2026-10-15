@@ -1,4 +1,4 @@
-//! Encode and publish one square beside painting the next, with no queued cell buffers.
+//! Encode and publish the painted squares one at a time beside painting the next ones.
 
 use paint::hm3::write;
 use paint::paint::Cells;
@@ -10,7 +10,7 @@ use tiles::geo::TileId;
 
 /// Painted squares that may wait for the writer: the painter goes on while a square's encoding
 /// outlasts the next one's pixels (a square's cells, 7 MB at zoom 13). Light squares 3-7 % faster
-/// than with a rendezvous, the others the same (msas2, 2026-10-14).
+/// than with a rendezvous, the others the same (2026-10-14).
 const SQUARES_WAITING: usize = 2;
 
 pub struct PaintedSquareCells {
@@ -44,7 +44,7 @@ impl PaintedSquareCells {
 }
 
 /// One writer, as in dev1's surface runner; its queue of [`SQUARES_WAITING`] bounds residency to
-/// its square, the waiting ones and the painter's next cells. Completion is reported only after
+/// its square, the waiting ones and the painters' next cells. Completion is reported only after
 /// the atomic bundle is durable.
 pub fn write_beside_painting(
     out: &Path,

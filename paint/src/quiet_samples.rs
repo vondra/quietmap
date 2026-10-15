@@ -243,11 +243,11 @@ fn agrees_with_interpolation(heard: &[f64; LAYERS + 1], blended: &[f64; LAYERS +
         if !heard.is_finite() || !blended.is_finite() || heard < 0.0 || blended < 0.0 {
             return false;
         }
-        if cell(heard) == SILENCE && cell(blended) == SILENCE {
-            return true;
-        }
         if layer < LAYERS && heard.max(blended) < QUIET_LAYER_UNDER_SONE {
             return (heard - blended).abs() <= QUIET_LAYER_SONE;
+        }
+        if cell(heard) == SILENCE && cell(blended) == SILENCE {
+            return true;
         }
         heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log2()).abs() <= 0.5
     })
