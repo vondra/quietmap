@@ -1,14 +1,16 @@
 //! Reading an aircraft file in place: the records decode on demand.
 
 use super::codes::{
-    cell_steps, curve_levels, flights, in_cell, lamax_db, lg_distances, offset, tail_db,
+    WIDE_SCALE, cell_steps, curve_levels, in_cell, lamax_db, lg_distances, offset, tail_db,
 };
 use super::{
     AircraftBox, BAND_BYTES, BLOCK_BYTES, BOX_BYTES, BOXES_PER_BLOCK, FLIGHT_BYTES, Flight,
-    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEADER_BYTES, INSTALLATIONS, MAGIC,
-    MAXIMUM_ZOOM, MIX_BYTES, NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES,
+    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEADER_BYTES, INSTALLATIONS,
+    KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM, MIX_BYTES,
+    NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
 };
 use crate::FormatError;
+use crate::rate::rate;
 
 /// A parsed aircraft file borrowing its bytes.
 #[derive(Clone, Copy)]
@@ -21,6 +23,7 @@ pub struct Aircraft<'a> {
     periods: &'a [u8],
     flights: &'a [u8],
     pieces: &'a [u8],
+    wide: &'a [u8],
 }
 
 fn u16_at(record: &[u8], at: usize) -> u16 {
@@ -53,13 +56,14 @@ impl<'a> Aircraft<'a> {
             return Err(FormatError("aircraft: bad magic"));
         }
         let count = |at: usize| u32_at(bytes, at) as usize;
-        let (boxes, periods, flights, pieces, bands, mixes) = (
+        let (boxes, periods, flights, pieces, bands, mixes, wide) = (
             count(8),
             count(12),
             count(16),
             count(20),
             count(24),
             count(28),
+            count(32),
         );
         let lengths = [
             BAND_BYTES * bands,
@@ -70,6 +74,7 @@ impl<'a> Aircraft<'a> {
             PERIOD_BYTES * periods,
             FLIGHT_BYTES * flights,
             PIECE_BYTES * pieces,
+            WIDE_BYTES.saturating_mul(wide),
         ];
         let mut end = HEADER_BYTES;
         let sections = lengths.map(|length| {
@@ -89,6 +94,7 @@ impl<'a> Aircraft<'a> {
             periods_at,
             flights_at,
             pieces_at,
+            wide_at,
         ] = sections;
         let parsed = Aircraft {
             bands: &bytes[bands_at],
@@ -99,6 +105,7 @@ impl<'a> Aircraft<'a> {
             periods: &bytes[periods_at],
             flights: &bytes[flights_at],
             pieces: &bytes[pieces_at],
+            wide: &bytes[wide_at],
         };
         for band in 0..bands {
             if !(12..=MAXIMUM_ZOOM).contains(&parsed.bands[BAND_BYTES * band]) {
@@ -137,10 +144,23 @@ impl<'a> Aircraft<'a> {
                 return Err(FormatError("aircraft: a period names a missing mix"));
             }
         }
+        let mut wide_seen = 0;
         for index in 0..pieces {
-            if u24_at(parsed.piece_record(index), 0) as usize >= flights {
-                return Err(FormatError("aircraft: a piece names a missing flight"));
+            let record = parsed.piece_record(index);
+            if u24_at(record, 0) as usize >= flights || u16_at(record, 13) >> 14 != 0 {
+                return Err(FormatError(
+                    "aircraft: a piece names a missing flight or has a bad kind",
+                ));
             }
+            if (u16_at(record, 13) >> KIND_SCALE_SHIFT) as u8 == WIDE_SCALE {
+                if wide_seen == wide || u32_at(parsed.wide_record(wide_seen), 0) as usize != index {
+                    return Err(FormatError("aircraft: a wide piece without its ends"));
+                }
+                wide_seen += 1;
+            }
+        }
+        if wide_seen != wide {
+            return Err(FormatError("aircraft: wide ends no piece names"));
         }
         Ok(parsed)
     }
@@ -167,6 +187,28 @@ impl<'a> Aircraft<'a> {
 
     fn piece_record(&self, index: usize) -> &'a [u8] {
         &self.pieces[index * PIECE_BYTES..(index + 1) * PIECE_BYTES]
+    }
+
+    fn wide_record(&self, index: usize) -> &'a [u8] {
+        &self.wide[index * WIDE_BYTES..(index + 1) * WIDE_BYTES]
+    }
+
+    /// A wide piece's exact ends, found by its index in the table sorted by it.
+    fn wide_ends(&self, piece: usize) -> [[i16; 2]; 2] {
+        let (mut low, mut high) = (0, self.wide.len() / WIDE_BYTES);
+        while low < high {
+            let middle = (low + high) / 2;
+            if (u32_at(self.wide_record(middle), 0) as usize) < piece {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        let record = self.wide_record(low);
+        [
+            [i16_at(record, 4), i16_at(record, 6)],
+            [i16_at(record, 8), i16_at(record, 10)],
+        ]
     }
 
     /// The first heard period and the first piece of box `index`: its block's counts and the
@@ -207,7 +249,7 @@ impl<'a> Aircraft<'a> {
         let (mut next_period, first_piece) = self.firsts(index);
         let mut energy_db = [[f64::NEG_INFINITY; NPD_DISTANCES]; PERIODS];
         let mut tail_energy_db = [f64::NEG_INFINITY; PERIODS];
-        let mut flights_per_period = [0; PERIODS];
+        let mut flights_per_period = [0.0; PERIODS];
         let mut piece_length_m = [0.0; PERIODS];
         let mut installation_shares = [[[0.0, 0.0, 1.0]; 2]; PERIODS];
         for period in (0..PERIODS).filter(|period| head & 1 << period != 0) {
@@ -216,7 +258,7 @@ impl<'a> Aircraft<'a> {
             let (levels, end) = curve_levels(u16_at(record, 0), &record[2..11]);
             energy_db[period] = levels;
             tail_energy_db[period] = tail_db(end, record[11]);
-            flights_per_period[period] = flights(u16_at(record, 12));
+            flights_per_period[period] = rate(u16_at(record, 12));
             piece_length_m[period] = f64::from(u16_at(record, 14));
             let mix = &self.mixes[MIX_BYTES * usize::from(u16_at(record, 16))..];
             installation_shares[period] = [0, 2].map(|at| {
@@ -243,7 +285,7 @@ impl<'a> Aircraft<'a> {
             gradient: f64::from(i16_at(record, 11)) / 10_000.0,
             gradient_spread: f64::from(u16_at(record, 13)) / 10_000.0,
             piece_length_m,
-            flights: flights_per_period,
+            flights_per_day: flights_per_period,
             energy_db,
             lg_scaled_distance: lg_distances(u16_at(record, 15), &record[17..26]),
             tail_energy_db,
@@ -268,23 +310,28 @@ impl<'a> Aircraft<'a> {
     /// stored from the box's centroid.
     pub fn piece(&self, owner: &AircraftBox, k: usize) -> FlightPiece {
         assert!(k < usize::from(owner.piece_count), "box piece {k}");
-        let record = self.piece_record(owner.first_piece as usize + k);
-        let edge = cell_steps(owner.zoom);
-        let end =
-            |at: usize| [0, 1].map(|axis| offset(record[at + axis], owner.centroid[axis], edge));
+        let index = owner.first_piece as usize + k;
+        let record = self.piece_record(index);
         let kind = u16_at(record, 13);
+        let scale = (kind >> KIND_SCALE_SHIFT & 3) as u8;
+        let end =
+            |at: usize| [0, 1].map(|axis| offset(record[at + axis], owner.centroid[axis], scale));
         FlightPiece {
             flight: u24_at(record, 0),
-            ends: [end(3), end(5)],
+            ends: if scale == WIDE_SCALE {
+                self.wide_ends(index)
+            } else {
+                [end(3), end(5)]
+            },
             altitudes_m: [f64::from(i16_at(record, 7)), f64::from(i16_at(record, 9))],
             speed_kt: f64::from(u16_at(record, 11)) / 10.0,
-            class: kind & 0x0fff,
+            class: kind & ((1 << KIND_FLAGS_SHIFT) - 1),
             power_code: u16_at(record, 15),
-            flags: (kind >> 12 & 3) as u8,
-            period: (kind >> 14) as u8,
+            flags: (kind >> KIND_FLAGS_SHIFT & 3) as u8,
+            period: (kind >> KIND_PERIOD_SHIFT & 3) as u8,
         }
     }
 }
 
-const _: () = assert!(17 + NPD_DISTANCES - 1 + 1 == BOX_BYTES);
+const _: () = assert!(15 + 2 + NPD_DISTANCES - 1 + 1 == BOX_BYTES);
 const _: () = assert!(2 + NPD_DISTANCES - 1 + 1 + 2 + 2 + 2 == PERIOD_BYTES && PERIODS == 3);

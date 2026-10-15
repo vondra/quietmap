@@ -11,9 +11,6 @@ use tiles::Kind;
 use tiles::aircraft::{AircraftBox, Flight, FlightPiece, Group, encode};
 use tiles::geo::{LocalFrame, Mercator, TileId};
 
-/// Days in the year the flight counts are stated for.
-const DAYS_PER_YEAR: f64 = 365.25;
-
 /// A piece's ends in its tile's frame: metres east and north of the tile centre, altitude above
 /// sea level (the frame every box of the tile sums in).
 pub fn piece_metres(piece: &BoxPiece) -> [[f64; 3]; 2] {
@@ -123,9 +120,7 @@ pub fn write_tiles(
                 gradient: values.gradient.clamp(-3.0, 3.0),
                 gradient_spread: values.gradient_spread.min(6.0),
                 piece_length_m: values.piece_length_m,
-                flights: entry
-                    .flights_per_day
-                    .map(|per_day| (per_day * DAYS_PER_YEAR).round() as u32),
+                flights_per_day: entry.flights_per_day,
                 energy_db: values.levels_db,
                 tail_energy_db: values.tail_levels_db,
                 lg_scaled_distance: values.scaled_distance_m.map(f64::log10),

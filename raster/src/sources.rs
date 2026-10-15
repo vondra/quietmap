@@ -74,7 +74,7 @@ const FIXED_ALPHA: u8 = 80;
 fn field_index(layer: SourceLayer, name: &str) -> usize {
     display_fields(layer)
         .iter()
-        .position(|field| *field == name)
+        .position(|field| field.name == name)
         .expect("a display field")
 }
 
@@ -88,9 +88,7 @@ fn number(layer: SourceLayer, fields: &[Value], name: &str) -> f64 {
 
 /// A piece's colour, line width and vehicles or trains a day from its display fields, or `None`
 /// when it carries nothing.
-fn style(layer: SourceLayer, display: &str) -> Option<([u8; 4], f64, f64)> {
-    let fields = serde_json::from_str::<Value>(display).ok()?;
-    let fields = fields.as_array()?;
+fn style(layer: SourceLayer, fields: &[Value]) -> Option<([u8; 4], f64, f64)> {
     let field = |name: &str| number(layer, fields, name);
     let (value, stops, alpha): (f64, &[(f64, [f64; 3])], u8) = match layer {
         SourceLayer::Road => {
@@ -178,21 +176,17 @@ fn style(layer: SourceLayer, display: &str) -> Option<([u8; 4], f64, f64)> {
 /// or `None` for a building's own sound (its plant, a school's yard, a warehouse's walls: the
 /// Buildings layer has the buildings) and what is not listed. The dots go by family, not power:
 /// every cell of an area carries the whole area's power in its display.
-fn other_style(layer: SourceLayer, display: &str) -> Option<([u8; 4], f64, f64)> {
+fn other_style(layer: SourceLayer, fields: &[Value]) -> Option<([u8; 4], f64, f64)> {
     let (family, width, rank) = match layer {
         SourceLayer::Road => return None,
         // A crossing's horn sounds along the track's approach; trains are the Trains layer's.
-        SourceLayer::Railway => {
-            let fields = serde_json::from_str::<Value>(display).ok()?;
-            match fields.get(field_index(layer, "rail_type")) {
-                Some(kind) if kind == "horn" => (HORNS, 2.5, 0.5),
-                _ => return None,
-            }
-        }
+        SourceLayer::Railway => match fields.get(field_index(layer, "rail_type")) {
+            Some(kind) if kind == "horn" => (HORNS, 2.5, 0.5),
+            _ => return None,
+        },
         SourceLayer::Aircraft => (AIRPORT, 2.5, 0.0),
         SourceLayer::Ship => (SHIPS, DOT_PX, 1.0),
         SourceLayer::Industry | SourceLayer::Building => {
-            let fields = serde_json::from_str::<Value>(display).ok()?;
             let text = |name: &str| {
                 fields
                     .get(field_index(layer, name))
@@ -235,9 +229,9 @@ pub fn render(
         Layer::Trains => kind == SourceLayer::Railway,
         _ => kind != SourceLayer::Road,
     };
-    let style = |kind: SourceLayer, display: &str| match layer {
-        Layer::Others => other_style(kind, display),
-        _ => style(kind, display),
+    let style = |kind: SourceLayer, fields: &[Value]| match layer {
+        Layer::Others => other_style(kind, fields),
+        _ => style(kind, fields),
     };
     let mut lines = Vec::new();
     for (&tile, file) in tiles.iter().zip(files) {
@@ -272,7 +266,7 @@ pub fn render(
                         .map_err(|error| error.to_string())?;
                     *styles
                         .entry(piece.attribute)
-                        .or_insert(style(kind, display))
+                        .or_insert(style(kind, &display))
                 }
             };
             if let Some((colour, width, value)) = found {
@@ -293,13 +287,13 @@ pub fn render(
 mod tests {
     use super::*;
 
-    /// A display array of `layer` with the named fields set, the rest empty strings.
-    fn display(layer: SourceLayer, set: &[(&str, Value)]) -> String {
-        let mut fields = vec![Value::from(""); display_fields(layer).len()];
+    /// A display array of `layer` with the named fields set, the rest null.
+    fn display(layer: SourceLayer, set: &[(&str, Value)]) -> Vec<Value> {
+        let mut fields = vec![Value::Null; display_fields(layer).len()];
         for (name, value) in set {
             fields[field_index(layer, name)] = value.clone();
         }
-        Value::from(fields).to_string()
+        fields
     }
 
     fn road(vehicles: f64, source: u16) -> Option<([u8; 4], f64)> {
@@ -362,7 +356,7 @@ mod tests {
             );
         }
         assert!(road(0.0, 9003).is_none());
-        assert!(style(SourceLayer::Road, "not json").is_none());
+        assert!(style(SourceLayer::Road, &[]).is_none());
     }
 
     /// Another source is a dot of its family's colour, turbines, bells and calls larger; a

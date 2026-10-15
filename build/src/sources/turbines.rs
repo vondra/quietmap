@@ -3,7 +3,7 @@
 //! source at its hub; dev4's turbine rows are silent (`industry`).
 
 use super::cells::point_piece;
-use super::{Converted, group_key};
+use super::{Converted, fields, group_key};
 use crate::dev4::{Square, degrees_to_z30};
 use physics::emission::wind::{TURBINE_MAXIMUM_PLAUSIBLE_POWER_KW, turbine_sound_power};
 use serde_json::json;
@@ -111,7 +111,7 @@ pub fn convert(turbines: &Turbines, square: Square, out: &mut Vec<Converted>) ->
                 footprint_id: 0,
                 group_key: group_key(&["turbine", &place]),
                 emission: sound.band_levels_db(),
-                display: display.to_string(),
+                display: fields(display),
             },
             deck_m: None,
         });

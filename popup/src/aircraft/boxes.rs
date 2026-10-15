@@ -87,9 +87,8 @@ impl ReceiverArea {
     }
 }
 
-/// The nearest a box's pieces can come to a receiver of `area` (m): its cell and slab widened by a
-/// quarter edge (a piece reaches past its box by an eighth at most), the first band down to any
-/// depth.
+/// The nearest a box's model can come to a receiver of `area` (m): its cell and slab widened by a
+/// quarter edge, the first band down to any depth.
 fn nearest_slant_m(
     record: &AircraftBox,
     tile: TileId,
@@ -204,8 +203,8 @@ fn box_at(
 /// closest slant over the flights' speed.
 fn box_lambda(record: &AircraftBox, sel: &BoxSel) -> [f64; PERIODS] {
     std::array::from_fn(|period| {
-        let flights = f64::from(record.flights[period]) / 365.25;
-        flights / (PERIOD_HOURS[period] * 3_600.0) * sel.closest_slant_m / FLIGHT_SPEED_M_S
+        record.flights_per_day[period] / (PERIOD_HOURS[period] * 3_600.0) * sel.closest_slant_m
+            / FLIGHT_SPEED_M_S
     })
 }
 
@@ -257,11 +256,43 @@ pub fn tile_flight_sums(
         )
 }
 
+/// The nearest a box's kept pieces come to a receiver of `area` (m): the gap between the area and
+/// each piece's bounding box. A piece reaches past its box as far as its flight's sampling carried
+/// it (r064: up to two edges from the centroid), so its own ends bound it, not the box.
+fn nearest_piece_slant_m(
+    aircraft: &Aircraft<'_>,
+    record: &AircraftBox,
+    tile: TileId,
+    frame: &LocalFrame,
+    area: ReceiverArea,
+) -> f64 {
+    let gap = |low: f64, high: f64, (from, to): (f64, f64)| (low - to).max(from - high).max(0.0);
+    (0..usize::from(record.piece_count))
+        .map(|k| {
+            let piece = aircraft.piece(record, k);
+            let [a, b] = piece.ends.map(|end| {
+                let global = tile.global(end);
+                frame.metres_of_steps([global.x as f64, global.y as f64])
+            });
+            let [low, high] = piece.altitudes_m;
+            let east = gap(a[0].min(b[0]), a[0].max(b[0]), (area.low[0], area.high[0]));
+            let north = gap(a[1].min(b[1]), a[1].max(b[1]), (area.low[1], area.high[1]));
+            let up = gap(
+                low.min(high),
+                low.max(high),
+                (area.altitudes_m[0], area.altitudes_m[1]),
+            );
+            east.hypot(north).hypot(up)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// The most maximum level (dB) a box's kept pieces can reach at a receiver of `area` (Eq. 4-8a:
 /// Delta_I adds at most [`INSTALLATION_CORRECTION_MAX_DB`], Lambda only attenuates); `None` for a
 /// box keeping none. `impedance_db` is the receivers' elevations' at most, which helicopters do
 /// not take.
 fn lamax_bound(
+    aircraft: &Aircraft<'_>,
     record: &AircraftBox,
     tile: TileId,
     frame: &LocalFrame,
@@ -270,7 +301,7 @@ fn lamax_bound(
 ) -> Option<f64> {
     (record.piece_count > 0).then(|| {
         record.loudest_lamax_db
-            + lamax_rise_bound_db(nearest_slant_m(record, tile, frame, area))
+            + lamax_rise_bound_db(nearest_piece_slant_m(aircraft, record, tile, frame, area))
             + INSTALLATION_CORRECTION_MAX_DB
             + match record.group {
                 Group::FixedWing => impedance_db,
@@ -295,6 +326,7 @@ pub fn box_lamax_bound(
     }
     let area = ReceiverArea::of(receiver);
     lamax_bound(
+        aircraft,
         &aircraft.aircraft_box(index),
         tile,
         frame,
@@ -313,6 +345,7 @@ pub fn box_lamax_bound_over(
     impedance_db: f64,
 ) -> Option<f64> {
     lamax_bound(
+        aircraft,
         &aircraft.aircraft_box(index),
         tile,
         frame,
@@ -352,6 +385,7 @@ pub fn tile_energy(
             );
             let lambda = box_lambda(&record, &sel);
             let bound = lamax_bound(
+                aircraft,
                 &record,
                 tile,
                 frame,

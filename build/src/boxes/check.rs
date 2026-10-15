@@ -91,7 +91,7 @@ pub struct BoxDiagnosis {
     pub distance_m: f64,
     pub zoom: u8,
     pub clearance_m: f64,
-    pub flights: u32,
+    pub flights_per_day: f64,
     pub axis_deg: f64,
     pub gradient: f64,
     pub gradient_spread: f64,

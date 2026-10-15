@@ -14,7 +14,7 @@ use super::road_traffic::{
 use super::tagged_speeds::tagged_speed_kmh;
 use super::thai_highways::thai_highway;
 use super::us_trucks::us_vehicle_shares;
-use super::{Converted, Reach, group_key, metres, split_at_tile_edges};
+use super::{Converted, Reach, fields, group_key, metres, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
 use arrow_array::cast::AsArray;
@@ -940,7 +940,7 @@ pub fn convert(
                 footprint_id: 0,
                 group_key: key,
                 emission,
-                display: display.to_string(),
+                display: fields(display),
             };
             for part in split_at_tile_edges(start, end) {
                 out.push(Converted {

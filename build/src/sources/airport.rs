@@ -2,7 +2,7 @@
 //! traffic ([`crate::airport`]) a line piece above the pavement carrying its sound power per metre,
 //! and one contributor per airport, as dev4 showed them.
 
-use super::{Converted, group_key, split_at_tile_edges};
+use super::{Converted, fields, group_key, split_at_tile_edges};
 use crate::airport::file::{self, LineTraffic};
 use crate::dev4::Square;
 use physics::emission::airport::GroundOperation;
@@ -46,15 +46,14 @@ pub fn attribute(line: &LineTraffic) -> Attribute {
                 }
             })
         }),
-        display: json!([
+        display: fields(json!([
             format!("{key} ground operations"),
             format!("airport_traffic:{key}"),
             line.airport.name,
             arrivals,
             departures,
             vehicles,
-        ])
-        .to_string(),
+        ])),
     }
 }
 
@@ -149,7 +148,7 @@ mod tests {
             + 10.0 * (100.0f64 / (12.0 * 3_600.0)).log10()
             + 10.0 * (theta / 25.0).log10();
         assert!((10.0 * received.log10() - dev4).abs() < 0.01);
-        let display: serde_json::Value = serde_json::from_str(&attributes[0].display).unwrap();
+        let display = &attributes[0].display;
         assert_eq!(display[0], "TEST ground operations");
         assert_eq!(display[1], "airport_traffic:TEST");
         assert_eq!(display[4], 100.0);

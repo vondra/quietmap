@@ -146,14 +146,24 @@ fn corrupt_files_are_rejected() {
         }
         Obstacles::parse(&copy).is_err()
     };
-    let runs = HEADER_BYTES + 4 * (CELLS + 1);
+    let header = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let (occupied, squares) = (header(20), header(24));
+    assert_eq!(squares, 1, "the block and the wall share their square");
+    let before = HEADER_BYTES + 8 * CELL_WORDS;
+    let first_runs = HEADER_BYTES + CELL_INDEX_BYTES;
+    let runs = first_runs + 4 * (occupied + 1) + 4 * squares;
     let outlines = runs + RUN_BYTES * parsed.run_count();
     assert!(rejected(&[(0, b'x')]), "magic");
     assert!(rejected(&[(8, 4)]), "outline count against the length");
-    assert!(rejected(&[(25, 1)]), "reserved header byte");
+    assert!(rejected(&[(28, 1)]), "reserved header word");
+    assert!(rejected(&[(HEADER_BYTES, 0x01)]), "an occupied bit more");
     assert!(
-        rejected(&[(HEADER_BYTES + 4, 0xff)]),
-        "cell offsets out of order"
+        rejected(&[(before + 2 * (CELL_WORDS - 1), 0)]),
+        "occupied cells miscounted"
+    );
+    assert!(
+        rejected(&[(first_runs + 4, 0)]),
+        "a cell's runs out of order"
     );
     // The first run is the block's edge 0 in cell (62, 62).
     assert!(rejected(&[(runs, 7)]), "a run naming a missing outline");
@@ -165,18 +175,35 @@ fn corrupt_files_are_rejected() {
         !rejected(&[(runs + 6, 4)]),
         "a run up to the last edge is fine"
     );
-    assert!(rejected(&[(outlines + 16, 3)]), "outline kind");
-    assert!(rejected(&[(outlines + 17, 6)]), "envelope class");
+    assert!(rejected(&[(outlines + 11, 3)]), "outline kind");
+    assert!(rejected(&[(outlines + 11, 6 << 2)]), "envelope class");
     assert!(
-        rejected(&[(outlines + 14, 0), (outlines + 15, 0)]),
+        rejected(&[(outlines + 8, 0), (outlines + 9, 0)]),
         "zero height"
     );
+    assert!(rejected(&[(outlines + 10, 1)]), "a missing square");
     assert!(
-        rejected(&[(outlines + 12, 4)]),
+        rejected(&[(outlines + OUTLINE_BYTES, 1)]),
         "a ring that no longer closes"
     );
     assert!(
-        rejected(&[(outlines + OUTLINE_BYTES, 0xff)]),
+        rejected(&[(outlines + OUTLINE_BYTES + 4, 0)]),
         "footprint ids out of order"
+    );
+}
+
+/// A file names each footprint square once; ids keep their square across the table.
+#[test]
+fn footprints_of_two_squares_keep_their_ids() {
+    let mut outlines = courtyard_block_and_wall();
+    outlines[2].footprint_id = 0x0115_00ad_8000_0001;
+    let parsed_bytes = encode(&outlines);
+    let parsed = Obstacles::parse(&parsed_bytes).unwrap();
+    for (index, outline) in outlines.iter().enumerate() {
+        assert_eq!(parsed.outline(index).footprint_id, outline.footprint_id);
+    }
+    assert_eq!(
+        u32::from_le_bytes(parsed_bytes[24..28].try_into().unwrap()),
+        2
     );
 }

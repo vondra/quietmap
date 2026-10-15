@@ -14,7 +14,7 @@ use super::cells::{
 use super::outside::OutsidePlacer;
 use super::people::convert_people;
 use super::worship::Host;
-use super::{Converted, Places, group_key};
+use super::{Converted, Places, fields, group_key};
 use crate::climate::Climate;
 use crate::dev4::{
     Dev4, Square, cell, column, degrees_to_z30, positive, require_stamp, text, z30_corner_degrees,
@@ -204,7 +204,7 @@ pub fn convert(
                 footprint_id: row.footprint_id,
                 group_key: key,
                 emission: emission.sound.band_levels_db(),
-                display: json!([
+                display: fields(json!([
                     row.name,
                     class_label(row.class),
                     decibels(emission.height_m),
@@ -212,8 +212,7 @@ pub fn convert(
                     emission.area_m2.round(),
                     row.address,
                     decibels(emission.sound.day_dba)
-                ])
-                .to_string(),
+                ])),
             };
             push_site_points(&site_points(&site), emission.area_m2, &attribute, out);
             emitting += 1;

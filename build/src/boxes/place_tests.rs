@@ -100,3 +100,46 @@ fn pieces_end_at_tile_edges() {
         assert!(piece.start.0.x >= tile && piece.end.0.x <= tile + 1.0);
     }
 }
+
+/// A steep descent from 2,000 m to 20 m crosses bands from coarse to fine within a coarse box's
+/// step; every piece ends within an eighth of its box's edge of the box (the flight list's bounds
+/// take no more).
+#[test]
+fn a_descent_keeps_every_piece_within_an_eighth_of_its_box() {
+    let terrain = HashMap::new();
+    let placement = Placement::new(&HashSet::from([PRAGUE]), &terrain, BOX_EDGE_LEVEL_STEP_DB);
+    let centre = PRAGUE.centre();
+    let units = 400.0 / cell_edge_m(PRAGUE, 12);
+    let start = (
+        Mercator {
+            x: centre.x - units,
+            y: centre.y - 0.3 * units,
+        },
+        2_000.0,
+    );
+    let end = (
+        Mercator {
+            x: centre.x + units,
+            y: centre.y + 0.3 * units,
+        },
+        20.0,
+    );
+    let pieces = cut_into_pieces(&placement, start, end, false);
+    let bands = placement.bands(PRAGUE).to_vec();
+    assert!(pieces.len() > 10, "{} pieces", pieces.len());
+    for piece in &pieces {
+        let zoom = bands[usize::from(piece.key.band)].zoom;
+        let edge = 1.0 / f64::from(1u32 << (zoom - 12));
+        for (end, _) in [piece.start, piece.end] {
+            for (coordinate, cell) in [(end.x, piece.key.cell[0]), (end.y, piece.key.cell[1])] {
+                let west = f64::from(cell) * edge;
+                let outside = (west - coordinate).max(coordinate - west - edge);
+                assert!(
+                    outside <= edge / 8.0 + 1e-9,
+                    "a piece of a zoom {zoom} box {} edges past it",
+                    outside / edge
+                );
+            }
+        }
+    }
+}

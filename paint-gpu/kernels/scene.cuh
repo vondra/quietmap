@@ -12,8 +12,9 @@
 #define CELLS_PER_SIDE 128
 #define CELLS (CELLS_PER_SIDE * CELLS_PER_SIDE)
 #define OBSTACLES_HEADER_BYTES 32
+#define CELL_WORDS (CELLS / 64)
 #define RUN_BYTES 8
-#define OUTLINE_BYTES 20
+#define OUTLINE_BYTES 12
 #define VERTEX_BYTES 4
 #define OUTLINE_KIND_WALL 2
 
@@ -439,6 +440,8 @@ struct ObstacleTile {
     u32 outline_count;
     u32 vertex_count;
     u32 run_count;
+    u32 occupied_count;         // cells with runs: the bitmap's set bits
+    u32 square_count;           // footprint squares the file names
     float offset_x;
     float offset_y;
     u64 base;
@@ -479,11 +482,33 @@ struct Outline {
     int kind;
 };
 
-__device__ __forceinline__ const u8* tile_cells(const ObstacleScene& scene, const ObstacleTile& tile) {
+// tiles::obstacles (qmobs2): the occupied-cell bitmap, the occupied cells before each of its
+// words, the first run of each occupied cell, the footprint squares, then runs, outlines, vertices.
+__device__ __forceinline__ const u8* tile_cell_words(const ObstacleScene& scene, const ObstacleTile& tile) {
     return scene.blob + tile.base + OBSTACLES_HEADER_BYTES;
 }
+__device__ __forceinline__ const u8* tile_first_runs(const ObstacleScene& scene, const ObstacleTile& tile) {
+    return tile_cell_words(scene, tile) + 10 * CELL_WORDS;
+}
+__device__ __forceinline__ const u8* tile_squares(const ObstacleScene& scene, const ObstacleTile& tile) {
+    return tile_first_runs(scene, tile) + 4 * ((u64)tile.occupied_count + 1);
+}
 __device__ __forceinline__ const u8* tile_runs(const ObstacleScene& scene, const ObstacleTile& tile) {
-    return tile_cells(scene, tile) + 4 * (CELLS + 1);
+    return tile_squares(scene, tile) + 4 * (u64)tile.square_count;
+}
+// Obstacles::cell_run_range: the runs of cell `index` (row * 128 + column), none for an empty cell.
+__device__ __forceinline__ void tile_cell_runs(const ObstacleScene& scene, const ObstacleTile& tile, int index, u32* begin, u32* end) {
+    const u8* words = tile_cell_words(scene, tile);
+    u64 word = *(const u64*)(words + 8 * (index >> 6));  // the bitmap starts 8-aligned in the blob
+    u64 bit = 1ull << (index & 63);
+    if (!(word & bit)) {
+        *begin = *end = 0;
+        return;
+    }
+    u32 rank = read_u16(words + 8 * CELL_WORDS + 2 * (index >> 6)) + (u32)__popcll(word & (bit - 1));
+    const u8* first_runs = tile_first_runs(scene, tile);
+    *begin = read_u32(first_runs + 4 * rank);
+    *end = read_u32(first_runs + 4 * (rank + 1));
 }
 __device__ __forceinline__ const u8* tile_outlines(const ObstacleScene& scene, const ObstacleTile& tile) {
     return tile_runs(scene, tile) + (u64)RUN_BYTES * tile.run_count;
@@ -495,10 +520,11 @@ __device__ __forceinline__ const u8* tile_vertices(const ObstacleScene& scene, c
 __device__ Outline tile_outline(const ObstacleScene& scene, const ObstacleTile& tile, u32 index) {
     const u8* record = tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index;
     Outline outline;
-    outline.footprint_id = (u64)read_u32(record) | ((u64)read_u32(record + 4) << 32);
-    outline.first_vertex = read_u32(record + 8);
-    outline.height_m = (float)read_u16(record + 14) * 0.1f;
-    outline.kind = record[16];
+    u64 square = read_u32(tile_squares(scene, tile) + 4 * (u32)record[10]);
+    outline.footprint_id = (square << 32) | (u64)read_u32(record + 4);
+    outline.first_vertex = read_u32(record);
+    outline.height_m = (float)read_u16(record + 8) * 0.1f;
+    outline.kind = record[11] & 3;
     return outline;
 }
 
@@ -619,8 +645,8 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
         int state = scene_locate(scene, cell[0], cell[1], &tile, &index);
         if (state == TILE_NOT_READ) return FAILED_NOT_READ;
         if (state == TILE_READ) {
-            const u8* cells = tile_cells(scene, *tile);
-            u32 run_begin = read_u32(cells + 4 * index), run_end = read_u32(cells + 4 * (index + 1));
+            u32 run_begin, run_end;
+            tile_cell_runs(scene, *tile, index, &run_begin, &run_end);
             if (run_begin < run_end) {
                 float t0 = clampf(t_enter, 0.0f, 1.0f), t1 = clampf(t_exit, 0.0f, 1.0f);
                 float p[2] = {start[0] + delta[0] * t0, start[1] + delta[1] * t0};

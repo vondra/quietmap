@@ -90,7 +90,7 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
         gradient: values.gradient,
         gradient_spread: values.gradient_spread,
         piece_length_m: values.piece_length_m,
-        flights: [1, 0, 0],
+        flights_per_day: [1.0 / 365.25, 0.0, 0.0],
         energy_db: values.levels_db,
         tail_energy_db: values.tail_levels_db,
         lg_scaled_distance: values.scaled_distance_m.map(f64::log10),
@@ -214,7 +214,7 @@ fn each_period_counts_its_own_flights() {
     record.tail_energy_db[2] = record.tail_energy_db[0] - 10.0;
     record.piece_length_m[2] = record.piece_length_m[0];
     record.installation_shares[2] = record.installation_shares[0];
-    record.flights = [731, 0, 731];
+    record.flights_per_day = [731.0 / 365.25, 0.0, 731.0 / 365.25];
     let bytes = encode(&[record], &[], &[]);
     let aircraft = tiles::aircraft::Aircraft::parse(&bytes).unwrap();
     let receiver = AircraftReceiver {

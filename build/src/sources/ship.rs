@@ -3,7 +3,7 @@
 //! whole 1 km cell at its centre), at the height of the class carrying most of the energy.
 
 use super::cells::{AUDIBILITY_FLOOR_DBA, Site, push_site_points, site_points, square_ring};
-use super::{Converted, group_key};
+use super::{Converted, fields, group_key};
 use crate::dev4::{Dev4, Square, column, require_stamp, z30_corner_degrees};
 use arrow_array::{Float32Array, Int32Array, UInt16Array};
 use physics::emission::ships::ship_cell_sound_power;
@@ -62,14 +62,13 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
                 footprint_id: 0,
                 group_key: group_key(&["ship", &cell_id.to_string()]),
                 emission: sound.band_levels_db(),
-                display: json!([
+                display: fields(json!([
                     class.name(),
                     area_m2.round(),
                     hours_per_month.map(|hours| (f64::from(hours) * 100.0).round() / 100.0),
                     (sound.day_dba * 10.0).round() / 10.0,
                     sources.value(row)
-                ])
-                .to_string(),
+                ])),
             };
             push_site_points(&site_points(&site), area_m2, &attribute, out);
             emitting += 1;

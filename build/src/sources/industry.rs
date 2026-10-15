@@ -11,7 +11,7 @@ use super::facilities::{
     FacilityJoins, Tags, facility_share, is_gas_substation, is_solar_plant, parse_tags,
     plant_output_mw, substation_power,
 };
-use super::{Converted, group_key};
+use super::{Converted, fields, group_key};
 use crate::dev4::{Dev4, Square, Table, column, positive, require_stamp, text, z30_corner_degrees};
 use arrow_array::{
     BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array, UInt16Array,
@@ -201,7 +201,7 @@ fn place(row: &IndustrialRow, emission: RowEmission, out: &mut Vec<Converted>) {
         footprint_id: 0,
         group_key: group_key(&["industry", &row.osm_kind, &row.osm_id.to_string()]),
         emission: emission.sound.band_levels_db(),
-        display: display.to_string(),
+        display: fields(display),
     };
     match (points, emission.area_m2) {
         (Some(points), Some(area_m2)) => push_site_points(&points, area_m2, &attribute, out),

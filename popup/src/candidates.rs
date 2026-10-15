@@ -209,7 +209,13 @@ pub fn collect(
     reach_m: f64,
     receiver_bound: &ReceiverBound,
 ) -> Result<TileCandidates, String> {
-    // Both loops run in parallel chunks: a dense tile holds a million sources.
+    // The loops run in parallel chunks: a dense tile holds a million sources. Attributes share
+    // emission rows (a city's buildings ten to a row), so a row's energies are computed once.
+    let row_energies: Vec<[[f64; BANDS]; PERIODS]> = (0..sources.emission_row_count())
+        .into_par_iter()
+        .with_min_len(PARALLEL_CHUNK)
+        .map(|row| emission_energy(&sources.emission_row(row)))
+        .collect();
     let attributes = (0..sources.attribute_count())
         .into_par_iter()
         .with_min_len(PARALLEL_CHUNK)
@@ -217,7 +223,9 @@ pub fn collect(
             let attribute = sources
                 .attribute(index as u32)
                 .map_err(|error| error.to_string())?;
-            let energy = emission_energy(&attribute.emission);
+            let energy = row_energies[sources
+                .emission_row_of(index as u32)
+                .map_err(|error| error.to_string())?];
             Ok(SourceAttribute {
                 layer: attribute.layer,
                 height_m: attribute.height_m,

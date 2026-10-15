@@ -69,7 +69,7 @@ fn departure_box() -> AircraftBox {
         gradient: values.gradient,
         gradient_spread: values.gradient_spread,
         piece_length_m: values.piece_length_m,
-        flights: [1, 0, 0],
+        flights_per_day: [1.0 / 365.25, 0.0, 0.0],
         energy_db: values.levels_db,
         tail_energy_db: values.tail_levels_db,
         lg_scaled_distance: values.scaled_distance_m.map(f64::log10),
@@ -118,8 +118,10 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
         footprint_id: 0,
         group_key: 99,
         emission: [[level_db; BANDS]; PERIODS],
-        display: r#"["TEST ground operations","airport_traffic:TEST","Test Airport",1.0,2.0,3.0]"#
-            .into(),
+        display: serde_json::from_str(
+            r#"["TEST ground operations","airport_traffic:TEST","Test Airport",1.0,2.0,3.0]"#,
+        )
+        .unwrap(),
     };
     write(Kind::Sources, encode_sources(&pieces, &[attribute], &[]));
     if with_box {

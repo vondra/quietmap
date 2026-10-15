@@ -3,7 +3,7 @@
 
 use super::decks::Decks;
 use super::tent::{FreightNetwork, Tier};
-use super::{Converted, group_key, split_at_tile_edges};
+use super::{Converted, fields, group_key, split_at_tile_edges};
 use crate::dev4::{Dev4, Square, Table, require_stamp, z30_corner_mercator_m, z30_to_global};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
@@ -398,7 +398,7 @@ pub fn convert(
                 footprint_id: 0,
                 group_key: key,
                 emission,
-                display: display.to_string(),
+                display: fields(display),
             };
             let deck_m = bridge
                 .value(row)
