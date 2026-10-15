@@ -171,14 +171,11 @@ fn run(arguments: &[String]) -> Result<Vec<u8>, String> {
     }
     let map_tile = MapTile::new(z, x, y);
     let tiles = map_tile.z12_tiles(layer.margin_px());
-    let paths: Vec<(PathBuf, tiles::Kind)> = tiles
+    let paths: Vec<PathBuf> = tiles
         .iter()
-        .map(|&tile| (tile_path(&year_root, tile, layer.kind()), layer.kind()))
+        .map(|&tile| tile_path(&year_root, tile, layer.kind()))
         .collect();
-    let files: Vec<Option<Vec<u8>>> = read_all(&paths)?
-        .into_iter()
-        .map(|file| file.map(|file| file.contents))
-        .collect();
+    let files = read_all(&paths)?;
     let pixels = match layer {
         Layer::Elevation | Layer::Forest | Layer::Hard => {
             ground::render(layer, map_tile, &tiles, &files)?

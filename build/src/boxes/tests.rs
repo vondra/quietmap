@@ -136,21 +136,14 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     let files: Vec<(TileId, Vec<u8>)> = scope
         .iter()
         .filter_map(|&tile| {
-            tiles::read::read_tile(
-                &tiles::tile_path(&out, tile, tiles::Kind::Aircraft),
-                tiles::Kind::Aircraft,
-            )
-            .unwrap()
-            .map(|file| (tile, file.contents))
+            tiles::read::read_tile(&tiles::tile_path(&out, tile, tiles::Kind::Aircraft))
+                .unwrap()
+                .map(|bytes| (tile, bytes))
         })
         .collect();
-    let bytes = tiles::read::read_tile(
-        &tiles::tile_path(&out, PRAGUE, tiles::Kind::Aircraft),
-        tiles::Kind::Aircraft,
-    )
-    .unwrap()
-    .unwrap()
-    .contents;
+    let bytes = tiles::read::read_tile(&tiles::tile_path(&out, PRAGUE, tiles::Kind::Aircraft))
+        .unwrap()
+        .unwrap();
     let aircraft = Aircraft::parse(&bytes).unwrap();
     assert!(aircraft.box_count() > 50, "{} boxes", aircraft.box_count());
     // A box counts each flight crossing it once, in the period it flies (all by day): at most all
