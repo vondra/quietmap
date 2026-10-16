@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::path::Path;
 pub use tiles::aircraft_events::{BANDS, EVENT_BANDS_DB};
 use tiles::aircraft_events::{BandCell, CELLS_PER_SIDE, EventCell, encode};
-use tiles::geo::{LocalFrame, Mercator, TILES_PER_AXIS, TileId};
+use tiles::geo::{LocalFrame, MAX_LATITUDE_DEG, Mercator, TILES_PER_AXIS, TileId};
 use tiles::square::{SquareWriter, read_held};
 use tiles::terrain::Terrain;
 
@@ -363,7 +363,7 @@ struct Candidate<'a> {
 }
 
 fn flight_moments(
-    segments: &[FlightSegment],
+    segments: &[&FlightSegment],
     receivers: &Receivers,
     place: &PlaceAtmosphere,
 ) -> CellMoments {
@@ -373,9 +373,40 @@ fn flight_moments(
     // its cells, before its emission and reach are worked out.
     let margin = [EVENTS_REACH_M / least_east, EVENTS_REACH_M / least_north];
     let side = (CELLS / CELLS_PER_SIDE) as f64;
+    // The same box in degrees, a millionth of a degree wider: a segment whose ends both lie
+    // beyond one of its sides is beyond the box, found without projecting its ends (the ends'
+    // latitudes clamped as the projection clamps them; east and west split at the antipode, as
+    // `wrap_x` splits, ends near it left to the projection).
+    let degrees_per_unit = 360.0 / f64::from(TILES_PER_AXIS);
+    let west_deg = receivers.west * degrees_per_unit - 180.0;
+    let (west_margin_deg, east_margin_deg) = (
+        -margin[0] * degrees_per_unit,
+        (side + margin[0]) * degrees_per_unit,
+    );
+    let latitude = |y: f64| Mercator { x: 0.0, y }.to_degrees().0;
+    let (north_deg, south_deg) = (
+        latitude(receivers.north - margin[1]),
+        latitude(receivers.north + side + margin[1]),
+    );
+    let slack_deg = 1e-6;
+    let beyond_in_degrees = |segment: &FlightSegment| {
+        let east = |end: [f64; 3]| (end[1] - west_deg + 180.0).rem_euclid(360.0) - 180.0;
+        let lat = |end: [f64; 3]| end[0].clamp(-MAX_LATITUDE_DEG, MAX_LATITUDE_DEG);
+        let [east0, east1] = [east(segment.start), east(segment.end)];
+        let [lat0, lat1] = [lat(segment.start), lat(segment.end)];
+        let near_antipode = east0.abs() > 170.0 || east1.abs() > 170.0;
+        (!near_antipode
+            && (east0.max(east1) < west_margin_deg - slack_deg
+                || east0.min(east1) > east_margin_deg + slack_deg))
+            || lat0.min(lat1) > north_deg + slack_deg
+            || lat0.max(lat1) < south_deg - slack_deg
+    };
     let mut candidates: Vec<Candidate> = segments
         .iter()
-        .filter_map(|segment| {
+        .filter_map(|&segment| {
+            if beyond_in_degrees(segment) {
+                return None;
+            }
             let ends =
                 [segment.start, segment.end].map(|end| Mercator::from_degrees(end[0], end[1]));
             let [x0, x1] = ends.map(|end| wrap_x(end.x - receivers.west));
@@ -390,18 +421,23 @@ fn flight_moments(
             let (_, emission) = emission_of(segment)?;
             // The receivers' square's atmosphere, as the popup's flight list reads its place's.
             let emission = emission.in_atmosphere(place);
-            let reach_slant_m = lmax_reach_m(&emission, lowest_band - IMPEDANCE_MARGIN_DB);
             let lowest_m = segment.start[2].min(segment.end[2]);
             let above_m = (lowest_m - receivers.highest_m).max(0.0);
+            // Its most anywhere: below the lowest band (a cruise high above) every cell's bound
+            // is too, and its reach is not sought.
+            let bound_db = emission.lamax_db(above_m.max(1.0))
+                + INSTALLATION_CORRECTION_MAX_DB
+                + IMPEDANCE_MARGIN_DB;
+            if bound_db < lowest_band {
+                return None;
+            }
+            let reach_slant_m = lmax_reach_m(&emission, lowest_band - IMPEDANCE_MARGIN_DB);
             if reach_slant_m <= above_m {
                 return None;
             }
             let reach_m = (reach_slant_m * reach_slant_m - above_m * above_m)
                 .sqrt()
                 .min(EVENTS_REACH_M);
-            let bound_db = emission.lamax_db(above_m.max(1.0))
-                + INSTALLATION_CORRECTION_MAX_DB
-                + IMPEDANCE_MARGIN_DB;
             Some(Candidate {
                 segment,
                 emission,
@@ -601,13 +637,13 @@ fn count_day(
     let flights: Vec<([u8; 4], bool, CellMoments)> = starts
         .par_windows(2)
         .map(|bounds| {
-            let mut flight: Vec<FlightSegment> = by_flight[bounds[0]..bounds[1]]
+            let mut flight: Vec<&FlightSegment> = by_flight[bounds[0]..bounds[1]]
                 .iter()
-                .map(|&(_, index)| segments[index as usize].clone())
+                .map(|&(_, index)| &segments[index as usize])
                 .collect();
-            flight.sort_by_key(segment_key);
+            flight.sort_by_key(|segment| segment_key(segment));
             flight.dedup_by_key(|segment| segment_key(segment));
-            let first = &flight[0];
+            let first = flight[0];
             let helicopter =
                 emission_of(first).is_some_and(|(aircraft, _)| aircraft.helicopter.is_some());
             (
