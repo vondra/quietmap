@@ -41,7 +41,7 @@ fn extended_line_bound_keeps_far_low_tracks_on_the_fine_lattice() {
         }
     }
 }
-use crate::doc29::box_sums::{BoxSums, BoxValues};
+use crate::doc29::box_sums::{BoxSums, BoxValues, SegmentEnergies};
 use crate::doc29::screening::Unscreened;
 use crate::doc29::segment::{
     AircraftType, SegmentEmission, SegmentGeometry, segment_sel_at_receiver,
@@ -80,7 +80,7 @@ fn box_of(pieces: &[(SegmentEmission, [f64; 3], [f64; 3])]) -> BoxValues {
     let mut sums = BoxSums::default();
     for (emission, start, end) in pieces {
         sums.add(
-            &emission.npd_distance_levels(),
+            &SegmentEnergies::of(&emission.npd_distance_levels()),
             emission.installation,
             [1.0, 0.0, 0.0],
             *start,
@@ -116,7 +116,7 @@ fn shared_geometry_preserves_period_energy_and_silence() {
     let emission = emission("A320", &flight(true, 150.0, 0.05, 600.0));
     let mut sums = BoxSums::default();
     sums.add(
-        &emission.npd_distance_levels(),
+        &SegmentEnergies::of(&emission.npd_distance_levels()),
         emission.installation,
         [1.0, 0.0, 10.0],
         [-150.0, 500.0, 300.0],
@@ -309,7 +309,7 @@ fn merged_sums_equal_the_whole() {
         };
         for sums in [half, &mut whole] {
             sums.add(
-                &emission.npd_distance_levels(),
+                &SegmentEnergies::of(&emission.npd_distance_levels()),
                 emission.installation,
                 [0.5, 0.3, 0.2],
                 *start,
@@ -419,7 +419,7 @@ fn each_period_reads_its_own_installation_mix() {
     for (designator, weights) in [("A320", [1.0, 0.0, 0.0]), ("DH8D", [0.0, 0.0, 1.0])] {
         let emission = emission(designator, &flight(true, 150.0, 0.06, altitude));
         sums.add(
-            &emission.npd_distance_levels(),
+            &SegmentEnergies::of(&emission.npd_distance_levels()),
             emission.installation,
             weights,
             [-50.0, 2_000.0, altitude - 3.0],

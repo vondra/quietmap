@@ -32,9 +32,11 @@
 //! X:Y[,X:Y..] [--halo yes] --out DIR` sorts the window's segments into squares (with the squares
 //! within the events' reach of them), and `qm-build aircraft-boxes
 //! --shuffled DIR --days D,.. [--increment-days D,..] --squares .. --terrain DIR --weather FILE
-//! [--kind aircraft-far] --out DIR` boxes them, refusing a shuffle that is not exactly that window;
+//! [--kind aircraft,aircraft-far] [--memory-gb N] [--progress DIR] --out DIR` boxes them, each
+//! square's day files read once for the kinds, refusing a shuffle that is not exactly that window;
 //! `qm-build aircraft-events` with the same arguments (no kind) writes what flies over each cell
 //! of the squares, reading the shuffle of the squares within reach of each (`boxes::events`).
+//! Both build many squares at once, the largest first, within `--memory-gb` (`boxes::run`).
 //!
 //! Roads: `qm-build traffic --prepared DIR --squares X:Y[,X:Y..] --out DIR` routes the buildings'
 //! trip ends down the local streets and grids them, one file per square, for the sources.
@@ -58,6 +60,8 @@ mod weather;
 
 use dev4::{Dev4, Square};
 use physics::weather::WeatherTable;
+use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 struct Arguments {
@@ -159,23 +163,51 @@ fn sampling_window(options: &Arguments) -> boxes::Window {
 
 /// The aircraft box rule: `--kind aircraft|aircraft-far`, `--level-step-db` (D) and `--pieces`
 /// (kept per box), else the kind's defaults.
-fn box_rule(options: &Arguments) -> Result<boxes::BoxRule, String> {
-    let mut rule = match options.optional("kind") {
-        None | Some("aircraft") => boxes::BoxRule::default(),
-        Some("aircraft-far") => boxes::BoxRule::far(),
-        Some(other) => return Err(format!("bad --kind {other}")),
-    };
-    if let Some(step) = options.optional("level-step-db") {
-        rule.level_step_db = step
-            .parse()
-            .map_err(|_| format!("bad --level-step-db {step}"))?;
+/// The box rules of `--kind` (a list, `aircraft` by default), with `--level-step-db` and
+/// `--pieces` laid over each.
+fn box_rules(options: &Arguments) -> Result<Vec<boxes::BoxRule>, String> {
+    options
+        .optional("kind")
+        .unwrap_or("aircraft")
+        .split(',')
+        .map(|kind| {
+            let mut rule = match kind {
+                "aircraft" => boxes::BoxRule::default(),
+                "aircraft-far" => boxes::BoxRule::far(),
+                other => return Err(format!("bad --kind {other}")),
+            };
+            if let Some(step) = options.optional("level-step-db") {
+                rule.level_step_db = step
+                    .parse()
+                    .map_err(|_| format!("bad --level-step-db {step}"))?;
+            }
+            if let Some(pieces) = options.optional("pieces") {
+                rule.pieces = pieces
+                    .parse()
+                    .map_err(|_| format!("bad --pieces {pieces}"))?;
+            }
+            Ok(rule)
+        })
+        .collect()
+}
+
+/// `--memory-gb`: the memory the squares built at once may take (GB, 64 by default).
+fn memory_budget(options: &Arguments) -> Result<u64, String> {
+    let gigabytes: u64 = options
+        .optional("memory-gb")
+        .unwrap_or("64")
+        .parse()
+        .map_err(|_| "bad --memory-gb".to_string())?;
+    Ok(gigabytes << 30)
+}
+
+/// `--progress DIR`: a marker per square and kind built, so that a rerun resumes.
+fn progress_markers(options: &Arguments) -> Result<Option<PathBuf>, String> {
+    let progress = options.optional("progress").map(PathBuf::from);
+    if let Some(progress) = &progress {
+        std::fs::create_dir_all(progress).map_err(|error| error.to_string())?;
     }
-    if let Some(pieces) = options.optional("pieces") {
-        rule.pieces = pieces
-            .parse()
-            .map_err(|_| format!("bad --pieces {pieces}"))?;
-    }
-    Ok(rule)
+    Ok(progress)
 }
 
 /// An events table as JSON: per band its threshold, flights a day by period, mean height (m) and
@@ -338,44 +370,60 @@ fn run(arguments: &[String]) -> Result<(), String> {
             Ok(())
         }
         "aircraft-boxes" => {
-            let rule = box_rule(&options)?;
+            let rules = box_rules(&options)?;
             let shuffled = Path::new(options.get("shuffled")?);
             let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
             let squares = parse_squares(options.get("squares")?)?;
             boxes::shuffle::holds(shuffled, &squares)?;
             let weather = WeatherTable::read(Path::new(options.get("weather")?))?;
+            let terrain = options.terrain(&out)?;
+            let progress = progress_markers(&options)?;
             eprintln!("aircraft boxes: {} days", days.len());
-            // `--progress DIR`: a marker per square built, so that a rerun resumes.
-            let progress = options.optional("progress").map(PathBuf::from);
-            if let Some(progress) = &progress {
-                std::fs::create_dir_all(progress).map_err(|error| error.to_string())?;
-            }
-            for square in squares {
-                let marker = progress.as_ref().map(|progress| {
+            let marker = |rule: &boxes::BoxRule, square: Square| {
+                progress.as_ref().map(|progress| {
                     progress.join(format!("{}-{}-{}", rule.kind.name(), square.x, square.y))
-                });
-                if marker.as_ref().is_some_and(|marker| marker.exists()) {
-                    continue;
-                }
+                })
+            };
+            let to_build = |square: Square| -> Vec<boxes::BoxRule> {
+                rules
+                    .iter()
+                    .filter(|rule| !marker(rule, square).is_some_and(|marker| marker.exists()))
+                    .copied()
+                    .collect()
+            };
+            let jobs: Vec<boxes::run::Job> = squares
+                .par_iter()
+                .filter(|&&square| !to_build(square).is_empty())
+                .map(|&square| {
+                    let bytes = boxes::shuffle::square_bytes(shuffled, square);
+                    // A box takes about 1 KB; a square's boxes stay under one per 100 bytes of its
+                    // day files (measured 2026-10-16 on 10 squares of the Americas, both kinds).
+                    boxes::run::Job {
+                        square,
+                        work: bytes,
+                        memory: (bytes / 100) << 10,
+                    }
+                })
+                .collect();
+            boxes::run::build_squares(jobs, memory_budget(&options)?, |square| {
                 let started = std::time::Instant::now();
-                let (tiles, written) = boxes::build_square(
+                let rules = to_build(square);
+                let written = boxes::build_square(
                     (shuffled, &days),
                     (square, &weather),
-                    options.terrain(&out)?,
-                    rule,
+                    terrain,
+                    &rules,
                     &out,
                 )?;
-                eprintln!(
-                    "aircraft boxes: square {}/{}: {written} boxes in {tiles} tiles, {:.0} s",
-                    square.x,
-                    square.y,
-                    started.elapsed().as_secs_f64()
-                );
-                if let Some(marker) = &marker {
-                    std::fs::write(marker, b"").map_err(|error| error.to_string())?;
+                let mut line = format!("aircraft boxes: square {}/{}:", square.x, square.y);
+                for (rule, (tiles, boxes)) in rules.iter().zip(written) {
+                    line += &format!(" {} {boxes} boxes in {tiles} tiles,", rule.kind.name());
+                    if let Some(marker) = marker(rule, square) {
+                        std::fs::write(marker, b"").map_err(|error| error.to_string())?;
+                    }
                 }
-            }
-            Ok(())
+                Ok(format!("{line} {:.1} s", started.elapsed().as_secs_f64()))
+            })
         }
         "aircraft-events" => {
             let shuffled = Path::new(options.get("shuffled")?);
@@ -383,35 +431,56 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let squares = parse_squares(options.get("squares")?)?;
             boxes::shuffle::holds(shuffled, &boxes::events::halo(&squares))?;
             let weather = WeatherTable::read(Path::new(options.get("weather")?))?;
-            let progress = options.optional("progress").map(PathBuf::from);
-            if let Some(progress) = &progress {
-                std::fs::create_dir_all(progress).map_err(|error| error.to_string())?;
-            }
-            for square in squares {
-                let marker = progress
+            let terrain = options.terrain(&out)?;
+            let progress = progress_markers(&options)?;
+            let marker = |square: Square| {
+                progress
                     .as_ref()
-                    .map(|progress| progress.join(format!("events-{}-{}", square.x, square.y)));
-                if marker.as_ref().is_some_and(|marker| marker.exists()) {
-                    continue;
-                }
+                    .map(|progress| progress.join(format!("events-{}-{}", square.x, square.y)))
+            };
+            let todo: Vec<Square> = squares
+                .into_iter()
+                .filter(|&square| !marker(square).is_some_and(|marker| marker.exists()))
+                .collect();
+            let inputs: HashSet<Square> = boxes::events::halo(&todo).into_iter().collect();
+            let bytes: HashMap<Square, u64> = inputs
+                .par_iter()
+                .map(|&square| (square, boxes::shuffle::square_bytes(shuffled, square)))
+                .collect();
+            let jobs: Vec<boxes::run::Job> = todo
+                .iter()
+                .map(|&square| {
+                    let work: u64 = boxes::events::squares_within_reach(square)
+                        .iter()
+                        .map(|input| bytes.get(input).copied().unwrap_or(0))
+                        .sum();
+                    // A day of the inputs decoded twice over (about 4 bytes in memory a byte of the
+                    // day files) and the square's counts.
+                    boxes::run::Job {
+                        square,
+                        work,
+                        memory: 4 * work / days.len().max(1) as u64 + (64 << 20),
+                    }
+                })
+                .collect();
+            boxes::run::build_squares(jobs, memory_budget(&options)?, |square| {
                 let started = std::time::Instant::now();
                 let written = boxes::events::build_square(
                     (shuffled, &days),
                     (square, &weather),
-                    options.terrain(&out)?,
+                    terrain,
                     &out,
                 )?;
-                eprintln!(
-                    "aircraft events: square {}/{}: {written} tiles, {:.0} s",
+                if let Some(marker) = marker(square) {
+                    std::fs::write(marker, b"").map_err(|error| error.to_string())?;
+                }
+                Ok(format!(
+                    "aircraft events: square {}/{}: {written} tiles, {:.1} s",
                     square.x,
                     square.y,
                     started.elapsed().as_secs_f64()
-                );
-                if let Some(marker) = &marker {
-                    std::fs::write(marker, b"").map_err(|error| error.to_string())?;
-                }
-            }
-            Ok(())
+                ))
+            })
         }
         "aircraft-tracks" => aircraft::tracks::build(Path::new(options.get("segments")?), &out),
         "aircraft-check" => {
@@ -450,7 +519,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let compared = boxes::check::compare(
                 (Path::new(options.get("segments")?), &weather),
                 &window,
-                (&out, box_rule(&options)?.level_step_db),
+                (&out, box_rules(&options)?[0].level_step_db),
                 terrain,
                 (
                     &chosen.iter().map(|(_, point)| *point).collect::<Vec<_>>(),

@@ -143,3 +143,41 @@ fn a_descent_keeps_every_piece_within_an_eighth_of_its_box() {
         }
     }
 }
+
+/// A tile's cut is the whole cut's pieces in that tile, whatever the segment crosses: long and
+/// short, through a corner, along an edge, climbing through bands (the builders cut tile by tile).
+#[test]
+fn a_tile_cut_is_the_whole_cut_within_it() {
+    let tiles: HashSet<TileId> = [0, 1, 2].iter().flat_map(|&ring| PRAGUE.ring(ring)).collect();
+    let terrain = HashMap::new();
+    let placement = Placement::new(&tiles, &terrain, BOX_EDGE_LEVEL_STEP_DB);
+    let corner = Mercator {
+        x: f64::from(PRAGUE.x),
+        y: f64::from(PRAGUE.y),
+    };
+    let at = |dx: f64, dy: f64| Mercator {
+        x: corner.x + dx,
+        y: corner.y + dy,
+    };
+    for (start, end) in [
+        ((at(-1.3, -0.7), 40.0), (at(1.6, 1.9), 3_000.0)),
+        ((at(-0.5, -0.5), 900.0), (at(0.5, 0.5), 900.0)),
+        ((at(0.0, -1.5), 120.0), (at(0.0, 1.5), 60.0)),
+        ((at(0.2, 0.3), 30.0), (at(0.25, 0.31), 35.0)),
+        ((at(1.99, -0.99), 11_000.0), (at(-1.99, 0.99), 9_000.0)),
+    ] {
+        let whole = cut_into_pieces(&placement, start, end, false);
+        let mut joined = Vec::new();
+        for tile in &tiles {
+            let within = cut_within_tile(&placement, start, end, false, *tile);
+            let expected: Vec<BoxPiece> = whole
+                .iter()
+                .filter(|piece| piece.key.tile == *tile)
+                .copied()
+                .collect();
+            assert_eq!(within, expected, "{tile:?} of {start:?} to {end:?}");
+            joined.extend(within);
+        }
+        assert_eq!(joined.len(), whole.len());
+    }
+}

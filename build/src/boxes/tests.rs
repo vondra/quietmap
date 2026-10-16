@@ -122,11 +122,10 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
         .map(|segment| (segment.clone(), 1.0))
         .collect();
     add_day(
-        &mut boxes,
+        std::slice::from_mut(&mut boxes),
+        &[(&placement, PIECES_PER_BOX)],
         &weighted,
-        (&placement, &PlaceAtmosphere::model()),
-        &scope,
-        PIECES_PER_BOX,
+        (Square::of(PRAGUE), &PlaceAtmosphere::model()),
     );
     let out = std::env::temp_dir().join(format!("qm-boxes-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
@@ -208,7 +207,7 @@ fn a_box_keeps_its_loudest_pieces_one_per_flight() {
         (2, 84.0),
         (4, 79.0),
     ] {
-        entry.keep(piece(flight, level), 2);
+        entry.keep((flight, level), 2, || piece(flight, level));
     }
     // Flight 2's louder piece and flight 1's; flight 3 falls out at 82 dB.
     let kept: Vec<(u64, f64)> = entry
@@ -236,11 +235,10 @@ fn a_flight_across_a_period_boundary_counts_in_both() {
         .map(|segment| (segment.clone(), 0.5))
         .collect();
     add_day(
-        &mut boxes,
+        std::slice::from_mut(&mut boxes),
+        &[(&placement, PIECES_PER_BOX)],
         &weighted,
-        (&placement, &PlaceAtmosphere::model()),
-        &scope,
-        PIECES_PER_BOX,
+        (Square::of(PRAGUE), &PlaceAtmosphere::model()),
     );
     // The box where the flight's pieces change period holds it in both.
     let both = boxes
