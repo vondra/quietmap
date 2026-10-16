@@ -16,9 +16,10 @@ use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use tiles::Kind;
 use tiles::geo::TileId;
+use tiles::square::read_tile;
 use tiles::terrain::{OCEAN, Terrain};
-use tiles::{Kind, tile_path};
 
 /// A dev4 row's ends in the z30 grid (start x, start y, end x, end y): the row's identity in every
 /// square that converts it.
@@ -70,15 +71,13 @@ impl Decks {
             let read = match tiles.entry(tile) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
-                    let path = tile_path(year_root, tile, Kind::Terrain);
-                    let parsed = match std::fs::read(&path) {
-                        Ok(bytes) => Terrain::parse(&bytes)
-                            .map(Some)
-                            .map_err(|error| format!("{}: {error:?}", path.display())),
-                        // A release without the tile has the open sea there.
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                        Err(error) => Err(format!("{}: {error}", path.display())),
-                    };
+                    // A release without terrain in the tile has the open sea there.
+                    let parsed = read_tile(year_root, tile, Kind::Terrain).and_then(|bytes| {
+                        bytes
+                            .map(|bytes| Terrain::parse(&bytes))
+                            .transpose()
+                            .map_err(|error| format!("terrain of {tile:?}: {error:?}"))
+                    });
                     match parsed {
                         Ok(parsed) => entry.insert(parsed),
                         Err(error) => {

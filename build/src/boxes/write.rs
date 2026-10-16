@@ -4,12 +4,13 @@
 use super::place::{BoxPiece, Placement};
 use super::read::{FLAG_DEPARTURE, FLAG_HELICOPTER_DESCENT};
 use super::{BoxEntry, Boxes, place::BoxKey};
-use crate::output::write_tile;
+use crate::dev4::Square;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use tiles::Kind;
 use tiles::aircraft::{AircraftBox, Flight, FlightPiece, Group, encode};
 use tiles::geo::{LocalFrame, Mercator, TileId};
+use tiles::square::SquareWriter;
 
 /// A piece's ends in its tile's frame: metres east and north of the tile centre, altitude above
 /// sea level (the frame every box of the tile sums in).
@@ -50,20 +51,23 @@ fn flight_of(flight_id: u64, callsign: [u8; 8], designator: [u8; 4]) -> Flight {
     }
 }
 
-/// Writes one aircraft file of `kind` per tile holding boxes (their bands from `placement`);
-/// returns how many were written.
-pub fn write_tiles(
+/// Writes the boxes of one square (their bands from `placement`) as its file of `kind`; returns how
+/// many tiles hold boxes.
+pub fn write_square_boxes(
     boxes: &Boxes,
     placement: &Placement,
-    kind: Kind,
+    (kind, square): (Kind, Square),
     out: &Path,
 ) -> Result<usize, String> {
     let mut by_tile: BTreeMap<TileId, Vec<(&BoxKey, &BoxEntry)>> = BTreeMap::new();
     for (key, entry) in boxes.iter() {
         by_tile.entry(key.tile).or_default().push((key, entry));
     }
-    let mut written = 0;
-    for (tile, mut tile_boxes) in by_tile {
+    let mut writer = SquareWriter::create(out, kind, square)?;
+    for tile in square.tiles() {
+        let Some(mut tile_boxes) = by_tile.remove(&tile) else {
+            continue;
+        };
         tile_boxes.sort_by_key(|(key, _)| (key.band, key.cell[1], key.cell[0], key.helicopter));
         let frame = LocalFrame::at(tile.centre());
         let bands = placement.bands(tile);
@@ -136,8 +140,10 @@ pub fn write_tiles(
         if records.is_empty() {
             continue;
         }
-        write_tile(out, tile, kind, &encode(&records, &flights, &pieces))?;
-        written += 1;
+        writer.add(tile, &encode(&records, &flights, &pieces))?;
     }
-    Ok(written)
+    if let Some(tile) = by_tile.keys().next() {
+        return Err(format!("boxes of {tile:?} outside {square:?}"));
+    }
+    writer.finish()
 }

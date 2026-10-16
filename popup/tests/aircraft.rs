@@ -13,11 +13,11 @@ use physics::weather::{COLUMNS, ROWS, SECTORS, WeatherNode, encode as encode_wea
 use popup::answer::{Options, answer};
 use popup::release::Release;
 use std::path::PathBuf;
+use tiles::Kind;
 use tiles::aircraft::{AircraftBox, Group, encode};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::sources::Layer;
-use tiles::write_tile;
-use tiles::{COMPLETION_MARKER, Kind};
+use tiles::square::write_tiles;
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };
 /// The receiver stands 4 m above the ocean.
@@ -35,8 +35,8 @@ fn release_with_boxes(name: &str, tile: TileId, kind: Kind, boxes: &[AircraftBox
         ROWS * COLUMNS
     ];
     std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
-    write_tile(&root.join("2026"), tile, kind, &encode(boxes, &[], &[])).unwrap();
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    write_tiles(&root.join("2026"), kind, &[(tile, encode(boxes, &[], &[]))]).unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     root
 }
 

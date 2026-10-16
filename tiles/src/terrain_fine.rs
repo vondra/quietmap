@@ -11,7 +11,7 @@
 //! tiles, measured on Czechia's clicks).
 
 use crate::FormatError;
-use crate::terrain::{Window, predicted};
+use crate::terrain::{Window, predicted, unpredict};
 use std::sync::OnceLock;
 
 /// Fine intervals in one interval of the one-arc-second lattice.
@@ -184,18 +184,12 @@ impl FineTerrain {
                 if planes.len() != 2 * nodes {
                     return None;
                 }
-                let mut codes = vec![0u16; nodes];
-                for at in 0..nodes {
-                    let zigzag = u16::from(planes[at]) | (u16::from(planes[nodes + at]) << 8);
-                    let residual = ((zigzag >> 1) as i16) ^ -((zigzag & 1) as i16);
-                    codes[at] = (residual as u16).wrapping_add(predicted(
-                        &codes,
-                        columns as usize,
-                        at / columns as usize,
-                        at % columns as usize,
-                    ));
-                }
-                Some(codes.into_iter().map(|code| code as i16).collect())
+                let mut codes = vec![0i16; nodes];
+                let (low, high) = planes.split_at(nodes);
+                unpredict(low, high, columns as usize, |at, code| {
+                    codes[at] = code as i16
+                });
+                Some(codes)
             })
             .as_deref()
             .ok_or(FormatError("terrain-fine: a block does not decode"))?;

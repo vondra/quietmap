@@ -8,46 +8,7 @@ use std::path::{Path, PathBuf};
 use tiles::geo::{GlobalSteps, MAX_LATITUDE_DEG, WGS84_A_M};
 use tiles::terrain::{NODES_PER_DEGREE, Window};
 
-/// z9 squares per axis.
-pub const Z9_PER_AXIS: u32 = 512;
-
-/// A z9 square in the XYZ numbering.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Square {
-    pub x: u32,
-    pub y: u32,
-}
-
-impl Square {
-    /// The square of a z30 cell (x east from 180 W, y north from the equator at 2^29).
-    pub fn of_z30(gx: i32, gy: i32) -> Square {
-        let per_square = (1i64 << 30) / i64::from(Z9_PER_AXIS);
-        let last = i64::from(Z9_PER_AXIS) - 1;
-        Square {
-            x: (i64::from(gx) / per_square).clamp(0, last) as u32,
-            y: ((((1i64 << 30) - 1) - i64::from(gy)) / per_square).clamp(0, last) as u32,
-        }
-    }
-
-    /// The square and its existing neighbours (x wraps, y stops at the poles).
-    pub fn with_neighbours(self) -> Vec<Square> {
-        let mut squares = Vec::new();
-        for dy in -1i64..=1 {
-            for dx in -1i64..=1 {
-                let y = i64::from(self.y) + dy;
-                if !(0..i64::from(Z9_PER_AXIS)).contains(&y) {
-                    continue;
-                }
-                let x = (i64::from(self.x) + dx).rem_euclid(i64::from(Z9_PER_AXIS));
-                squares.push(Square {
-                    x: x as u32,
-                    y: y as u32,
-                });
-            }
-        }
-        squares
-    }
-}
+pub use tiles::square::{SQUARES_PER_AXIS, Square};
 
 /// The dev4 prepared tree (`z9/<x>/<y>/*.arrow`) and its raster tree (`z9/<x>/<y>/*.u8|u16le`).
 pub struct Dev4 {
@@ -184,13 +145,14 @@ pub fn degrees_to_z30(lat: f64, lon: f64) -> (i32, i32) {
 
 /// dev4's node window of a z9 square: floor/ceil node edges, the polar rows reaching +-90 deg.
 pub fn z9_raster_window(square: Square) -> Window {
-    let axis = i64::from(Z9_PER_AXIS);
+    let axis = i64::from(SQUARES_PER_AXIS);
     let longitude_nodes = 360 * i64::from(NODES_PER_DEGREE);
     let west = i64::from(square.x) * longitude_nodes / axis - longitude_nodes / 2;
     let east =
         ((i64::from(square.x) + 1) * longitude_nodes + axis - 1) / axis - longitude_nodes / 2;
     let edge_latitude_nodes = |y: u32| {
-        let mercator = std::f64::consts::PI * (1.0 - 2.0 * f64::from(y) / f64::from(Z9_PER_AXIS));
+        let mercator =
+            std::f64::consts::PI * (1.0 - 2.0 * f64::from(y) / f64::from(SQUARES_PER_AXIS));
         mercator.sinh().atan().to_degrees() * f64::from(NODES_PER_DEGREE)
     };
     let pole = 90 * NODES_PER_DEGREE;
@@ -199,7 +161,7 @@ pub fn z9_raster_window(square: Square) -> Window {
     } else {
         edge_latitude_nodes(square.y).ceil() as i32
     };
-    let south = if square.y == Z9_PER_AXIS - 1 {
+    let south = if square.y == SQUARES_PER_AXIS - 1 {
         -pole
     } else {
         edge_latitude_nodes(square.y + 1).floor() as i32

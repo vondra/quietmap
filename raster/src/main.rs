@@ -11,9 +11,9 @@ mod sources;
 
 use std::io::Write;
 use std::path::PathBuf;
+use tiles::Kind;
 use tiles::geo::{Mercator, TILES_PER_AXIS, TileId, ZOOM};
-use tiles::read::read_all;
-use tiles::{COMPLETION_MARKER, Kind, tile_path};
+use tiles::square::read_tiles;
 
 /// Pixels per side of a map tile.
 const PIXELS: usize = 256;
@@ -166,16 +166,11 @@ fn run(arguments: &[String]) -> Result<Vec<u8>, String> {
         return Err(format!("no {layer:?} tile {z}/{x}/{y}"));
     }
     let year_root = PathBuf::from(required("prepared")?).join(required("year")?);
-    if !year_root.join(COMPLETION_MARKER).exists() {
-        return Err(format!("{} is not a complete release", year_root.display()));
-    }
+    tiles::check_year_complete(&year_root)?;
     let map_tile = MapTile::new(z, x, y);
     let tiles = map_tile.z12_tiles(layer.margin_px());
-    let paths: Vec<PathBuf> = tiles
-        .iter()
-        .map(|&tile| tile_path(&year_root, tile, layer.kind()))
-        .collect();
-    let files = read_all(&paths)?;
+    let requests: Vec<(TileId, Kind)> = tiles.iter().map(|&tile| (tile, layer.kind())).collect();
+    let files = read_tiles(&year_root, &requests)?;
     let pixels = match layer {
         Layer::Elevation | Layer::Forest | Layer::Hard => {
             ground::render(layer, map_tile, &tiles, &files)?

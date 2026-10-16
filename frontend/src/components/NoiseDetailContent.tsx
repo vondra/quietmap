@@ -162,7 +162,7 @@ function StatsPanel({ data }: { data: PopupUpdate }) {
   return (
     <div data-testid="popup-stats" className="mt-2 pt-1.5 border-t border-border/30 text-[10px] font-mono text-muted-foreground/70 leading-tight">
       <div className="opacity-60 mb-0.5">
-        ⏱ update {data.seq}{data.partial ? ' (partial)' : ''} · {stats.rings} ring{stats.rings === 1 ? '' : 's'} · {stats.files} files · {(stats.bytes / 1e6).toFixed(1)} MB
+        ⏱ update {data.seq}{data.partial ? ' (partial)' : ''} · {stats.rings} ring{stats.rings === 1 ? '' : 's'} · {stats.reads} reads · {(stats.bytes / 1e6).toFixed(1)} MB
       </div>
       <div className="grid grid-cols-2 gap-x-3 gap-y-0">
         {([['read', stats.read_ms], ['candidates', stats.candidate_ms], ['evaluate', stats.evaluate_ms], ['elapsed', stats.elapsed_ms]] as const).map(([name, ms]) => (

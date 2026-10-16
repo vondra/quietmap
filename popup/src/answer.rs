@@ -146,7 +146,7 @@ pub fn answer(
         .map(|&layer| LayerSelection::new(layer))
         .collect();
     // The weather table's nodes are the click's first read.
-    let (mut files, mut bytes, mut read_seconds) =
+    let (mut reads, mut bytes, mut read_seconds) =
         (1usize, physics::weather::PLACE_BYTES, weather_read_seconds);
     let (mut candidate_seconds, mut evaluate_seconds) = (0.0f64, 0.0f64);
     let mut station: Option<Station> = None;
@@ -188,8 +188,8 @@ pub fn answer(
             },
         )?);
         let read = cell.get().expect("the ring was just read");
-        (files, bytes, read_seconds) = (
-            files + read.file_count,
+        (reads, bytes, read_seconds) = (
+            reads + read.tile_count,
             bytes + read.bytes,
             read_seconds + read.read_seconds,
         );
@@ -271,7 +271,7 @@ pub fn answer(
                 &ground,
                 click,
                 &selections,
-                (files, bytes, read_seconds, started),
+                (reads, bytes, read_seconds, started),
                 emit,
             );
         }
@@ -388,7 +388,7 @@ pub fn answer(
                 frame.to_mercator(station.position),
             )?;
             aircraft_events = Some(events);
-            (files, bytes) = (files + usize::from(read > 0), bytes + read);
+            (reads, bytes) = (reads + usize::from(read > 0), bytes + read);
         }
         if reads_ground {
             horizons = Some(Horizons::build(
@@ -657,10 +657,10 @@ pub fn answer(
                 &mut listed_flights,
                 [lat, lon],
             )?;
-            (files, bytes) = (files + track_files, bytes + track_bytes);
+            (reads, bytes) = (reads + track_files, bytes + track_bytes);
             read_seconds += read_started.elapsed().as_secs_f64();
         }
-        let (fine_files, fine_bytes) = ground.fine_read();
+        let (fine_tiles, fine_bytes) = ground.fine_read();
         let update = Update {
             partial: !last_ring,
             percentiles,
@@ -683,7 +683,7 @@ pub fn answer(
             arrival,
             statistics: Statistics {
                 rings_read: ring,
-                files: files + fine_files as usize,
+                reads: reads + fine_tiles as usize,
                 bytes: bytes + fine_bytes,
                 read_seconds,
                 candidate_seconds,

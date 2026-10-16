@@ -70,7 +70,8 @@ pub const CONTRIBUTOR_PIECES: usize = 24;
 
 pub struct Statistics {
     pub rings_read: u32,
-    pub files: usize,
+    /// The tiles read (each whole), the weather table and the flight tracks' files.
+    pub reads: usize,
     pub bytes: u64,
     pub read_seconds: f64,
     /// Parsing tiles and bounding candidates.
@@ -208,7 +209,7 @@ pub fn empty_answer(
     ground: &Ground,
     click: BuildingClick,
     selections: &[LayerSelection],
-    (files, bytes, read_seconds, started): (usize, u64, f64, std::time::Instant),
+    (reads, bytes, read_seconds, started): (usize, u64, f64, std::time::Instant),
     emit: &mut dyn FnMut(&Update) -> Result<(), String>,
 ) -> Result<(), String> {
     let no_display = |_: DisplayRef, _: Layer| -> Result<serde_json::Value, String> {
@@ -236,7 +237,7 @@ pub fn empty_answer(
         arrival: None,
         statistics: Statistics {
             rings_read: 1,
-            files,
+            reads,
             bytes,
             read_seconds,
             candidate_seconds: 0.0,

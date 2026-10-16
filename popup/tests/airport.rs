@@ -11,10 +11,10 @@ use popup::answer::{Options, answer};
 use popup::json::update_line;
 use popup::release::Release;
 use std::path::PathBuf;
+use tiles::Kind;
 use tiles::aircraft::{AircraftBox, Group, encode as encode_aircraft};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::sources::{Attribute, Layer, Piece, encode as encode_sources};
-use tiles::{COMPLETION_MARKER, Kind};
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };
 
@@ -95,7 +95,7 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
     ];
     std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
     let write = |kind, bytes: Vec<u8>| {
-        tiles::write_tile(&root.join("2026"), TILE, kind, &bytes).unwrap();
+        tiles::square::write_tiles(&root.join("2026"), kind, &[(TILE, bytes)]).unwrap();
     };
     let steps = steps_per_metre();
     let half = (125.0 * steps[1]).round() as i16;
@@ -130,7 +130,7 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
             encode_aircraft(&[departure_box()], &[], &[]),
         );
     }
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     root
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark report: reads the JSON lines of cold.py runs (fast, and optionally --exact) and the
 dev4 reference answers, and prints per point the cold times (median of the repeats) against the
-budget, bytes and files, the fast-versus-exact difference per layer and the difference to dev4
+budget, bytes and reads, the fast-versus-exact difference per layer and the difference to dev4
 per layer; then the error of every fast layer answer against exact (p95 and max over all runs,
 the budget being 0.1 and 0.3 dB).
 
@@ -45,7 +45,7 @@ def main():
     runs = load(arguments.runs)
     exact = load(arguments.exact) if arguments.exact else {}
     first_budget, full_budget = BUDGET_MS[arguments.disk]
-    print(f"{'point':18} {'first ms':>9} {'full ms':>9} {'first MB':>8} {'full MB':>8} {'files':>5}  "
+    print(f"{'point':18} {'first ms':>9} {'full ms':>9} {'first MB':>8} {'full MB':>8} {'reads':>5}  "
           "layers (fast | fast-exact | fast-dev4)")
     errors = []
     for point, records in runs.items():
@@ -68,7 +68,7 @@ def main():
                 text += f" | {level - dev4[layer]:+.1f}"
             cells.append(text)
         print(f"{point:18} {mark(first, first_budget)} {mark(full, full_budget)} "
-              f"{last['first_mb']:8.1f} {last['full_mb']:8.1f} {last['full_files']:5d}  "
+              f"{last['first_mb']:8.1f} {last['full_mb']:8.1f} {last['full_reads']:5d}  "
               + "; ".join(cells))
     print(f"* over the {arguments.disk} budget ({first_budget} / {full_budget} ms)")
     if errors:

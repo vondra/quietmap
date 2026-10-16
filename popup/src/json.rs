@@ -443,7 +443,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         "top_flights": flights,
         "stats": {
             "rings": statistics.rings_read,
-            "files": statistics.files,
+            "reads": statistics.reads,
             "bytes": statistics.bytes,
             "read_ms": (statistics.read_seconds * 1000.0).round(),
             "candidate_ms": (statistics.candidate_seconds * 1000.0).round(),
