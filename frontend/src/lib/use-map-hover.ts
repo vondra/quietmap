@@ -34,20 +34,23 @@ export function useMapHover(mapRef: MapRef | undefined, enabled: boolean): MapHo
       const { lng, lat } = map.unproject([point.x, point.y])
       setHover({ lat, lng, clientX: point.x, clientY: point.y, zoom: map.getZoom() })
     }
-    const onMouseMove = (e: MouseEvent) => {
+    // A finger has no hover: the mouse events a browser sends after a tap would leave a readout
+    // standing at the tapped point, beside the popup's own level and after it closes.
+    const onPointerMove = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return
       const rect = container.getBoundingClientRect()
       point = { x: e.clientX - rect.left, y: e.clientY - rect.top }
       sample()
     }
-    const onMouseLeave = () => { point = null; setHover(null) }
+    const onPointerLeave = () => { point = null; setHover(null) }
     const onMoveStart = () => setHover(null)
-    container.addEventListener('mousemove', onMouseMove)
-    container.addEventListener('mouseleave', onMouseLeave)
+    container.addEventListener('pointermove', onPointerMove)
+    container.addEventListener('pointerleave', onPointerLeave)
     map.on('movestart', onMoveStart)
     map.on('moveend', sample)
     return () => {
-      container.removeEventListener('mousemove', onMouseMove)
-      container.removeEventListener('mouseleave', onMouseLeave)
+      container.removeEventListener('pointermove', onPointerMove)
+      container.removeEventListener('pointerleave', onPointerLeave)
       map.off('movestart', onMoveStart)
       map.off('moveend', sample)
     }

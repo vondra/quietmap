@@ -2,11 +2,24 @@
 // point), the clicked-point marker, and the streamed request for it.
 import { useEffect } from 'react'
 import { useMap, Source, Layer } from 'react-map-gl/maplibre'
-import type { MapMouseEvent } from 'maplibre-gl'
+import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl'
 import type { PopupUpdate } from '../types/noise'
 import { streamPopup } from '../lib/popup-stream'
+import { DESKTOP_QUERY } from '../hooks/useIsDesktop'
+import { sheetTop } from './MobileDetailSheet'
 import { stayAt } from './StayLayer'
 import type { Stay } from '../lib/stays'
+
+/** On a phone the popup's sheet rises over the lower half of the map: a point it would cover (at `y`
+ *  px from the top) moves up to the middle of the map left between the search bar and the sheet,
+ *  where the opened rows draw their roads, segments and rays. */
+function keepAboveSheet(map: MaplibreMap, y: number) {
+  if (window.matchMedia(DESKTOP_QUERY).matches) return
+  const top = document.querySelector('.map-top-bar')?.getBoundingClientRect().bottom ?? 0
+  const bottom = sheetTop(map.getContainer().clientHeight)
+  if (y < bottom - 24) return
+  map.panBy([0, y - (top + bottom) / 2], { duration: 400 })
+}
 
 export interface DetailPopupProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
@@ -56,6 +69,12 @@ export default function DetailPopup({ isCurrentDetailPosition, detailPosition, t
   useEffect(() => {
     if (triggerPosition) onDetailPositionChange?.(triggerPosition)
   }, [triggerPosition, onDetailPositionChange])
+
+  // Whatever opened the popup (a tap, a link's `d=`, a recent place), its point stays in sight.
+  useEffect(() => {
+    if (!detailPosition || !map) return
+    keepAboveSheet(map.getMap(), map.project([detailPosition.lng, detailPosition.lat]).y)
+  }, [detailPosition, map])
 
   // One streamed request per clicked point: every line redraws the popup. A new click (or closing
   // the popup) aborts it, which also stops the computation on the server.

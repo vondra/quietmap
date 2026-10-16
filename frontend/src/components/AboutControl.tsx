@@ -1,5 +1,5 @@
 // "About quietmap.org" in the map's bottom-right corner, left of the attribution ⓘ (from md up;
-// the phone's layers sheet carries the link instead).
+// on a phone the ⓘ's credits and the layers sheet carry the link instead).
 import { useControl } from 'react-map-gl/maplibre'
 
 export default function AboutControl() {

@@ -280,11 +280,19 @@ test.describe('mobile', () => {
 
     await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
     await expect(sheet.getByTestId('lden')).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
+    // The sheet would cover the tapped point (the map's centre): the map moves it up, the view's
+    // centre south of it. A finger leaves no hover readout beside the popup.
+    const viewLat = () => page.evaluate(() => Number(new URLSearchParams(location.hash.slice(1)).get('lat')))
+    await expect.poll(viewLat).toBeLessThan(POINT.lat)
+    await expect(page.getByTestId('heatmap-hover')).toHaveCount(0)
     // The loudest flights fit the phone: the whole table is on screen, nothing clipped or scrolled.
     await sheet.getByRole('button', { name: /^Aircraft/ }).tap()
     const flights = sheet.getByRole('table', { name: 'Loudest flights' })
     await expect(flights.locator('tbody tr')).toHaveCount(2)
     await expect(flights).toBeInViewport({ ratio: 1 })
+    // The sheet closes from its corner as well as by a swipe.
+    await sheet.getByRole('button', { name: 'Close' }).tap()
+    await expect(sheet).toHaveCount(0)
 
     // A detail sheet deliberately covers the layers button. Start a clean map
     // view instead of force-clicking through it (which no user can do). A
@@ -292,6 +300,11 @@ test.describe('mobile', () => {
     // would keep the existing React instance and its open sheet.
     await page.goto(`/?e2e=layers${mapUrl(POINT).slice(1)}`)
     await canvasCenter(page)
+    // The credits' ⓘ in the control row opens them with the way to the About pages first.
+    await page.locator('.maplibregl-ctrl-attrib-button').tap()
+    await expect(page.locator('.attrib-about')).toBeVisible()
+    await expect(page.locator('.attrib-about')).toHaveAttribute('href', '/about')
+    await page.locator('.maplibregl-ctrl-attrib-button').tap()
     await page.getByRole('button', { name: 'Toggle layers panel' }).tap()
     const panel = page.locator('[data-testid="layers-panel"]:visible')
     await expect(panel).toBeVisible()

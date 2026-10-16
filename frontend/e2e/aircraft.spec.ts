@@ -90,7 +90,8 @@ test.describe('mobile', () => {
     await installHermeticMap(page, POINT)
     await page.goto(mapUrl(POINT))
     const { x, y } = await canvasCenter(page)
-    await page.touchscreen.tap(x, y)
+    // Above the sheet: a point it would cover moves the map, and the track's pixels with it.
+    await page.touchscreen.tap(x, y - 200)
     await expect.poll(() => popupRequests(page)).toHaveLength(1)
     await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
     const sheet = page.getByTestId('mobile-detail-sheet')

@@ -1,5 +1,6 @@
 // The phone popup's bottom sheet, with a drag handle, a collapsed peek and the streamed answer.
 import { lazy, Suspense, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
+import { X } from 'lucide-react'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
@@ -8,6 +9,16 @@ import { resolveSheetTouchEnd } from '../lib/sheet-drag'
 
 // Lazy popup body: see DetailCard.
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
+
+// The handle and the recent places' tabs over the sheet's body (measured on a 390 x 844 phone: the
+// opened sheet with both reached 372 px from the top).
+const SHEET_CHROME_PX = 66
+
+/** How far from the viewport's top the opened sheet reaches at most: its body is at most half the
+ *  viewport less 16 px (`max-h-[calc(50vh-16px)]` below), the handle and the tabs over it. */
+export function sheetTop(viewportHeight: number): number {
+  return viewportHeight / 2 + 16 - SHEET_CHROME_PX
+}
 
 interface MobileDetailSheetProps {
   data: PopupUpdate | null
@@ -96,9 +107,19 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
     <div className="fixed bottom-0 left-0 right-0 z-[2000] md:hidden">
       <div
         data-testid="mobile-detail-sheet"
-        className="bg-background rounded-t-xl shadow-2xl"
+        className="relative bg-background rounded-t-xl shadow-2xl"
         style={{ transform, transition }}
       >
+        {/* A visible way to close it, as the desktop card has; a swipe down on the handle closes it
+            too, but nothing on a phone tells that. */}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-0 right-1.5 z-10 p-1.5 rounded-md text-muted-foreground hover:text-foreground"
+        >
+          <X className="size-4" />
+        </button>
         <div
           className="flex justify-center py-3 cursor-grab"
           onTouchStart={onTouchStart}
