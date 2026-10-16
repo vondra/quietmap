@@ -222,7 +222,7 @@ impl Receivers {
         let (west, north) = (f64::from(square.x * 8), f64::from(square.y * 8));
         let terrain_bytes = read_held(terrain_root, tiles::Kind::Terrain, square.tiles())?;
         let terrain: HashMap<TileId, Terrain> = terrain_bytes
-            .iter()
+            .par_iter()
             .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
             .collect::<Result<_, _>>()
             .map_err(|error| error.to_string())?;
