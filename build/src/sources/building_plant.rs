@@ -25,7 +25,8 @@
 //! split or window unit runs at 62 dB(A) (59-65 cooling), a central condenser at 68 (58 variable
 //! speed to 72-76 single stage).
 //!
-//! A country without its own numbers takes its UN M49 region's median of the measured countries;
+//! A country without its own numbers takes its UN M49 region's median of the measured countries
+//! (South-East Asia the research's regional 29 %, `REGIONS`);
 //! a region without measured countries the 16 % that Brazil, Mexico and India measure, and no
 //! heat pumps (outside Europe, North America, Australia and New Zealand the research found no
 //! stock of heating heat pumps).

@@ -1,4 +1,4 @@
-//! Outdoor-pixel and facade etalons with every retained loud ground source and aircraft box computed exactly.
+//! The outdoor pixels' etalon, every retained loud ground source and aircraft box computed exactly.
 //!
 //! The painter's reference: every outdoor pixel's loudness as the painter's model takes it with
 //! every ground source loud there evaluated exactly, the quiet hum blended from its points as the

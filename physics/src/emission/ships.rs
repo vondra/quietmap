@@ -23,9 +23,9 @@ pub const SHIP_CLASSES: [ShipClass; 3] = [ShipClass::Large, ShipClass::Work, Shi
 
 impl ShipClass {
     /// A-weighted sound power of one ship, sailing or at berth. Large: Fredianelli et al. 2020
-    /// (Sustainability 12:1740) pass-bys of 82.6-89.0 dB(A)/m over 150-250 m hulls and Bernardini
+    /// (Sustainability 12:1740) pass-bys of 82.6-89.0 dB(A)/m over 150-250 m hulls and Schiavoni
     /// et al. 2022 (IJERPH 19:10996, Table 7) moored ships 95-115 dB(A); work boats 83.5 dB(A)/m
-    /// over 30 m and leisure craft 77.4 dB(A)/m over 12 m (Bernardini 2022, Table 11).
+    /// over 30 m and leisure craft 77.4 dB(A)/m over 12 m (Schiavoni 2022, Table 11).
     pub const fn sound_power_dba(self) -> f64 {
         match self {
             ShipClass::Large => 108.0,
@@ -35,7 +35,7 @@ impl ShipClass {
     }
 
     /// Height of the dominant source above the water: funnels and vents of large ships
-    /// (Bernardini 2022, 3.2), the engine casing of a work boat, a yacht's cockpit.
+    /// (Schiavoni 2022, 3.2), the engine casing of a work boat, a yacht's cockpit.
     pub const fn source_height_m(self) -> f64 {
         match self {
             ShipClass::Large => 15.0,
@@ -54,7 +54,7 @@ impl ShipClass {
 }
 
 /// Low-frequency dominated, falling about 4 dB per octave above 250 Hz (Fredianelli 2020
-/// Figs 4-8, Bernardini 2022 3.5).
+/// Figs 4-8, Schiavoni 2022 3.5).
 const SHIP_SPECTRUM: [f64; BANDS] = [0.0, 0.0, -3.0, -6.0, -9.0, -13.0, -18.0, -25.0];
 
 /// A water cell's sound power from its mean vessel-hours per month by class, and the class

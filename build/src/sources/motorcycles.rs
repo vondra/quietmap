@@ -14,7 +14,9 @@
 /// the WHO Global status report on road safety 2023 country profile's powered two- and
 /// three-wheelers over its registered vehicles (95 countries whose total and vehicle types agree);
 /// without it, dev4's traffic share of the country where it set one (Cambodia, Laos, Taiwan,
-/// Japan, Nigeria, Kenya), else the median fleet share of the country's WHO region.
+/// Japan, Nigeria, Kenya), else the median fleet share of the country's WHO region, or of the
+/// world where the table found none (83 countries and territories, South Africa and Uzbekistan
+/// among them; evidence 2026-10-02, motorcycles, `motorcycle-table.json`).
 const COUNTRY_MOTORCYCLES: [([u8; 2], f64, f64); 249] = [
     (*b"AD", 0.0151, 0.005),
     (*b"AE", 0.0048, 0.002),

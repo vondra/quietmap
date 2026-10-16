@@ -2,8 +2,10 @@
 //! local street carries the trip ends routed down it to the nearest main road, no background and
 //! no street more than the one it drains into; a main road of the classes the counts cover takes
 //! the counted roads' relation between their traffic and the trip ends generated around them
-//! (fitted on the counted rows of 13 European countries, evidence 2026-10-01, building traffic).
-//! Squares whose buildings are not mapped keep dev4's guesses.
+//! (fitted on the counted rows of 13 European countries, evidence 2026-10-01, building traffic);
+//! in 58 countries a major road likewise takes its traffic from a model of the counted major roads
+//! (`MAJOR_MODELS`). Only class estimates are replaced: a country's own defaults stay. Squares
+//! whose buildings are not mapped keep dev4's guesses.
 
 use crate::dev4::Square;
 use crate::traffic::{SquareTraffic, Surroundings};
@@ -27,9 +29,9 @@ fn by_built_up([rural, urban]: [f64; 2], built_up: u8) -> f64 {
 /// ends, and the one-way shift (natural logs of vehicles a day). Secondary and tertiary roads weigh the 13
 /// countries alike (country-balanced least squares, held out by square: 2.6 and 5.2 dB mean
 /// absolute error against 3.4 and 5.3 for a class median); unclassified roads are fitted on
-/// Great Britain's, France's and Sweden's counts (4.1 dB against 6.1). Primary roads keep
-/// dev4's priors: the counted ones are national roads outside the cities, and their fit put
-/// Barcelona's arterials at a third of their traffic.
+/// Great Britain's, France's and Sweden's counts (4.1 dB against 6.1). Primary roads are not
+/// fitted here (the counted ones are national roads outside the cities, and their fit put
+/// Barcelona's arterials at a third of their traffic): the major-road model takes them.
 ///
 /// The trip ends around are capped at the 90th percentile of the counted rows' (dense city cores
 /// beyond it drive less per dwelling than the fit would extrapolate: Barcelona's and Paris's
