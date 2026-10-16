@@ -92,11 +92,6 @@ impl TileId {
         }
     }
 
-    /// The z9 directory holding this tile.
-    pub fn z9(self) -> (u32, u32) {
-        (self.x >> 3, self.y >> 3)
-    }
-
     /// Position of a tile-local int16 coordinate pair (east, south).
     pub fn to_mercator(self, local: [i16; 2]) -> Mercator {
         let centre = self.centre();
@@ -273,9 +268,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prague_lies_in_the_known_z9_directory() {
+    fn prague_lies_in_its_known_tile() {
         let tile = TileId::containing(Mercator::from_degrees(50.07553, 14.43781));
-        assert_eq!(tile.z9(), (276, 173));
         assert_eq!(tile, TileId { x: 2212, y: 1387 });
     }
 

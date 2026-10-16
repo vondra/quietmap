@@ -11,7 +11,7 @@
 //! trip ends routed through it (NaN where the row is no local street of a tree), then the square's
 //! grid of trip ends.
 
-use crate::dev4::{Dev4, Square, Z9_PER_AXIS, Z30_QUANTUM_M, cell, column, require_stamp};
+use crate::dev4::{Dev4, SQUARES_PER_AXIS, Square, Z30_QUANTUM_M, cell, column, require_stamp};
 use crate::structures::footprint_area_m2;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int32Type, UInt8Type, UInt16Type};
@@ -661,7 +661,7 @@ pub fn street_parking_shares(dev4: &Dev4, square: Square) -> Result<Vec<f32>, St
 pub fn grid_cell(square: Square, at: (i32, i32)) -> (usize, usize) {
     let (west, north) = (
         i64::from(square.x) * SQUARE_Z30,
-        (i64::from(Z9_PER_AXIS) - i64::from(square.y)) * SQUARE_Z30,
+        (i64::from(SQUARES_PER_AXIS) - i64::from(square.y)) * SQUARE_Z30,
     );
     let column = ((i64::from(at.0) - west) / CELL_Z30).clamp(0, GRID_SIDE as i64 - 1);
     let row = ((north - 1 - i64::from(at.1)) / CELL_Z30).clamp(0, GRID_SIDE as i64 - 1);
@@ -964,7 +964,7 @@ impl Surroundings {
 
     fn from_grids(square: Square, grids: &HashMap<Square, Vec<f32>>) -> Self {
         let side = GRID_SIDE as i64;
-        let world = i64::from(Z9_PER_AXIS);
+        let world = i64::from(SQUARES_PER_AXIS);
         let mut cells = vec![0.0f64; WINDOW * WINDOW];
         for dy in -1i64..=1 {
             let y = i64::from(square.y) + dy;
@@ -1005,9 +1005,10 @@ impl Surroundings {
     pub fn around(&self, at: (i32, i32), radius_m: f64) -> f64 {
         let reach = (radius_m / metres_per_z30(at.1) / CELL_Z30 as f64).round() as i64;
         let side = GRID_SIDE as i64;
-        let world_columns = i64::from(Z9_PER_AXIS) * side;
+        let world_columns = i64::from(SQUARES_PER_AXIS) * side;
         let column = i64::from(at.0) / CELL_Z30;
-        let row_from_north = (i64::from(Z9_PER_AXIS) * SQUARE_Z30 - 1 - i64::from(at.1)) / CELL_Z30;
+        let row_from_north =
+            (i64::from(SQUARES_PER_AXIS) * SQUARE_Z30 - 1 - i64::from(at.1)) / CELL_Z30;
         // The neighbourhood's own coordinates: its north-west square's north-west cell is (0, 0).
         let column = (column - (i64::from(self.square.x) - 1) * side).rem_euclid(world_columns);
         let row = row_from_north - (i64::from(self.square.y) - 1) * side;
@@ -1122,9 +1123,9 @@ mod tests {
         let brute = |at: (i32, i32), radius_m: f64| {
             let reach = (radius_m / metres_per_z30(at.1) / CELL_Z30 as f64).round() as i64;
             let column = i64::from(at.0) / CELL_Z30;
-            let row = (i64::from(Z9_PER_AXIS) * SQUARE_Z30 - 1 - i64::from(at.1)) / CELL_Z30;
+            let row = (i64::from(SQUARES_PER_AXIS) * SQUARE_Z30 - 1 - i64::from(at.1)) / CELL_Z30;
             let side = GRID_SIDE as i64;
-            let world_columns = i64::from(Z9_PER_AXIS) * side;
+            let world_columns = i64::from(SQUARES_PER_AXIS) * side;
             let mut sum = 0.0;
             for r in row - reach..=row + reach {
                 for c in column - reach..=column + reach {
@@ -1140,7 +1141,7 @@ mod tests {
             }
             sum
         };
-        let north = (i64::from(Z9_PER_AXIS) - 200) * SQUARE_Z30;
+        let north = (i64::from(SQUARES_PER_AXIS) - 200) * SQUARE_Z30;
         for (dx, dy, radius) in [
             (3, 5, 1_000.0),
             (250, 3, 5_000.0),

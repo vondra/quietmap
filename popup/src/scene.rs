@@ -8,13 +8,14 @@ use physics::profile::{FINE_ENDS_M, Profile};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tiles::Kind;
 use tiles::geo::{LocalFrame, Mercator, TILES_PER_AXIS, TileId};
+use tiles::square::read_tile;
 use tiles::terrain::{
     GroundSample, HEIGHT_MISSING, NODES_PER_DEGREE, Node, NodePosition, OCEAN, PERCENT_MAX,
     Terrain, height_m_of_code,
 };
 use tiles::terrain_fine::{FINE_PER_NODE, FineTerrain, fine_window};
-use tiles::{Kind, tile_path};
 
 /// Lattice columns around the globe.
 const COLUMNS_AROUND: i64 = 360 * NODES_PER_DEGREE as i64;
@@ -88,7 +89,7 @@ impl Ground {
         self.tiles[slot] = Some(terrain);
     }
 
-    /// The fine terrain files and bytes read so far.
+    /// The fine terrain tiles and bytes read so far.
     pub fn fine_read(&self) -> (u64, u64) {
         let [files, bytes] = &self.fine_read;
         (files.load(Ordering::Relaxed), bytes.load(Ordering::Relaxed))
@@ -105,21 +106,20 @@ impl Ground {
             .ok_or_else(|| format!("fine terrain of tile {tile:?} outside the scene"))?;
         self.fine[slot]
             .get_or_init(|| {
-                let path = tile_path(root, tile, Kind::TerrainFine);
-                let bytes = match std::fs::read(&path) {
-                    Ok(bytes) => bytes,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                    Err(error) => return Err(format!("{}: {error}", path.display())),
+                let Some(bytes) = read_tile(root, tile, Kind::TerrainFine)? else {
+                    return Ok(None);
                 };
                 self.fine_read[0].fetch_add(1, Ordering::Relaxed);
                 self.fine_read[1].fetch_add(bytes.len() as u64, Ordering::Relaxed);
                 let fine = FineTerrain::parse(bytes)
-                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                    .map_err(|error| format!("fine terrain of {tile:?}: {error}"))?;
                 let coarse = self
                     .terrain_of(tile)?
-                    .ok_or_else(|| format!("{}: fine terrain over the ocean", path.display()))?;
+                    .ok_or_else(|| format!("fine terrain of {tile:?} over the ocean"))?;
                 if fine.window() != fine_window(coarse.window()) {
-                    return Err(format!("{}: not its terrain tile's window", path.display()));
+                    return Err(format!(
+                        "fine terrain of {tile:?}: not its terrain tile's window"
+                    ));
                 }
                 Ok(Some(fine))
             })

@@ -58,7 +58,7 @@ export function popupUpdate(
       l50: { day: db - 2, evening: db - 3, night: db - 9 },
       l90: { day: db - 6, evening: db - 7, night: db - 15 },
     },
-    stats: { rings: seq, files: 27, bytes: 1e6, read_ms: 3, candidate_ms: 4, evaluate_ms: 20, elapsed_ms: 30 },
+    stats: { rings: seq, reads: 27, bytes: 1e6, read_ms: 3, candidate_ms: 4, evaluate_ms: 20, elapsed_ms: 30 },
   }
 }
 

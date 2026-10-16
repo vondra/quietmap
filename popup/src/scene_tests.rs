@@ -288,6 +288,7 @@ fn fine_root(
         std::process::id(),
         ROOTS.fetch_add(1, Ordering::Relaxed)
     ));
+    let mut fine_tiles = Vec::new();
     for (tile, bytes) in &fixture.tiles {
         if bytes.is_none() || !fine(*tile) {
             continue;
@@ -302,10 +303,9 @@ fn fine_root(
                 ))
             })
             .collect();
-        let path = tile_path(&root, *tile, Kind::TerrainFine);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, tiles::terrain_fine::encode(window, &details)).unwrap();
+        fine_tiles.push((*tile, tiles::terrain_fine::encode(window, &details)));
     }
+    tiles::square::write_tiles(&root, Kind::TerrainFine, &fine_tiles).unwrap();
     root
 }
 

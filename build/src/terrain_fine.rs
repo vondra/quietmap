@@ -6,13 +6,13 @@
 //! the model's own datum cancels (`fetch/national-dem.sh` keeps its heights for this). Every node
 //! is computed from global lattice indices alone, so a node two tiles share gets one code.
 
-use crate::dev4::{Square, Z9_PER_AXIS};
-use crate::output::write_tile;
+use crate::dev4::{SQUARES_PER_AXIS, Square};
 use crate::terrain::national::{Raster, distances_to_missing};
 use rayon::prelude::*;
 use std::path::Path;
 use tiles::Kind;
 use tiles::geo::TileId;
+use tiles::square::{TILES_PER_SQUARE, tiles_held, write_square};
 use tiles::terrain::Window;
 use tiles::terrain_fine::{FINE_NODES_PER_DEGREE, FINE_PER_NODE, detail_code, encode, fine_window};
 
@@ -180,11 +180,12 @@ fn check_raster_around(
         for (dx, &(west, east)) in columns.iter().enumerate() {
             // x wraps at the antimeridian; beyond a pole there is no square.
             let y = i64::from(square.y) + dy as i64 - 1;
-            if (dx, dy) == (1, 1) || !(0..i64::from(Z9_PER_AXIS)).contains(&y) {
+            if (dx, dy) == (1, 1) || !(0..i64::from(SQUARES_PER_AXIS)).contains(&y) {
                 continue;
             }
             let neighbour = Square {
-                x: (i64::from(square.x) + dx as i64 - 1).rem_euclid(i64::from(Z9_PER_AXIS)) as u32,
+                x: (i64::from(square.x) + dx as i64 - 1).rem_euclid(i64::from(SQUARES_PER_AXIS))
+                    as u32,
                 y: y as u32,
             };
             if has_raster(neighbour) {
@@ -219,8 +220,8 @@ fn fine_details(tile: TileId, models: &[Model]) -> Option<Vec<i16>> {
     any.then_some(details)
 }
 
-/// Writes the fine terrain tiles of `squares` (land tiles: those with a `terrain` file in
-/// `terrain_root`) a model has detail in; returns the number written. Each model is a directory of
+/// Writes the fine terrain of `squares`, a file a square: its land tiles (those holding terrain in
+/// `terrain_root`) a model has detail in; returns the number of tiles written. Each model is a directory of
 /// 1/6" rasters, one a z9 square (`<x9>_<y9>.tif`), each bracketing its tiles' fine windows and
 /// `RASTER_MARGIN_NODES` more.
 pub fn build(
@@ -256,29 +257,18 @@ pub fn build(
         if rasters.is_empty() {
             continue;
         }
-        written += (0..64u32)
+        let land = tiles_held(terrain_root, Kind::Terrain, square)?;
+        let tiles: Vec<(TileId, Vec<u8>)> = (0..TILES_PER_SQUARE)
             .into_par_iter()
-            .map(|i| {
-                let tile = TileId {
-                    x: square.x * 8 + i % 8,
-                    y: square.y * 8 + i / 8,
-                };
-                let land = tiles::tile_path(terrain_root, tile, Kind::Terrain);
-                match std::fs::metadata(&land) {
-                    Ok(_) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-                    Err(error) => return Err(format!("{}: {error}", land.display())),
-                }
-                let Some(details) = fine_details(tile, &rasters) else {
-                    return Ok(0);
-                };
-                let window = fine_window(Window::of_tile(tile));
-                write_tile(out, tile, Kind::TerrainFine, &encode(window, &details))?;
-                Ok(1)
+            .filter(|&index| land[index])
+            .filter_map(|index| {
+                let tile = square.tile(index);
+                let details = fine_details(tile, &rasters)?;
+                Some((tile, encode(fine_window(Window::of_tile(tile)), &details)))
             })
-            .collect::<Result<Vec<usize>, String>>()?
-            .into_iter()
-            .sum::<usize>();
+            .collect();
+        write_square(out, Kind::TerrainFine, square, &tiles)?;
+        written += tiles.len();
     }
     Ok(written)
 }

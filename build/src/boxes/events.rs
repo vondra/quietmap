@@ -15,7 +15,6 @@ use super::read::{FLAG_SECONDARY_ONLY, FlightSegment};
 use super::shuffle::{self, DayRoles};
 use super::{emission_of, place_atmosphere};
 use crate::dev4::Square;
-use crate::output::write_tile;
 use physics::bands::PERIODS;
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
@@ -27,6 +26,7 @@ use std::path::Path;
 pub use tiles::aircraft_events::{BANDS, EVENT_BANDS_DB};
 use tiles::aircraft_events::{BandCell, CELLS_PER_SIDE, EventCell, encode};
 use tiles::geo::{LocalFrame, Mercator, TILES_PER_AXIS, TileId};
+use tiles::square::{SquareWriter, read_held};
 use tiles::terrain::Terrain;
 
 /// A flight's moment at a receiver: its maximum level, the period it falls in and the aircraft's
@@ -220,17 +220,7 @@ const BLOCKS: usize = CELLS / BLOCK;
 impl Receivers {
     fn new(square: Square, terrain_root: &Path) -> Result<Self, String> {
         let (west, north) = (f64::from(square.x * 8), f64::from(square.y * 8));
-        let mut terrain_bytes = HashMap::new();
-        for index in 0..64 {
-            let tile = TileId {
-                x: square.x * 8 + index % 8,
-                y: square.y * 8 + index / 8,
-            };
-            let path = tiles::tile_path(terrain_root, tile, tiles::Kind::Terrain);
-            if let Ok(bytes) = std::fs::read(path) {
-                terrain_bytes.insert(tile, bytes);
-            }
-        }
+        let terrain_bytes = read_held(terrain_root, tiles::Kind::Terrain, square.tiles())?;
         let terrain: HashMap<TileId, Terrain> = terrain_bytes
             .iter()
             .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
@@ -661,7 +651,7 @@ pub fn build_square(
             }
         }
     }
-    let mut written = 0;
+    let mut writer = SquareWriter::create(out, tiles::Kind::AircraftEvents, square)?;
     for tile_index in 0..64 {
         let (tile_column, tile_row) = (tile_index % 8, tile_index / 8);
         let cells: Vec<EventCell> = (0..CELLS_PER_SIDE * CELLS_PER_SIDE)
@@ -674,14 +664,9 @@ pub fn build_square(
         if cells.iter().all(|cell| cell.bands[0].per_day == 0.0) {
             continue;
         }
-        let tile = TileId {
-            x: square.x * 8 + tile_column as u32,
-            y: square.y * 8 + tile_row as u32,
-        };
-        write_tile(out, tile, tiles::Kind::AircraftEvents, &encode(&cells))?;
-        written += 1;
+        writer.add(square.tile(tile_index), &encode(&cells))?;
     }
-    Ok(written)
+    writer.finish()
 }
 
 #[cfg(test)]
@@ -772,8 +757,9 @@ mod tests {
         .unwrap();
         assert!(written >= 1);
         let tile = TileId::containing(cell);
-        let path = tiles::tile_path(&out, tile, tiles::Kind::AircraftEvents);
-        let bytes = tiles::read::read_tile(&path).unwrap().unwrap();
+        let bytes = tiles::square::read_tile(&out, tile, tiles::Kind::AircraftEvents)
+            .unwrap()
+            .unwrap();
         let events = AircraftEvents::parse(&bytes).unwrap();
         let heard = events.cell(column % CELLS_PER_SIDE, row % CELLS_PER_SIDE);
         // The night pass overhead: its segment over the cell, 596 m above the receiver.
@@ -809,7 +795,10 @@ mod tests {
             x: square.x * 8 + 7,
             y: tile.y,
         };
-        assert!(!tiles::tile_path(&out, far, tiles::Kind::AircraftEvents).exists());
+        assert_eq!(
+            tiles::square::read_tile(&out, far, tiles::Kind::AircraftEvents).unwrap(),
+            None
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

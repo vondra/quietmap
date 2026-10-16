@@ -8,11 +8,11 @@ use physics::weather::{COLUMNS, ROWS, SECTORS, WeatherNode, encode as encode_wea
 use popup::answer::{Options, answer};
 use popup::release::Release;
 use std::path::{Path, PathBuf};
+use tiles::Kind;
 use tiles::geo::{LocalFrame, TileId};
 use tiles::obstacles::{EnvelopeClass, Outline, OutlineKind, encode as encode_obstacles};
 use tiles::sources::{Attribute, Deck, Layer, Piece, encode};
-use tiles::write_tile;
-use tiles::{COMPLETION_MARKER, Kind};
+use tiles::square::write_tiles;
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };
 
@@ -73,11 +73,10 @@ fn write_roads_on(root: &Path, distances: &[f64], separate: bool, deck_m: Option
                 .collect()
         })
         .unwrap_or_default();
-    write_tile(
+    write_tiles(
         &root.join("2026"),
-        TILE,
         Kind::Sources,
-        &encode(&pieces, &attributes, &decks),
+        &[(TILE, encode(&pieces, &attributes, &decks))],
     )
     .unwrap();
 }
@@ -97,11 +96,10 @@ fn write_building(root: &Path) {
         height_m: 15.0,
         vertices: vec![[-s, s], [s, s], [s, -s], [-s, -s], [-s, s]],
     };
-    write_tile(
+    write_tiles(
         &root.join("2026"),
-        TILE,
         Kind::Obstacles,
-        &encode_obstacles(&[outline]),
+        &[(TILE, encode_obstacles(&[outline]))],
     )
     .unwrap();
 }
@@ -174,7 +172,7 @@ fn the_fast_answer_is_within_a_tenth_of_a_decibel_of_the_exact_one() {
         .filter(|d| *d < 2_900.0)
         .collect();
     write_roads(&root, &distances, false);
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (exact, exact_count, contributors) = road_answer(&release, true);
     let (fast, fast_count, _) = road_answer(&release, false);
@@ -197,7 +195,7 @@ fn the_last_row_counts_the_sources_the_list_leaves_out() {
     let root = release_root("rest");
     let distances: Vec<f64> = (0..40).map(|i| 30.0 + 20.0 * f64::from(i)).collect();
     write_roads(&root, &distances, true);
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (lat, lon) = TILE.centre().to_degrees();
     let mut last = None;
@@ -233,7 +231,7 @@ fn a_road_on_a_bridge_emits_from_its_deck() {
     for (name, deck_m) in [("ground", None), ("deck", Some([30.0, 50.0]))] {
         let root = release_root(name);
         write_roads_on(&root, &[30.0], false, deck_m);
-        std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+        tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
         let release = Release::open(&root, "2026").unwrap();
         let (lat, lon) = TILE.centre().to_degrees();
         let mut pieces = Vec::new();
@@ -275,7 +273,7 @@ fn a_road_on_a_bridge_emits_from_its_deck() {
 fn an_asked_source_lists_every_piece_of_it() {
     let root = release_root("listed");
     write_roads(&root, &[30.0, 60.0, 90.0, 120.0], false);
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (lat, lon) = TILE.centre().to_degrees();
     let mut last = None;
@@ -325,7 +323,7 @@ fn a_click_inside_a_building_answers_at_the_facade_facing_the_road() {
     let root = release_root("building");
     write_roads(&root, &[40.0], false);
     write_building(&root);
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (inside, bearing) = click(&release, 0.0);
     let bearing = bearing.expect("the click stands in the building");
@@ -369,14 +367,13 @@ fn a_source_on_the_edge_of_the_read_block_is_answered() {
             attribute: 0,
         })
         .collect();
-    write_tile(
+    write_tiles(
         &root.join("2026"),
-        north,
         Kind::Sources,
-        &encode(&pieces, &attributes, &[]),
+        &[(north, encode(&pieces, &attributes, &[]))],
     )
     .unwrap();
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let mut building_energy = 0.0;
     answer(
@@ -438,14 +435,13 @@ fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
             display: vec![serde_json::Value::from("point")],
         })
         .collect();
-    write_tile(
+    write_tiles(
         &root.join("2026"),
-        TILE,
         Kind::Sources,
-        &encode(&pieces, &attributes, &[]),
+        &[(TILE, encode(&pieces, &attributes, &[]))],
     )
     .unwrap();
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let industry = |exact: bool| {
         let (lat, lon) = TILE.centre().to_degrees();
@@ -535,14 +531,13 @@ fn a_sampled_layer_sounds_as_the_exact_one() {
             display: vec![serde_json::Value::from("point")],
         })
         .collect();
-    write_tile(
+    write_tiles(
         &root.join("2026"),
-        TILE,
         Kind::Sources,
-        &encode(&pieces, &attributes, &[]),
+        &[(TILE, encode(&pieces, &attributes, &[]))],
     )
     .unwrap();
-    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let sone = |exact: bool| {
         let (lat, lon) = TILE.centre().to_degrees();

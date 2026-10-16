@@ -26,6 +26,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tiles::geo::{Mercator, TileId};
+use tiles::square::read_held;
 use tiles::terrain::Terrain;
 
 /// Loudest pieces a box keeps for the top-flights list (PLAN section 5: K starts at 2), one per
@@ -381,13 +382,7 @@ pub fn build_square(
         near.extend(tile.ring(0));
         near.extend(tile.ring(1));
     }
-    let bytes: Vec<(TileId, Vec<u8>)> = near
-        .iter()
-        .filter_map(|&tile| {
-            let path = tiles::tile_path(terrain_root, tile, tiles::Kind::Terrain);
-            std::fs::read(path).ok().map(|bytes| (tile, bytes))
-        })
-        .collect();
+    let bytes = read_held(terrain_root, tiles::Kind::Terrain, near.iter().copied())?;
     let terrain: HashMap<TileId, Terrain> = bytes
         .iter()
         .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
@@ -417,7 +412,7 @@ pub fn build_square(
             rule.pieces,
         );
     }
-    let written = write::write_tiles(&boxes, &placement, rule.kind, out)?;
+    let written = write::write_square_boxes(&boxes, &placement, (rule.kind, square), out)?;
     Ok((written, boxes.len()))
 }
 

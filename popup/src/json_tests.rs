@@ -50,7 +50,7 @@ fn streamed_loudness_shares_do_not_cross_the_list_cutoff_by_rounding() {
         arrival: None,
         statistics: Statistics {
             rings_read: 1,
-            files: 0,
+            reads: 0,
             bytes: 0,
             read_seconds: 0.0,
             candidate_seconds: 0.0,

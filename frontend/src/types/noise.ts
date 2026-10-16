@@ -182,7 +182,7 @@ export interface PopupLoudness {
 /** What the click read and computed so far. */
 export interface PopupStats {
   rings: number
-  files: number
+  reads: number
   bytes: number
   read_ms: number
   candidate_ms: number

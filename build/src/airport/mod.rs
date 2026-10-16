@@ -195,8 +195,9 @@ pub fn day_weights(window: &Window, day: &str) -> (f64, f64) {
 
 /// The z9 square holding a point (latitude, longitude).
 fn square_of(point: [f64; 2]) -> Square {
-    let (x, y) = TileId::containing(Mercator::from_degrees(point[0], point[1])).z9();
-    Square { x, y }
+    Square::of(TileId::containing(Mercator::from_degrees(
+        point[0], point[1],
+    )))
 }
 
 /// The traffic pass: the lines of `squares` and their neighbours (a leg is shared among every line
@@ -303,7 +304,8 @@ pub fn build(
         window.baseline_days.len(),
         window.increment_days.len()
     );
-    crate::output::mark_complete(out, &note)?;
+    let marker = out.join(COMPLETION_MARKER);
+    std::fs::write(&marker, note).map_err(|error| format!("{}: {error}", marker.display()))?;
     Ok(by_square.len())
 }
 

@@ -11,6 +11,7 @@ use physics::doc29::screening::Unscreened;
 use physics::doc29::segment::{SegmentGeometry, segment_sel_at_receiver};
 use tiles::aircraft::Aircraft;
 use tiles::geo::LocalFrame;
+use tiles::square::read_tile;
 
 const PRAGUE: TileId = TileId { x: 2212, y: 1387 };
 
@@ -130,18 +131,18 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     let out = std::env::temp_dir().join(format!("qm-boxes-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
     assert!(
-        write::write_tiles(&boxes, &placement, tiles::Kind::Aircraft, &out).unwrap() >= 2,
+        write::write_square_boxes(
+            &boxes,
+            &placement,
+            (tiles::Kind::Aircraft, Square::of(PRAGUE)),
+            &out
+        )
+        .unwrap()
+            >= 2,
         "the corridor crosses tiles"
     );
-    let files: Vec<(TileId, Vec<u8>)> = scope
-        .iter()
-        .filter_map(|&tile| {
-            tiles::read::read_tile(&tiles::tile_path(&out, tile, tiles::Kind::Aircraft))
-                .unwrap()
-                .map(|bytes| (tile, bytes))
-        })
-        .collect();
-    let bytes = tiles::read::read_tile(&tiles::tile_path(&out, PRAGUE, tiles::Kind::Aircraft))
+    let files = read_held(&out, tiles::Kind::Aircraft, scope.iter().copied()).unwrap();
+    let bytes = read_tile(&out, PRAGUE, tiles::Kind::Aircraft)
         .unwrap()
         .unwrap();
     let aircraft = Aircraft::parse(&bytes).unwrap();

@@ -1,5 +1,5 @@
 //! What flies over the receiver: the `aircraft-events` cells around it in its tile (flights a day
-//! above 50, 60 and 70 dB, of them at night, their height and type; one file, read whole).
+//! above 50, 60 and 70 dB, of them at night, their height and type; one tile, read whole).
 
 use std::path::Path;
 use tiles::aircraft_events::{AircraftEvents, BANDS, BandCell, CELLS_PER_SIDE, EventCell};
@@ -7,12 +7,12 @@ use tiles::geo::{Mercator, TileId};
 
 /// What flies over `position` under `year_root` and the bytes read: the counts blended bilinearly
 /// over the four nearest cell centres of its tile (clamped at the tile's edge), the heights by the
-/// blended counts, the type of the nearest cell. A tile without a file has no flight above 50 dB
-/// (the year root is complete).
+/// blended counts, the type of the nearest cell. A tile with nothing of the kind has no flight above
+/// 50 dB (the year root is complete).
 pub fn events_at(year_root: &Path, position: Mercator) -> Result<(EventCell, u64), String> {
     let tile = TileId::containing(position);
-    let path = tiles::tile_path(year_root, tile, tiles::Kind::AircraftEvents);
-    let Some(bytes) = tiles::read::read_tile(&path)? else {
+    let Some(bytes) = tiles::square::read_tile(year_root, tile, tiles::Kind::AircraftEvents)?
+    else {
         return Ok((EventCell::default(), 0));
     };
     let events = AircraftEvents::parse(&bytes).map_err(|error| error.to_string())?;
@@ -93,11 +93,10 @@ mod tests {
         };
         cells[5 * CELLS_PER_SIDE + 5].bands[0] = band(100.0, 600, b"A320");
         cells[5 * CELLS_PER_SIDE + 6].bands[0] = band(300.0, 200, b"B738");
-        tiles::write_tile(
+        tiles::square::write_tiles(
             &root,
-            tile,
             tiles::Kind::AircraftEvents,
-            &tiles::aircraft_events::encode(&cells),
+            &[(tile, tiles::aircraft_events::encode(&cells))],
         )
         .unwrap();
         // A quarter of the way from cell (5, 5)'s centre towards (6, 5)'s.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Cold popup benchmark: for every benchmark point, evict every file its click can read from the
-page cache (its tiles of every kind, the flight tracks, the weather table; posix_fadvise DONTNEED,
-residency checked with mincore), run `qm-popup` and record the time to the first and the full
-answer, bytes and files read, and the levels per layer.
+page cache (the square files of its tiles of every kind, the flight tracks, the weather table;
+posix_fadvise DONTNEED, residency checked with mincore), run `qm-popup` and record the time to the
+first and the full answer, bytes and reads, and the levels per layer.
 
 usage: cold.py --prepared DIR --year YYYY [--points bench/points.json] [--only a,b] [--repeat 3]
                [--exact] [--popup target/release/qm-popup]
@@ -34,23 +34,28 @@ def tile_of(lat, lon, zoom=12):
     return x, min(max(y, 0), n - 1)
 
 
-def tile_files(year_root, lat, lon):
+def square_files(year_root, lat, lon):
+    """The files of every kind of the z9 squares holding the tiles within EVICT_RINGS of the click's
+    (`tiles::square`: `<year root>/<kind>/<x9>_<y9>.<kind>`)."""
     cx, cy = tile_of(lat, lon)
     n = 4096
+    squares = set()
     for dy in range(-EVICT_RINGS, EVICT_RINGS + 1):
         for dx in range(-EVICT_RINGS, EVICT_RINGS + 1):
             x, y = (cx + dx) % n, cy + dy
-            if not 0 <= y < n:
-                continue
-            for kind in KINDS:
-                path = year_root / str(x >> 3) / str(y >> 3) / f"{x}_{y}.{kind}"
-                if path.exists():
-                    yield path
+            if 0 <= y < n:
+                squares.add((x >> 3, y >> 3))
+    for kind in KINDS:
+        for x9, y9 in sorted(squares):
+            path = year_root / kind / f"{x9}_{y9}.{kind}"
+            if path.exists():
+                yield path
 
 
 def click_files(prepared, year, lat, lon):
-    """Every file a click at (lat, lon) can read: its tiles, the flight tracks and the weather."""
-    yield from tile_files(prepared / year, lat, lon)
+    """Every file a click at (lat, lon) can read: its squares' files, the flight tracks and the
+    weather."""
+    yield from square_files(prepared / year, lat, lon)
     yield from sorted((prepared / year / "aircraft-tracks").glob("*.aircraft-tracks"))
     if (prepared / "weather").exists():
         yield prepared / "weather"
@@ -118,10 +123,10 @@ def summary(point, lines, resident_before, repeat, exact):
         "full_wall_ms": round(lines[-1][0] * 1000),
         "first_mb": round(first["stats"]["bytes"] / 1e6, 2),
         "full_mb": round(last["stats"]["bytes"] / 1e6, 2),
-        "first_files": first["stats"]["files"],
+        "first_reads": first["stats"]["reads"],
         "first_read_ms": first["stats"]["read_ms"],
         "full_read_ms": last["stats"]["read_ms"],
-        "full_files": last["stats"]["files"],
+        "full_reads": last["stats"]["reads"],
         "rings": last["stats"]["rings"],
         "total_lden": last["total_lden"],
         "first_total_lden": first["total_lden"],

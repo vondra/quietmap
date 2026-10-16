@@ -47,7 +47,6 @@ mod climate;
 mod dev4;
 mod low_profile;
 mod obstacles;
-mod output;
 mod period;
 mod screening;
 mod sources;
@@ -95,8 +94,8 @@ impl Arguments {
 /// (the same pairs, by commas or lines: a world's list is too long for one argument).
 fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
     if text == "all" {
-        return Ok((0..dev4::Z9_PER_AXIS)
-            .flat_map(|x| (0..dev4::Z9_PER_AXIS).map(move |y| Square { x, y }))
+        return Ok((0..dev4::SQUARES_PER_AXIS)
+            .flat_map(|x| (0..dev4::SQUARES_PER_AXIS).map(move |y| Square { x, y }))
             .collect());
     }
     if let Some(path) = text.strip_prefix('@') {
@@ -280,7 +279,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             );
             Ok(())
         }
-        "complete" => output::mark_complete(&out, options.get("note")?),
+        "complete" => tiles::mark_year_complete(&out, options.get("note")?),
         "geoid" => aircraft::geoid::build(Path::new(options.get("tiff")?), &out),
         "aircraft-segments" => {
             if let Some(threads) = options.optional("threads") {

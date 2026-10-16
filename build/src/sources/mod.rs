@@ -37,13 +37,13 @@ pub mod worship;
 
 use crate::climate::Climate;
 use crate::dev4::{Dev4, Square};
-use crate::output::write_tile;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use tent::FreightNetwork;
 use tiles::geo::{GlobalSteps, TileId};
 use tiles::sources::{Attribute, Deck, Piece, attribute_key, encode};
+use tiles::square::SquareWriter;
 use tiles::{COMPLETION_MARKER, Kind};
 
 /// int16 steps per tile and the world's width in steps.
@@ -253,8 +253,8 @@ pub fn build(
     Ok(built.iter().map(|&(tiles, _)| tiles).sum())
 }
 
-/// The sources tiles of one square (the squares build in parallel, each within its own memory),
-/// and the count of its decks.
+/// The sources of one square as its file (the squares build in parallel, each within its own
+/// memory): the tiles written and the count of its decks.
 fn build_square(
     (dev4, climate, network, turbines): (&Dev4, &Climate, &FreightNetwork, &turbines::Turbines),
     (airport_traffic, road_traffic, bus, places): (
@@ -266,7 +266,7 @@ fn build_square(
     square: Square,
     out: &Path,
 ) -> Result<(usize, decks::DeckCounts), String> {
-    let owned = |item: &Converted| (item.tile.x >> 3, item.tile.y >> 3) == (square.x, square.y);
+    let owned = |item: &Converted| Square::of(item.tile) == square;
     let mut converted = Vec::new();
     let reach = Reach::of_square(square);
     let decks = decks::Decks::of_square(dev4, square, out)?;
@@ -298,8 +298,11 @@ fn build_square(
     for item in converted {
         by_tile.entry(item.tile).or_default().push(item);
     }
-    let mut written = 0;
-    for (tile, items) in by_tile {
+    let mut writer = SquareWriter::create(out, Kind::Sources, square)?;
+    for tile in square.tiles() {
+        let Some(items) = by_tile.remove(&tile) else {
+            continue;
+        };
         let mut attributes: Vec<Attribute> = Vec::new();
         let mut index: HashMap<Vec<u8>, u32> = HashMap::new();
         let mut pieces = Vec::with_capacity(items.len());
@@ -323,15 +326,9 @@ fn build_square(
             }
             pieces.push(Piece { ends, attribute });
         }
-        write_tile(
-            out,
-            tile,
-            Kind::Sources,
-            &encode(&pieces, &attributes, &decks),
-        )?;
-        written += 1;
+        writer.add(tile, &encode(&pieces, &attributes, &decks))?;
     }
-    Ok((written, decks.counts))
+    Ok((writer.finish()?, decks.counts))
 }
 
 #[cfg(test)]

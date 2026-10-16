@@ -24,6 +24,7 @@ use report::report;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tiles::geo::{LocalFrame, Mercator, TileId};
+use tiles::square::{read_held, read_tile};
 use tiles::terrain::Terrain;
 
 /// Aircraft within this horizontal distance of a point count (the popup's reach).
@@ -214,13 +215,7 @@ pub fn compare(
             near.extend(TileId::containing(receiver.frame.origin).ring(ring));
         }
     }
-    let bytes: Vec<(TileId, Vec<u8>)> = near
-        .iter()
-        .filter_map(|&tile| {
-            let path = tiles::tile_path(terrain_root, tile, tiles::Kind::Terrain);
-            std::fs::read(path).ok().map(|bytes| (tile, bytes))
-        })
-        .collect();
+    let bytes = read_held(terrain_root, tiles::Kind::Terrain, near.iter().copied())?;
     let terrain: HashMap<TileId, Terrain> = bytes
         .iter()
         .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
@@ -316,20 +311,20 @@ pub fn compare(
 /// The ground under a point from the prepared terrain (0 at sea or where none was read).
 pub fn ground_at(terrain_root: &Path, point: (f64, f64)) -> f64 {
     let position = Mercator::from_degrees(point.0, point.1);
-    let path = tiles::tile_path(
+    read_tile(
         terrain_root,
         TileId::containing(position),
         tiles::Kind::Terrain,
-    );
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| {
-            Terrain::parse(&bytes)
-                .ok()
-                .and_then(|terrain| terrain.sample(position))
-                .map(|sample| sample.height_m)
-        })
-        .unwrap_or(0.0)
+    )
+    .ok()
+    .flatten()
+    .and_then(|bytes| {
+        Terrain::parse(&bytes)
+            .ok()
+            .and_then(|terrain| terrain.sample(position))
+            .map(|sample| sample.height_m)
+    })
+    .unwrap_or(0.0)
 }
 
 #[cfg(test)]

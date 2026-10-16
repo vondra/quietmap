@@ -49,16 +49,7 @@ fn read_rings(
     kind: tiles::Kind,
 ) -> Result<RingFiles, String> {
     (0..=REACH_RINGS)
-        .map(|ring| {
-            let mut files = Vec::new();
-            for tile in centre.ring(ring) {
-                let path = tiles::tile_path(aircraft_root, tile, kind);
-                if let Some(bytes) = tiles::read::read_tile(&path)? {
-                    files.push((tile, bytes));
-                }
-            }
-            Ok(files)
-        })
+        .map(|ring| tiles::square::read_held(aircraft_root, kind, centre.ring(ring)))
         .collect()
 }
 

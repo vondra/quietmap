@@ -5,13 +5,13 @@
 pub mod national;
 
 use crate::dev4::{Dev4, Square, z9_raster_window};
-use crate::output::write_tile;
 use national::NationalHeights;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
 use tiles::Kind;
 use tiles::geo::{Mercator, TileId};
+use tiles::square::write_square;
 use tiles::terrain::{
     HEIGHT_MISSING, NODES_PER_DEGREE, Node, Window, code_of_height_m, encode, height_m_of_code,
 };
@@ -107,8 +107,8 @@ fn with_national(mut node: Node, north: i32, east: i32, national: &[NationalHeig
     node
 }
 
-/// Writes the terrain tiles of `squares`, the `national` models laid over dev4's heights; returns
-/// the number written (all-ocean tiles are absent).
+/// Writes the terrain of `squares`, a file a square, the `national` models laid over dev4's
+/// heights; returns the number of tiles written (all-ocean tiles are absent).
 pub fn build(
     dev4: &Dev4,
     squares: &[Square],
@@ -122,13 +122,8 @@ pub fn build(
             rasters.insert(neighbour, SquareRaster::load(dev4, neighbour)?);
         }
         let own = &rasters[&square];
-        let children: Vec<TileId> = (0..64)
-            .map(|i| TileId {
-                x: square.x * 8 + i % 8,
-                y: square.y * 8 + i / 8,
-            })
-            .collect();
-        written += children
+        let children: Vec<TileId> = square.tiles().collect();
+        let tiles = children
             .par_iter()
             .map(|&tile| {
                 let window = Window::of_tile(tile);
@@ -147,14 +142,16 @@ pub fn build(
                     }
                 }
                 if nodes.iter().all(|node| *node == OCEAN_NODE) {
-                    return Ok(0);
+                    return Ok(None);
                 }
-                write_tile(out, tile, Kind::Terrain, &encode(window, &nodes))?;
-                Ok(1)
+                Ok(Some((tile, encode(window, &nodes))))
             })
-            .collect::<Result<Vec<usize>, String>>()?
+            .collect::<Result<Vec<_>, String>>()?
             .into_iter()
-            .sum::<usize>();
+            .flatten()
+            .collect::<Vec<_>>();
+        write_square(out, Kind::Terrain, square, &tiles)?;
+        written += tiles.len();
     }
     Ok(written)
 }

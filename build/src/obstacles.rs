@@ -8,7 +8,6 @@
 
 use crate::barriers::Barriers;
 use crate::dev4::{Dev4, Square};
-use crate::output::write_tile;
 use crate::screening::ScreeningOutline;
 use crate::structures::read_square;
 use rayon::prelude::*;
@@ -20,15 +19,14 @@ use tiles::geo::{GlobalSteps, STEPS_PER_TILE, TileId};
 use tiles::obstacles::{
     MAXIMUM_HEIGHT_M, MAXIMUM_VERTICES, Outline, OutlineKind, encode, tiles_crossed,
 };
+use tiles::square::{TILES_PER_SIDE, write_square};
 
-/// z12 tiles per z9 square side.
-const TILES_PER_SQUARE_SIDE: u32 = 8;
 /// Squares built at once: each holds the outlines of nine squares (up to about 2 GB in a dense
 /// city), and its reading is serial.
 const SQUARES_AT_ONCE: usize = 8;
 
-/// Writes the obstacles tiles of `squares`, [`SQUARES_AT_ONCE`] at a time; returns the number
-/// written (empty tiles get no file).
+/// Writes the obstacles of `squares`, a file a square, [`SQUARES_AT_ONCE`] at a time; returns the
+/// number of tiles written (empty tiles take no bytes).
 pub fn build(
     dev4: &Dev4,
     barriers: &Barriers,
@@ -59,14 +57,14 @@ pub fn build(
     })
 }
 
-/// Writes the obstacles tiles of one square; returns the number written.
+/// Writes the obstacles of one square as its file; returns the number of tiles written.
 fn build_square(
     dev4: &Dev4,
     barriers: &Barriers,
     square: Square,
     out: &Path,
 ) -> Result<usize, String> {
-    let side = i64::from(TILES_PER_SQUARE_SIDE) * STEPS_PER_TILE as i64;
+    let side = i64::from(TILES_PER_SIDE) * STEPS_PER_TILE as i64;
     let (west, north) = (i64::from(square.x) * side, i64::from(square.y) * side);
     // An outline can cross the square's cells only if its box meets the square's.
     let near = |vertices: &[GlobalSteps]| {
@@ -100,21 +98,17 @@ fn build_square(
         .collect();
     let mut members: HashMap<TileId, Vec<usize>> = HashMap::new();
     for (index, tiles) in crossed.iter().enumerate() {
-        for &tile in tiles
-            .iter()
-            .filter(|tile| (tile.x >> 3, tile.y >> 3) == (square.x, square.y))
-        {
+        for &tile in tiles.iter().filter(|&&tile| Square::of(tile) == square) {
             members.entry(tile).or_default().push(index);
         }
     }
     drop(crossed);
-    members
+    let tiles: Vec<(TileId, Vec<u8>)> = members
         .par_iter()
-        .map(|(&tile, members)| {
-            let bytes = encode(&tile_outlines(tile, &outlines, members)?);
-            write_tile(out, tile, Kind::Obstacles, &bytes).map(|()| 1)
-        })
-        .sum()
+        .map(|(&tile, members)| Ok((tile, encode(&tile_outlines(tile, &outlines, members)?))))
+        .collect::<Result<_, String>>()?;
+    write_square(out, Kind::Obstacles, square, &tiles)?;
+    Ok(tiles.len())
 }
 
 /// A tile's outlines in its int16 frame, sorted by footprint id with each footprint's rings in

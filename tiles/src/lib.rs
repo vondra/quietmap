@@ -1,7 +1,7 @@
-//! Prepared z12 tiles: numbering and coordinates ([`geo`]) and one module per kind with its
-//! file format, writer and reader ([`terrain`], [`terrain_fine`], [`obstacles`], [`sources`],
-//! [`aircraft`]); [`read`] reads whole files, [`write_tile`] writes one; [`aircraft_tracks`] holds
-//! the year's flights as the map draws them.
+//! Prepared z12 tiles: numbering and coordinates ([`geo`]), the z9 squares and their files, one a
+//! square and kind ([`square`]: read and write), and one module per kind with its tile format,
+//! writer and reader ([`terrain`], [`terrain_fine`], [`obstacles`], [`sources`], [`aircraft`]);
+//! [`aircraft_tracks`] holds the year's flights as the map draws them.
 //!
 //! For visitors, down to this code: the About page Data preparation, The files
 //! (`frontend/src/about/data-preparation.md`).
@@ -12,14 +12,14 @@ pub mod aircraft_tracks;
 pub mod geo;
 pub mod obstacles;
 mod rate;
-pub mod read;
 pub mod sources;
+pub mod square;
 pub mod terrain;
 pub mod terrain_fine;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// The kinds of tile files, one file per kind and tile.
+/// The kinds of tiles, one file a square and kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     Terrain,
@@ -48,35 +48,32 @@ impl Kind {
     }
 }
 
-/// `<year root>/<x9>/<y9>/<x12>_<y12>.<kind>`.
-pub fn tile_path(year_root: &Path, tile: geo::TileId, kind: Kind) -> PathBuf {
-    let (x9, y9) = tile.z9();
-    year_root
-        .join(x9.to_string())
-        .join(y9.to_string())
-        .join(format!("{}_{}.{}", tile.x, tile.y, kind.name()))
-}
-
-/// Writes one tile file atomically (a temporary name renamed into place).
-pub fn write_tile(
-    year_root: &Path,
-    tile: geo::TileId,
-    kind: Kind,
-    bytes: &[u8],
-) -> Result<(), String> {
-    let path = tile_path(year_root, tile, kind);
-    let directory = path.parent().expect("tile paths have a directory");
-    std::fs::create_dir_all(directory)
-        .map_err(|error| format!("{}: {error}", directory.display()))?;
-    let temporary = path.with_extension(format!("{}.partial", kind.name()));
-    std::fs::write(&temporary, bytes)
-        .map_err(|error| format!("{}: {error}", temporary.display()))?;
-    std::fs::rename(&temporary, &path).map_err(|error| format!("{}: {error}", path.display()))
-}
-
 /// Written last by a builder: only a year root holding it is served, and only there does an
-/// absent tile file mean "empty".
+/// absent square file or tile mean "empty". Its first line names the layout ([`LAYOUT`]): a year
+/// root of another layout would read as empty, so a reader refuses it.
 pub const COMPLETION_MARKER: &str = "complete";
+/// The completion marker's first line: the year root laid out as [`square`] reads and writes it.
+pub const LAYOUT: &str = "qmsq1";
+
+/// Marks a year root complete, its layout's line before `note`.
+pub fn mark_year_complete(year_root: &Path, note: &str) -> Result<(), String> {
+    let path = year_root.join(COMPLETION_MARKER);
+    std::fs::write(&path, format!("{LAYOUT}\n{note}"))
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Refuses a year root that is not complete or not laid out as this code reads it.
+pub fn check_year_complete(year_root: &Path) -> Result<(), String> {
+    let marker = std::fs::read_to_string(year_root.join(COMPLETION_MARKER))
+        .map_err(|_| format!("{} is not a complete release", year_root.display()))?;
+    if marker.lines().next() != Some(LAYOUT) {
+        return Err(format!(
+            "{} is not laid out as {LAYOUT}",
+            year_root.display()
+        ));
+    }
+    Ok(())
+}
 
 /// A tile file whose bytes do not follow its kind's format: the click fails, never answers quieter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
