@@ -68,17 +68,26 @@ impl TileGround {
                 .and_then(|terrain| terrain.sample(position))
                 .map_or(0.0, |sample| sample.height_m)
         };
+        // Each lattice point sampled once: a point on the edge between two cells is both cells'.
+        let steps = per_axis - 1;
+        let lattice = side * steps + 1;
+        let along = |index: usize| (index / steps) as f64 + (index % steps) as f64 / steps as f64;
+        let heights: Vec<f64> = (0..lattice * lattice)
+            .map(|index| {
+                height(Mercator {
+                    x: f64::from(tile.x) + along(index % lattice) * cell_units,
+                    y: f64::from(tile.y) + along(index / lattice) * cell_units,
+                })
+            })
+            .collect();
         let finest_grid: Vec<f32> = (0..side * side)
             .map(|index| {
                 let (row, column) = (index / side, index % side);
                 let mut highest = f64::NEG_INFINITY;
                 for i in 0..per_axis {
                     for j in 0..per_axis {
-                        let fraction = |k: usize| k as f64 / (per_axis - 1) as f64;
-                        highest = highest.max(height(Mercator {
-                            x: f64::from(tile.x) + (column as f64 + fraction(j)) * cell_units,
-                            y: f64::from(tile.y) + (row as f64 + fraction(i)) * cell_units,
-                        }));
+                        highest =
+                            highest.max(heights[(row * steps + i) * lattice + column * steps + j]);
                     }
                 }
                 highest as f32
@@ -118,12 +127,38 @@ fn ground_within_one_edge(ground: &TileGround, zoom: u8, cell: [u32; 2]) -> f64 
     f64::from(ground.within_one_edge[level][(row * side + column) as usize])
 }
 
+/// The highest terrain of one cell at `zoom` (0 beyond the prepared tiles).
+fn cell_ground_m(ground: &Ground, zoom: u8, cell: [i64; 2]) -> f64 {
+    let per_tile = 1i64 << (zoom - 12);
+    let world = i64::from(TILES_PER_AXIS) * per_tile;
+    if !(0..world).contains(&cell[1]) {
+        return 0.0;
+    }
+    let x = cell[0].rem_euclid(world);
+    let tile = TileId {
+        x: (x / per_tile) as u32,
+        y: (cell[1] / per_tile) as u32,
+    };
+    let Some(tile_ground) = ground.get(&tile) else {
+        return 0.0;
+    };
+    // A tile whose finest zoom is coarser than `zoom` answers with the parent cell.
+    let level = usize::from(zoom - 12).min(tile_ground.levels.len() - 1);
+    let shift = usize::from(zoom - 12) - level;
+    let side = 1i64 << level;
+    let (column, row) = ((x % per_tile) >> shift, (cell[1] % per_tile) >> shift);
+    f64::from(tile_ground.levels[level][(row * side + column) as usize])
+}
+
+/// The terrain pyramids of the tiles near the flights.
+type Ground = HashMap<TileId, TileGround, BuildHasherDefault<TileHasher>>;
+
 /// The bands of every tile row (they depend on the latitude alone) and the terrain pyramid of the
-/// tiles near the flights, built once and shared.
+/// tiles near the flights, built once and shared by the level steps.
 pub struct Placement {
     level_step_db: f64,
     bands: Vec<std::sync::OnceLock<Vec<ClearanceBand>>>,
-    ground: HashMap<TileId, TileGround, BuildHasherDefault<TileHasher>>,
+    ground: std::sync::Arc<Ground>,
 }
 
 /// Hashes tiles and boxes word by word, mixed once at the end: a sample's tile is looked up for
@@ -174,7 +209,7 @@ impl Placement {
             bands: (0..TILES_PER_AXIS)
                 .map(|_| std::sync::OnceLock::new())
                 .collect(),
-            ground: HashMap::default(),
+            ground: Default::default(),
         };
         let built: Vec<(TileId, TileGround)> = tiles
             .par_iter()
@@ -188,12 +223,12 @@ impl Placement {
                 (tile, TileGround::build(tile, finest, terrain))
             })
             .collect();
-        placement.ground.extend(built);
-        let neighbourhoods: Vec<(TileId, Vec<Vec<f32>>)> = placement
-            .ground
+        let mut ground = Ground::default();
+        ground.extend(built);
+        let neighbourhoods: Vec<(TileId, Vec<Vec<f32>>)> = ground
             .par_iter()
-            .map(|(&tile, ground)| {
-                let levels = (0..ground.levels.len())
+            .map(|(&tile, tile_ground)| {
+                let levels = (0..tile_ground.levels.len())
                     .map(|level| {
                         let side = 1i64 << level;
                         let zoom = 12 + level as u8;
@@ -208,7 +243,7 @@ impl Placement {
                                     for dx in -1..=1 {
                                         let neighbour = [cell[0] + dx, cell[1] + dy];
                                         highest =
-                                            highest.max(placement.cell_ground_m(zoom, neighbour));
+                                            highest.max(cell_ground_m(&ground, zoom, neighbour));
                                     }
                                 }
                                 highest as f32
@@ -220,42 +255,33 @@ impl Placement {
             })
             .collect();
         for (tile, levels) in neighbourhoods {
-            let ground = placement.ground.get_mut(&tile).expect("a prepared tile");
-            ground.highest_within_one_edge = levels
+            let tile_ground = ground.get_mut(&tile).expect("a prepared tile");
+            tile_ground.highest_within_one_edge = levels
                 .iter()
                 .map(|grid| f64::from(grid.iter().copied().fold(f32::NEG_INFINITY, f32::max)))
                 .collect();
-            ground.within_one_edge = levels;
+            tile_ground.within_one_edge = levels;
         }
+        placement.ground = std::sync::Arc::new(ground);
         placement
+    }
+
+    /// The same ground with the bands of a level step D of `level_step_db`: the lowest band of
+    /// every step takes the first layer's zoom (`clearance_bands`), the zoom of the ground's finest
+    /// grid, so the ground is the one the step would build (a test holds it on every row).
+    pub fn with_level_step(&self, level_step_db: f64) -> Self {
+        Placement {
+            level_step_db,
+            bands: (0..TILES_PER_AXIS)
+                .map(|_| std::sync::OnceLock::new())
+                .collect(),
+            ground: std::sync::Arc::clone(&self.ground),
+        }
     }
 
     /// The clearance bands of a tile (of its row: they depend on the latitude alone).
     pub fn bands(&self, tile: TileId) -> &[ClearanceBand] {
         self.bands[tile.y as usize].get_or_init(|| tile_bands(tile, self.level_step_db))
-    }
-
-    /// The highest terrain of one cell at `zoom` (0 beyond the prepared tiles).
-    fn cell_ground_m(&self, zoom: u8, cell: [i64; 2]) -> f64 {
-        let per_tile = 1i64 << (zoom - 12);
-        let world = i64::from(TILES_PER_AXIS) * per_tile;
-        if !(0..world).contains(&cell[1]) {
-            return 0.0;
-        }
-        let x = cell[0].rem_euclid(world);
-        let tile = TileId {
-            x: (x / per_tile) as u32,
-            y: (cell[1] / per_tile) as u32,
-        };
-        let Some(ground) = self.ground.get(&tile) else {
-            return 0.0;
-        };
-        // A tile whose finest zoom is coarser than `zoom` answers with the parent cell.
-        let level = usize::from(zoom - 12).min(ground.levels.len() - 1);
-        let shift = usize::from(zoom - 12) - level;
-        let side = 1i64 << level;
-        let (column, row) = ((x % per_tile) >> shift, (cell[1] % per_tile) >> shift);
-        f64::from(ground.levels[level][(row * side + column) as usize])
     }
 
     /// The box of a point (Mercator position, altitude above sea level): the highest band whose

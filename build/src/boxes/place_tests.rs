@@ -2,7 +2,7 @@
 //! cover it exactly.
 
 use super::*;
-use physics::doc29::box_geometry::BOX_EDGE_LEVEL_STEP_DB;
+use physics::doc29::box_geometry::{BOX_EDGE_LEVEL_STEP_DB, FAR_BOX_EDGE_LEVEL_STEP_DB};
 
 const PRAGUE: TileId = TileId { x: 2212, y: 1387 };
 
@@ -27,6 +27,21 @@ fn a_point_takes_the_highest_band_its_clearance_reaches() {
         assert!(key.helicopter);
         let scale = f64::from(1u32 << (band.zoom - 12));
         assert_eq!(key.cell[0], (centre.x * scale) as u32);
+    }
+}
+
+/// The rules share one terrain pyramid (`Placement::with_level_step`), built at the finest band of
+/// the first: every level step must have the same finest band on every tile row.
+#[test]
+fn the_level_steps_share_their_finest_band_on_every_row() {
+    for y in 0..TILES_PER_AXIS {
+        let tile = TileId { x: 0, y };
+        let finest = |step| tile_bands(tile, step).iter().map(|band| band.zoom).max();
+        assert_eq!(
+            finest(BOX_EDGE_LEVEL_STEP_DB),
+            finest(FAR_BOX_EDGE_LEVEL_STEP_DB),
+            "row {y}"
+        );
     }
 }
 
