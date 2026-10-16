@@ -24,8 +24,10 @@ import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 // The noise model's data: OpenStreetMap's ODbL asks for its credit on the map (the satellite base
-// map does not name it); every other source is credited on the About pages.
-const NOISE_DATA_CREDITS = 'Noise model: &copy; OpenStreetMap contributors and <a href="/about/data-sources">others</a>'
+// map does not name it); every other source is credited on the About pages. On a phone the credits
+// open from the control row's ⓘ and lead with the way to the About pages (`.attrib-about`).
+const NOISE_DATA_CREDITS = '<a class="attrib-about" href="/about">About quietmap.org</a>'
+  + 'Noise model: &copy; OpenStreetMap contributors and <a href="/about/data-sources">others</a>'
 
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean

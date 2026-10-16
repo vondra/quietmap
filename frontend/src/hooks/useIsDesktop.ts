@@ -4,7 +4,7 @@
 // visible one.
 import { useEffect, useState } from 'react'
 
-const DESKTOP_QUERY = '(min-width: 48rem)'
+export const DESKTOP_QUERY = '(min-width: 48rem)'
 
 export function useIsDesktop(): boolean {
   const [desktop, setDesktop] = useState(() => window.matchMedia(DESKTOP_QUERY).matches)
