@@ -5,7 +5,7 @@ intro: Measured daily traffic on part of the MTC Red Vial Nacional 2024, estimat
 
 ## Roads
 
-Road data: the 2024 Red Vial Nacional of MTC Provías, read from a [community mirror](https://services6.arcgis.com/G8JFnqCHKQ9vb8YW/) because the ministry's servers are unreachable from abroad. Some sections carry a measured daily traffic (IMD); most do not. The departmental road network has no traffic data.
+Road data: the 2024 Red Vial Nacional of MTC Provías, read from a [community mirror](https://services6.arcgis.com/G8JFnqCHKQ9vb8YW/) because the ministry's servers are unreachable from abroad. Some sections carry a measured daily traffic (IMD), which reaches 6 % of the motorway, trunk and primary length; most do not. The departmental road network has no traffic data.
 
 An OSM motorway, trunk or primary road takes the nearest network road within 500 m and uses its IMD where present. Otherwise the volume is estimated from the classification:
 
@@ -22,13 +22,21 @@ An OSM motorway, trunk or primary road takes the nearest network road within 500
 
 Measured volumes are used as published. Estimates are doubled inside Lima and Callao and multiplied by 1.4 in 24 other cities: Arequipa, Trujillo, Chiclayo, Piura, Iquitos, Cusco, Chimbote, Huancayo, Tacna, Juliaca, Ica, Cajamarca, Pucallpa, Sullana, Ayacucho, Chincha Alta, Huánuco, Tarapoto, Puno, Tumbes, Huaraz, Jaén, Huacho and Pisco. The city boxes are drawn manually.
 
-The vehicle mix is an estimate everywhere, including where the total is measured:
+Where the total is measured, the vehicle mix is an estimate:
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 45 % of a town street's traffic (WHO 2023).
+| Where | Light | Medium | Heavy | Motorcycle |
+|---|---:|---:|---:|---:|
+| Lima | 65% | 6% | 14% | 15% |
+| The 24 cities | 68% | 6% | 12% | 14% |
+| Mining regions | 45% | 8% | 38% | 9% |
+| Sierra | 50% | 10% | 30% | 10% |
+| Costa and selva | 60% | 8% | 22% | 10% |
 
 The mining regions are four manually drawn boxes: the south around Arequipa, Moquegua and Tacna; the central Andes around Ancash; Cajamarca; and Apurímac with southern Cusco. Costa, sierra and selva are divided by approximate lines of longitude.
 
-Secondary and smaller roads use world defaults.
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 45 % of a town street's traffic (WHO 2023).
+
+Motorways, trunks and primaries away from the network use the world estimate per lane; secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make, else world defaults.
 
 Unsigned roads: a primary road 40 km/h in towns, 60 outside.
 

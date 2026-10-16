@@ -9,11 +9,11 @@ Motorways, expressways, main and regional roads: the [2024 traffic load map](htt
 
 A road takes the nearest counting site on a compatible class within 200 m. Sections whose traffic DRSI estimated rather than counted are skipped, and short-term counts keep their total with the class split marked estimated.
 
-Uncounted streets carry the trips their buildings make. Uncounted main roads follow one model of the trips made around them, fitted on counted roads.
+Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.5 % of a town street's traffic (WHO 2023).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles the share counted on nearby roads, else 1.5 % of a town street's traffic (WHO 2023).
 
-Unsigned roads: a primary road 50 km/h in towns, 90 outside (traffic drives 76 on a two-way one), a motorway 130.
+Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a two-way one), a motorway 130.
 
 ## Railways
 

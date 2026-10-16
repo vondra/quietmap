@@ -1,15 +1,15 @@
 ---
 title: Libya
-intro: Roads use the world defaults; no working railway; ship traffic from EMODnet and Global Fishing Watch.
+intro: Main roads use the world defaults; no working railway; ship traffic from EMODnet and Global Fishing Watch.
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)). Vehicle mix: world default.
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.1 % of a town street's traffic (WHO 2023).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 0.1 % of a town street's traffic (WHO 2023).
 
-Unsigned roads: a primary road 90 km/h in towns, 120 outside (traffic drives 101 on a two-way one).
+Unsigned roads: a primary road 90 km/h in towns, 120 outside (cars drive 101 on a two-way one).
 
 ## Railways
 

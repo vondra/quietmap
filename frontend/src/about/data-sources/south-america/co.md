@@ -7,7 +7,7 @@ intro: INVIAS 2024 traffic census with a measured bus and truck share on nationa
 
 Traffic volumes: the INVIAS 2024 traffic census, published as an [open map service](https://services6.arcgis.com/kyerLIHvrND0OSya/). Each counted section has TPDA (average daily traffic) and the percentage of cars, buses and trucks. Motorcycles are not counted; a flat 5% is added and the measured shares are scaled to 95%.
 
-An OSM motorway, trunk or primary road takes the nearest counted section within 500 m. Sections under 50 vehicles per day are ignored.
+An OSM motorway, trunk or primary road takes the nearest counted section within 500 m. Sections under 50 vehicles per day are ignored. Counts reach 66 % of the motorway, trunk and primary length.
 
 Roads without a nearby count are matched within 400 m to the INVIAS national road network and estimated from the administering body:
 
@@ -21,11 +21,9 @@ Roads without a nearby count are matched within 400 m to the INVIAS national roa
 
 Counts are used as published. Estimates are doubled inside Bogotá and Medellín and multiplied by 1.4 in 24 other cities: Cali, Barranquilla, Cartagena, Cúcuta, Bucaramanga, Pereira, Santa Marta, Ibagué, Manizales, Pasto, Villavicencio, Neiva, Armenia, Soledad, Soacha, Valledupar, Montería, Sincelejo, Buenaventura, Tunja, Riohacha, Quibdó, Florencia and Popayán. The city boxes are drawn manually.
 
-Roads with a network estimate also take an estimated vehicle mix:
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 47 % of a town street's traffic (WHO 2023); electric cars 0.5 % of cars, rolling noise only (IEA 2024).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 47 % of a town street's traffic (WHO 2023); electric cars 0.5 % of cars, rolling noise only (IEA 2024).
-
-Secondary and smaller roads carry the trips their buildings make, else world defaults.
+Motorways, trunks and primaries matched to neither (21 % of their length) follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)); secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make, else world defaults.
 
 Unsigned roads: a primary road 40 km/h in towns, 60 outside, a motorway 120, a service road 10.
 

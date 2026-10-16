@@ -5,7 +5,7 @@ intro: Where every number on the map comes from, with links, licences and dates.
 
 The map is computed from open data: OpenStreetMap for the roads, railways, buildings and sites, and
 public traffic counts, timetables, flight tracks, ship positions, terrain models and registries for
-what they carry and how they stand. Where nobody counted, a documented default stands in; the region
+what they carry and how they stand. Where nobody counted, a documented model or default stands in; the region
 and country pages below say which is which.
 
 Each version of the map is built once for the whole world. The current one, built in October 2026,
@@ -80,9 +80,9 @@ the European Union and ESA; all rights reserved).
   elsewhere; tree height: [GLAD forest height 2020](https://glad.umd.edu/dataset/GLCLUC2020)
   (Potapov et al. 2022, University of Maryland)
 - Hard ground (paved, built over or water): [ESA WorldCover 2021](https://worldcover2021.esa.int/)
-  (CC BY 4.0), refined by [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness)
-  in Europe, its gaps filled from C3S/ESA CCI Land Cover 2022
-  v2.1.1
+  (CC BY 4.0), its gaps filled from C3S/ESA CCI Land Cover 2022 v2.1.1, refined by
+  [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness)
+  in Europe
 - Weather: [ERA5](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5) 1991–2020
   climatology (Copernicus Climate Change Service, CC BY 4.0, via ARCO-ERA5; contains modified
   Copernicus Climate Change Service information); yearly temperatures and degree days from
@@ -101,7 +101,7 @@ the European Union and ESA; all rights reserved).
   Baden-Württemberg's counters, Rijkswaterstaat (INWEVA), the UK Department for Transport, and the
   roadside noise monitors of Madrid, Barcelona and Thailand's Pollution Control Department.
   Free-flow speeds: the UK Department for Transport (SPE0102)
-- Vehicle fleets: electric cars from the [IEA](https://www.iea.org/) Global EV Outlook, motorcycles
+- Vehicle fleets: electric cars from the [IEA](https://www.iea.org/) Global EV Data Explorer 2025, motorcycles
   from the [WHO](https://www.who.int/) Global status report on road safety 2023
 - Default speed limits: OpenStreetMap Wiki contributors, "Default speed limits" (CC BY-SA 2.0),
   parsed by [osm-legal-default-speeds](https://github.com/westnordost/osm-legal-default-speeds), and
@@ -121,14 +121,14 @@ the European Union and ESA; all rights reserved).
   helicopters: EASA Certification Noise Levels – Helicopters, Issue 52 (source acknowledged as its
   terms require)
 - Ships: [EMODnet Human Activities](https://emodnet.ec.europa.eu/en/human-activities) vessel density
-  2024 in European waters (CC BY 4.0); elsewhere **Powered by [Global Fishing Watch](https://globalfishingwatch.org)**
+  2024 in European seas (CC BY 4.0); on inland waterways and elsewhere **Powered by [Global Fishing Watch](https://globalfishingwatch.org)**
   (CC BY-NC 4.0)
 
 ### Industry and other sources
 
 - Industry: [E-PRTR](https://industry.eea.europa.eu/) (EEA),
   [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase) (WRI),
-  [Global Energy Monitor](https://globalenergymonitor.org/) trackers and 14 national registers; the
+  [Global Energy Monitor](https://globalenergymonitor.org/) trackers and the national registers named on the country pages; the
   base levels calibrated on the Czech strategic noise maps of 2022
 - Wind turbines standing today: OpenStreetMap and eight registers —
   [USWTDB](https://energy.usgs.gov/uswtdb/) (USGS, LBNL; public domain),

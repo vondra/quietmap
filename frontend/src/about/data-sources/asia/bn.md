@@ -1,15 +1,13 @@
 ---
 title: Brunei
-intro: Roads use the world defaults. No passenger railway.
+intro: Main roads use the world defaults; smaller roads are estimated from the buildings around them. No passenger railway.
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
-Local streets: traffic is derived from the buildings served; motorcycles 1.5 % (the region's median).
-
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.5 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.5 % of a town street's traffic (the world median).
 
 Unsigned roads: a primary road 60 km/h in towns, 65 outside.
 
@@ -29,4 +27,4 @@ Brunei has no passenger railway. Industrial track in OpenStreetMap uses the clas
 
 ## Homes and places
 
-Homes mapped in OpenStreetMap: 29 air conditioners per 100 homes (the region's median). Mosques call five times a day. Open-fronted bars and restaurants, their terraces open as long as they are.
+Homes mapped in OpenStreetMap: 29 air conditioners per 100 homes (South-East Asia's figure). Mosques call five times a day. Open-fronted bars and restaurants, their terraces open as long as they are.

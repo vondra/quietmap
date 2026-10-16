@@ -17,9 +17,9 @@ The 12 largest cities are Beijing, Shanghai, Guangzhou, Shenzhen, Chengdu, Chong
 
 Vehicle split in cities: 75% cars, 10% medium, 10% heavy, 5% motorcycles. Outside cities: 65, 12, 18 and 5%. The motorcycle share is low because most large cities ban petrol motorcycles and electric scooters make almost no engine noise.
 
-None of these values is a count. Main roads with no network line nearby get the world estimate per lane ([world defaults](/about/data-preparation)).
+None of these values is a count. Main roads with no network line nearby get the world estimate per lane ([world defaults](/about/data-preparation)); secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 4.3 % of a town street's traffic (WHO 2023); electric cars 6.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 100 km/h.
+Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 4.3 % of a town street's traffic (WHO 2023); electric cars 6.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 100 km/h.
 
 Unsigned roads: a primary road 50 km/h in towns, 70 outside, a motorway 120, a residential street 20.
 

@@ -1,15 +1,13 @@
 ---
 title: Georgia
-intro: Roads are estimated from the buildings around them; Georgian Railway lines use class defaults.
+intro: Main roads use the world defaults, smaller roads are estimated from the buildings around them; Georgian Railway lines use class defaults.
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
-Local streets: traffic is derived from the buildings served; motorcycles 1.1 % (the region's median).
-
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.1 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.1 % of a town street's traffic (the region's median).
 
 Unsigned roads: a primary road 50 km/h in towns and outside, a motorway 110.
 
@@ -25,7 +23,7 @@ Georgian Railway publishes no timetable feed. All lines use the [world railway d
 
 ## Ships
 
-[Global Fishing Watch](https://globalfishingwatch.org/our-apis/) AIS data, which has no class for yachts and pleasure boats.
+AIS data: EMODnet 2024 where its European grid reaches, [Global Fishing Watch](https://globalfishingwatch.org/our-apis/) elsewhere.
 
 ## Homes and places
 

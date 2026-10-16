@@ -1,6 +1,6 @@
 ---
 title: Indonesia
-intro: Bina Marga daily traffic (LHRT) on many regional roads, assigned values elsewhere. No railway timetable.
+intro: Bina Marga daily traffic (LHRT) on some provincial roads, assigned values on most other main roads. No railway timetable.
 ---
 
 ## Roads
@@ -13,9 +13,9 @@ The highways directorate, Bina Marga, runs a public [GIS portal](https://gisport
 
 Assigned values are doubled in 8 metropolitan areas (Jakarta, Surabaya, Bandung, Medan, Semarang, Makassar, Palembang, Denpasar) and multiplied by 1.4 in 33 other cities. Published LHRT values are used unchanged.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 64 % of a town street's traffic (WHO 2023); electric cars 0.6 % of cars, rolling noise only (IEA 2024).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 64 % of a town street's traffic (WHO 2023); electric cars 0.6 % of cars, rolling noise only (IEA 2024).
 
-The vehicle split is assigned; LHRT is a single total without vehicle classes. Smaller roads use the world default. Local-street traffic is derived from the buildings served, with 33% motorcycles.
+LHRT is a single total without vehicle classes; its roads take an assigned split: 35 % motorcycles, 8 % medium and 7 % heavy vehicles in open country, 50, 6 and 4 % in the 33 cities, 60, 5 and 5 % in the 8 metropolitan areas. Main roads none of the layers reach, 28 % of their length, use the world estimate per lane ([world defaults](/about/data-preparation)); secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make.
 
 Unsigned roads: a primary road 50 km/h in towns, 60 outside, a motorway 100.
 

@@ -16,13 +16,22 @@ An OSM motorway, trunk or primary road within 500 m of a national route is estim
 | Dirt | 3,000 |
 | Not stated | 6,000 |
 
-The estimate is doubled inside Greater Asunción and multiplied by 1.4 in 17 other towns, among them Ciudad del Este, Encarnación, Pedro Juan Caballero, Concepción, Coronel Oviedo, Villarrica, Pilar, Caaguazú, Filadelfia and Salto del Guairá.
+The estimate is doubled inside Greater Asunción, its suburbs included, and multiplied by 1.4 in 11 other towns: Ciudad del Este, Encarnación, Pedro Juan Caballero, Concepción, Coronel Oviedo, Villarrica, Pilar, Caaguazú, Filadelfia, Salto del Guairá and Limpio.
 
-The vehicle mix is an estimate:
+These roads take an estimated vehicle mix:
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 19 % of a town street's traffic (WHO 2023).
+| Where | Light | Medium | Heavy | Motorcycle |
+|---|---:|---:|---:|---:|
+| Greater Asunción | 65% | 5% | 10% | 20% |
+| The 11 towns | 62% | 6% | 12% | 20% |
+| Chaco | 60% | 10% | 20% | 10% |
+| Eastern region | 55% | 8% | 25% | 12% |
 
-Motorways, trunks and primaries that are not a national route use the world estimate per lane. Secondary and smaller roads use class defaults ([world defaults](/about/data-preparation)).
+The Chaco is taken as everything west of 57.3° W and north of 26° S.
+
+Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 19 % of a town street's traffic (WHO 2023).
+
+Motorways, trunks and primaries that are not a national route use the world estimate per lane. Secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
 Unsigned roads: a primary road 50 km/h in towns, 60 outside.
 

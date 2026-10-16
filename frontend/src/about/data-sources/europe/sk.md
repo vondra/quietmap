@@ -5,16 +5,16 @@ intro: ŽSR passenger timetable from the national open data portal. Roads are es
 
 ## Roads
 
-No traffic counts are loaded. Motorways, trunk and primary roads without a count follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads; smaller roads carry the trips their buildings make ([method](/about/data-preparation)).
+No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.1 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.1 % of a town street's traffic (the region's median).
 
-Unsigned roads: a primary road 50 km/h in towns, 90 outside (traffic drives 76 on a two-way one), a motorway 130.
+Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a two-way one), a motorway 130.
 
 ## Railways
 
-Train counts: ŽSR timetable on the [national open data portal](https://data.slovensko.sk/), one busy Wednesday. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train counts: ŽSR timetable on the [national open data portal](https://data.slovensko.sk/), one busy Wednesday. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 
 ## Homes and places
 
-Homes mapped in OpenStreetMap: 4 heat pumps and 16 air conditioners per 100 homes (the region's median). Church bells ring three times a day, with a Sunday peal. Mosques: only those with a mapped minaret call, once on Fridays.
+Homes mapped in OpenStreetMap: 4 heat pumps and 16 air conditioners (the region's median) per 100 homes. Church bells ring three times a day, with a Sunday peal. Mosques: only those with a mapped minaret call, once on Fridays.

@@ -1,6 +1,6 @@
 ---
 title: Saudi Arabia
-intro: Ministry of Transport station counts 2024 on numbered roads, assigned values elsewhere. No railway timetable.
+intro: Ministry of Transport station counts 2024 on a quarter of the main roads, assigned values on an eighth, the world defaults on the rest. No railway timetable.
 ---
 
 ## Roads
@@ -20,11 +20,13 @@ Riyadh: the city's pavement management map gives a street class (A to D) and a l
 | C | 3,500 to 6,000 |
 | D | 900 to 1,800 |
 
-Elsewhere: roads are matched to the national [transport atlas](https://www.arcgis.com/home/item.html?id=a69a52e770ba4f91950cfd208c556dcb) within 250 m. A primary route gets 6,000 vehicles per day, a secondary route 1,500, anything else 800. Most Saudi main roads fall into this group.
+Elsewhere: roads are matched to the national [transport atlas](https://www.arcgis.com/home/item.html?id=a69a52e770ba4f91950cfd208c556dcb) within 250 m. A primary route gets 6,000 vehicles per day, a secondary route 1,500, anything else 800.
 
-All three use one vehicle split: 78% cars, 10% medium, 11% heavy, 1% motorcycles. Residential streets are not covered; their traffic is derived from the buildings served.
+Of the main roads' length the stations cover 26 %, Riyadh's map and the atlas 12 %; the other 62 % use the world estimate per lane ([world defaults](/about/data-preparation)). Secondary and tertiary roads none of the three reach follow the trips made by the buildings within 5 km; residential streets carry the trips their buildings make.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.1 % of a town street's traffic (WHO 2023).
+Station roads take an assigned vehicle split: 78% cars, 10% medium, 11% heavy, 1% motorcycles.
+
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 0.1 % of a town street's traffic (WHO 2023).
 
 Unsigned roads: a primary road 50 km/h in towns, 100 outside.
 

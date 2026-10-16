@@ -1,19 +1,19 @@
 ---
 title: Greece
-intro: Community-made Hellenic Train timetable. Roads are estimated from the buildings around them; the Athens metro and tram use class defaults. Rail freight from the national train-kilometres.
+intro: Community-made Hellenic Train timetable. Roads are estimated from the buildings around them; the Athens metro and tram use class defaults. Rail freight from class defaults.
 ---
 
 ## Roads
 
-No traffic counts are loaded. Motorways, trunk and primary roads without a count follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads; smaller roads carry the trips their buildings make ([method](/about/data-preparation)).
+No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 3.9 % of a town street's traffic (WHO 2023); electric cars 0.4 % of cars, rolling noise only (IEA 2024).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 3.9 % of a town street's traffic (WHO 2023); electric cars 0.4 % of cars, rolling noise only (IEA 2024).
 
 Unsigned roads: a primary road 50 km/h in towns and outside, a motorway 130.
 
 ## Railways
 
-Train counts: [community-made Hellenic Train timetable](https://jbb.ghsq.de/gtfs/gr-hellenic-train.gtfs.zip), one busy Wednesday; Hellenic Train publishes none itself. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. The Athens metro and tram have no feed loaded; their surface tracks use the class default.
+Train counts: [community-made Hellenic Train timetable](https://jbb.ghsq.de/gtfs/gr-hellenic-train.gtfs.zip), one busy Wednesday; Hellenic Train publishes none itself. Where no count exists, the passenger defaults are scaled to the country's train-kilometres (Eurostat 2024). Greece publishes no goods train-kilometres: freight keeps the class defaults' national total, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. The Athens metro and tram have no feed loaded; their surface tracks use the class default.
 
 ## Homes and places
 

@@ -9,11 +9,11 @@ National and provincial roads: [General Traffic Measurement 2020/2021](https://w
 
 A national road takes the counted section of its number within 500 m; lettered sections such as S8F count as their road. Provincial sections are published without locations, so a provincial road takes the median section of its number, marked as estimated.
 
-The census excludes cities with county rights, so the main streets of Warsaw, Kraków, Łódź and Wrocław, among others, have no counts. Uncounted streets carry the trips their buildings make. Uncounted main roads follow one model of the trips made around them, fitted on counted roads.
+The census excludes cities with county rights, so the main streets of Warsaw, Kraków, Łódź and Wrocław, among others, have no counts. Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.7 % of a town street's traffic (WHO 2023); electric cars 0.7 % of cars, rolling noise only (IEA 2024).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles the share counted on nearby roads, else 1.7 % of a town street's traffic (WHO 2023); electric cars 0.7 % of cars, rolling noise only (IEA 2024).
 
-Unsigned roads: a primary road 50 km/h in towns, 90 outside (traffic drives 76 on a two-way one), an expressway 120 (101 on a two-way one), a motorway 140.
+Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a two-way one), an expressway 120 (101 on a two-way one), a motorway 140.
 
 ## Railways
 
@@ -27,7 +27,7 @@ Train counts, one busy Wednesday:
 | [GZM](https://mkuran.pl/gtfs/gzm.zip) | Silesian trams |
 | [WKD](https://mkuran.pl/gtfs/wkd.zip) | Warsaw commuter railway |
 
-Trams without a feed (Gdańsk, Poznań, Wrocław, Łódź and others) default to 120 per day on every track. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Trams without a feed (Gdańsk, Poznań, Wrocław, Łódź and others) default to 120 per day on every track. The timetables are passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 
 ## Buildings and terrain
 

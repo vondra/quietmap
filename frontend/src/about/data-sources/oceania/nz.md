@@ -10,13 +10,13 @@ Traffic volumes, both 2024 editions:
 - State highways: [NZTA Waka Kotahi open data portal](https://opendata-nzta.opendata.arcgis.com/). Each carriageway section has an estimated daily traffic and a heavy vehicle percentage.
 - Auckland streets: [Auckland Transport](https://data-atgis.opendata.arcgis.com/) count sites, each with a daily count and a heavy vehicle percentage.
 
-An OSM motorway, trunk, primary, secondary or tertiary road takes the nearest count within 200 m with a compatible road class. The heavy share is the published percentage; one fifth of it is assigned to medium trucks, an assumed split.
+An OSM motorway, trunk, primary, secondary or tertiary road takes the nearest count within 200 m with a compatible road class. The heavy share is the published percentage; one fifth of it is assigned to medium trucks and 1 % of the traffic to motorcycles, assumed splits. Where no junction lies between them, an uncounted stretch of a counted road carries the count of its neighbour.
 
-Local streets outside Auckland have no counts loaded and carry the trips their buildings make. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)).
+Local streets, Auckland's included, have no counts loaded and carry the trips their buildings make. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a model of the trips made within 5 km, fitted on European counts ([method](/about/data-preparation)).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 3.4 % of a town street's traffic (the region's median); electric cars 2.3 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 3.4 % of a town street's traffic (the region's median); electric cars 2.3 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
 
-Unsigned roads: a primary road 50 km/h in towns, 100 outside (traffic drives 84 on a two-way one).
+Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a two-way one).
 
 ## Railways
 
@@ -26,7 +26,7 @@ No timetable is loaded. The GTFS feeds of Auckland Transport and Metlink Welling
 
 Power plants: WRI Global Power Plant Database. A plant is a noise source only where OSM maps an industrial area at its location. Other sites are OSM industrial areas with a type inferred from name and tags. No usable national pollutant register exists.
 
-No open per-turbine register was found. Wind turbines are OSM points; a turbine without tagged specs is treated as a 2 MW machine.
+No open per-turbine register was found. Wind turbines are OSM points; a turbine without a tagged rating takes the fleet's median sound power, 105 dB(A) at full power, and one without a tagged hub height stands 105 m high.
 
 ## Ships
 
@@ -34,4 +34,4 @@ Coast and Cook Strait: Global Fishing Watch AIS vessel density.
 
 ## Homes and places
 
-Homes mapped in OpenStreetMap: 49 heat pumps and 59 air conditioners per 100 homes (the region's median). Mosques: only those with a mapped minaret call, once on Fridays.
+Homes mapped in OpenStreetMap: 49 heat pumps and 59 air conditioners per 100 homes (Australia's figures). Mosques: only those with a mapped minaret call, once on Fridays.

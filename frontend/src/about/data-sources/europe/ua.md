@@ -1,6 +1,6 @@
 ---
 title: Ukraine
-intro: No open counts or timetable. Roads and railways use Ukraine-specific defaults describing the country before the 2022 invasion.
+intro: No open counts or timetable. Main roads and railways use Ukraine-specific defaults describing the country before the 2022 invasion.
 ---
 
 All values describe Ukraine before February 2022. No data is available on traffic near the front or in occupied areas.
@@ -16,13 +16,12 @@ No traffic counts are loaded. Class defaults apply, raised in the large cities:
 | Primary | 7,000 | 14,000 | 11,200 | 9,100 |
 | Secondary | 3,500 | 7,000 | 5,600 | 4,550 |
 | Tertiary | 1,500 | 3,000 | 2,400 | 1,950 |
-| Residential | 600 | 1,200 | 960 | 780 |
 
-Truck share: 18 % on motorways and trunk roads, 10 % on primary and secondary roads, 4 % elsewhere.
+Streets carry the trips their buildings make.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.1 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.1 % of a town street's traffic (the region's median).
 
-Unsigned roads: a primary road 50 km/h in towns, 90 outside (traffic drives 76 on a two-way one), a motorway 130.
+Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a two-way one), a motorway 130.
 
 ## Railways
 

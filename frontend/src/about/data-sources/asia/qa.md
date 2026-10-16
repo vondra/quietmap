@@ -1,17 +1,15 @@
 ---
 title: Qatar
-intro: Roads use the world defaults. Rail traffic uses class defaults.
+intro: Main roads use the world defaults; smaller roads are estimated from the buildings around them. Rail traffic uses class defaults.
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
-Local streets: traffic is derived from the buildings served; motorcycles 0.4 % (WHO 2023).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 0.4 % of a town street's traffic (WHO 2023).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.4 % of a town street's traffic (WHO 2023).
-
-Unsigned roads: a primary road 80 km/h in towns and outside (traffic drives 68 on a two-way one).
+Unsigned roads: a primary road 80 km/h in towns and outside (cars drive 68 on a two-way one).
 
 ## Railways
 

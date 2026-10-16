@@ -1,19 +1,17 @@
 ---
 title: South Korea
-intro: Korean traffic counts and timetables are not accessible from abroad; roads and railways use class defaults.
+intro: Korean traffic counts and timetables are not accessible from abroad; main roads and railways use class defaults, smaller roads are estimated from the buildings around them.
 ---
 
 ## Roads
 
-Korean traffic counts exist, but the government data portals refuse connections from outside the country and registration needs a Korean phone number. The same applies to the expressway API at [data.ex.co.kr](https://data.ex.co.kr/openapi/). Traffic is set by OpenStreetMap road class.
+Korean traffic counts exist, but the government data portals refuse connections from outside the country and registration needs a Korean phone number. The same applies to the expressway API at [data.ex.co.kr](https://data.ex.co.kr/openapi/).
 
-Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
+Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
-Local streets: traffic is derived from the buildings served; motorcycles 3%, set by hand because the Asia-wide value would be five times too high.
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.5 % of a town street's traffic (WHO 2023); electric cars 2.3 % of cars, rolling noise only (IEA 2024).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.5 % of a town street's traffic (WHO 2023); electric cars 2.3 % of cars, rolling noise only (IEA 2024).
-
-Unsigned roads: a primary road 50 km/h in towns, 60 outside, an expressway 100 (84 on a two-way one), a motorway 100.
+Unsigned roads: a primary road 50 km/h in towns, 60 outside, an expressway 100 (cars drive 84 on a two-way one), a motorway 100.
 
 ## Railways
 

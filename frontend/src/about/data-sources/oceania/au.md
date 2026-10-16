@@ -1,11 +1,11 @@
 ---
 title: Australia
-intro: Passenger rail timetables for five states. No traffic counts are loaded; all roads use class defaults. Freight rail uses class defaults.
+intro: Passenger rail timetables for five states. No traffic counts are loaded; main roads use class defaults. Freight rail uses class defaults.
 ---
 
 ## Roads
 
-No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
 
 Australia has no national traffic database. Five states publish counts under CC BY 4.0; loaders for them are not yet written.
 
@@ -17,9 +17,9 @@ Australia has no national traffic database. Five states publish counts under CC 
 | Western Australia | [Main Roads traffic digest](https://catalogue.data.wa.gov.au/dataset/mrwa-traffic-digest) |
 | South Australia | [Traffic volumes](https://data.sa.gov.au/data/dataset/traffic-volumes) |
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.8 % of a town street's traffic (WHO 2023); electric cars 1.6 % of cars, rolling noise only (IEA 2024); lorries and buses at most 100 km/h.
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 0.8 % of a town street's traffic (WHO 2023); electric cars 1.6 % of cars, rolling noise only (IEA 2024); lorries and buses at most 100 km/h.
 
-Unsigned roads: a primary road 50 km/h in towns, 100 outside (traffic drives 84 on a two-way one).
+Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a two-way one).
 
 ## Railways
 
@@ -41,7 +41,7 @@ Freight is not covered: the Pilbara iron ore lines and the Hunter Valley coal li
 
 Power plants: Global Energy Monitor power tracker, operating plants only, supplementing the WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. A plant is a noise source only where OSM maps an industrial area at its location.
 
-Wind turbines are OSM points. The Clean Energy Regulator lists wind farms by postcode only, so missing specs cannot be filled from a register; a turbine without tagged specs is treated as a 2 MW machine.
+Wind turbines are OSM points. The Clean Energy Regulator lists wind farms by postcode only, so missing specs cannot be filled from a register; a turbine without a tagged rating takes the fleet's median sound power, 105 dB(A) at full power, and one without a tagged hub height stands 105 m high.
 
 The National Pollutant Inventory (coordinates and industry codes for reporting facilities) is not used.
 

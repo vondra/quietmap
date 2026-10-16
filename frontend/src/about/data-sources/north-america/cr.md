@@ -1,15 +1,15 @@
 ---
 title: Costa Rica
-intro: Roads use the world defaults. The Incofer suburban timetable is not loaded. Power plants from Global Energy Monitor.
+intro: Main roads use the world defaults; other roads are estimated from the buildings around them. The Incofer suburban timetable is not loaded. Power plants from Global Energy Monitor.
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow the trips made within 5 km of them, fitted on European counts, else class defaults ([world defaults](/about/data-preparation)).
 
 Where buildings are mapped, residential, living, service and unclassified streets are instead estimated from the buildings they serve.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 9 % of a town street's traffic (WHO 2023); electric cars 2.0 % of cars, rolling noise only (IEA 2024).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 9 % of a town street's traffic (WHO 2023); electric cars 2.0 % of cars, rolling noise only (IEA 2024).
 
 Unsigned roads: a primary road 50 km/h in towns, 60 outside.
 

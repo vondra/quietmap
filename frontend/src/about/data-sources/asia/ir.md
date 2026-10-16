@@ -16,13 +16,11 @@ Iran publishes no open per-road traffic counts. Traffic is assigned by road clas
 | Tertiary | 2,500 | 3,500 | 4,500 | 6,250 |
 | Residential | 900 | 1,260 | 1,620 | 2,250 |
 
-Each city is a box around its centre, not its administrative boundary.
+Each city is a box around its centre, not its administrative boundary. Residential streets take the table's value only where their buildings are not mapped; elsewhere they carry the trips their buildings make.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.3 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 0.3 % of a town street's traffic (the region's median).
 
-The South Pars routes run from Asaluyeh inland to Shiraz and along the coast towards Bushehr.
-
-Unsigned roads: a primary road 60 km/h in towns, 90 outside (traffic drives 76 on a two-way one).
+Unsigned roads: a primary road 60 km/h in towns, 90 outside (cars drive 76 on a two-way one).
 
 ## Railways
 
