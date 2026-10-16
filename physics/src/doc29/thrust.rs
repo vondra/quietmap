@@ -113,6 +113,11 @@ impl PowerBracket {
         weight: 0.0,
     };
 
+    /// A value between the bracket's row (`low`) and the next (`high`), linear in power (Eq. 4-3).
+    pub fn lerp(self, low: f64, high: f64) -> f64 {
+        low + self.weight * (high - low)
+    }
+
     /// The bracket as stored in a tile (the boxes' loudest pieces): the row in the top 3 bits,
     /// the weight in the low 13 (steps of 1/8191, under 1e-3 dB of level).
     pub fn code(self) -> u16 {

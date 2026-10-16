@@ -204,12 +204,23 @@ pub fn read_npd(class: usize, departure: bool, power: PowerBracket, slant_m: f64
         return low;
     }
     let high = rows[power.row + 1].read(&position);
-    let lerp = |a: f64, b: f64| a + power.weight * (b - a);
     NpdReading {
-        sel_db: lerp(low.sel_db, high.sel_db),
-        lamax_db: lerp(low.lamax_db, high.lamax_db),
-        scaled_distance_m: lerp(low.scaled_distance_m, high.scaled_distance_m),
+        sel_db: power.lerp(low.sel_db, high.sel_db),
+        lamax_db: power.lerp(low.lamax_db, high.lamax_db),
+        scaled_distance_m: power.lerp(low.scaled_distance_m, high.scaled_distance_m),
     }
+}
+
+/// The LAmax of [`read_npd`] alone, without the SEL and d_lambda the maximum level's readers
+/// leave unread.
+pub fn read_npd_lamax_db(class: usize, departure: bool, power: PowerBracket, slant_m: f64) -> f64 {
+    let rows = &POWER_ROWS[class][usize::from(departure)];
+    let position = NpdPosition::at(slant_m);
+    let low = rows[power.row].lamax_db(&position);
+    if power.weight == 0.0 {
+        return low;
+    }
+    power.lerp(low, rows[power.row + 1].lamax_db(&position))
 }
 
 /// One tabulated power setting of a class and operation.
@@ -267,9 +278,13 @@ impl PowerRow {
         };
         NpdReading {
             sel_db: position.level(&self.sel_db, alpha),
-            lamax_db: position.level(&self.lamax_db, alpha),
+            lamax_db: self.lamax_db(position),
             scaled_distance_m,
         }
+    }
+
+    fn lamax_db(&self, position: &NpdPosition) -> f64 {
+        position.level(&self.lamax_db, self.tail_absorption_db_per_m)
     }
 }
 

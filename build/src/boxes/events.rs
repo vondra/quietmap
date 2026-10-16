@@ -321,9 +321,9 @@ pub fn halo(squares: &[Square]) -> Vec<Square> {
     all
 }
 
-/// A flight's loudest moments at the cells it reaches: per cell index, over its primary segments
+/// A flight's loudest moments at the cells it reaches, by cell index: over its primary segments
 /// and over all of them (only moments of the lowest band and above).
-type CellMoments = HashMap<u32, [Option<Peak>; 2]>;
+type CellMoments = Vec<(u32, [Option<Peak>; 2])>;
 
 /// One block's loudest moments of the flight so far, and per provider the quietest of them over
 /// its cells (-inf while a cell has none): no segment whose bound stays under it can change the
@@ -399,7 +399,7 @@ fn flight_moments(
             let reach_m = (reach_slant_m * reach_slant_m - above_m * above_m)
                 .sqrt()
                 .min(EVENTS_REACH_M);
-            let bound_db = emission.read_npd(above_m.max(1.0)).lamax_db
+            let bound_db = emission.lamax_db(above_m.max(1.0))
                 + INSTALLATION_CORRECTION_MAX_DB
                 + IMPEDANCE_MARGIN_DB;
             Some(Candidate {
@@ -475,7 +475,7 @@ fn flight_moments(
                 let nearest_m = horizontal_m
                     .max(0.0)
                     .hypot((candidate.lowest_m - top_m).max(0.0));
-                let bound = emission.read_npd(nearest_m).lamax_db
+                let bound = emission.lamax_db(nearest_m)
                     + INSTALLATION_CORRECTION_MAX_DB
                     + IMPEDANCE_MARGIN_DB;
                 if bound < lowest_band {
@@ -503,7 +503,7 @@ fn flight_moments(
                     }
                     // The nearest the segment comes bounds what it can reach here.
                     let nearest_m = horizontal_m.hypot((candidate.lowest_m - altitude_m).max(0.0));
-                    let bound = emission.read_npd(nearest_m).lamax_db
+                    let bound = emission.lamax_db(nearest_m)
                         + INSTALLATION_CORRECTION_MAX_DB
                         + IMPEDANCE_MARGIN_DB;
                     if bound < lowest_band
@@ -540,10 +540,11 @@ fn flight_moments(
             if cell[1].is_some() {
                 let row = block_row * BLOCK + slot / BLOCK;
                 let column = block_column * BLOCK + slot % BLOCK;
-                moments.insert((row * CELLS + column) as u32, *cell);
+                moments.push(((row * CELLS + column) as u32, *cell));
             }
         }
     }
+    moments.sort_unstable_by_key(|(index, _)| *index);
     moments
 }
 
@@ -578,6 +579,71 @@ fn segment_key(segment: &FlightSegment) -> (u64, u8, u8, [u64; 6]) {
     )
 }
 
+/// Counts one day's flights at the square's cells: each flight once, its segments by
+/// [`segment_key`] with the copies the squares' files share dropped, the flights in order and
+/// each cell's flights added in that order.
+fn count_day(
+    counts: &mut [EventCounts],
+    segments: &[FlightSegment],
+    (receivers, place): (&Receivers, &PlaceAtmosphere),
+    weights: (f64, f64),
+) {
+    let mut by_flight: Vec<(u64, u32)> = segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| (segment.flight_id, index as u32))
+        .collect();
+    by_flight.par_sort_unstable();
+    let starts: Vec<usize> = (0..by_flight.len())
+        .filter(|&index| index == 0 || by_flight[index - 1].0 != by_flight[index].0)
+        .chain(std::iter::once(by_flight.len()))
+        .collect();
+    let flights: Vec<([u8; 4], bool, CellMoments)> = starts
+        .par_windows(2)
+        .map(|bounds| {
+            let mut flight: Vec<FlightSegment> = by_flight[bounds[0]..bounds[1]]
+                .iter()
+                .map(|&(_, index)| segments[index as usize].clone())
+                .collect();
+            flight.sort_by_key(segment_key);
+            flight.dedup_by_key(|segment| segment_key(segment));
+            let first = &flight[0];
+            let helicopter =
+                emission_of(first).is_some_and(|(aircraft, _)| aircraft.helicopter.is_some());
+            (
+                first.designator,
+                helicopter,
+                flight_moments(&flight, receivers, place),
+            )
+        })
+        .collect();
+    counts
+        .par_chunks_mut(ROWS_PER_GROUP * CELLS)
+        .enumerate()
+        .for_each(|(group, cells)| {
+            let first_cell = (group * ROWS_PER_GROUP * CELLS) as u32;
+            for (designator, helicopter, moments) in &flights {
+                let from = moments.partition_point(|(index, _)| *index < first_cell);
+                for &(index, [primary, any]) in &moments[from..] {
+                    let Some(cell) = cells.get_mut((index - first_cell) as usize) else {
+                        break;
+                    };
+                    let mut peaks = FlightPeaks::new(*designator, *helicopter);
+                    if let Some(peak) = primary {
+                        peaks.add(peak, false);
+                    }
+                    if let Some(peak) = any {
+                        peaks.add(peak, true);
+                    }
+                    cell.add(&peaks, weights);
+                }
+            }
+        });
+}
+
+/// Rows of cells one thread adds a day's flights to.
+const ROWS_PER_GROUP: usize = 8;
+
 /// Builds the `aircraft-events` tiles of one z9 square from the day files of the squares within
 /// [`EVENTS_REACH_M`] under `shuffled` (`days`: the window's, with their roles) and the terrain of
 /// `terrain_root`; writes the tiles with a flight above the lowest band under `out`; returns the
@@ -590,6 +656,12 @@ pub fn build_square(
     terrain_root: &Path,
     out: &Path,
 ) -> Result<usize, String> {
+    if let Some((day, _)) = days
+        .iter()
+        .find(|(_, roles)| roles.increment && !roles.baseline)
+    {
+        return Err(format!("aircraft events: {day} is an increment day only"));
+    }
     let receivers = Receivers::new(square, terrain_root)?;
     let inputs = squares_within_reach(square);
     let place = place_atmosphere(weather, square);
@@ -603,30 +675,19 @@ pub fn build_square(
             .count()
             .max(1) as f64,
     );
+    // A day's segments of the squares within reach, read at once.
+    let read_day = |day: &str| -> Result<Vec<FlightSegment>, String> {
+        let read: Vec<Vec<FlightSegment>> = inputs
+            .par_iter()
+            .map(|input| shuffle::square_day(shuffled, *input, day))
+            .collect::<Result<_, _>>()?;
+        Ok(read.concat())
+    };
     let mut counts = vec![EventCounts::default(); CELLS * CELLS];
-    for (day, roles) in days {
-        if roles.increment && !roles.baseline {
-            return Err(format!("aircraft events: {day} is an increment day only"));
-        }
-        let mut segments = Vec::new();
-        for input in &inputs {
-            segments.extend(shuffle::square_day(shuffled, *input, day)?);
-        }
-        segments.par_sort_unstable_by_key(segment_key);
-        segments.dedup_by_key(|segment| segment_key(segment));
-        let starts: Vec<usize> = (0..segments.len())
-            .filter(|&index| {
-                index == 0 || segments[index - 1].flight_id != segments[index].flight_id
-            })
-            .chain(std::iter::once(segments.len()))
-            .collect();
-        let flights: Vec<(&[FlightSegment], CellMoments)> = starts
-            .par_windows(2)
-            .map(|bounds| {
-                let flight = &segments[bounds[0]..bounds[1]];
-                (flight, flight_moments(flight, &receivers, &place))
-            })
-            .collect();
+    // The next day is read while this one is counted.
+    let mut next = days.first().map(|(day, _)| read_day(day));
+    for (index, (_, roles)) in days.iter().enumerate() {
+        let segments = next.take().expect("the day read ahead")?;
         let weights = (
             if roles.baseline { 1.0 / baseline } else { 0.0 },
             if roles.increment {
@@ -635,21 +696,11 @@ pub fn build_square(
                 0.0
             },
         );
-        for (flight, moments) in flights {
-            let first = &flight[0];
-            let helicopter =
-                emission_of(first).is_some_and(|(aircraft, _)| aircraft.helicopter.is_some());
-            for (index, [primary, any]) in moments {
-                let mut peaks = FlightPeaks::new(first.designator, helicopter);
-                if let Some(peak) = primary {
-                    peaks.add(peak, false);
-                }
-                if let Some(peak) = any {
-                    peaks.add(peak, true);
-                }
-                counts[index as usize].add(&peaks, weights);
-            }
-        }
+        let ((), following) = rayon::join(
+            || count_day(&mut counts, &segments, (&receivers, &place), weights),
+            || days.get(index + 1).map(|(day, _)| read_day(day)),
+        );
+        next = following;
     }
     let mut writer = SquareWriter::create(out, tiles::Kind::AircraftEvents, square)?;
     for tile_index in 0..64 {
