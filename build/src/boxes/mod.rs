@@ -411,7 +411,7 @@ pub fn build_square(
     }
     let bytes = read_held(terrain_root, tiles::Kind::Terrain, near.iter().copied())?;
     let terrain: HashMap<TileId, Terrain> = bytes
-        .iter()
+        .par_iter()
         .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
         .collect::<Result<_, _>>()
         .map_err(|error| error.to_string())?;
