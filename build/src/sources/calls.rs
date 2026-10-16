@@ -13,12 +13,12 @@
 //! - Turkey and Cyprus (Diyanet): the calls and the sala, Friday's by day and Thursday's in the
 //!   evening (120 s, a judgment);
 //! - Rwanda: no dawn call since 2022; China, Tajikistan and Singapore: none outside;
-//! - western, central and northern Europe, the Americas, Australia and East Asia: Friday's noon
-//!   call only, 240 s at 100 dB(A) (Cologne's 60 dB at the footpath, Oer-Erkenschwick's 33 dB(A)
+//! - western, central and northern Europe, Ukraine, Belarus, Moldova, the Americas, Australia,
+//!   New Zealand, Japan, South Korea, Taiwan, Hong Kong and Macao: Friday's noon call only, 240 s at 100 dB(A) (Cologne's 60 dB at the footpath, Oer-Erkenschwick's 33 dB(A)
 //!   at 890 m), and only at mosques with a mapped minaret (7-8 % of Dutch mosques call, 0.5-1 % of
 //!   German ones);
 //! - everywhere else (the Middle East, Africa, South and Central Asia, the Balkans, Russia, South-East
-//!   Asia): the five calls (India's 22-06 h loudspeaker ban is not the practice, the research found).
+//!   Asia, North Korea and Mongolia): the five calls (India's 22-06 h loudspeaker ban is not the practice, the research found).
 //!
 //! The horns hang three quarters up a mapped minaret within reach, else 10 m up in Indonesia,
 //! Malaysia and Brunei, 6 m where only Friday's call sounds, 15 m elsewhere, or 2 m above a taller

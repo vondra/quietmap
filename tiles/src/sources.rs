@@ -109,7 +109,8 @@ pub const THAI_HIGHWAYS_SOURCE_ID: u16 = 31;
 /// country-tuned CNOSSOS class defaults (Algeria, DR Congo, Ethiopia, Iran, Iraq, Kazakhstan,
 /// Kenya, Morocco, Nigeria, Russia, Sudan, Turkey, Ukraine, Egypt, Tanzania, Uzbekistan: "no open
 /// per-segment AADT") and the road-classification fallbacks (Japan, Argentina, Chile, Colombia,
-/// Indonesia, Peru, Riyadh, Thailand). They put 9-15 % medium and heavy vehicles on urban main
+/// Indonesia, Peru, Saudi Arabia (Riyadh's map and the national atlas), Thailand). They put
+/// 9-15 % medium and heavy vehicles on urban main
 /// roads and up to 40 % on every class, residential streets included.
 pub const GUESSED_SPLIT_SOURCES: [u16; 25] = [
     PRIOR_SOURCE_ID,

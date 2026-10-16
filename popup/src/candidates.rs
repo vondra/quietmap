@@ -191,8 +191,7 @@ impl Candidate {
 }
 
 /// Whether a piece whose bound at a receiver is `bound` is loud there: its bound reaches the edge.
-/// The painter evaluates a loud piece exactly and estimates the quiet rest as this crate's
-/// selection does (`paint::lattice`).
+/// The painter evaluates a loud piece exactly and blends the quiet rest (`paint::blocks`).
 pub fn loud(bound: &[f64; PERIODS]) -> bool {
     lden_energy(bound) >= energy(REACH_EDGE_LDEN_DB)
 }

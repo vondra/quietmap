@@ -1,5 +1,5 @@
 // One row of the popup's "what you hear" list, in columns: the source, why it is loud (how often it
-// passes, or steady), how far, how loud it is alone over the day (its own Nden, sone) and its share
+// passes; nothing for a steady source), how far, how loud it is alone over the day (its own Nden, sone) and its share
 // of the place's loudness; it opens to its details. A contributor has one, the aircraft layer as a whole has one (it lists no
 // contributors), and so has the rest of the sources, together.
 import { useState, type ReactNode } from 'react'
@@ -20,7 +20,7 @@ export function rowRank(nden: number | undefined, lden: number | null | undefine
 function SourceRow({ label, distance, heard, nden, percent, onToggle, children }: {
   label: string
   distance: string
-  /** Why it is loud, short: how often it passes, or steady; none for a source without passes. */
+  /** Why it is loud, short: how often it passes; none for a steady source. */
   heard: string | null
   /** The row's own Nden in sone, alone: how loud it is over the day (undefined before the final
    *  update, null when it cannot be told). */

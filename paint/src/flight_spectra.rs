@@ -4,8 +4,8 @@
 //! receiver's air. Every second block corner stays a spectral node. Alternating nodes and cell
 //! centres are evaluated first; other nodes blend only where those five spectra vary little and
 //! the centre agrees. Undefined spectra and square borders retain their exact computation.
-//! The stored lattice and its pixel interpolation are unchanged; the independent etalon checks
-//! the sampling error against the popup's model.
+//! The stored lattice and its pixel interpolation are unchanged; the etalon shares these spectra,
+//! so it does not test their sampling.
 
 use crate::exact::Point;
 use crate::loudest::LoudestIndex;

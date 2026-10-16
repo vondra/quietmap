@@ -65,7 +65,8 @@ pub fn source_type_profile(source_type: u8) -> IndustrialProfile {
 pub const SOLAR_NACE: u16 = 3599;
 
 /// The most specific profile, by NACE code (4 digits, then the division); `None` when unknown.
-/// Coal (05) runs around the clock, quarries (07, 08) by day; 06 and 62 are weak anchors.
+/// Coal (05) runs around the clock, quarries (07, 08) mostly by day (8 dB quieter in the
+/// evening, 20 at night); 06 and 62 are weak anchors.
 pub fn nace_profile(nace: u16) -> Option<IndustrialProfile> {
     match nace {
         3511 => return Some(profile(97.0, THERMAL_POWER, -1.0, -2.0)),
