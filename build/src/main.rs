@@ -191,11 +191,12 @@ fn box_rules(options: &Arguments) -> Result<Vec<boxes::BoxRule>, String> {
         .collect()
 }
 
-/// `--memory-gb`: the memory the squares built at once may take (GB, 64 by default).
+/// `--memory-gb`: the memory the squares built at once may take by their estimates (GB, 96 by
+/// default; the estimates are bounds, the heaviest squares take about half of theirs).
 fn memory_budget(options: &Arguments) -> Result<u64, String> {
     let gigabytes: u64 = options
         .optional("memory-gb")
-        .unwrap_or("64")
+        .unwrap_or("96")
         .parse()
         .map_err(|_| "bad --memory-gb".to_string())?;
     Ok(gigabytes << 30)
@@ -396,12 +397,15 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 .filter(|&&square| !to_build(square).is_empty())
                 .map(|&square| {
                     let bytes = boxes::shuffle::square_bytes(shuffled, square);
-                    // A box takes about 1 KB; a square's boxes stay under one per 100 bytes of its
-                    // day files (measured 2026-10-16 on 10 squares of the Americas, both kinds).
+                    // A box takes about 900 bytes. A square's fine boxes stayed under 1,414 times
+                    // its day files' bytes to the power 0.4 at 7,323 squares of the Americas (the
+                    // most, 8.5 million in 20.9 GB, 2.2 times under), its far boxes under 0.3 times
+                    // its fine (2026-10-16).
+                    let boxes = 1.3 * 1_414.0 * (bytes as f64).powf(0.4);
                     boxes::run::Job {
                         square,
                         work: bytes,
-                        memory: (bytes / 100) << 10,
+                        memory: (boxes * 900.0) as u64,
                     }
                 })
                 .collect();
@@ -454,12 +458,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
                         .iter()
                         .map(|input| bytes.get(input).copied().unwrap_or(0))
                         .sum();
-                    // A day of the inputs decoded twice over (about 4 bytes in memory a byte of the
-                    // day files) and the square's counts.
+                    // Two days of the inputs decoded (152 bytes a segment of 80 in the day files)
+                    // and each flight's segments copied once more, and the square's counts.
                     boxes::run::Job {
                         square,
                         work,
-                        memory: 4 * work / days.len().max(1) as u64 + (64 << 20),
+                        memory: 6 * work / days.len().max(1) as u64 + (64 << 20),
                     }
                 })
                 .collect();
