@@ -11,10 +11,12 @@ reads "—"; a click there computes it all the same.
 ## Colours
 
 One colour for each doubling of loudness: under 1 sone, about as loud as a quiet room, the map is
-clear; then 2 sone pale green, 4 yellow, 8 orange, 16 red and 32 maroon, held flat above. Colours
-blend smoothly in between, and their opacity rises with loudness over the base map. The order is the
-one air-quality maps taught, and the lightness falls with loudness, so the scale still reads in grey
-and with red-green colour blindness.
+clear; then 2 sone a pale sage green, 4 amber, 8 orange, 16 red and 32 maroon, held flat above.
+Colours blend smoothly in between, and their opacity rises with loudness over the base map. The
+quiet colours stay soft and see-through, so the map under them still shows; the loud ones grow
+saturated, dark and opaque, because lighter colours read as calmer and more saturated ones as more
+urgent. The order is the one air-quality maps taught, and the lightness falls with loudness, so the
+scale still reads in grey and with red-green colour blindness.
 
 ## Layers
 
