@@ -1,7 +1,8 @@
 //! Builds many squares at once in one process: the largest first, so that the longest start first
-//! and the small ones fill the threads to the end; as many at a time as a memory budget admits
-//! (a square needing more than the whole budget runs once the others are done). Each square's
-//! builder runs on the shared thread pool with its own parallel work inside.
+//! and the small ones fill the threads to the end; as many at a time as a memory budget admits,
+//! a smaller square taking what a larger one waiting for memory leaves (a square needing more
+//! than the whole budget runs once the others are done). Each square's builder runs on the
+//! shared thread pool with its own parallel work inside.
 
 use crate::dev4::Square;
 use std::sync::{Condvar, Mutex};
@@ -21,22 +22,31 @@ pub fn build_squares(
     budget: u64,
     build: impl Fn(Square) -> Result<String, String> + Sync,
 ) -> Result<(), String> {
+    for job in &mut jobs {
+        job.memory = job.memory.min(budget);
+    }
     jobs.sort_by(|a, b| b.work.cmp(&a.work).then(a.square.cmp(&b.square)));
-    let free = Mutex::new(budget);
-    let freed = Condvar::new();
+    // The memory left.
+    let state = Mutex::new(budget);
+    let changed = Condvar::new();
     let failure: Mutex<Option<String>> = Mutex::new(None);
     rayon::in_place_scope(|scope| {
-        for job in jobs {
-            let need = job.memory.min(budget);
-            let mut left = freed
-                .wait_while(free.lock().expect("the budget"), |left| *left < need)
-                .expect("the budget");
+        while !jobs.is_empty() {
+            let mut guard = state.lock().expect("the budget");
+            let chosen = loop {
+                let left = *guard;
+                if let Some(index) = jobs.iter().position(|job| job.memory <= left) {
+                    break index;
+                }
+                guard = changed.wait(guard).expect("the budget");
+            };
             if failure.lock().expect("the failure").is_some() {
                 break;
             }
-            *left -= need;
-            drop(left);
-            let (build, free, freed, failure) = (&build, &free, &freed, &failure);
+            let job = jobs.remove(chosen);
+            *guard -= job.memory;
+            drop(guard);
+            let (build, state, changed, failure) = (&build, &state, &changed, &failure);
             scope.spawn(move |_| {
                 match build(job.square) {
                     Ok(line) => eprintln!("{line}"),
@@ -44,8 +54,8 @@ pub fn build_squares(
                         failure.lock().expect("the failure").get_or_insert(error);
                     }
                 }
-                *free.lock().expect("the budget") += need;
-                freed.notify_all();
+                *state.lock().expect("the budget") += job.memory;
+                changed.notify_all();
             });
         }
     });

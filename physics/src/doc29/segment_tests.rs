@@ -366,3 +366,32 @@ fn sources_above_the_screening_ceiling_are_not_screened() {
     };
     assert!(segment_sel_at_receiver(&jet, &lower, &wall).sel_db < sel.sel_db);
 }
+
+/// The LAmax read alone is the full reading's, bit for bit, at every slant and in any air: the
+/// events and the boxes' kept pieces read it so.
+#[test]
+fn the_lamax_alone_is_the_readings_lamax() {
+    let humid =
+        crate::doc29::atmosphere::PlaceAtmosphere::new(&crate::atmosphere::alpha_bands(30.0, 90.0));
+    for (designator, departure) in [
+        ("B738", true),
+        ("A320", false),
+        ("EC35", true),
+        ("C172", true),
+    ] {
+        for speed_kt in [90.0, 160.0, 250.0] {
+            let model = emission(designator, &flight(departure, speed_kt, 0.04), false);
+            for emission in [model, model.in_atmosphere(&humid)] {
+                for slant_m in [
+                    1.0, 25.0, 61.0, 300.0, 2_000.0, 7_619.0, 7_621.0, 20_000.0, 60_000.0,
+                ] {
+                    assert_eq!(
+                        emission.lamax_db(slant_m).to_bits(),
+                        emission.read_npd(slant_m).lamax_db.to_bits(),
+                        "{designator} at {slant_m} m"
+                    );
+                }
+            }
+        }
+    }
+}

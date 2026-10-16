@@ -284,7 +284,7 @@ fn add_day(
             let emission = emission.in_atmosphere(place);
             let emitted = Emitted {
                 energies: SegmentEnergies::of(&emission.npd_distance_levels()),
-                lamax_reference_db: emission.read_npd(LAMAX_REFERENCE_SLANT_M).lamax_db,
+                lamax_reference_db: emission.lamax_db(LAMAX_REFERENCE_SLANT_M),
                 helicopter: aircraft.helicopter.is_some(),
                 emission,
             };
@@ -353,8 +353,7 @@ fn add_day(
                     }
                     let keep_level_db = emitted
                         .emission
-                        .read_npd(piece.start.1.min(piece.end.1) - piece.ground_m)
-                        .lamax_db;
+                        .lamax_db(piece.start.1.min(piece.end.1) - piece.ground_m);
                     entry.keep((segment.flight_id, keep_level_db), *pieces, || {
                         KeptPiece::new(segment, emitted, keep_level_db, piece)
                     });
