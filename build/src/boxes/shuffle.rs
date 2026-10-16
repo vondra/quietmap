@@ -362,6 +362,16 @@ pub fn window_days(out: &Path, window: &Window) -> Result<Vec<(String, DayRoles)
     Ok(done)
 }
 
+/// The bytes of one square's day files under `out` (0 without any): the size of its work.
+pub fn square_bytes(out: &Path, square: Square) -> u64 {
+    let directory = out.join(square.x.to_string()).join(square.y.to_string());
+    std::fs::read_dir(directory).map_or(0, |entries| {
+        entries
+            .filter_map(|entry| Some(entry.ok()?.metadata().ok()?.len()))
+            .sum()
+    })
+}
+
 /// The segments of one square on one day under `out` (none when it had none).
 pub fn square_day(out: &Path, square: Square, day: &str) -> Result<Vec<FlightSegment>, String> {
     let path = square_day_path(out, square, day);

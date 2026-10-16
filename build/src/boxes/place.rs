@@ -6,6 +6,7 @@
 use physics::doc29::box_geometry::{ClearanceBand, clearance_bands};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 use tiles::geo::{Mercator, TILES_PER_AXIS, TileId};
 use tiles::terrain::Terrain;
 
@@ -45,11 +46,13 @@ pub fn tile_bands(tile: TileId, level_step_db: f64) -> Vec<ClearanceBand> {
 }
 
 /// A tile's highest terrain per cell, from its finest band's zoom up to the tile itself:
-/// `levels[k]` is the zoom 12 + k grid, 2^k cells a side, row-major from the north-west; and the
-/// same grids holding the highest terrain within one edge of each cell (its 3 x 3 cells).
+/// `levels[k]` is the zoom 12 + k grid, 2^k cells a side, row-major from the north-west; the same
+/// grids holding the highest terrain within one edge of each cell (its 3 x 3 cells); and per grid
+/// the highest of those, over which a point clears a band anywhere in the tile.
 struct TileGround {
     levels: Vec<Vec<f32>>,
     within_one_edge: Vec<Vec<f32>>,
+    highest_within_one_edge: Vec<f64>,
 }
 
 impl TileGround {
@@ -99,6 +102,7 @@ impl TileGround {
         TileGround {
             levels,
             within_one_edge: Vec::new(),
+            highest_within_one_edge: Vec::new(),
         }
     }
 }
@@ -119,7 +123,42 @@ fn ground_within_one_edge(ground: &TileGround, zoom: u8, cell: [u32; 2]) -> f64 
 pub struct Placement {
     level_step_db: f64,
     bands: Vec<std::sync::OnceLock<Vec<ClearanceBand>>>,
-    ground: HashMap<TileId, TileGround>,
+    ground: HashMap<TileId, TileGround, BuildHasherDefault<TileHasher>>,
+}
+
+/// Hashes tiles and boxes word by word, mixed once at the end: a sample's tile is looked up for
+/// each of its bands' terrain, where the default SipHash cost as much as the band climb.
+#[derive(Default)]
+pub struct TileHasher(u64);
+
+impl Hasher for TileHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.write_u64(u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u8(&mut self, value: u8) {
+        self.write_u64(u64::from(value));
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.write_u64(u64::from(value));
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+
+    fn finish(&self) -> u64 {
+        // The splitmix64 finalizer: every bit of the words reaches the low bits a table indexes by.
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
 }
 
 impl Placement {
@@ -135,7 +174,7 @@ impl Placement {
             bands: (0..TILES_PER_AXIS)
                 .map(|_| std::sync::OnceLock::new())
                 .collect(),
-            ground: HashMap::new(),
+            ground: HashMap::default(),
         };
         let built: Vec<(TileId, TileGround)> = tiles
             .par_iter()
@@ -181,11 +220,12 @@ impl Placement {
             })
             .collect();
         for (tile, levels) in neighbourhoods {
-            placement
-                .ground
-                .get_mut(&tile)
-                .expect("a prepared tile")
-                .within_one_edge = levels;
+            let ground = placement.ground.get_mut(&tile).expect("a prepared tile");
+            ground.highest_within_one_edge = levels
+                .iter()
+                .map(|grid| f64::from(grid.iter().copied().fold(f32::NEG_INFINITY, f32::max)))
+                .collect();
+            ground.within_one_edge = levels;
         }
         placement
     }
@@ -225,8 +265,7 @@ impl Placement {
         let tile = TileId::containing(position);
         let bands = self.bands(tile);
         let ground = self.ground.get(&tile);
-        let mut chosen = (0usize, [0u32; 2], 0.0);
-        for (index, band) in bands.iter().enumerate() {
+        let cell_and_terrain = |band: &ClearanceBand| {
             let scale = 1u32 << (band.zoom - 12);
             let cell = [
                 ((position.x * f64::from(scale)).floor() as u32).min(TILES_PER_AXIS * scale - 1),
@@ -235,18 +274,31 @@ impl Placement {
             let terrain_m = ground.map_or(0.0, |ground| {
                 ground_within_one_edge(ground, band.zoom, cell)
             });
-            if index > 0 && altitude_m - terrain_m < band.clearance_m {
+            (cell, terrain_m)
+        };
+        // The first band the point does not clear ends the climb; a band it clears over the
+        // tile's highest terrain at that zoom it clears in any cell.
+        let mut chosen = 0;
+        for (index, band) in bands.iter().enumerate().skip(1) {
+            let highest_m = ground.map_or(0.0, |ground| {
+                let level = usize::from(band.zoom - 12).min(ground.levels.len() - 1);
+                ground.highest_within_one_edge[level]
+            });
+            if altitude_m - highest_m < band.clearance_m
+                && altitude_m - cell_and_terrain(band).1 < band.clearance_m
+            {
                 break;
             }
-            chosen = (index, cell, terrain_m);
+            chosen = index;
         }
+        let (cell, terrain_m) = cell_and_terrain(&bands[chosen]);
         let key = BoxKey {
             tile,
-            band: chosen.0 as u8,
-            cell: chosen.1,
+            band: chosen as u8,
+            cell,
             helicopter,
         };
-        (key, chosen.2)
+        (key, terrain_m)
     }
 
     /// The edge (m) of a box.
@@ -275,6 +327,37 @@ pub fn cut_into_pieces(
     end: (Mercator, f64),
     helicopter: bool,
 ) -> Vec<BoxPiece> {
+    cut_where(placement, start, end, helicopter, |_, _| true)
+}
+
+/// The pieces [`cut_into_pieces`] cuts in `tile`, cutting only there: a stretch's middle lies
+/// between the ends of its stretch between two tile edges (positions along a segment rise or fall
+/// with the fraction, rounded alike), so a stretch whose ends' tiles do not frame `tile` has no
+/// piece there; a tile's pieces follow each other along a segment, so the joins are the same.
+pub fn cut_within_tile(
+    placement: &Placement,
+    start: (Mercator, f64),
+    end: (Mercator, f64),
+    helicopter: bool,
+    tile: TileId,
+) -> Vec<BoxPiece> {
+    let between = |a: u32, b: u32, value: u32| a.min(b) <= value && value <= a.max(b);
+    let mut pieces = cut_where(placement, start, end, helicopter, |from, to| {
+        between(from.x, to.x, tile.x) && between(from.y, to.y, tile.y)
+    });
+    pieces.retain(|piece| piece.key.tile == tile);
+    pieces
+}
+
+/// The cut of [`cut_into_pieces`] over the stretches between tile edges whose ends' tiles
+/// `wanted` takes.
+fn cut_where(
+    placement: &Placement,
+    start: (Mercator, f64),
+    end: (Mercator, f64),
+    helicopter: bool,
+    wanted: impl Fn(TileId, TileId) -> bool,
+) -> Vec<BoxPiece> {
     let at = |t: f64| {
         (
             Mercator {
@@ -289,6 +372,9 @@ pub fn cut_into_pieces(
     let mut pieces: Vec<BoxPiece> = Vec::new();
     for pair in tile_crossings(start.0, end.0).windows(2) {
         let (mut t, until) = (pair[0], pair[1]);
+        if !wanted(TileId::containing(at(t).0), TileId::containing(at(until).0)) {
+            continue;
+        }
         let mut step_m = {
             let (probe, probe_altitude) = at(0.5 * (t + until));
             placement.edge_m(&placement.box_of(probe, probe_altitude, helicopter).0)

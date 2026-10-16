@@ -8,25 +8,26 @@ pub mod check;
 pub mod events;
 mod place;
 mod read;
+pub mod run;
 pub mod shuffle;
 mod write;
 
 use crate::dev4::Square;
 use physics::bands::PERIODS;
 use physics::doc29::atmosphere::PlaceAtmosphere;
-use physics::doc29::box_sums::BoxSums;
+use physics::doc29::box_sums::{BoxSums, SegmentEnergies};
 use physics::doc29::npd::LAMAX_REFERENCE_SLANT_M;
-use physics::doc29::segment::{AircraftType, NpdDistanceLevels, SegmentEmission};
+use physics::doc29::segment::{AircraftType, SegmentEmission};
 use physics::doc29::thrust::SegmentFlight;
 use physics::weather::WeatherTable;
-use place::{BoxKey, BoxPiece, Placement, cut_into_pieces};
+use place::{BoxKey, BoxPiece, Placement, TileHasher, cut_within_tile};
 use rayon::prelude::*;
 use read::{FLAG_DEPARTURE, FLAG_HELICOPTER_DESCENT, FLAG_ON_GROUND, FlightSegment};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use tiles::geo::{Mercator, TileId};
-use tiles::square::read_held;
+use tiles::geo::{LocalFrame, Mercator, TileId};
+use tiles::square::{TILES_PER_SIDE, TILES_PER_SQUARE, read_held};
 use tiles::terrain::Terrain;
 
 /// Loudest pieces a box keeps for the top-flights list (PLAN section 5: K starts at 2), one per
@@ -64,7 +65,12 @@ pub struct KeptPiece {
 }
 
 impl KeptPiece {
-    fn new(segment: &FlightSegment, emission: &SegmentEmission, piece: &BoxPiece) -> Self {
+    fn new(
+        segment: &FlightSegment,
+        emitted: &Emitted,
+        keep_level_db: f64,
+        piece: &BoxPiece,
+    ) -> Self {
         KeptPiece {
             flight_id: segment.flight_id,
             callsign: segment.callsign,
@@ -72,12 +78,10 @@ impl KeptPiece {
             flags: segment.flags,
             period: segment.period,
             speed_kt: segment.speed_kt as f32,
-            class: emission.class as u16,
-            power_code: emission.power.code(),
-            lamax_reference_db: emission.read_npd(LAMAX_REFERENCE_SLANT_M).lamax_db,
-            keep_level_db: emission
-                .read_npd(piece.start.1.min(piece.end.1) - piece.ground_m)
-                .lamax_db,
+            class: emitted.emission.class as u16,
+            power_code: emitted.emission.power.code(),
+            lamax_reference_db: emitted.lamax_reference_db,
+            keep_level_db,
             start: piece.start,
             end: piece.end,
         }
@@ -86,42 +90,46 @@ impl KeptPiece {
     /// The order a box keeps its pieces in: by `keep_level_db`, equal levels by a hash of the
     /// flight, so that the flights kept of one type spread over the window.
     pub fn cmp_loudness(&self, other: &KeptPiece) -> Ordering {
-        let mixed = |flight: u64| flight.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        self.keep_level_db
-            .total_cmp(&other.keep_level_db)
-            .then(mixed(self.flight_id).cmp(&mixed(other.flight_id)))
+        loudness_order(
+            (self.keep_level_db, self.flight_id),
+            (other.keep_level_db, other.flight_id),
+        )
     }
 }
 
-/// Boxes are kept in this many shards by tile, so that each thread adds pieces to its own.
-const SHARDS: usize = 512;
-
-/// The shard of a tile's boxes (neighbouring tiles fall far apart).
-fn shard_of(tile: TileId) -> usize {
-    let mixed = (u64::from(tile.x) << 32 | u64::from(tile.y)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    (mixed >> (64 - SHARDS.trailing_zeros())) as usize
+/// [`KeptPiece::cmp_loudness`] of two pieces' (keep level, flight).
+fn loudness_order(a: (f64, u64), b: (f64, u64)) -> Ordering {
+    let mixed = |flight: u64| flight.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    a.0.total_cmp(&b.0).then(mixed(a.1).cmp(&mixed(b.1)))
 }
 
-/// The boxes being built, in shards by tile.
+/// One tile's boxes.
+type TileBoxes = HashMap<BoxKey, BoxEntry, std::hash::BuildHasherDefault<TileHasher>>;
+
+/// The boxes of one square being built, a map per tile (by its index in the square), so that each
+/// thread adds the pieces of its own tiles.
 pub struct Boxes {
-    shards: Vec<HashMap<BoxKey, BoxEntry>>,
+    tiles: Vec<TileBoxes>,
 }
 
 impl Default for Boxes {
     fn default() -> Self {
         Boxes {
-            shards: (0..SHARDS).map(|_| HashMap::new()).collect(),
+            tiles: (0..TILES_PER_SQUARE)
+                .map(|_| TileBoxes::default())
+                .collect(),
         }
     }
 }
 
 impl Boxes {
     fn len(&self) -> usize {
-        self.shards.iter().map(HashMap::len).sum()
+        self.tiles.iter().map(HashMap::len).sum()
     }
 
+    #[cfg(test)]
     fn iter(&self) -> impl Iterator<Item = (&BoxKey, &BoxEntry)> {
-        self.shards.iter().flatten()
+        self.tiles.iter().flatten()
     }
 }
 
@@ -139,16 +147,20 @@ pub struct BoxEntry {
 }
 
 impl BoxEntry {
-    /// Keeps `candidate` if it is among the `limit` loudest pieces so far, one per flight.
-    fn keep(&mut self, candidate: KeptPiece, limit: usize) {
-        let same_flight = self
-            .kept
-            .iter()
-            .position(|kept| kept.flight_id == candidate.flight_id);
+    /// Keeps the piece of `flight` at `keep_level_db` if it is among the `limit` loudest pieces so
+    /// far, one per flight; `piece` builds it only then.
+    fn keep(
+        &mut self,
+        (flight, keep_level_db): (u64, f64),
+        limit: usize,
+        piece: impl FnOnce() -> KeptPiece,
+    ) {
+        let same_flight = self.kept.iter().position(|kept| kept.flight_id == flight);
         let slot = match same_flight {
             Some(slot) => slot,
             None if self.kept.len() < limit => {
-                self.kept.push(candidate);
+                self.kept.reserve_exact(limit - self.kept.len());
+                self.kept.push(piece());
                 return;
             }
             None => match (0..self.kept.len())
@@ -158,8 +170,14 @@ impl BoxEntry {
                 None => return,
             },
         };
-        if self.kept[slot].cmp_loudness(&candidate).is_lt() {
-            self.kept[slot] = candidate;
+        let kept = &self.kept[slot];
+        if loudness_order(
+            (kept.keep_level_db, kept.flight_id),
+            (keep_level_db, flight),
+        )
+        .is_lt()
+        {
+            self.kept[slot] = piece();
         }
     }
 }
@@ -215,116 +233,132 @@ fn geo_metres(from: [f64; 3], to: [f64; 3]) -> (f64, f64) {
     (east, (to[0] - from[0]) * metres_per_degree)
 }
 
-/// Whether a segment's tile bounding box meets `scope` (segments far outside are skipped).
-fn touches(scope: &HashSet<TileId>, start: Mercator, end: Mercator) -> bool {
-    let (x0, x1) = (
-        start.x.min(end.x).floor() as i64,
-        start.x.max(end.x).floor() as i64,
-    );
-    let (y0, y1) = (
-        start.y.min(end.y).floor() as i64,
-        start.y.max(end.y).floor() as i64,
-    );
-    if (x1 - x0 + 1) * (y1 - y0 + 1) > 64 {
-        return true;
-    }
-    (y0..=y1).any(|y| {
-        (x0..=x1).any(|x| {
-            scope.contains(&TileId {
-                x: x.rem_euclid(i64::from(tiles::geo::TILES_PER_AXIS)) as u32,
-                y: y.clamp(0, i64::from(tiles::geo::TILES_PER_AXIS) - 1) as u32,
-            })
-        })
-    })
+/// The square's tiles a segment's ends' tile box meets (columns and rows within the square), or
+/// `None`: a piece's tile lies within its segment's ends' tiles.
+fn tiles_met(
+    square: Square,
+    start: Mercator,
+    end: Mercator,
+) -> Option<[std::ops::RangeInclusive<u32>; 2]> {
+    let last = f64::from(tiles::geo::TILES_PER_AXIS - 1);
+    let span = |from: f64, to: f64, first: u32| {
+        let low = (from.min(to).floor().clamp(0.0, last) as u32).max(first);
+        let high = (from.max(to).floor().clamp(0.0, last) as u32).min(first + TILES_PER_SIDE - 1);
+        (low <= high).then(|| low - first..=high - first)
+    };
+    Some([
+        span(start.x, end.x, square.x * TILES_PER_SIDE)?,
+        span(start.y, end.y, square.y * TILES_PER_SIDE)?,
+    ])
 }
 
-/// Adds one day's segments with their window weights to `boxes`, each box keeping its `pieces`
-/// loudest pieces. Each flight's segments must be together: a box counts a flight once while its
-/// pieces arrive one after another.
+/// What a segment adds to the boxes, worked out once for all its pieces and rules.
+struct Emitted {
+    emission: SegmentEmission,
+    energies: SegmentEnergies,
+    /// The LAmax its kept pieces name at 1,000 ft (dB).
+    lamax_reference_db: f64,
+    helicopter: bool,
+}
+
+/// Adds one day's segments of `square` with their window weights to the boxes of each rule (its
+/// placement and the pieces a box keeps), tile by tile. Each flight's segments must be together: a
+/// box counts a flight once while its pieces arrive one after another.
 fn add_day(
-    boxes: &mut Boxes,
+    boxes: &mut [Boxes],
+    rules: &[(&Placement, usize)],
     segments: &[(FlightSegment, f64)],
-    (placement, place): (&Placement, &PlaceAtmosphere),
-    scope: &HashSet<TileId>,
-    pieces: usize,
+    (square, place): (Square, &PlaceAtmosphere),
 ) {
     let point = |end: [f64; 3]| (Mercator::from_degrees(end[0], end[1]), end[2]);
-    // Each segment's emission, its levels and whether it is a helicopter (none without weight,
-    // outside the scope or outside the thrust model's domain).
-    let emitted: Vec<Option<(SegmentEmission, NpdDistanceLevels, bool)>> = segments
+    // Each segment's emission and the square's tiles it can reach (none without weight, outside
+    // the square or outside the thrust model's domain).
+    let emitted: Vec<Option<(Emitted, [std::ops::RangeInclusive<u32>; 2])>> = segments
         .par_iter()
         .map(|(segment, weight)| {
             if *weight <= 0.0 || usize::from(segment.period) >= PERIODS {
                 return None;
             }
-            if !touches(scope, point(segment.start).0, point(segment.end).0) {
-                return None;
-            }
+            let tiles = tiles_met(square, point(segment.start).0, point(segment.end).0)?;
             let (aircraft, emission) = emission_of(segment)?;
             let emission = emission.in_atmosphere(place);
-            let helicopter = aircraft.helicopter.is_some();
-            Some((emission, emission.npd_distance_levels(), helicopter))
+            let emitted = Emitted {
+                energies: SegmentEnergies::of(&emission.npd_distance_levels()),
+                lamax_reference_db: emission.read_npd(LAMAX_REFERENCE_SLANT_M).lamax_db,
+                helicopter: aircraft.helicopter.is_some(),
+                emission,
+            };
+            Some((emitted, tiles))
         })
         .collect();
-    // Every piece in the scope with its shard, segment and order along the segment; then each
-    // shard adds its pieces in that order.
-    let mut cut: Vec<(u16, u32, u16, BoxPiece)> = segments
-        .par_iter()
-        .zip(&emitted)
-        .enumerate()
-        .flat_map_iter(|(index, ((segment, _), emitted))| {
-            let pieces = match emitted {
-                Some((_, _, helicopter)) => cut_into_pieces(
+    // Per tile the segments that can reach it, in their order.
+    let mut reaching: Vec<Vec<u32>> = vec![Vec::new(); TILES_PER_SQUARE];
+    for (index, emitted) in emitted.iter().enumerate() {
+        if let Some((_, [columns, rows])) = emitted {
+            for row in rows.clone() {
+                for column in columns.clone() {
+                    reaching[(row * TILES_PER_SIDE + column) as usize].push(index as u32);
+                }
+            }
+        }
+    }
+    // Each rule's tiles add their pieces in segment order, a tile at a time.
+    let mut work: Vec<(&mut TileBoxes, (&Placement, usize), usize)> = boxes
+        .iter_mut()
+        .zip(rules)
+        .flat_map(|(boxes, &rule)| {
+            boxes
+                .tiles
+                .iter_mut()
+                .enumerate()
+                .map(move |(index, map)| (map, rule, index))
+        })
+        .collect();
+    work.par_iter_mut()
+        .for_each(|(map, (placement, pieces), index)| {
+            let tile = square.tile(*index);
+            let frame = LocalFrame::at(tile.centre());
+            let metres = |(position, altitude): (Mercator, f64)| {
+                let [east, north] = frame.to_metres(position);
+                [east, north, altitude]
+            };
+            for &segment_index in &reaching[*index] {
+                let (segment, weight) = &segments[segment_index as usize];
+                let Some((emitted, _)) = &emitted[segment_index as usize] else {
+                    continue;
+                };
+                let period = usize::from(segment.period);
+                let mut period_weights = [0.0; PERIODS];
+                period_weights[period] = *weight;
+                let cut = cut_within_tile(
                     placement,
                     point(segment.start),
                     point(segment.end),
-                    *helicopter,
-                ),
-                None => Vec::new(),
-            };
-            pieces
-                .into_iter()
-                .enumerate()
-                .filter(|(_, piece)| scope.contains(&piece.key.tile))
-                .map(move |(order, piece)| {
-                    let shard = shard_of(piece.key.tile) as u16;
-                    (shard, index as u32, order as u16, piece)
-                })
-        })
-        .collect();
-    cut.par_sort_unstable_by_key(|&(shard, index, order, _)| (shard, index, order));
-    let bounds: Vec<usize> = (0..=SHARDS)
-        .map(|shard| cut.partition_point(|entry| usize::from(entry.0) < shard))
-        .collect();
-    boxes
-        .shards
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(shard, map)| {
-            for (_, index, _, piece) in &cut[bounds[shard]..bounds[shard + 1]] {
-                let (segment, segment_weight) = &segments[*index as usize];
-                let Some((emission, levels, _)) = &emitted[*index as usize] else {
-                    continue;
-                };
-                let segment_weight = *segment_weight;
-                let mut period_weights = [0.0; PERIODS];
-                period_weights[usize::from(segment.period)] = segment_weight;
-                let entry = map.entry(piece.key).or_default();
-                let [start_m, end_m] = write::piece_metres(piece);
-                entry.sums.add(
-                    levels,
-                    emission.installation,
-                    period_weights,
-                    start_m,
-                    end_m,
+                    emitted.helicopter,
+                    tile,
                 );
-                entry.ground_m = piece.ground_m;
-                let period = usize::from(segment.period);
-                if entry.last_flight[period] != segment.flight_id {
-                    entry.last_flight[period] = segment.flight_id;
-                    entry.flights_per_day[period] += segment_weight;
+                for piece in &cut {
+                    let entry = map.entry(piece.key).or_default();
+                    entry.sums.add(
+                        &emitted.energies,
+                        emitted.emission.installation,
+                        period_weights,
+                        metres(piece.start),
+                        metres(piece.end),
+                    );
+                    entry.ground_m = piece.ground_m;
+                    if entry.last_flight[period] != segment.flight_id {
+                        entry.last_flight[period] = segment.flight_id;
+                        entry.flights_per_day[period] += *weight;
+                    }
+                    let keep_level_db = emitted
+                        .emission
+                        .read_npd(piece.start.1.min(piece.end.1) - piece.ground_m)
+                        .lamax_db;
+                    entry.keep((segment.flight_id, keep_level_db), *pieces, || {
+                        KeptPiece::new(segment, emitted, keep_level_db, piece)
+                    });
                 }
-                entry.keep(KeptPiece::new(segment, emission, piece), pieces);
             }
         });
 }
@@ -361,24 +395,18 @@ impl BoxRule {
 
 /// Builds the aircraft tiles of one z9 square from its day files under `shuffled` (see
 /// [`shuffle`]; `days` are the days done there with their roles) and the terrain of
-/// `terrain_root` (a prepared year root) by `rule`; writes them under `out`, returns the number
-/// of tiles and boxes written.
+/// `terrain_root` (a prepared year root) by each of `rules`, the day files read once for all of
+/// them; writes them under `out`, returns per rule the number of tiles and boxes written.
 pub fn build_square(
     (shuffled, days): (&Path, &[(String, shuffle::DayRoles)]),
     (square, weather): (Square, &WeatherTable),
     terrain_root: &Path,
-    rule: BoxRule,
+    rules: &[BoxRule],
     out: &Path,
-) -> Result<(usize, usize), String> {
+) -> Result<Vec<(usize, usize)>, String> {
     let place = place_atmosphere(weather, square);
-    let scope: HashSet<TileId> = (0..64)
-        .map(|index| TileId {
-            x: square.x * 8 + index % 8,
-            y: square.y * 8 + index / 8,
-        })
-        .collect();
     let mut near: HashSet<TileId> = HashSet::new();
-    for tile in &scope {
+    for tile in square.tiles() {
         near.extend(tile.ring(0));
         near.extend(tile.ring(1));
     }
@@ -388,32 +416,53 @@ pub fn build_square(
         .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
         .collect::<Result<_, _>>()
         .map_err(|error| error.to_string())?;
-    let placement = Placement::new(&near, &terrain, rule.level_step_db);
-    let mut boxes = Boxes::default();
+    let placements: Vec<Placement> = rules
+        .iter()
+        .map(|rule| Placement::new(&near, &terrain, rule.level_step_db))
+        .collect();
+    let placed: Vec<(&Placement, usize)> = placements
+        .iter()
+        .zip(rules)
+        .map(|(placement, rule)| (placement, rule.pieces))
+        .collect();
+    let mut boxes: Vec<Boxes> = rules.iter().map(|_| Boxes::default()).collect();
     let counts = (
         days.iter().filter(|(_, roles)| roles.baseline).count(),
         days.iter().filter(|(_, roles)| roles.increment).count(),
     );
-    for (day, roles) in days {
-        let mut segments: Vec<(FlightSegment, f64)> = shuffle::square_day(shuffled, square, day)?
-            .into_iter()
-            .map(|segment| {
-                let weight = roles.weight(&segment, counts);
-                (segment, weight)
-            })
-            .collect();
-        // Each flight's segments together, in their order.
-        segments.par_sort_by_key(|(segment, _)| segment.flight_id);
-        add_day(
-            &mut boxes,
-            &segments,
-            (&placement, &place),
-            &scope,
-            rule.pieces,
+    // A day's segments with their weights, each flight's segments together in their order.
+    let read_day = |(day, roles): &(String, shuffle::DayRoles)| {
+        shuffle::square_day(shuffled, square, day).map(|segments| {
+            let mut weighted: Vec<(FlightSegment, f64)> = segments
+                .into_iter()
+                .map(|segment| {
+                    let weight = roles.weight(&segment, counts);
+                    (segment, weight)
+                })
+                .collect();
+            weighted.par_sort_by_key(|(segment, _)| segment.flight_id);
+            weighted
+        })
+    };
+    // The next day is read while this one is added.
+    let mut next = days.first().map(read_day);
+    for index in 0..days.len() {
+        let segments = next.take().expect("the day read ahead")?;
+        let ((), following) = rayon::join(
+            || add_day(&mut boxes, &placed, &segments, (square, &place)),
+            || days.get(index + 1).map(read_day),
         );
+        next = following;
     }
-    let written = write::write_square_boxes(&boxes, &placement, (rule.kind, square), out)?;
-    Ok((written, boxes.len()))
+    boxes
+        .iter()
+        .zip(&placements)
+        .zip(rules)
+        .map(|((boxes, placement), rule)| {
+            let written = write::write_square_boxes(boxes, placement, (rule.kind, square), out)?;
+            Ok((written, boxes.len()))
+        })
+        .collect()
 }
 
 #[cfg(test)]

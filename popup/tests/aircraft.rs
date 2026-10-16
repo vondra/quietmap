@@ -3,7 +3,7 @@
 //! boxes are read; a box beyond the reach is not heard.
 
 use physics::bands::{PERIOD_HOURS, PERIODS};
-use physics::doc29::box_sums::BoxSums;
+use physics::doc29::box_sums::{BoxSums, SegmentEnergies};
 use physics::doc29::screening::Unscreened;
 use physics::doc29::segment::{
     AircraftType, SegmentEmission, SegmentGeometry, segment_sel_at_receiver,
@@ -60,7 +60,7 @@ fn departure(east_m: f64) -> (SegmentEmission, [f64; 3], [f64; 3]) {
 fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> AircraftBox {
     let mut sums = BoxSums::default();
     sums.add(
-        &emission.npd_distance_levels(),
+        &SegmentEnergies::of(&emission.npd_distance_levels()),
         emission.installation,
         [1.0, 0.0, 0.0],
         start,

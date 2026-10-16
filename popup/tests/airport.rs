@@ -3,7 +3,7 @@
 //! energy counts in the layer's omitted-energy account.
 
 use physics::bands::{BANDS, PERIODS};
-use physics::doc29::box_sums::BoxSums;
+use physics::doc29::box_sums::{BoxSums, SegmentEnergies};
 use physics::doc29::segment::{AircraftType, SegmentEmission};
 use physics::doc29::thrust::SegmentFlight;
 use physics::weather::{COLUMNS, ROWS, SECTORS, WeatherNode, encode as encode_weather};
@@ -42,7 +42,7 @@ fn departure_box() -> AircraftBox {
         SegmentEmission::new(&AircraftType::from_designator("A320"), &flight, false).unwrap();
     let mut sums = BoxSums::default();
     sums.add(
-        &emission.npd_distance_levels(),
+        &SegmentEnergies::of(&emission.npd_distance_levels()),
         emission.installation,
         [100.0, 100.0, 100.0],
         [1_000.0, -150.0, 588.0],

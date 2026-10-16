@@ -13,6 +13,25 @@ const GEOMETRY_WEIGHT_DISTANCE: usize = 3;
 /// changes with distance, propellers falling off slower than jets.
 pub const INSTALLATION_SHARE_SLANTS_M: [f64; 2] = [1_000.0 * METRES_PER_FOOT, TAIL_ANCHOR_M];
 
+/// A segment's energies at the NPD distances and the tail anchor: the same for each of its pieces,
+/// so computed once per segment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SegmentEnergies {
+    unweighted: [f64; NPD_DISTANCES],
+    tail: f64,
+    scaled_distance_m: [f64; NPD_DISTANCES],
+}
+
+impl SegmentEnergies {
+    pub fn of(levels: &NpdDistanceLevels) -> Self {
+        SegmentEnergies {
+            unweighted: levels.sel_db.map(|level| 10f64.powf(level / 10.0)),
+            tail: 10f64.powf(levels.tail_sel_db / 10.0),
+            scaled_distance_m: levels.scaled_distance_m,
+        }
+    }
+}
+
 /// The running sums of one box.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BoxSums {
@@ -64,22 +83,22 @@ pub struct BoxValues {
 
 impl BoxSums {
     /// Adds one piece from `start_m` to `end_m` (metres in any frame shared by the box's pieces,
-    /// heights in metres), with its levels at the NPD distances and its installation, weighted
-    /// per period by `period_weights` (the provider weights of its day, 0 outside its period).
+    /// heights in metres), with its segment's energies and installation, weighted per period by
+    /// `period_weights` (the provider weights of its day, 0 outside its period).
     pub fn add(
         &mut self,
-        levels: &NpdDistanceLevels,
+        energies: &SegmentEnergies,
         installation: Installation,
         period_weights: [f64; PERIODS],
         start_m: [f64; 3],
         end_m: [f64; 3],
     ) {
-        let unweighted: [f64; NPD_DISTANCES] = levels.sel_db.map(|level| 10f64.powf(level / 10.0));
+        let unweighted = energies.unweighted;
         let total_weight: f64 = period_weights.iter().sum();
         if total_weight <= 0.0 {
             return;
         }
-        let tail = 10f64.powf(levels.tail_sel_db / 10.0);
+        let tail = energies.tail;
         for (period, weight) in period_weights.iter().enumerate() {
             for (sum, energy) in self.energy[period].iter_mut().zip(unweighted) {
                 *sum += weight * energy;
@@ -87,7 +106,7 @@ impl BoxSums {
             self.tail_energy[period] += weight * tail;
         }
         for (k, sum) in self.energy_over_scaled_distance.iter_mut().enumerate() {
-            *sum += total_weight * unweighted[k] / levels.scaled_distance_m[k].max(1.0);
+            *sum += total_weight * unweighted[k] / energies.scaled_distance_m[k].max(1.0);
         }
         let weight = total_weight * unweighted[GEOMETRY_WEIGHT_DISTANCE];
         let delta = [0, 1, 2].map(|axis| end_m[axis] - start_m[axis]);
