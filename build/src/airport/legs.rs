@@ -3,6 +3,7 @@
 //! the airborne ones). Only these columns are decoded.
 
 use crate::aircraft::{IS_DEPARTURE, SECONDARY_ONLY};
+use crate::stage1::DayFile;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, UInt8Type, UInt64Type};
 use arrow_array::{Array, RecordBatch};
@@ -98,21 +99,12 @@ pub fn read_ground_legs(
     path: &Path,
     keep: &(dyn Fn([f64; 2], [f64; 2]) -> bool + Sync),
 ) -> Result<DayLegs, String> {
-    let failed = |error: &dyn std::fmt::Display| format!("{}: {error}", path.display());
-    let open = || {
-        std::fs::File::open(path)
-            .map(std::io::BufReader::new)
-            .map_err(|e| failed(&e))
-    };
-    let schema = arrow_ipc::reader::FileReader::try_new(open()?, None)
-        .map_err(|e| failed(&e))?
-        .schema();
-    let projection = COLUMNS
-        .iter()
-        .map(|name| schema.index_of(name).map_err(|e| failed(&e)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let reader = arrow_ipc::reader::FileReader::try_new(open()?, Some(projection))
-        .map_err(|e| failed(&e))?;
+    let file = DayFile::open(path, &COLUMNS)?
+        .ok_or_else(|| format!("{}: no such day file", path.display()))?;
+    // Batches decoded at once a window of them at a time, then read in order: a flight's
+    // segments run across batches.
+    let window = 2 * rayon::current_num_threads();
+    let indices: Vec<usize> = (0..file.batches()).collect();
     let mut day = DayLegs::default();
     // The current flight: its id, airborne segments so far, its first one, its last one and the
     // last one the primary provider saw (each kept only when low): where only the secondary
@@ -131,8 +123,13 @@ pub fn read_ground_legs(
             }
         }
     };
-    for batch in reader {
-        let batch = batch.map_err(|e| failed(&e))?;
+    let batches = indices.chunks(window).flat_map(|chunk| {
+        let decoded: Vec<Result<RecordBatch, String>> =
+            chunk.par_iter().map(|&index| file.batch(index)).collect();
+        decoded
+    });
+    for batch in batches {
+        let batch = batch?;
         let bytes = |name| column(&batch, name).map(|c| c.as_primitive::<UInt8Type>());
         let (profile, kind, vehicle, period, phase, flags) = (
             bytes("profile_idx")?,

@@ -250,20 +250,21 @@ pub fn shuffle(
                 bytes
             })
             .collect();
-        for (square, bytes) in squares.iter().zip(&records) {
-            if bytes.is_empty() {
-                continue;
-            }
-            let path = square_day_path(out, *square, day);
-            let directory = path.parent().expect("a square directory");
-            std::fs::create_dir_all(directory)
-                .map_err(|error| format!("{}: {error}", directory.display()))?;
-            let temporary = path.with_extension("seg.partial");
-            std::fs::write(&temporary, bytes)
-                .map_err(|error| format!("{}: {error}", temporary.display()))?;
-            std::fs::rename(&temporary, &path)
-                .map_err(|error| format!("{}: {error}", path.display()))?;
-        }
+        squares
+            .par_iter()
+            .zip(&records)
+            .filter(|(_, bytes)| !bytes.is_empty())
+            .try_for_each(|(square, bytes)| {
+                let path = square_day_path(out, *square, day);
+                let directory = path.parent().expect("a square directory");
+                std::fs::create_dir_all(directory)
+                    .map_err(|error| format!("{}: {error}", directory.display()))?;
+                let temporary = path.with_extension("seg.partial");
+                std::fs::write(&temporary, bytes)
+                    .map_err(|error| format!("{}: {error}", temporary.display()))?;
+                std::fs::rename(&temporary, &path)
+                    .map_err(|error| format!("{}: {error}", path.display()))
+            })?;
         let marker = day_marker(out, day);
         std::fs::create_dir_all(marker.parent().expect("the days directory"))
             .map_err(|error| error.to_string())?;
