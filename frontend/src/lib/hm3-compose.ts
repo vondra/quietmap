@@ -1,6 +1,6 @@
 /// Colour a decoded HM3 cell grid into a palette-mapped RGBA `ImageData`, and the ancestor preview
-/// a child paints while its own tile loads. One grid a tile: loudness does not add over layers, so
-/// the map shows the total or one layer, each a tile of its own.
+/// a child paints while its own tile loads. One grid a tile: the total, one layer or several layers
+/// combined (`hm3-combine`).
 
 import { HM3_SILENCE } from './hm3-decoder.ts'
 import { PALETTE_LUT } from './heatmap-palette.ts'

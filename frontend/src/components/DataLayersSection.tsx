@@ -1,9 +1,27 @@
 // The layer panel's "Advanced" group: the data layers, folded away until opened (open while any is
-// on).
+// on), each on with its legend.
 import { useState } from 'react'
 import { Building, Car, ChevronDown, Fence, Mountain, SquareDashed, TrainFront, Trees, Volume2 } from 'lucide-react'
 import { DATA_LAYERS, type DataLayerId } from '../lib/data-layers'
+import LEGEND from '../lib/data-legend.json'
 import { Switch } from './ui/switch'
+
+/** A layer's legend under its switch: the renderer's colours (`qm-raster --legend`). */
+function Legend({ id }: { id: DataLayerId }) {
+  return (
+    <div className="ml-6 mb-1 flex flex-wrap gap-x-2 gap-y-0.5" data-testid={`legend-${id}`}>
+      {LEGEND[id].map(entry => (
+        <span key={entry.label} className="flex items-center gap-1 text-[10px] leading-4 text-muted-foreground">
+          <span
+            className="inline-block size-2.5 shrink-0 rounded-sm"
+            style={{ backgroundColor: entry.colour, opacity: entry.opacity }}
+          />
+          {entry.label}
+        </span>
+      ))}
+    </div>
+  )
+}
 
 const ICONS: Record<DataLayerId, React.ReactNode> = {
   elevation: <Mountain className="size-3.5" />,
@@ -44,8 +62,8 @@ export default function DataLayersSection({ dataLayers, onDataLayersChange }: Da
           {DATA_LAYERS.map(layer => {
             const active = dataLayers.includes(layer.id)
             return (
+              <div key={layer.id}>
               <button
-                key={layer.id}
                 onClick={() => toggle(layer.id)}
                 title={`${layer.tooltip}\n\nFrom zoom ${layer.minzoom}.`}
                 aria-pressed={active}
@@ -56,6 +74,8 @@ export default function DataLayersSection({ dataLayers, onDataLayersChange }: Da
                 <span className={`flex-1 text-left text-xs ${active ? 'text-foreground' : 'text-muted-foreground'}`}>{layer.label}</span>
                 <Switch on={active} size="sm" />
               </button>
+              {active && <Legend id={layer.id} />}
+              </div>
             )
           })}
         </div>

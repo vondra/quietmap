@@ -3,7 +3,8 @@
 // ancestor preview with grace, complete-for-complete swap, the sharp tile's
 // late swap). Timing constants live here, next to the races they govern.
 
-import { fetchAndDecodeHM3, TILE_PX } from './hm3-decoder'
+import { TILE_PX } from './hm3-decoder'
+import { fetchSourceTile } from './hm3-combine'
 import { composeOffThread } from './compose-off-thread'
 
 export type HeatTile = {
@@ -47,7 +48,7 @@ export function fetchAncestor(url: string): Promise<{ cells: Uint8Array } | null
     return hit.promise
   }
   const entry: AncestorEntry = {
-    promise: fetchAndDecodeHM3(url, undefined, 'low').catch(() => {
+    promise: fetchSourceTile(url, undefined, 'low').catch(() => {
       // A failed fetch must not negative-cache as "empty ancestor".
       ancestorMemo.delete(url)
       return null
@@ -110,7 +111,7 @@ export async function loadTileProgressively(
   let settled = false
   // 'high': sharp tiles outrank basemap assets and the 'low' ancestor
   // previews in Chromium's network queue.
-  const sharp = fetchAndDecodeHM3(url, ctl.signal, 'high')
+  const sharp = fetchSourceTile(url, ctl.signal, 'high')
     .then((d) => {
       cells = d?.cells ?? null
       if (cells) previewCtl.abort() // real data beats any preview from here on

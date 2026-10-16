@@ -17,8 +17,8 @@ import { HM3_MANIFEST_URL } from './hm3-decoder.ts'
 
 // The toggleable noise layers of the heatmap, each its own tile tree. All share
 // the same HM3 format and loudness palette, so the tile fetch/decode
-// loop is layer-agnostic. `total` (every layer summed, one fetch) is a tile
-// source but no toggle.
+// loop is layer-agnostic. `total` (every layer together, one fetch) is a tile
+// source but no toggle; two to five layers are a combination of their tiles.
 export const HEATMAP_LAYERS = [
   'road',
   'railway',
@@ -29,7 +29,21 @@ export const HEATMAP_LAYERS = [
 ] as const
 
 export type HeatmapLayer = (typeof HEATMAP_LAYERS)[number]
-export type HeatmapSource = HeatmapLayer | 'total'
+/** Two to five layers shown together: their ids in the panel's order, joined by `+`. */
+export type LayerCombination = `${HeatmapLayer}+${string}`
+export type HeatmapSource = HeatmapLayer | 'total' | LayerCombination
+
+/** The source showing `layers` (in the panel's order): every layer the total, one its own tiles,
+ *  several their combination; none nothing. */
+export function sourceOf(layers: readonly HeatmapLayer[]): HeatmapSource | null {
+  if (layers.length === 0) return null
+  if (layers.length === HEATMAP_LAYERS.length) return 'total'
+  return layers.length === 1 ? layers[0] : (layers.join('+') as LayerCombination)
+}
+
+/** A combination's address joins its layers' tile URLs with this (no URL holds it):
+ *  `fetchSourceTile` reads each and combines them. */
+export const LAYER_URL_SEPARATOR = ' '
 
 // EVERY layer pyramids down to z2 — a single-layer view at world zoom is a
 // first-class use case (deck's TileLayer renders NOTHING below its minZoom, so
@@ -80,13 +94,15 @@ function snapshot(): TileBuilds | null {
 }
 
 /**
- * URL for one HM3 tile of `source` (a layer id or 'total') — the caller
+ * URL for one HM3 tile of `source` (a layer id, 'total' or a combination) — the caller
  * passes the snapshot its layer was constructed with; the URL carries the
  * SOURCE's own build so partial republishes stay per-layer exact.
  */
 export function tileUrl(builds: TileBuilds, source: string, z: number, x: number, y: number): string {
-  const b = builds.byLayer[source] ?? builds.latest
-  return `/api/tiles/${b}/${source}/${z}/${x}/${y}.bin`
+  return source
+    .split('+')
+    .map(layer => `/api/tiles/${builds.byLayer[layer] ?? builds.latest}/${layer}/${z}/${x}/${y}.bin`)
+    .join(LAYER_URL_SEPARATOR)
 }
 
 /**
@@ -97,7 +113,8 @@ export function tileUrl(builds: TileBuilds, source: string, z: number, x: number
  * re-keys the layer it republished.
  */
 export function buildKey(builds: TileBuilds, source: string): string {
-  return `${source}:${builds.byLayer[source] ?? builds.latest}|z${builds.zoom}`
+  const layerBuilds = source.split('+').map(layer => builds.byLayer[layer] ?? builds.latest)
+  return `${source}:${layerBuilds.join(',')}|z${builds.zoom}`
 }
 
 /**

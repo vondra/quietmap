@@ -35,7 +35,7 @@ function ToggleRow({ active, icon, label, tooltip, onClick }: {
   )
 }
 
-/** A slider over the quiet thresholds (sone), one step a half doubling. */
+/** A slider over the quiet thresholds (sone). */
 function LoudnessSlider({ value, onChange, testId }: {
   value: number; onChange: (v: number) => void; testId: string
 }) {

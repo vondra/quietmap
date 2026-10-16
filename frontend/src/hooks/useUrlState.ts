@@ -6,9 +6,11 @@ import { resolveInitialView } from '../utils/initial-view'
 import { HEATMAP_LAYERS } from '../lib/tile-urls'
 import { parseDataLayers, type DataLayerId } from '../lib/data-layers'
 // Quiet-zone thresholds — highlight areas whose total loudness is ≤ this (sone): from a quarter
-// of a quiet room's to four times it, a step every half doubling; one sone (a quiet room, where the
-// map's colours begin) by default.
-export const QUIET_THRESHOLDS = [0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 2.8, 4] as const
+// of a quiet room's to four times it in readable steps of a tenth to a quarter of a doubling; one
+// sone (a quiet room, where the map's colours begin) by default.
+export const QUIET_THRESHOLDS = [
+  0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3.5, 4,
+] as const
 export const QUIET_THRESHOLD_DEFAULT = 1
 
 /** The popup point's decimals in the URL: 0.1 m, so a shared link answers at the very point
