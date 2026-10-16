@@ -1,8 +1,11 @@
 //! Builds many squares at once in one process: the largest first, so that the longest start first
 //! and the small ones fill the threads to the end; as many at a time as a memory budget admits,
 //! a smaller square taking what a larger one waiting for memory leaves (a square needing more
-//! than the whole budget runs once the others are done). Each square's builder runs on the
-//! shared thread pool with its own parallel work inside.
+//! than the whole budget runs once the others are done). Each square runs on a driver thread of
+//! its own, outside the thread pool, and gives the pool only its parallel work inside: a pool
+//! thread waiting for part of one square then takes part of another, never a whole square, which
+//! would hold the first square (and its memory) until the second is done (on 2026-10-16 squares
+//! spawned onto the pool itself nested 390 deep and left 20 of 28 threads asleep).
 
 use crate::dev4::Square;
 use std::sync::{Condvar, Mutex};
@@ -15,7 +18,13 @@ pub struct Job {
     pub memory: u64,
 }
 
-/// Builds every job's square with `build`, which returns the line to log; stops admitting squares
+/// The squares not yet started and the memory left.
+struct Queue {
+    jobs: Vec<Job>,
+    memory: u64,
+}
+
+/// Builds every job's square with `build`, which returns the line to log; stops starting squares
 /// after the first error and returns it once the running ones are done.
 pub fn build_squares(
     mut jobs: Vec<Job>,
@@ -26,36 +35,43 @@ pub fn build_squares(
         job.memory = job.memory.min(budget);
     }
     jobs.sort_by(|a, b| b.work.cmp(&a.work).then(a.square.cmp(&b.square)));
-    // The memory left.
-    let state = Mutex::new(budget);
+    let queue = Mutex::new(Queue {
+        jobs,
+        memory: budget,
+    });
     let changed = Condvar::new();
     let failure: Mutex<Option<String>> = Mutex::new(None);
-    rayon::in_place_scope(|scope| {
-        while !jobs.is_empty() {
-            let mut guard = state.lock().expect("the budget");
-            let chosen = loop {
-                let left = *guard;
-                if let Some(index) = jobs.iter().position(|job| job.memory <= left) {
-                    break index;
-                }
-                guard = changed.wait(guard).expect("the budget");
-            };
-            if failure.lock().expect("the failure").is_some() {
-                break;
+    // Twice the pool's threads: a small square's serial part (reading, the day loop) runs on its
+    // driver while the others keep the pool busy.
+    let drivers = 2 * rayon::current_num_threads();
+    let next_job = || -> Option<Job> {
+        let mut queue = queue.lock().expect("the queue");
+        loop {
+            if queue.jobs.is_empty() || failure.lock().expect("the failure").is_some() {
+                return None;
             }
-            let job = jobs.remove(chosen);
-            *guard -= job.memory;
-            drop(guard);
-            let (build, state, changed, failure) = (&build, &state, &changed, &failure);
-            scope.spawn(move |_| {
-                match build(job.square) {
-                    Ok(line) => eprintln!("{line}"),
-                    Err(error) => {
-                        failure.lock().expect("the failure").get_or_insert(error);
+            let left = queue.memory;
+            if let Some(index) = queue.jobs.iter().position(|job| job.memory <= left) {
+                let job = queue.jobs.remove(index);
+                queue.memory -= job.memory;
+                return Some(job);
+            }
+            queue = changed.wait(queue).expect("the queue");
+        }
+    };
+    std::thread::scope(|scope| {
+        for _ in 0..drivers {
+            scope.spawn(|| {
+                while let Some(job) = next_job() {
+                    match build(job.square) {
+                        Ok(line) => eprintln!("{line}"),
+                        Err(error) => {
+                            failure.lock().expect("the failure").get_or_insert(error);
+                        }
                     }
+                    queue.lock().expect("the queue").memory += job.memory;
+                    changed.notify_all();
                 }
-                *state.lock().expect("the budget") += job.memory;
-                changed.notify_all();
             });
         }
     });
