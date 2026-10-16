@@ -522,7 +522,28 @@ fn flight_moments(
                     continue;
                 }
                 let mut changed = false;
+                // Per row of the block, the columns whose cells can lie within the reach.
+                let windows: [std::ops::Range<usize>; BLOCK] =
+                    std::array::from_fn(|row_in_block| {
+                        let row = block_row * BLOCK + row_in_block;
+                        let first = receivers.positions[row * CELLS + block_column * BLOCK];
+                        let scales = receivers.scales[row];
+                        let flat = |position: Mercator| {
+                            let [east, north, _] = local(first, scales, position, 0.0, 0.0);
+                            [east, north]
+                        };
+                        let cell_m = scales[0] / CELLS_PER_SIDE as f64;
+                        columns_within(
+                            flat(start_position),
+                            flat(end_position),
+                            candidate.reach_m,
+                            cell_m,
+                        )
+                    });
                 for (slot, cell) in state.cells.iter_mut().enumerate() {
+                    if !windows[slot / BLOCK].contains(&(slot % BLOCK)) {
+                        continue;
+                    }
                     let row = block_row * BLOCK + slot / BLOCK;
                     let column = block_column * BLOCK + slot % BLOCK;
                     let index = row * CELLS + column;
@@ -582,6 +603,65 @@ fn flight_moments(
     }
     moments.sort_unstable_by_key(|(index, _)| *index);
     moments
+}
+
+/// The cells of a block row (cell k's centre `k * cell_m` metres east of the first's, the segment's
+/// ends in the first cell's frame) whose distance to the segment can be within `reach_m`: where
+/// the line of their centres crosses the segment's reach (a capsule, convex), widened by a metre
+/// for the rounding of each cell's own distance, which then decides.
+fn columns_within(
+    start: [f64; 2],
+    end: [f64; 2],
+    reach_m: f64,
+    cell_m: f64,
+) -> std::ops::Range<usize> {
+    let reach = reach_m + 1.0;
+    let mut span = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut widen = |low: f64, high: f64| {
+        if low <= high {
+            span = (span.0.min(low), span.1.max(high));
+        }
+    };
+    for [x, y] in [start, end] {
+        if y.abs() <= reach {
+            let half = (reach * reach - y * y).sqrt();
+            widen(x - half, x + half);
+        }
+    }
+    let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
+    let length = dx.hypot(dy);
+    if length > 0.0 {
+        // A point (start.x + x, 0) as seen from the start: (x, y) with y = -start.y. Within the
+        // reach of the segment's line: |x uy - y ux| <= reach; between the perpendiculars at its
+        // ends: 0 <= x ux + y uy <= length.
+        let (ux, uy, y) = (dx / length, dy / length, -start[1]);
+        let interval = |scale: f64, low: f64, high: f64| {
+            if scale != 0.0 {
+                let (a, b) = (low / scale, high / scale);
+                (a.min(b), a.max(b))
+            } else if low <= 0.0 && 0.0 <= high {
+                (f64::NEG_INFINITY, f64::INFINITY)
+            } else {
+                (f64::INFINITY, f64::NEG_INFINITY)
+            }
+        };
+        let across = interval(uy, -reach + y * ux, reach + y * ux);
+        let along = interval(ux, -y * uy, length - y * uy);
+        widen(
+            start[0] + across.0.max(along.0),
+            start[0] + across.1.min(along.1),
+        );
+    }
+    if span.0 > span.1 {
+        return 0..0;
+    }
+    let first = (span.0 / cell_m).ceil().max(0.0);
+    let last = (span.1 / cell_m).floor().min(BLOCK as f64 - 1.0);
+    if first > last {
+        0..0
+    } else {
+        first as usize..last as usize + 1
+    }
 }
 
 /// The horizontal distance (m) from the origin to a segment given in its frame.
@@ -762,6 +842,41 @@ mod tests {
     use crate::boxes::read::FLAG_DEPARTURE;
     use physics::weather::{COLUMNS, ROWS, WeatherNode, encode as encode_weather};
     use tiles::aircraft_events::AircraftEvents;
+
+    /// A block row's window holds every cell within the reach of a segment, whatever its course:
+    /// across the row, along it, short, long, beside it, a point.
+    #[test]
+    fn the_window_holds_every_cell_within_reach() {
+        let cell_m = 400.0;
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 20_000) as f64 - 6_000.0
+        };
+        for case in 0..20_000 {
+            let start = [next(), next()];
+            let end = if case % 7 == 0 {
+                start
+            } else {
+                [next(), next()]
+            };
+            let reach_m = (next() + 6_000.0) / 2.0;
+            let window = columns_within(start, end, reach_m, cell_m);
+            for column in 0..BLOCK {
+                let point = column as f64 * cell_m;
+                let distance = horizontal_distance_m(
+                    [start[0] - point, start[1], 0.0],
+                    [end[0] - point, end[1], 0.0],
+                );
+                assert!(
+                    distance > reach_m || window.contains(&column),
+                    "{start:?} {end:?} reach {reach_m}: column {column} at {distance} outside {window:?}"
+                );
+            }
+        }
+    }
 
     /// The halo is the eight neighbours at mid latitudes and reaches further where squares are
     /// narrower than the reach: 3 x 3 squares around Prague, 5 x 5 at 80 degrees north (13 km wide).
