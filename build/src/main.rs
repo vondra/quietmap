@@ -52,6 +52,7 @@ mod obstacles;
 mod period;
 mod screening;
 mod sources;
+mod stage1;
 mod structures;
 mod terrain;
 mod terrain_fine;

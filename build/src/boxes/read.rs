@@ -2,6 +2,7 @@
 //! boxes need, one struct per airborne or cruise segment of an aircraft (ground segments go to
 //! ground operations; a surface vehicle's track is never a flight, however high its heights read).
 
+use crate::stage1::DayFile;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, UInt8Type, UInt64Type};
 use arrow_array::{Array, RecordBatch};
@@ -107,106 +108,121 @@ fn padded<const N: usize>(bytes: &[u8]) -> [u8; N] {
     out
 }
 
+/// The columns the boxes read.
+const COLUMNS: [&str; 23] = [
+    "profile_idx",
+    "source_id",
+    "period",
+    "phase",
+    "flags",
+    "veh_kind",
+    "flight_id",
+    "callsign",
+    "aircraft_type",
+    "start_lat",
+    "start_lon",
+    "start_alt_msl_m",
+    "end_lat",
+    "end_lon",
+    "end_alt_msl_m",
+    "start_alt_m",
+    "end_alt_m",
+    "speed_kt",
+    "agl_avg_m",
+    "departure_field_elev_m",
+    "start_elev_m",
+    "end_elev_m",
+    "length_m",
+];
+
 /// The airborne and cruise segments of the day file at `path` whose ends (latitude, longitude)
-/// `keep` accepts (none when the file is absent). Batches are read one at a time: a world day is
-/// 86 M segments, of which a region keeps a small part.
+/// `keep` accepts (none when the file is absent), in the file's order; its batches decoded and
+/// kept at once.
 pub fn read_segments(
     path: &Path,
     keep: &(dyn Fn([f64; 2], [f64; 2]) -> bool + Sync),
 ) -> Result<Vec<FlightSegment>, String> {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("{}: {error}", path.display())),
+    let Some(file) = DayFile::open(path, &COLUMNS)? else {
+        return Ok(Vec::new());
     };
-    let reader = arrow_ipc::reader::FileReader::try_new(std::io::BufReader::new(file), None)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    let mut segments = Vec::new();
-    for batch in reader {
-        let batch = batch.map_err(|error| format!("{}: {error}", path.display()))?;
-        let batch = &batch;
-        let bytes = |name| column(batch, name).map(|c| c.as_primitive::<UInt8Type>());
-        let floats = |name| column(batch, name).map(|c| c.as_primitive::<Float32Type>());
-        let (profile, source_id, period, phase, flags, kind) = (
-            bytes("profile_idx")?,
-            bytes("source_id")?,
-            bytes("period")?,
-            bytes("phase")?,
-            bytes("flags")?,
-            bytes("veh_kind")?,
-        );
-        let flight_id = column(batch, "flight_id")?.as_primitive::<UInt64Type>();
-        let callsign = column(batch, "callsign")?.as_string::<i32>();
-        let designator = column(batch, "aircraft_type")?.as_fixed_size_binary();
-        let names = [
-            "start_lat",
-            "start_lon",
-            "start_alt_msl_m",
-            "end_lat",
-            "end_lon",
-            "end_alt_msl_m",
-            "start_alt_m",
-            "end_alt_m",
-            "speed_kt",
-            "agl_avg_m",
-            "departure_field_elev_m",
-            "start_elev_m",
-            "end_elev_m",
-            "length_m",
-        ];
-        let values = names
-            .iter()
-            .map(|name| floats(name))
-            .collect::<Result<Vec<_>, String>>()?;
-        let ends: Vec<([f32; 2], [f32; 2])> = (0..batch.num_rows())
-            .map(|row| {
-                (
-                    [values[0].value(row), values[1].value(row)],
-                    [values[3].value(row), values[4].value(row)],
+    let batches: Vec<Vec<FlightSegment>> = (0..file.batches())
+        .into_par_iter()
+        .map(|index| batch_segments(&file.batch(index)?, keep))
+        .collect::<Result<_, String>>()?;
+    Ok(batches.concat())
+}
+
+/// The kept segments of one batch.
+fn batch_segments(
+    batch: &RecordBatch,
+    keep: &(dyn Fn([f64; 2], [f64; 2]) -> bool + Sync),
+) -> Result<Vec<FlightSegment>, String> {
+    let bytes = |name| column(batch, name).map(|c| c.as_primitive::<UInt8Type>());
+    let floats = |name| column(batch, name).map(|c| c.as_primitive::<Float32Type>());
+    let (profile, source_id, period, phase, flags, kind) = (
+        bytes("profile_idx")?,
+        bytes("source_id")?,
+        bytes("period")?,
+        bytes("phase")?,
+        bytes("flags")?,
+        bytes("veh_kind")?,
+    );
+    let flight_id = column(batch, "flight_id")?.as_primitive::<UInt64Type>();
+    let callsign = column(batch, "callsign")?.as_string::<i32>();
+    let designator = column(batch, "aircraft_type")?.as_fixed_size_binary();
+    // The float columns, in the order `value` reads them.
+    let names = &COLUMNS[9..];
+    let values = names
+        .iter()
+        .map(|name| floats(name))
+        .collect::<Result<Vec<_>, String>>()?;
+    let ends: Vec<([f32; 2], [f32; 2])> = (0..batch.num_rows())
+        .map(|row| {
+            (
+                [values[0].value(row), values[1].value(row)],
+                [values[3].value(row), values[4].value(row)],
+            )
+        })
+        .collect();
+    let acceleration = accelerations(
+        flight_id.values(),
+        &ends,
+        values[8].values(),
+        values[13].values(),
+        phase.values(),
+    );
+    let kept: Vec<FlightSegment> = (0..batch.num_rows())
+        .into_par_iter()
+        .filter(|&row| phase.value(row) != PHASE_GROUND && kind.value(row) == KIND_AIRCRAFT)
+        .flat_map_iter(|row| {
+            let value = |index: usize| f64::from(values[index].value(row));
+            split_at_antimeridian(FlightSegment {
+                flight_id: flight_id.value(row),
+                callsign: padded(callsign.value(row).as_bytes()),
+                designator: padded(designator.value(row)),
+                profile: profile.value(row),
+                source_id: source_id.value(row),
+                period: period.value(row),
+                flags: flags.value(row),
+                start: [value(0), value(1), value(2)],
+                end: [value(3), value(4), value(5)],
+                pressure_altitude_m: [value(6), value(7)],
+                speed_kt: value(8),
+                above_ground_m: value(9),
+                departure_field_m: value(10),
+                ground_m: [value(11), value(12)],
+                acceleration_ms2: acceleration[row],
+            })
+            .into_iter()
+            .filter(|segment| {
+                keep(
+                    [segment.start[0], segment.start[1]],
+                    [segment.end[0], segment.end[1]],
                 )
             })
-            .collect();
-        let acceleration = accelerations(
-            flight_id.values(),
-            &ends,
-            values[8].values(),
-            values[13].values(),
-            phase.values(),
-        );
-        let kept: Vec<FlightSegment> = (0..batch.num_rows())
-            .into_par_iter()
-            .filter(|&row| phase.value(row) != PHASE_GROUND && kind.value(row) == KIND_AIRCRAFT)
-            .flat_map_iter(|row| {
-                let value = |index: usize| f64::from(values[index].value(row));
-                split_at_antimeridian(FlightSegment {
-                    flight_id: flight_id.value(row),
-                    callsign: padded(callsign.value(row).as_bytes()),
-                    designator: padded(designator.value(row)),
-                    profile: profile.value(row),
-                    source_id: source_id.value(row),
-                    period: period.value(row),
-                    flags: flags.value(row),
-                    start: [value(0), value(1), value(2)],
-                    end: [value(3), value(4), value(5)],
-                    pressure_altitude_m: [value(6), value(7)],
-                    speed_kt: value(8),
-                    above_ground_m: value(9),
-                    departure_field_m: value(10),
-                    ground_m: [value(11), value(12)],
-                    acceleration_ms2: acceleration[row],
-                })
-                .into_iter()
-                .filter(|segment| {
-                    keep(
-                        [segment.start[0], segment.start[1]],
-                        [segment.end[0], segment.end[1]],
-                    )
-                })
-            })
-            .collect();
-        segments.extend(kept);
-    }
-    Ok(segments)
+        })
+        .collect();
+    Ok(kept)
 }
 
 /// Longitude (deg) a half of a segment across the antimeridian ends at, short of +-180 by more than
