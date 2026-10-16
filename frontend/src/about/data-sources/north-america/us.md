@@ -9,25 +9,25 @@ Traffic volumes: [FHWA Highway Performance Monitoring System](https://www.fhwa.d
 
 HPMS publishes one total per segment; the vehicle mix comes from FHWA's state shares (below).
 
-Day, evening and night split: [FHWA TMAS](https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/) hourly station counts for 2025. A road within 200 m of a station on the same route uses that station's split. TMAS publishes hourly totals only; trucks are assumed to follow the same hourly profile as cars.
+Day, evening and night split: [FHWA TMAS](https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/) hourly counts of 8,056 stations in 2025, one split per road group (motorways and trunks, primary roads, other roads) for the whole country. TMAS publishes hourly totals only; trucks are assumed to follow the same hourly profile as cars.
 
-Minor collectors and local streets are not in HPMS and carry the trips their buildings make. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)).
+Minor collectors and local streets are not in HPMS, whose values reach 60 % of the length of motorways, trunks and primaries and 1 % of secondary, tertiary and unclassified roads. Uncounted local streets carry the trips their buildings make, secondary and tertiary roads the trips made within 5 km of them. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)).
 
-Vehicle mix: where not counted, FHWA's state mix by road group and area (table VM-4), motorcycles included; lorries and buses at most 105 km/h.
+Vehicle mix: where not counted, FHWA's state mix by road group and area (table VM-4), motorcycles included; electric cars 1.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 105 km/h.
 
-Unsigned roads: a primary road 64 km/h in towns, 89 outside (traffic drives 75 on a two-way one).
+Unsigned roads: a primary road 64 km/h in towns, 89 outside (cars drive 75 on a two-way one).
 
 ## Railways
 
 Passenger trains: [Amtrak GTFS timetable](https://content.amtrak.com/content/gtfs/GTFS.zip). Commuter rail feeds (LIRR, NJ Transit, Metra, MBTA, Caltrain and others) are not loaded; those lines use the [world railway defaults](/about/data-preparation). Lines without a usage tag use the [unclassified railway default](/about/data-preparation). Surface metro sections are included; see the [railway method](/about/data-preparation).
 
-Freight is not covered: BNSF, Union Pacific, CSX and Norfolk Southern publish no schedules.
+Freight: BNSF, Union Pacific, CSX and Norfolk Southern publish no schedules; main lines take the class default of 20 freight trains a day, branches 5.
 
 Level-crossing horns: [FRA Highway-Rail Crossing Inventory](https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6) (Form 6180.71). Public at-grade crossings with trains sound on approach; full-day quiet zones and Chicago-excused crossings stay silent, partial zones at night.
 
 ## Industry
 
-Wind turbines: [US Wind Turbine Database](https://eerscmap.usgs.gov/uswtdb/) from USGS, LBNL and DOE. An OSM turbine without specs takes rated power and hub height from the nearest database turbine within 500 m.
+Wind turbines: [US Wind Turbine Database](https://eerscmap.usgs.gov/uswtdb/) from USGS, LBNL and DOE. Each database turbine is paired with one OSM turbine within 500 m, nearest pairs first, and gives it the database's rated power and hub height.
 
 Power plants: WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. Other factories are OSM industrial areas with an inferred type. The EPA Toxics Release Inventory is not used.
 

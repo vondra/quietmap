@@ -1,11 +1,11 @@
 ---
 title: Kazakhstan
-intro: Road traffic assigned by road class and city, below the world default; train counts assigned per corridor.
+intro: Road traffic assigned by road class and city; train counts assigned per corridor.
 ---
 
 ## Roads
 
-Kazakhstan publishes no open traffic counts. Traffic is assigned by road class and city; the values are below the world default.
+Kazakhstan publishes no open traffic counts. Traffic is assigned by road class and city:
 
 | Road class | Open country | 14 regional cities (×1.4) | Almaty and Astana (×2.0) |
 |---|---:|---:|---:|
@@ -16,9 +16,9 @@ Kazakhstan publishes no open traffic counts. Traffic is assigned by road class a
 | Tertiary | 800 | 1,120 | 1,600 |
 | Residential | 350 | 490 | 700 |
 
-Each city is a box around its centre, not its administrative boundary.
+Each city is a box around its centre, not its administrative boundary. Residential streets take the table's value only where their buildings are not mapped; elsewhere they carry the trips their buildings make.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.1 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.1 % of a town street's traffic (the region's median).
 
 Unsigned roads: a primary road 60 km/h in towns, 100 outside, a motorway 140.
 

@@ -19,13 +19,22 @@ An OSM motorway, trunk or primary road within 500 m of one of those routes is es
 
 The estimate is doubled inside La Paz and El Alto, Santa Cruz de la Sierra and Cochabamba, and multiplied by 1.4 in 16 other towns: Sucre, Oruro, Tarija, Potosí, Trinidad, Cobija, Riberalta, Montero, Quillacollo, Sacaba, Warnes, Yacuiba, Camiri, Villazón, Viacha and Uyuni. No measurements are available to validate these values.
 
-The vehicle mix is an estimate:
+These roads take an estimated vehicle mix:
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 9.7 % of a town street's traffic (WHO 2023).
+| Where | Light | Medium | Heavy | Motorcycle |
+|---|---:|---:|---:|---:|
+| The three big cities | 60% | 5% | 10% | 25% |
+| The 16 towns | 62% | 6% | 12% | 20% |
+| Mining corridors | 45% | 8% | 37% | 10% |
+| Altiplano | 50% | 8% | 30% | 12% |
+| Valleys | 58% | 8% | 22% | 12% |
+| Lowlands | 55% | 8% | 25% | 12% |
 
 Altiplano, valleys and lowlands are divided at 67° W and 65° W. The mining corridors are two boxes around Oruro, Potosí and Uyuni.
 
-Motorways, trunks and primaries not near a mapped main route use the world estimate per lane. Secondary and smaller roads use class defaults ([world defaults](/about/data-preparation)).
+Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 9.7 % of a town street's traffic (WHO 2023).
+
+Motorways, trunks and primaries not near a mapped main route use the world estimate per lane. Secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
 Unsigned roads: a primary road 40 km/h in towns, 60 outside, a residential street 20.
 

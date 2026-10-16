@@ -16,13 +16,11 @@ Iraq publishes no open traffic counts. Traffic is assigned by road class and cit
 | Tertiary | 2,000 | 2,600 | 3,200 | 5,000 |
 | Residential | 800 | 1,040 | 1,280 | 2,000 |
 
-Each city is a box around its centre, not its administrative boundary.
+Each city is a box around its centre, not its administrative boundary. Residential streets take the table's value only where their buildings are not mapped; elsewhere they carry the trips their buildings make.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.3 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 0.3 % of a town street's traffic (the region's median).
 
-The oil route runs from West Qurna through Rumaila, Zubair and Basra towards Faw.
-
-Unsigned roads: a primary road 60 km/h in towns, 80 outside (traffic drives 68 on a two-way one).
+Unsigned roads: a primary road 60 km/h in towns, 80 outside (cars drive 68 on a two-way one).
 
 ## Railways
 

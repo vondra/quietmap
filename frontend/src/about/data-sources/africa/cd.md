@@ -16,9 +16,9 @@ Traffic volumes: no national counts. DR Congo-specific estimates by OpenStreetMa
 | Tertiary | 500 | 1,250 | 700 |
 | Residential | 250 | 625 | 350 |
 
-Vehicles per day, both directions. Slip roads take half the value of their road. Service roads, tracks and unclassified roads keep the world default.
+Vehicles per day, both directions. Slip roads take half the value of their road. The Residential row applies only where too few buildings are mapped; elsewhere residential and living streets, service and unclassified roads carry the trips their buildings make. Tracks keep the world default.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.5 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.5 % of a town street's traffic (the world median).
 
 Unsigned roads: a primary road 50 km/h in towns and outside, a motorway 120.
 
@@ -42,4 +42,4 @@ Operating power plants: Global Energy Monitor, matched to OpenStreetMap industri
 
 ## Homes and places
 
-Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes (the region's median). Mosques call five times a day.
+Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes (South Africa's survey). Mosques call five times a day.

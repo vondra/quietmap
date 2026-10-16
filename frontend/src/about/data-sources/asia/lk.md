@@ -1,15 +1,13 @@
 ---
 title: Sri Lanka
-intro: Class defaults on roads and on every railway line; Sri Lanka Railways publishes no timetable feed.
+intro: Class defaults on main roads and on every railway line, smaller roads estimated from the buildings around them; Sri Lanka Railways publishes no timetable feed.
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
-Local streets: traffic is derived from the buildings served; motorcycles 29%, from 0.4 × the two-wheeler share of registered vehicles (WHO 2023 country profile, 2021 fleet).
-
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 56 % of a town street's traffic (WHO 2023).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 56 % of a town street's traffic (WHO 2023).
 
 Unsigned roads: a primary road 60 km/h in towns and outside.
 

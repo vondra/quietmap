@@ -19,7 +19,8 @@ Traffic is the largest source of error. Of the world's 5.8 million km of motorwa
 primary roads, 31 % carry a dataset (in India, China and a few other countries a national estimate
 rather than counts), 14 % a model of the trips made within 1, 5 and 15 km fitted on counted roads,
 and 54 % a fixed estimate for their class or country (October 2026). Secondary and tertiary roads
-without a count follow a fit of the same kind, made on 13 European countries. A street nobody
+with only a class estimate follow a fit of the same kind, made on 13 European countries; where a
+country's default stands instead (Russia, Turkey, Japan, Iran, Ukraine), it is kept. A street nobody
 counted carries the trips its buildings make, OpenStreetMap's and Overture's, routed along the
 street network to the nearest main road.
 
@@ -31,13 +32,16 @@ default. Battery-electric cars, at their country's 2024 share (IEA), make rollin
 motorcycles run 3.8 dB louder than cars, 2.9 dB pulling away (ASJ RTN-Model 2018), at shares from
 counts and national fleets (WHO 2023).
 
-Speeds are the posted limit. An unsigned road takes its country's legal limit for its class, or the
-median signed speed of its class where that is lower or no legal limit is known; a residential
-street 30 km/h, a living street, service road or track 20. On a two-way road outside towns, other
-than a motorway, at its country's open-road limit of 80 km/h or more, cars drive at 0.845 of it,
-the free-flow share measured in Great Britain. Lorries and buses drive at most 80 km/h, 90 to 105 in
-thirteen countries. Uncounted roads also carry the buses of mapped bus routes. A road on a bridge
-emits from its deck, straight between the ground at the bridge's two ends.
+Speeds are the posted limit. An unsigned road takes its country's legal limit for its class, else
+100 km/h on a motorway and 70 on a trunk road; on primary, secondary, tertiary and unclassified
+roads the median signed speed of the class in the country replaces it where that is lower or no
+legal limit is known. A residential street takes 30 km/h and a living street, service road or
+track 20, or the class's lower median sign (a German living street 10). On a two-way road outside
+towns, other than a motorway, at its country's open-road limit of 80 km/h or more, cars drive at
+0.845 of it, the free-flow share measured in Great Britain. Lorries and buses drive at most
+80 km/h, 90 to 105 in thirteen countries. Uncounted roads also carry the buses of mapped bus
+routes. A road on a bridge emits from its deck, straight between the ground at the bridge's two
+ends.
 
 <details>
 <summary><strong>Default traffic by road class</strong></summary>
@@ -72,7 +76,8 @@ these vehicles a day:
 | Tertiary | One-way | 2,266 | 4,298 | 4,132 |
 | Tertiary | Two-way | 1,002 | 2,562 | 1,506 |
 
-Local streets in squares with too few mapped buildings keep the earlier version's estimate.
+In squares with too few mapped buildings, uncounted roads keep the fixed estimate for their class or
+country and local streets the earlier version's estimate.
 Directional counts are kept as published; counts of both directions are shared between
 carriageways, and a divided main road whose other carriageway is missing takes half.
 
@@ -80,19 +85,24 @@ carriageways, and a divided main road whose other carriageway is missing takes h
 
 ## Railways
 
-Each kind of train — passenger, high-speed, freight, tram — has one sound power spectrum, its
+Each kind of train — passenger, freight, tram, light rail — has one sound power spectrum, its
 rolling noise growing with speed, set to a typical train by CNOSSOS-EU's per-vehicle computations:
-a passenger train is the mean of Germany's railway noise monitoring in 2023 (26 axles, 176 m), and
-freight in the EU is the EU fleet's, quieter than elsewhere. The trains of a period are spread along
-the line as CNOSSOS-EU spreads them; a heavy train's sound power is taken at no less than 50 km/h, a
+a passenger train is the mean of Germany's railway noise monitoring in 2023 (26 axles, 176 m) up to
+200 km/h and nears a 16-car high-speed set at 300; freight in the EU, Switzerland, Norway and Great
+Britain is the EU fleet's, quieter than elsewhere; light rail, with no typical train of its own,
+takes the regional train's correction. The trains of a period are spread along the line as
+CNOSSOS-EU spreads them; a heavy train's sound power is taken at no less than 50 km/h, a
 light-rail train's at 30, and freight runs at no more than 89 km/h.
 
 Train counts come from GTFS feeds and national timetables, every trip routed along the track
 network; a stretch of track between two switches carries one count. Freight is in almost no public
-timetable, so it comes from defaults, scaled in 29 European countries to the country's official
-goods train-kilometres (Eurostat 2024; the United Kingdom 2019). In the EU it is weighted 4 on a
-TEN-T core corridor, 2 on another TEN-T line and 0.5 off them, and 37.6 % of it runs between 22
-and 06 h, as counted at the German monitors. Lines mapped as passenger-only take no default
+timetable, so it comes from defaults, scaled in 28 European countries and Turkey to the country's
+official goods train-kilometres (Eurostat 2024; the United Kingdom 2019); Belgium and Greece
+publish none and keep the defaults' total, and Switzerland keeps its defaults. In the EU it is
+weighted 4 on a TEN-T core corridor, 2 on another TEN-T line and 0.5 off them within the country's
+total; in the EU, Switzerland, Norway and Great Britain 37.6 % of it runs between 22 and 06 h, as
+counted at the German monitors. Default passenger trains are lowered to fit the country's passenger
+train-kilometres in 12 European countries and Turkey. Lines mapped as passenger-only take no default
 freight. Above-ground metro uses the light-rail model; track underground emits nothing outdoors.
 
 At US and Canadian public level crossings, locomotives sound their horns over up to a quarter mile
@@ -102,9 +112,11 @@ partial ones at night.
 <details>
 <summary><strong>Default trains a day</strong></summary>
 
-Where no count or national estimate exists; six countries have defaults of their own (Germany 24.5
-freight trains a day on a main line, Switzerland 31.4). Main, branch and industrial use must be
-mapped; other lines take the unclassified row. Parallel tracks share their line's count.
+Where no count or national estimate exists; six countries have main-line freight defaults of their
+own (Germany 24.5 trains a day, Switzerland 31.4). The country factors above then scale them: a
+French main line carries 23 passenger trains a day, a German one 7 to 54 freight trains by its
+TEN-T tier. Main, branch and industrial use must be mapped; other lines take the unclassified row.
+Parallel tracks share their line's count.
 
 | Railway | Passenger | Freight |
 |---|---:|---:|
@@ -124,13 +136,16 @@ mapped; other lines take the unclassified row. Parallel tracks share their line'
 A year of flights as volunteer receivers recorded their ADS-B signals: adsb.lol from September 2025
 to August 2026, with the flights only ADSBExchange received added from 11 sample days. Each type
 flies on its noise-power-distance tables from EASA's ANP database (a similar aircraft where the
-database has none, a generic jet where the type is unknown), by ECAC Doc 29, 4th edition: height
-above the geoid, thrust from the observed climb and acceleration, flaps and gear on approach.
-Helicopters take their type's certification level.
+database has none), by ECAC Doc 29, 4th edition: height above the geoid, thrust from the observed
+climb and acceleration, flaps and gear on approach. Helicopters take their type's certification
+level. A flight of unknown type flies as a helicopter or a Cessna 172 by its transponder's
+category, as a Cessna 172 when its median speed in the air is under 140 kt and it carries no airline
+flight number, else as a generic jet.
 
 - Ground: taxiing, take-off and landing rolls on the runways and taxiways, mapped or found where
   the flights' ground tracks run.
-- Airborne: up to 7,620 m (25,000 ft) above the ground, the last distance of the noise tables.
+- Airborne: up to 7,620 m (25,000 ft) above the ground, the last distance of the noise tables; a
+  flight turns to cruise at 8,000 m and back below 7,200 m.
 - Cruise: above it.
 
 The year is summed into boxes of airspace: a cell of the map's grid and a slab of height above the
@@ -139,7 +154,7 @@ ten distances of the noise tables, and its two loudest flights for the click's l
 reads back within 0.2 dB of its flights summed one by one, a period's within 0.3 dB. Where no
 receiver is near, low flights are missing: near nine of 59 large airports (Beijing, Shanghai
 Pudong, Cairo, Casablanca, Riyadh, Tehran, Accra, Moscow Sheremetyevo, Lagos) the map reads 5 to
-20 dB too quiet.
+23 dB too quiet.
 
 ## Ships
 
@@ -154,11 +169,11 @@ which overstates leisure boats at night.
 ## Industry
 
 Sites and their kind are OpenStreetMap's; E-PRTR in Europe, the Global Power Plant Database, Global
-Energy Monitor's steel, cement and coal trackers and 14 national registers add the sector. Sound
-power follows the sector and the site's area, its base levels calibrated on the Czech strategic
-noise maps of 2022. Coal and lignite mines run day and night; other mines, quarries and offices
-keep daytime hours; warehouses run 3 dB quieter in the evening and 8 dB at night; inactive sites
-are silent.
+Energy Monitor's power, steel, cement and coal trackers and national registers add the sector.
+Sound power follows the sector and the site's area, its base levels calibrated on the Czech
+strategic noise maps of 2022. Coal and lignite mines run day and night; other mines, quarries and
+offices run 5 to 8 dB quieter in the evening and 20 dB at night, warehouses 3 and 8 dB; inactive
+sites are silent.
 
 Wind turbines are the standing ones of OpenStreetMap and eight registers (the United States,
 Canada, Germany, Denmark, Sweden, Norway, Castilla-La Mancha, the Netherlands with Belgium), which
@@ -180,14 +195,19 @@ part-load hours. Solar farms hum from their inverters by day (88 dB(A) a MW at f
 - Car parks follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
   (LfU 2007): 63 dB(A) for one movement an hour, 0.4 movements a space an hour from 06 to 22 h and
   0.05 at night; street parking carries only the cars of the buildings around it.
-- Church bells ring in Europe and Cyprus: prayer bells three times a day and a Sunday peal; German
-  and Swiss church clocks strike the quarters. A peal is 114 dB(A), a cathedral's 122.
-- Calls to prayer sound at the place's prayer times, five a day at 118 dB(A) from a minaret's horns;
-  where mosques rarely call aloud, as in most of Europe and the Americas, only a mosque with a
-  mapped minaret calls, at Friday noon.
-- People sit on the terraces and stand at the doors of bars and restaurants by their mapped opening
-  hours, else the country's custom; terrace seats come from Madrid's and Melbourne's registers, and
-  how full they are is an assumption, as nothing is measured.
+- Church bells ring in Europe and Cyprus: prayer bells three times a day and a Sunday peal; Orthodox
+  churches, and in 11 Orthodox countries every church of unmapped denomination, ring only before
+  Saturday's vespers and Sunday's liturgy. German and Swiss church clocks strike the hours and
+  quarters, Swiss ones at night too. A peal is 114 dB(A), a cathedral's 122.
+- Calls to prayer sound at the place's prayer times, five a day at 118 dB(A) at every mapped
+  mosque, from its minaret's horns or 10 to 15 m up; where mosques rarely call aloud, as in most of
+  Europe, the Americas, Australia and East Asia, only a mosque with a mapped minaret calls, at
+  Friday noon at 100 dB(A). In China, Tajikistan and Singapore no call sounds outside.
+- People sit on the terraces of bars, cafés and restaurants and stand at the doors of bars and pubs
+  from 19 h and of nightclubs, by their mapped opening hours, else the country's custom; terrace
+  seats come from Madrid's and Melbourne's registers. On weekend evenings and nights three quarters
+  of the seats are taken (ÖNORM's design value), on weekdays fewer by Melbourne's and Paris's
+  counts; the daytime 30 % is an assumption.
 
 Buildings and noise walls also screen. Heights come from measured surveys (North Rhine-Westphalia,
 the Netherlands, Prague), then mapped heights, floor counts (Czechia's RÚIAN, Spain's Catastro),
@@ -200,27 +220,29 @@ deliveries, building sites, garden machinery, music and festivals.
 
 ## Terrain, ground and weather
 
-Terrain is bare earth: national terrain models in 17 countries, most from laser surveys, over the
-GEDTM30 world model. Near the ends of a ray, a national model of 5 m or finer adds what the
-arc-second grid misses (Czechia, Germany, Switzerland, the Netherlands, Belgium and part of
-Portugal). Ground is hard where it is sealed, built over or water. Weather — how often sound bends
-down to the ground from each direction, and what the air absorbs — is a 1991–2020 ERA5
-climatology. The map's Advanced layers show the terrain, the trees, the hard ground, the buildings
-and walls, and every source.
+Terrain is the bare earth of national terrain models in 17 countries, most from laser surveys, over
+the GEDTM30 world model, a bare-earth model that keeps part of the canopy and of dense city blocks
+(around Prague about 10 m and 12.5 m above the national model). Near the ends of a ray, a national
+model of 5 m or finer adds what the arc-second grid misses (Czechia, Germany, Switzerland, the
+Netherlands, Belgium and part of Portugal). Ground is hard where it is sealed, built over or water.
+Weather — how often sound bends down to the ground from each direction, and what the air absorbs —
+is a 1991–2020 ERA5 climatology. The map's Advanced layers show the terrain, the trees, the hard ground, the buildings
+and walls, and every source but the buildings' own sound and the aircraft in flight.
 
 ## The files
 
 Everything a click or the painter reads lies in one tree of files, a directory a year. The world
 is cut into the standard web-map tiles of zoom 12, 6.3 km wide in Prague and 9.8 km at the
-equator, and those into squares of zoom 9, eight by eight tiles. Each square has a directory, and
-in it one file a kind of data holds the square's tiles of that kind behind a directory of where
-each begins: a click reads exactly the tiles its rings need, each in one read, and a set of square
-directories is a whole cutout of the world. A square with nothing of a kind has no file of it, a
-tile with nothing takes no bytes: the open sea has no terrain. A tile holds its
-kind's records each number in the fewest bytes its meaning needs, to a step below what moves an
-answer, read in place without decoding: no text, no general compressor, a value repeated in a tile
-kept once in a table of it. Only the terrain carries a coder: a smooth field's information is the
-residual of a planar prediction of its heights, stored in zstd.
+equator, and those into squares of zoom 9, eight by eight tiles. Each square holding data has a
+directory, and in it one file a kind of data holds the square's tiles of that kind behind a
+directory of where each begins: a click reads exactly the tiles its rings need, each in one read,
+and a set of square directories with the year's weather table and flight tracks is a whole cutout
+of the world. A square with nothing of a kind has no file of it, a tile with nothing takes no
+bytes: the open sea has no terrain. A tile holds its kind's records, most numbers in the fewest
+bytes their meaning needs, to a step below what moves an answer, read in place without decoding: no
+general compressor, a value or a name repeated in a tile kept once in a table of it. Only the
+terrain carries a coder: a smooth field's information is the residual of a planar prediction of its
+heights, stored in zstd.
 The world takes 1.08 TB in 377,082 files (October 2026).
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
@@ -277,7 +299,7 @@ it, such as a road's vehicles a day, speed and surface. A piece on a bridge also
 altitude at its two ends.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
-<svg viewBox="0 0 400 240" role="img" aria-label="A road's way drawn as straight pieces, a long segment split in two and the way cut at the tile edge; in the tile's sources five pieces point to two records, and both records to one text" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
+<svg viewBox="0 0 400 240" role="img" aria-label="A road's way drawn as straight pieces, a long segment split in two and the way cut at the tile edge; in the tile's sources five pieces point to two records, and both records to one display" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
 <defs><marker id="hiw-arrow-records" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L8 4L0 8z" fill="currentColor"/></marker></defs>
 <path d="M262 6V122" fill="none" stroke="currentColor" stroke-opacity=".55" stroke-dasharray="4 3"/>
 <text x="254" y="16" text-anchor="end" fill="currentColor" fill-opacity=".7" font-size="11.5">tile 2212/1387</text>
@@ -321,7 +343,8 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
   make), `airport-traffic`, `geoid`, the aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.
 - `tiles/` holds each kind's tile format, writer and reader, and the square files that hold the
-  tiles (`tiles/src/square.rs`), the only code that knows the bytes.
+  tiles (`tiles/src/square.rs`): the only code that knows the bytes, but for the GPU painter's
+  kernel, which reads the obstacles tiles as stored (`paint-gpu/kernels/scene.cuh`).
 
 <details>
 <summary><strong>What the readers rely on</strong></summary>
@@ -330,9 +353,9 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
 |---|---|---|
 | `terrain` | `tiles/src/terrain.rs` | the one-arc-second node window that brackets the tile: neighbours share their seam nodes; a sample touching a node without data is refused, never guessed; height, sealing, tree cover and crown height a node |
 | `terrain-fine` | `tiles/src/terrain_fine.rs` | a national model's detail on the 1/6" lattice, its height less its own 1" average, faded towards its edges and voids; blocks of 128 x 128 cells, each one zstd frame behind a directory, so a click decodes only the blocks its rays' ends touch |
-| square files | `tiles/src/square.rs` | `<year>/<x9>/<y9>/<kind>`: a zoom-9 square's 64 tiles of a kind behind the 65 offsets where each begins, row-major from the north-west; a tile with nothing of the kind takes no bytes; written to a temporary file of its own, synced and renamed into place |
+| square files | `tiles/src/square.rs` | `<year>/<x9>/<y9>/<kind>`: a zoom-9 square's 64 tiles of a kind behind a 536-byte directory, the format's magic, the square's x9 and y9 and the 65 offsets where each tile begins, row-major from the north-west; a tile with nothing of the kind takes no bytes; written to a temporary file of its own, synced and renamed into place |
 | `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile): a bitmap marks the occupied cells and counts them before every 64, so a cell finds its runs in place; an outline's footprint id is its square's row in the tile's table and its ordinal |
-| `sources` | `tiles/src/sources.rs` | 12-byte lines and 8-byte points, 32-byte records, each distinct emission row (per octave band and period a u16 in 0.01 dB) and display once, 8-byte deck entries (a bridge line's deck altitude at its ends); a display is its layer's fields typed by one schema (`tiles/src/sources/display.rs`: texts in the tile's table, numbers as whole counts of their field's decimal step), as the builder wrote them |
+| `sources` | `tiles/src/sources.rs` | 12-byte lines and 8-byte points, 32-byte records, each distinct emission row (per octave band and period a u16 in 0.01 dB) and display once, 8-byte deck entries (a bridge line's deck altitude at its ends); a display is its layer's fields typed by one schema (`tiles/src/sources/display.rs`: texts in the tile's table, numbers as whole counts of their field's decimal step, a railway's trains a day, a turbine's hub height and rating and an airport's movements as 8-byte reals), as the builder wrote them |
 | `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with only the periods it is heard in and its loudest flight pieces, its slab a row of the tile's band table, its flights a day as a 16-bit rate; the tile's flight table; a piece's ends from its box's centroid (the farthest exact); a box finds its periods and pieces from the counts every 32 boxes |
 | `aircraft-events` | `tiles/src/aircraft_events.rs` | 16 x 16 z16 cells a tile, the flights a day as 16-bit rates; no tile where no flight reaches 50 dB |
 | `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start behind a fence of every 256th part's key, so a listed flight reads one 4 KB page of the directory; a part's points as 2-byte steps at 1e-5 deg |
@@ -357,8 +380,8 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
 - Tiles are read whole, a ring's asked for together: each square file's directory once, then
   every tile with one read of its bytes, one task a read; a fine terrain tile is read whole when a
   ray's end first needs it and its blocks are decoded on first use. The exceptions read by
-  position: the weather table's nodes and the flight tracks (a file's directory, then each listed
-  flight's points).
+  position: the weather table's nodes and the flight tracks (a file's fence, then for each listed
+  flight a 4 KB page of the directory and its points).
 
 </details>
 

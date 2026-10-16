@@ -24,10 +24,10 @@ Human-made noise is not the same as natural sound. A forest at 50 dB with birdso
 Three steps:
 
 1. **Sources emit noise.** Roads, trains, planes, ships, factories, wind turbines and buildings — each modelled from real data: traffic counts, timetables, a year of flight tracks, ship positions, registries.
-2. **Sound travels and fades.** Hills and buildings block it, noise barriers screen it, soft ground, trees and the air absorb it — computed with the EU method CNOSSOS-EU, and for aircraft with ECAC Doc 29.
+2. **Sound travels and fades.** Hills and buildings block it, noise barriers screen it, soft ground, trees and the air absorb it — computed with the EU method CNOSSOS-EU (trees with ISO 9613-2), and for aircraft with ECAC Doc 29.
 3. **You see the result.** Click any point and the level there is computed on the spot from every source around it; the map shows how loud each place sounds, in colour: clear under 1 sone (a quiet room), then pale green, yellow, orange, red and maroon, a colour for each doubling of loudness, maroon from 32 sone.
 
-Each source layer — roads, railways, aircraft, ships, industrial, buildings — is modelled independently; the map shows them together or one alone.
+Each source layer — roads, railways, aircraft, ships, industrial, buildings — is modelled independently; the map shows any of them together.
 
 ![Prague on the map, coloured by how loud each place sounds](map-overview.jpg)
 
@@ -49,16 +49,16 @@ Five pages, each from the simple to the exact, down to the code:
 Computed — a physics model (CNOSSOS-EU for ground sources, ECAC Doc 29 for aircraft) over public data. The model is continuously checked against real monitoring stations; see [Validation](/about/validation).
 
 **How accurate is it?**
-It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from. The [validation](/about/validation) page shows the gaps station by station.
+It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from. The [validation](/about/validation) page shows the gaps network by network.
 
 **Why does my quiet street show 50 dB?**
-Click it. Most surprises have a visible cause: a road with no measured traffic carries the trips its buildings make or a class default, a nearby factory is classified by registry sector, or the dominant source is something you've tuned out. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
+Click it. Most surprises have a visible cause: a road with no measured traffic carries the trips the buildings around it make or a class default, a nearby factory is classified by registry sector, or the dominant source is something you've tuned out. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
 
 **Why are there no low-flying aircraft where I live?**
 The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, flights aren't received and the layer reads too quiet or empty: near Lagos and Cairo airports 5–20 dB low, over parts of Siberia and the Amazon with no aircraft at all — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
 
 **Why is the map clear in places?**
-By design: under 1 sone, about as loud as a quiet room, the map has no colour. A blank area can also mean missing source data. A click still gives the level there, however low.
+By design: under 1 sone, about as loud as a quiet room, the map has no colour. A blank area can also mean missing source data, or a place the map has not painted yet. A click still gives the level there, however low.
 
 **Can I use screenshots or embed the map?**
 Yes, free, with visible "quietmap.org" attribution — details in the [terms of use](/about/terms).
@@ -86,7 +86,7 @@ Some of it was built while hiking the forests of La Palma — changes discussed 
 
 quietmap.org is an internal project of [Miton](https://www.miton.cz/en/).
 
-The [product code is open source](https://github.com/vondra/quietmap) under the Apache License 2.0, and the computations are transparent and reproducible from public data.
+The [product code is open source](https://github.com/vondra/quietmap/tree/r070) under the Apache License 2.0, and the computations are transparent and reproducible from public data.
 
 ## Credits & terms
 

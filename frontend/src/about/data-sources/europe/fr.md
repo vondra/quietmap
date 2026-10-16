@@ -1,6 +1,6 @@
 ---
 title: France
-intro: National road census (Cerema TMJA), street counts in eleven cities, SNCF national and Transilien timetables. Paris metro and city trams not covered; rail freight from the national train-kilometres.
+intro: National road census (Cerema TMJA), street counts in ten cities, SNCF national and Transilien timetables. Paris metro and city trams not covered; rail freight from the national train-kilometres.
 ---
 
 ## Roads
@@ -8,11 +8,11 @@ intro: National road census (Cerema TMJA), street counts in eleven cities, SNCF 
 - Autoroutes and routes nationales: [Cerema TMJA census](https://www.data.gouv.fr/), 2024 for the concession motorways and 2019 for the rest of the national network (daily traffic and truck share per section). Where a section has no truck share (680 sections of 2019, including the A4 and A86 near Paris), the nearest section of the same road lends its share.
 - Paris, Lyon, Lille, Bordeaux, Marseille, Toulouse, Grenoble, Rennes, Rouen, Montpellier: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Routes départementales and other city streets have no counts. Uncounted streets carry the trips their buildings make. Uncounted main roads follow one model of the trips made around them, fitted on counted roads.
+Routes départementales and other city streets have no counts. Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.1 % of a town street's traffic (WHO 2023); electric cars 3.1 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.1 % of a town street's traffic (WHO 2023); electric cars 3.1 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
 
-Unsigned roads: a primary road 50 km/h in towns, 80 outside (traffic drives 68 on a two-way one), a motorway 130.
+Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a two-way one), a motorway 130.
 
 ## Railways
 
@@ -30,4 +30,4 @@ Homes mapped in OpenStreetMap: 20 heat pumps and 24 air conditioners per 100 hom
 
 ## Checked against
 
-Bruitparif's stations; Paris's street stations; Paris's street stations.
+Bruitparif's stations; Paris's street stations.

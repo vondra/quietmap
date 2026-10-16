@@ -13,9 +13,11 @@ No open traffic counts. The Department of Public Works and Highways publishes it
 | Secondary | 20,000 | 28,000 | 40,000 |
 | Tertiary | 8,000 | 11,200 | 16,000 |
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 48 % of a town street's traffic (WHO 2023); electric cars 0.1 % of cars, rolling noise only (IEA 2024).
+Network sections take an assigned vehicle split: 55 % cars, 10 % medium, 10 % heavy vehicles and 25 % motorcycles in open country, 45, 8, 7 and 40 % in the 19 cities, 35, 8, 7 and 50 % in Metro Manila.
 
-None of these values is a count. Main roads with no DPWH section nearby get the world estimate per lane ([world defaults](/about/data-preparation)).
+Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 48 % of a town street's traffic (WHO 2023); electric cars 0.1 % of cars, rolling noise only (IEA 2024).
+
+None of these values is a count. Main roads with no DPWH section nearby get the world estimate per lane ([world defaults](/about/data-preparation)); secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make.
 
 Unsigned roads: a primary road 30 km/h in towns, 40 outside, a motorway 100, a residential street 20.
 
@@ -35,4 +37,4 @@ No timetable is loaded. All lines use the [world railway defaults](/about/data-p
 
 ## Homes and places
 
-Homes mapped in OpenStreetMap: 29 air conditioners per 100 homes (the region's median). Mosques call five times a day. Open-fronted bars and restaurants, their terraces open as long as they are.
+Homes mapped in OpenStreetMap: 29 air conditioners per 100 homes (South-East Asia's figure). Mosques call five times a day. Open-fronted bars and restaurants, their terraces open as long as they are.

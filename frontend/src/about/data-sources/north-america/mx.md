@@ -1,6 +1,6 @@
 ---
 title: Mexico
-intro: Datos Viales 2025 traffic counts with a measured vehicle mix on federal and state highways, Mexico City rail from the SEMOVI timetable. Other roads, railways and wind turbines use defaults.
+intro: Datos Viales 2025 traffic counts with a measured vehicle mix on federal and state highways, Mexico City rail from the SEMOVI timetable. Other roads are estimated from the buildings around them; other railways and wind turbines use defaults.
 ---
 
 ## Roads
@@ -9,23 +9,23 @@ Traffic volumes: Datos Viales 2025, the annual counts of SICT and the Instituto 
 
 An OSM motorway, trunk, primary or secondary road takes the nearest counted section within 200 m with a compatible road type: a federal toll road matches a motorway or trunk, a free federal road a trunk or primary, a state road a primary or secondary. Roads outside Mexico never match.
 
-Local roads are not in the dataset and use world defaults. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)).
+Counted sections reach 78 % of the motorway, trunk and primary length. Tertiary roads and streets are not in the dataset: uncounted secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on the counted roads of 19 other countries; on Mexico's counted roads it reads 1.3 dB low ([method](/about/data-preparation)).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 2.1 % of a town street's traffic (WHO 2023); electric cars 0.2 % of cars, rolling noise only (IEA 2024).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 2.1 % of a town street's traffic (WHO 2023); electric cars 0.2 % of cars, rolling noise only (IEA 2024).
 
-Unsigned roads: a primary road 50 km/h in towns, 80 outside (traffic drives 68 on a two-way one).
+Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a two-way one).
 
 ## Railways
 
-Mexico City: [SEMOVI unified GTFS](https://datos.cdmx.gob.mx/dataset/gtfs), covering Tren Ligero and Tren Suburbano. Headway-based entries are expanded into daily train counts. Surface metro sections are included; see the [railway method](/about/data-preparation).
+Mexico City: [SEMOVI unified GTFS](https://datos.cdmx.gob.mx/dataset/gtfs) and Movimex's Toluca timetable, covering the Metro, Tren Ligero and part of El Insurgente. Headway-based entries are expanded into daily train counts. Surface metro sections are included; see the [railway method](/about/data-preparation).
 
-No timetable is loaded for the Guadalajara and Monterrey light rail or for Tren Maya, and freight railways publish no schedules. These lines use class defaults.
+Tren Suburbano, the Guadalajara and Monterrey light rail and Tren Maya take no timetable, and freight railways publish no schedules. These lines use class defaults.
 
 ## Industry
 
 Power plants: Global Energy Monitor power tracker, operating plants only. Refineries and factories are OSM industrial areas with an inferred type. The federal pollutant register RETC has no bulk download and is not used.
 
-No open per-turbine register exists for Mexico. Wind turbines are OSM points; a turbine without tagged specs is treated as a 2 MW machine.
+No open per-turbine register exists for Mexico. Wind turbines are OSM points; a turbine without tagged specs takes the fleet medians, 105 dB(A) at full power and a 105 m hub.
 
 ## Ships
 

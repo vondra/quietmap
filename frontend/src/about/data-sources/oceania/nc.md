@@ -1,17 +1,17 @@
 ---
 title: New Caledonia
-intro: Roads use the world defaults. No railway. Power plants from Global Energy Monitor.
+intro: The map treats New Caledonia as part of France, so French defaults apply to its roads, homes, churches and mosques. No traffic counts, no railway. Power plants from Global Energy Monitor.
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
+No open traffic counts. The road data carries France's country code, so France's rules apply: motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a model of the trips made within 5 km ([method](/about/data-preparation)).
 
-Where buildings are mapped, residential, living, service and unclassified streets are instead estimated from the buildings they serve.
+Where buildings are mapped, residential, living, service and unclassified streets carry the trips their buildings make; where too few are mapped, roads keep the class defaults.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.5 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.1 % of a town street's traffic (France's, WHO 2023); electric cars 3.1 % of cars, rolling noise only (France's, IEA 2024); lorries and buses at most 90 km/h.
 
-Unsigned roads: a primary road 50 km/h in towns and outside.
+Unsigned roads: France's limits, a primary road 50 km/h in towns, 80 outside (cars drive 68 on a two-way one), a motorway 130.
 
 ## Railways
 
@@ -27,4 +27,4 @@ Global Fishing Watch AIS vessel density.
 
 ## Homes and places
 
-Homes mapped in OpenStreetMap: 16 air conditioners per 100 homes (a world value). Mosques call five times a day.
+Homes mapped in OpenStreetMap take France's 20 heat pumps and 24 air conditioners per 100 homes. As in France, church bells ring three times a day, with a Sunday peal, mosques call only from a mapped minaret, once on Fridays, and bars without mapped hours close at 02:00.

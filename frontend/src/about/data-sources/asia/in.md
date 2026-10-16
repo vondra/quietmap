@@ -16,15 +16,17 @@ No open traffic counts; the highway authority's census is PDF only. The official
 
 The 8 largest cities are Delhi, Mumbai, Bangalore, Hyderabad, Chennai, Kolkata, Ahmedabad and Pune.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 63 % of a town street's traffic (WHO 2023); electric cars 0.5 % of cars, rolling noise only (IEA 2024).
+Network roads take an assigned vehicle split: 55 % cars, 10 % medium, 15 % heavy vehicles and 20 % motorcycles in open country, 50, 9, 10 and 31 % in the 33 large cities, 45, 8, 7 and 40 % in the 8 largest.
 
-None of these values is a count. Main roads with no network line nearby get the world estimate per lane ([world defaults](/about/data-preparation)). On local streets motorcycles are 63 % of traffic (WHO 2023).
+Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 63 % of a town street's traffic (WHO 2023); electric cars 0.5 % of cars, rolling noise only (IEA 2024).
+
+None of these values is a count. Main roads with no network line nearby get the world estimate per lane ([world defaults](/about/data-preparation)); secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make.
 
 Unsigned roads: a primary road 60 km/h in towns, 50 outside, a motorway 120.
 
 ## Railways
 
-Lines in the [community-built Indian Railways timetable](https://github.com/Neo2308/indianrailways-gtfs) get its passenger train counts. The timetable is unofficial and has no freight.
+Lines in the [community-built Indian Railways timetable](https://github.com/Neo2308/indianrailways-gtfs) get its passenger train counts. The timetable is unofficial and has no freight; freight comes from the network map below.
 
 Other lines use the official railway network map on [Esri Living Atlas India](https://livingatlas.esri.in/), which gives speed, gauge and railway zone. Track within 500 m of a mapped line gets trains by location and speed:
 

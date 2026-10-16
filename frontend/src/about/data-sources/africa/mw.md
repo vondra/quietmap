@@ -1,13 +1,13 @@
 ---
 title: Malawi
-intro: Roads use the world defaults; the freight-only rail network carries the world rail default.
+intro: Main roads use the world defaults; the freight-only rail network carries the world rail default.
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)). Vehicle mix: world default.
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.5 % of a town street's traffic (the region's median).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.5 % of a town street's traffic (the world median).
 
 Unsigned roads: a primary road 50 km/h in towns, 60 outside.
 
@@ -21,4 +21,4 @@ Operating power plants: Global Energy Monitor, matched to OpenStreetMap industri
 
 ## Homes and places
 
-Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes (the region's median). Mosques call five times a day.
+Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes (South Africa's survey). Mosques call five times a day.

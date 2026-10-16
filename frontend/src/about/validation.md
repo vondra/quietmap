@@ -7,10 +7,10 @@ At 5,351 road monitoring points in Poland (6,616 measurements) the model's media
 the measurement, and half are within 3.0 dB. Around Minneapolis–St Paul airport half of 39
 microphones are within 1.1 dB. In Accra the model reads 9.7 dB below the measurements.
 
-Before a version goes live, the click is run at every microphone of public city, airport and railway
-monitoring networks and compared with what it measured. A gap is first traced to the input data, a
-justified difference in method or a model defect; only a defect leads to a fix. Official strategic
-noise maps serve as cross-checks, never as calibration targets.
+Before a version goes live, the click is run at the microphones of the monitoring networks and
+research campaigns below and compared with what they measured. A gap is first traced to the input
+data, a justified difference in method or a model defect; only a defect leads to a fix. Official
+strategic noise maps serve as cross-checks, never as calibration targets.
 
 ## Model minus measurement
 
@@ -31,8 +31,8 @@ version (October 2026):
 | Zurich airport, Flughafen Zürich, aircraft, 06–22 h, 2024 | 4 | −5.9 dB | 5.9 dB |
 | Accra, Clark et al. 2021 ([Zenodo](https://zenodo.org/records/11223686), CC BY 4.0), 24 h, 2019–2020 | 146 | −9.7 dB | 9.7 dB |
 
-The rail emission takes its typical train from the same German monitoring report, so that row is no
-fully independent test.
+The rail emission takes its typical train from the same German monitoring report, so that row is
+not a fully independent test.
 
 ## Quiet places
 

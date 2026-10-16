@@ -7,9 +7,9 @@ intro: Anas census on motorways and state roads, passenger timetables for five r
 
 Motorways and state roads: [Anas](https://www.stradeanas.it/) daily traffic census (TGM), one total per counting point. The vehicle split is assumed: 18 % trucks on motorways and trunk roads, 12 % on primary roads, 4 % motorcycles. Milan has counts from the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Motorways run by concession companies (most of the autostrada network, the A4 at Milan included) are not in the Anas census and follow the model of the trips made around them. Other regional and city roads have no counts. Uncounted streets carry the trips their buildings make. Uncounted main roads follow one model of the trips made around them, fitted on counted roads.
+Motorways run by concession companies (most of the autostrada network, the A4 at Milan included) are not in the Anas census and follow the model of the trips made around them. Other regional and city roads have no counts. Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 3.8 % of a town street's traffic (WHO 2023); electric cars 0.7 % of cars, rolling noise only (IEA 2024).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 3.8 % of a town street's traffic (WHO 2023); electric cars 0.7 % of cars, rolling noise only (IEA 2024).
 
 Unsigned roads: a primary road 50 km/h in towns, 70 outside, a motorway 130.
 
@@ -25,7 +25,7 @@ Italy has no national open timetable. Train counts come from five regional feeds
 | Ferrotramviaria (2025 archive) | Bari to Barletta |
 | [Trenitalia Sardegna](https://www.sardegnamobilita.it/) | Sardinia |
 
-Lazio, Campania, Veneto and Sicily have no feed. Class defaults apply there: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Lazio, Campania, Veneto and Sicily have no feed. Class defaults apply there: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks. The timetables are passenger-only. Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 
 ## Buildings and terrain
 

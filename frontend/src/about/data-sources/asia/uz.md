@@ -16,11 +16,9 @@ Uzbekistan publishes no open traffic counts. Traffic is assigned by road class a
 | Tertiary | 1,400 | 1,960 | 2,800 |
 | Residential | 600 | 840 | 1,200 |
 
-Each city is a box around its centre, not its administrative boundary.
+Each city is a box around its centre, not its administrative boundary. Residential streets take the table's value only where their buildings are not mapped; elsewhere they carry the trips their buildings make.
 
-Trucks are 30% of traffic on motorways and trunk roads, 16% on primary and secondary roads, 8% on tertiary roads and 5% on residential streets. Vans are 6% and motorcycles 4% everywhere; the rest is cars.
-
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.5 % of a town street's traffic (the region's median); electric cars 0.2 % of cars, rolling noise only (IEA 2024).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.5 % of a town street's traffic (the world median); electric cars 0.2 % of cars, rolling noise only (IEA 2024).
 
 Unsigned roads: a primary road 60 km/h in towns, 70 outside.
 

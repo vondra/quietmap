@@ -18,15 +18,24 @@ An OSM motorway, trunk or primary road within 400 m of one of those roads is est
 | Provincial road, paved | 4,000 |
 | Provincial road, unpaved | 1,200 |
 
-The estimate is doubled inside Quito and Guayaquil and multiplied by 1.4 in 17 other cities: Cuenca, Santo Domingo, Machala, Durán, Manta, Portoviejo, Ambato, Loja, Riobamba, Esmeraldas, Ibarra, Latacunga, Milagro, Babahoyo, Quevedo, Lago Agrio and Tulcán.
+The estimate is doubled inside Quito and Guayaquil, Durán included, and multiplied by 1.4 in 16 other cities: Cuenca, Santo Domingo, Machala, Manta, Portoviejo, Ambato, Loja, Riobamba, Esmeraldas, Ibarra, Latacunga, Milagro, Babahoyo, Quevedo, Lago Agrio and Tulcán.
 
-The vehicle mix is an estimate:
+These roads take an estimated vehicle mix:
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 8.8 % of a town street's traffic (WHO 2023).
+| Where | Light | Medium | Heavy | Motorcycle |
+|---|---:|---:|---:|---:|
+| Quito, Guayaquil | 67% | 6% | 12% | 15% |
+| The 16 cities | 68% | 6% | 12% | 14% |
+| Oil roads of Sucumbíos and the SOTE pipeline | 45% | 8% | 37% | 10% |
+| Sierra | 55% | 8% | 27% | 10% |
+| Oriente | 50% | 8% | 32% | 10% |
+| Costa | 60% | 8% | 22% | 10% |
 
 Costa, sierra and oriente are divided by lines of longitude, an approximation.
 
-Motorways, trunks and primaries not near a mapped network road use the world estimate per lane. Secondary and smaller roads use class defaults ([world defaults](/about/data-preparation)).
+Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 8.8 % of a town street's traffic (WHO 2023).
+
+Motorways, trunks and primaries not near a mapped network road use the world estimate per lane. Secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
 Unsigned roads: a primary road 50 km/h in towns, 80 outside.
 

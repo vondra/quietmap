@@ -3,30 +3,33 @@ title: Noise at a point
 intro: What a click shows, and how the noise at its point is computed from every source around it.
 ---
 
-Click anywhere and the noise there is computed on the spot, from every road, railway, factory,
-building, ship and airport within 12 km and every flight within 16 km. The first answer comes from the tiles around
-the point and is refined, ring of tiles by ring, until everything in reach is heard. A click always
-gives the same answer.
+Click anywhere and the noise there is computed on the spot, from every road, railway, factory, wind
+turbine, building, ship and airport within 12 km and every flight within 16 km. The first answer
+comes from the tiles around the point and is refined, ring of tiles by ring, until everything in
+reach is heard. A click always gives the same answer.
 
 ## What the click shows
 
 The panel leads with Nden, how loud the place sounds over the day in sone, then Lden. Below are the
-sources heard there, loudest first — a road as one row, a factory, the aircraft — each with how it
-is heard (steady, so many vehicles an hour, so many trains a day), how far it is and its share of
-the loudness.
+sources heard there, loudest first — a road as one row, a factory, the aircraft — each with how
+often it passes (vehicles an hour by day, trains a day, flights a day above 50 dB, how many times a
+day bells ring or a call sounds; nothing for a steady source), how far it is, its loudness alone in
+sone and its share of the loudness.
 
 The list shows the loudest three and every other row contributing at least 1 % of the loudness,
 up to ten rows, on a phone too. Shares retain their precision through the popup's answer; only the
 display rounds them to whole percents.
-Everything else folds into Rest, which opens to the hidden rows. Roads and railways join by name,
-or by number where unnamed. Unnamed tram tracks without a number stay separate: the popup's records
+Everything else folds into Rest, which opens to the folded rows among the 30 loudest sources the
+click sends and holds the quieter ones as one sum. Roads and railways join by name, or by number
+where unnamed. Unnamed tram tracks without a number stay separate: the popup's records
 carry no route or street identity, and connected tracks can belong to different lines. Joining
 rows changes the list; every part keeps its own noise computation.
 
 Open a source for its data (vehicles a day and their mix, speed, a surface other than asphalt;
-trains a day; the flights and their types) and what distance, air, buildings, terrain and ground
-take from its sound, in calm air and downwind. Its segments show the rays they were computed along, drawn on the map. The ten loudest
-flights are listed. Detailed calculation is the whole place: each period and layer, the weather,
+trains a day; the flights and their types) and what distance, air, buildings, terrain, ground and
+trees take from its sound and the buildings around the point add, in calm air and downwind. Its
+segments show the rays they were computed along, drawn on the map. The ten loudest flights are
+listed. Detailed calculation is the whole place: each period and layer, the weather,
 the façade the click is answered at, and the levels exceeded 5 to 90 % of the time.
 
 <p>
@@ -42,9 +45,9 @@ hours adds little, a constant hum all of its loudness — and the evening counts
 10 dB louder, as in Lden.
 
 Lden is the day-evening-night level of the EU's noise directive
-([END 2002/49/EC](https://eur-lex.europa.eu/eli/dir/2002/49/oj/eng)), the indicator of every
-EU's official noise maps: the year's average in decibels, the evening counted 5 dB and the night 10 dB
-louder. Day is 07–19 h, evening 19–23 h, night 23–07 h. The
+([END 2002/49/EC](https://eur-lex.europa.eu/eli/dir/2002/49/oj/eng)), the main indicator of the
+EU's strategic noise maps: the year's average in decibels, the evening counted 5 dB and the night
+10 dB louder. Day is 07–19 h, evening 19–23 h, night 23–07 h. The
 [WHO's 2018 guidelines](https://www.who.int/europe/publications/i/item/9789289053563) recommend
 road traffic below 53 dB, railways below 54 dB and aircraft below 45 dB.
 
@@ -58,10 +61,10 @@ sounds louder than the map says.
 ## Where the point is
 
 A click answers 4 m above the ground, as the END prescribes. Inside a building it answers at the
-point of its façades loudest by Lden from the 100 strongest ground sources around (flights do not
-choose it), placed as CNOSSOS-EU places receivers: every 5 m or less along each façade, 0.1 m in
-front of the wall and 4 m up, the façade's own reflection left out. A building
-with no exposed façade gets no answer. No indoor attenuation is applied.
+point of its façades loudest by Lden from the 100 pieces of ground sources with the highest bound
+at the building (flights do not choose it), placed as CNOSSOS-EU places receivers: every 5 m or
+less along each façade, 0.1 m in front of the wall and 4 m up, the façade's own reflection left
+out. A building with no exposed façade gets no answer. No indoor attenuation is applied.
 
 ## How it is computed
 
@@ -137,10 +140,10 @@ through the gaps between its houses.
 Along each ray the click reads the ground wherever the ray crosses a line of the one-arc-second
 terrain grid (31 m north to south, 20 m east to west in Prague), and within 100 m of either end on a
 grid six times finer where a national model that fine exists:
-the D4's berm at Mníšek pod Brdy, 7 m high, takes 3.5 dB off the motorway 70 m behind it, which the
-coarser grid missed. Each sample gives the terrain's height, how hard the ground is, and the trees'
-cover and height; every wall the ray crosses stands at its height. Over this cross-section the
-click takes:
+the D4's berm at Mníšek pod Brdy, 7 m high, takes 3.5 dB off the motorway at a point 70 m from its
+axis, about 20 m behind the crest, which the coarser grid missed. Each sample gives the terrain's
+height, how hard the ground is, and the trees' cover and height; every wall the ray crosses stands
+at its height. Over this cross-section the click takes:
 
 - the spreading of the sound with distance;
 - the air's absorption in each octave band (ISO 9613-1), averaged over 30 years of the place's
@@ -179,8 +182,8 @@ click takes:
 </figure>
 
 Every term is computed in eight octave bands from 63 Hz to 8 kHz. At 392 Polish road monitoring
-stations behind forest the model read 2.4 dB above the measurement without the crowns' term and
-0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above.
+stations behind forest the model read a median 2.4 dB above the measurement without the crowns'
+term and 0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above.
 
 ### From rays to the answer
 
@@ -217,8 +220,9 @@ The panel opens these sums one level at a time:
 
 ## Standards
 
-- [CNOSSOS-EU](https://eur-lex.europa.eu/eli/dir_del/2021/1226): road, rail and industrial
-  emission; propagation; receivers at façades.
+- [CNOSSOS-EU](https://eur-lex.europa.eu/eli/dir_del/2021/1226): road emission and the typical
+  trains the railway spectra are set to; propagation; receivers at façades.
+- IEC 61400-11: the wind turbines' sound power.
 - [ECAC Doc 29](https://www.ecac-ceac.org/activities/environment/european-aviation-and-environment-working-group-eaeg/airmod)
   with [EASA ANP](https://www.easa.europa.eu/en/domains/environment/policy-support-and-research/aircraft-noise-and-performance-anp-data)
   data: aircraft.
@@ -238,8 +242,11 @@ noise map or a property certificate.
 
 - `answer.rs`: the ring loop, until every kind's reach is covered (`candidates::GROUND_REACH_M`,
   `aircraft::boxes::AIRCRAFT_REACH_M`); an update after every ring.
+- `release.rs`: a ring's tiles, each read whole from its square file (`tiles/src/square.rs`).
 - `candidates.rs`: every piece of the files read, with its bound (`physics/src/bound.rs`).
-- `selection.rs`: the stop rule and the sample, one omitted-energy account per layer and period.
+- `selection.rs`, `sampling.rs`: the stop rule and the sample's rounds, one omitted-energy account
+  per layer and period.
+- `scene.rs`: the ground under a point and along a ray, at every line of the terrain grid it crosses.
 - `evaluate.rs`: one source at the receiver, its rays through `physics/src/ray.rs`, `line.rs`,
   `cnossos/` and `foliage.rs`, and its sound path.
 - `building.rs`: a click inside a building, answered at its loudest façade.

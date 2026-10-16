@@ -24,11 +24,13 @@ An OSM motorway, trunk or primary road within 400 m of a road in that layer is e
 
 The estimate is doubled inside Caracas, Maracaibo, Valencia and Barquisimeto and multiplied by 1.4 in 19 other cities: Ciudad Guayana, Maracay, Maturín, Barcelona, Puerto La Cruz, San Cristóbal, Cumaná, Mérida, Ciudad Bolívar, Cabimas, Coro, Los Teques, Guarenas, Guanare, Valera, Punto Fijo, Acarigua, Barinas and San Felipe.
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 9.2 % of a town street's traffic (the region's median).
+These roads take an estimated vehicle mix: 60% light, 5% medium, 10% heavy and 25% motorcycles in the four big cities; 62, 6, 12 and 20 in the 19 cities; 58, 8, 22 and 12 elsewhere.
+
+Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 9.2 % of a town street's traffic (the region's median).
 
 The estimates describe the network as archived, not current traffic; no data on changes since is available.
 
-Motorways, trunks and primaries not in the archive use the world estimate per lane. Secondary and smaller roads use class defaults ([world defaults](/about/data-preparation)).
+Motorways, trunks and primaries not in the archive use the world estimate per lane. Secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
 Unsigned roads: a primary road 40 km/h in towns, 70 outside, a motorway 90, a residential street 20.
 

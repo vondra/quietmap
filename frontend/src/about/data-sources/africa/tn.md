@@ -1,15 +1,15 @@
 ---
 title: Tunisia
-intro: World defaults for roads and railways, including trams and light rail; ship traffic combines EMODnet and Global Fishing Watch.
+intro: World defaults for main roads and railways, including trams and light rail; ship traffic combines EMODnet and Global Fishing Watch.
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)). Vehicle mix: world default.
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
 
-Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.2 % of a town street's traffic (WHO 2023).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 0.2 % of a town street's traffic (WHO 2023).
 
-Unsigned roads: a primary road 50 km/h in towns, 90 outside (traffic drives 76 on a two-way one), a motorway 110.
+Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a two-way one), a motorway 110.
 
 ## Railways
 
