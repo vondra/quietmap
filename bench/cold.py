@@ -22,7 +22,10 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Every tile kind a click reads (`tiles::Kind`).
 KINDS = ("terrain", "terrain-fine", "obstacles", "sources", "aircraft", "aircraft-far", "aircraft-events")
-EVICT_RINGS = 4
+# The farthest a click reads: 16 km of flights (popup/src/aircraft/boxes.rs), from the centre tile's
+# edge, a ring more for a façade's receiver; a z12 tile is 9,783.9 m times cos(latitude) wide.
+AIRCRAFT_REACH_M = 16_000.0
+TILE_M_AT_EQUATOR = 40_075_016.686 / 4096
 LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
 LIBC.mincore.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_ubyte)]
 
@@ -34,20 +37,26 @@ def tile_of(lat, lon, zoom=12):
     return x, min(max(y, 0), n - 1)
 
 
+def evict_rings(lat):
+    """The rings of tiles a click at `lat` can read, one more for margin."""
+    tile_m = TILE_M_AT_EQUATOR * math.cos(math.radians(min(abs(lat), 85.0)))
+    return math.ceil(AIRCRAFT_REACH_M / tile_m) + 2
+
+
 def square_files(year_root, lat, lon):
-    """The files of every kind of the z9 squares holding the tiles within EVICT_RINGS of the click's
-    (`tiles::square`: `<year root>/<kind>/<x9>_<y9>.<kind>`)."""
+    """The files of every kind of the z9 squares holding the tiles a click at (lat, lon) can read
+    (`tiles::square`: `<year root>/<x9>/<y9>/<kind>`)."""
     cx, cy = tile_of(lat, lon)
-    n = 4096
+    n, rings = 4096, evict_rings(lat)
     squares = set()
-    for dy in range(-EVICT_RINGS, EVICT_RINGS + 1):
-        for dx in range(-EVICT_RINGS, EVICT_RINGS + 1):
+    for dy in range(-rings, rings + 1):
+        for dx in range(-rings, rings + 1):
             x, y = (cx + dx) % n, cy + dy
             if 0 <= y < n:
                 squares.add((x >> 3, y >> 3))
-    for kind in KINDS:
-        for x9, y9 in sorted(squares):
-            path = year_root / kind / f"{x9}_{y9}.{kind}"
+    for x9, y9 in sorted(squares):
+        for kind in KINDS:
+            path = year_root / str(x9) / str(y9) / kind
             if path.exists():
                 yield path
 
@@ -57,8 +66,8 @@ def click_files(prepared, year, lat, lon):
     weather."""
     yield from square_files(prepared / year, lat, lon)
     yield from sorted((prepared / year / "aircraft-tracks").glob("*.aircraft-tracks"))
-    if (prepared / "weather").exists():
-        yield prepared / "weather"
+    if (prepared / year / "weather").exists():
+        yield prepared / year / "weather"
 
 
 LIBC.mmap.restype = ctypes.c_void_p

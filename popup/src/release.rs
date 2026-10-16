@@ -1,4 +1,4 @@
-//! An opened release: its year root (served only when complete), the global weather table beside
+//! An opened release: its year root (served only when complete) with the year's weather table in
 //! it, and the reads of a ring's tiles, each whole.
 
 use std::path::{Path, PathBuf};
@@ -6,12 +6,13 @@ use tiles::Kind;
 use tiles::geo::TileId;
 use tiles::square::read_tiles;
 
-/// The weather table's file name beside the year roots.
+/// The weather table's file name in a year root: the long-term climatology the year is computed in
+/// (the same table in every year, a reflink).
 pub const WEATHER_FILE: &str = "weather";
 
 pub struct Release {
     pub year_root: PathBuf,
-    /// The global weather table: a click reads its own place of it
+    /// The year's weather table: a click reads its own place of it
     /// (`physics::weather::read_place`), the painter all of it.
     pub weather_path: PathBuf,
 }
@@ -22,8 +23,8 @@ impl Release {
         let year_root = prepared.join(year);
         tiles::check_year_complete(&year_root)?;
         Ok(Release {
+            weather_path: year_root.join(WEATHER_FILE),
             year_root,
-            weather_path: prepared.join(WEATHER_FILE),
         })
     }
 }

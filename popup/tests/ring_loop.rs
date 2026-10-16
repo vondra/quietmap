@@ -27,7 +27,7 @@ fn release_root(name: &str) -> PathBuf {
         };
         ROWS * COLUMNS
     ];
-    std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
+    std::fs::write(root.join("2026").join("weather"), encode_weather(&weather)).unwrap();
     root
 }
 

@@ -70,7 +70,8 @@ pub const CONTRIBUTOR_PIECES: usize = 24;
 
 pub struct Statistics {
     pub rings_read: u32,
-    /// The tiles read (each whole), the weather table and the flight tracks' files.
+    /// The payloads read: the tiles holding something (each whole), the weather table and the
+    /// flight tracks' files; the square files' directories, 536 bytes each, are not counted.
     pub reads: usize,
     pub bytes: u64,
     pub read_seconds: f64,

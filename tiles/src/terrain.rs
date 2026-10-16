@@ -1,6 +1,6 @@
 //! `terrain` tiles: the one-arc-second lattice window of a z12 tile with height, imperviousness,
 //! forest cover and canopy height per node. The window brackets the tile with floor/ceil node
-//! edges, so every point of the tile interpolates from its own file and neighbours share their
+//! edges, so every point of the tile interpolates from its own tile and neighbours share their
 //! seam nodes. Stored as planes in one zstd frame, the heights as the residual of a planar
 //! prediction from the west, north and north-west nodes: 0.64 B a node of information in 4 stored
 //! raw (measured 2026-10-10: the world 1,108.6 -> 177.1 GB, lossless).
@@ -17,6 +17,9 @@ pub const HEIGHT_MISSING: u16 = u16::MAX;
 pub const PERCENT_MAX: u8 = 100;
 const MAGIC: &[u8; 8] = b"qmterr2\n";
 const HEADER_BYTES: usize = 24;
+/// More nodes a side than any tile's window has (at most 320: 316.4 to a tile's width, its two
+/// bracketing nodes): a header beyond is not a tile's.
+pub const MAX_WINDOW_NODES: u32 = 1024;
 /// A decoded node: height code u16 LE, imperviousness, forest cover.
 pub const NODE_BYTES: usize = 4;
 /// The frame's planes, n bytes each: the height residual's low and high bytes, imperviousness,
@@ -123,7 +126,7 @@ pub struct GroundSample {
     pub canopy_m: f64,
 }
 
-/// An absent terrain file in a complete release: sea level, hard water, no forest.
+/// A tile without terrain in a complete release: sea level, hard water, no forest.
 pub const OCEAN: GroundSample = GroundSample {
     height_m: 0.0,
     ground_factor: 0.0,
@@ -168,7 +171,7 @@ pub(crate) fn unpredict(low: &[u8], high: &[u8], columns: usize, mut node: impl 
     }
 }
 
-/// The bytes of a terrain file: the header, then one zstd frame of the five planes, row-major,
+/// The bytes of a terrain tile: the header, then one zstd frame of the five planes, row-major,
 /// the height residual zigzag-coded (small of either sign: small codes).
 pub fn encode(window: Window, nodes: &[Node]) -> Vec<u8> {
     assert_eq!(nodes.len(), window.node_count());
@@ -198,7 +201,7 @@ pub fn encode(window: Window, nodes: &[Node]) -> Vec<u8> {
     bytes
 }
 
-/// A parsed terrain file: its nodes decoded.
+/// A parsed terrain tile: its nodes decoded.
 pub struct Terrain {
     window: Window,
     /// `NODE_BYTES` a node, row-major.
@@ -223,10 +226,12 @@ impl Terrain {
             rows: word(16),
             columns: word(20),
         };
-        let (n, columns) = (window.node_count(), window.columns as usize);
-        if n == 0 {
-            return Err(FormatError("terrain: a window without nodes"));
+        if !(1..=MAX_WINDOW_NODES).contains(&window.rows)
+            || !(1..=MAX_WINDOW_NODES).contains(&window.columns)
+        {
+            return Err(FormatError("terrain: a window no tile has"));
         }
+        let (n, columns) = (window.node_count(), window.columns as usize);
         let planes = zstd::bulk::decompress(&bytes[HEADER_BYTES..], PLANES * n)
             .map_err(|_| FormatError("terrain: the frame does not decode"))?;
         if planes.len() != PLANES * n {

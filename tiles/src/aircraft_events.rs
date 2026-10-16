@@ -2,7 +2,7 @@
 //! counted once at its loudest moment there (Doc 29 Eq. 4-8a, outdoors in the open): per band of
 //! that maximum level (50, 60, 70 dB) the flights of an average day and those at night, their
 //! mean height above the ground at that moment and the type flying most of them; and the
-//! helicopters of the lowest band. A tile without any flight above 50 dB has no file.
+//! helicopters of the lowest band. A tile without any flight above 50 dB holds nothing.
 //!
 //! ```text
 //! magic "qmevt2\n\0", u16 cells per side (16), u16 designators
@@ -13,7 +13,7 @@
 //! designators: 4 B each, ICAO, space padded
 //! ```
 //!
-//! A rate is a u16 float (`rate`: within 0.025 %); a file names at most 29 types in r064
+//! A rate is a u16 float (`rate`: within 0.025 %); a tile names at most 29 types in r064
 //! (measured 2026-10-15).
 
 use crate::FormatError;
@@ -95,7 +95,7 @@ pub fn encode(cells: &[EventCell]) -> Vec<u8> {
     bytes
 }
 
-/// A parsed events file borrowing its bytes.
+/// A parsed events tile borrowing its bytes.
 #[derive(Clone, Copy)]
 pub struct AircraftEvents<'a> {
     cells: &'a [u8],
@@ -162,7 +162,7 @@ mod tests {
     use super::*;
 
     /// Cells round trip, their rates within 0.025 % and their types listed once; a cell naming a
-    /// type beyond the list, or a short file, is refused.
+    /// type beyond the list, or a short tile, is refused.
     #[test]
     fn cells_round_trip_and_bad_files_are_refused() {
         let mut cells = vec![EventCell::default(); CELLS_PER_SIDE * CELLS_PER_SIDE];

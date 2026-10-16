@@ -1,5 +1,7 @@
-//! z9 squares, the unit a builder builds and a file holds: `<year root>/<kind>/<x9>_<y9>.<kind>`
-//! keeps a square's 64 z12 tiles of one kind behind a directory of their offsets. A read takes
+//! z9 squares, the unit a builder builds and a file holds: `<year root>/<x9>/<y9>/<kind>` keeps a
+//! square's 64 z12 tiles of one kind behind a directory of their offsets, a square's kinds side by
+//! side (copied square by square, they lie together on a disk, and a cutout of the world is a set of
+//! square directories). A read takes
 //! exactly the tiles asked for, each with one `pread` of its bytes after its square's directory,
 //! every read at once (one reader a read, so the disk sees the requests in parallel); a write
 //! streams a square's tiles in its order into a temporary file and renames it into place. One file a square and kind keeps a year at 377,082 files where
@@ -96,11 +98,12 @@ impl Square {
     }
 }
 
-/// `<year root>/<kind>/<x9>_<y9>.<kind>`.
+/// `<year root>/<x9>/<y9>/<kind>`.
 pub fn square_path(year_root: &Path, kind: Kind, square: Square) -> PathBuf {
     year_root
+        .join(square.x.to_string())
+        .join(square.y.to_string())
         .join(kind.name())
-        .join(format!("{}_{}.{}", square.x, square.y, kind.name()))
 }
 
 /// An open square file and its tiles' offsets.
@@ -233,17 +236,20 @@ pub fn tiles_held(
 }
 
 /// A square's file of a kind being written: its tiles added in the square's order and streamed to
-/// a temporary file of its own, the directory written, the file synced and renamed into place when
-/// finished; dropped unfinished, the temporary file goes.
+/// a temporary file of its own; when finished, the directory written, the file synced, renamed into
+/// place and its directory synced, so a square reported written survives a crash. A writer that
+/// fails or is dropped unfinished removes its temporary file.
 pub struct SquareWriter {
     square: Square,
     path: PathBuf,
     temporary: PathBuf,
-    file: Option<File>,
+    file: File,
     offsets: [u64; TILES_PER_SQUARE + 1],
     /// The first index a tile may still take.
     next: usize,
     tiles: usize,
+    /// The temporary file is gone: renamed into place or removed.
+    settled: bool,
 }
 
 impl SquareWriter {
@@ -253,28 +259,32 @@ impl SquareWriter {
         let path = square_path(year_root, kind, square);
         let directory = path.parent().expect("a square path has a directory");
         std::fs::create_dir_all(directory).map_err(|error| failed(directory, error))?;
-        let temporary = path.with_extension(format!(
+        let temporary = path.with_file_name(format!(
             "{}.{}-{}.partial",
             kind.name(),
             std::process::id(),
             WRITERS.fetch_add(1, Ordering::Relaxed)
         ));
-        let mut file = File::options()
+        let file = File::options()
             .write(true)
             .create_new(true)
             .open(&temporary)
             .map_err(|error| failed(&temporary, error))?;
-        file.write_all(&[0; HEADER_BYTES])
-            .map_err(|error| failed(&temporary, error))?;
-        Ok(SquareWriter {
+        let mut writer = SquareWriter {
             square,
             path,
             temporary,
-            file: Some(file),
+            file,
             offsets: [HEADER_BYTES as u64; TILES_PER_SQUARE + 1],
             next: 0,
             tiles: 0,
-        })
+            settled: false,
+        };
+        writer
+            .file
+            .write_all(&[0; HEADER_BYTES])
+            .map_err(|error| failed(&writer.temporary, error))?;
+        Ok(writer)
     }
 
     /// Appends a tile of the square after every tile added before it in the square's order.
@@ -288,12 +298,12 @@ impl SquareWriter {
         let index = self.square.index_of(tile);
         assert!(
             index >= self.next,
-            "{tile:?} after a later tile of its square"
+            "{tile:?} again or after a later tile of its square"
         );
         let start = self.offsets[self.next];
         self.offsets[self.next..=index].fill(start);
-        let file = self.file.as_mut().expect("an unfinished writer");
-        file.write_all(bytes)
+        self.file
+            .write_all(bytes)
             .map_err(|error| failed(&self.temporary, error))?;
         self.offsets[index + 1] = start + bytes.len() as u64;
         self.next = index + 1;
@@ -306,17 +316,18 @@ impl SquareWriter {
     pub fn finish(mut self) -> Result<usize, String> {
         let end = self.offsets[self.next];
         self.offsets[self.next..].fill(end);
-        let file = self.file.take().expect("an unfinished writer");
+        let directory = self.path.parent().expect("a square path has a directory");
         if self.tiles == 0 {
-            drop(file);
             std::fs::remove_file(&self.temporary)
                 .map_err(|error| failed(&self.temporary, error))?;
-            return match std::fs::remove_file(&self.path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    Err(failed(&self.path, error))
-                }
-                _ => Ok(0),
-            };
+            self.settled = true;
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+                Err(error) => return Err(failed(&self.path, error)),
+            }
+            sync_directory(directory)?;
+            return Ok(0);
         }
         let mut header = Vec::with_capacity(HEADER_BYTES);
         header.extend_from_slice(MAGIC);
@@ -325,21 +336,29 @@ impl SquareWriter {
         for offset in self.offsets {
             header.extend_from_slice(&offset.to_le_bytes());
         }
-        file.write_all_at(&header, 0)
-            .and_then(|()| file.sync_all())
+        self.file
+            .write_all_at(&header, 0)
+            .and_then(|()| self.file.sync_all())
             .map_err(|error| failed(&self.temporary, error))?;
-        drop(file);
         std::fs::rename(&self.temporary, &self.path).map_err(|error| failed(&self.path, error))?;
+        self.settled = true;
+        sync_directory(directory)?;
         Ok(self.tiles)
     }
 }
 
 impl Drop for SquareWriter {
     fn drop(&mut self) {
-        if self.file.take().is_some() {
+        if !self.settled {
             let _ = std::fs::remove_file(&self.temporary);
         }
     }
+}
+
+fn sync_directory(directory: &Path) -> Result<(), String> {
+    File::open(directory)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| failed(directory, error))
 }
 
 fn failed(path: &Path, error: std::io::Error) -> String {
@@ -496,8 +515,9 @@ mod tests {
         std::fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
         assert!(read_tile(&root, square.tile(7), Kind::Obstacles).is_err());
         let other = Square { x: 2, y: 2 };
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(square_path(&root, Kind::Obstacles, other), &bytes).unwrap();
+        let other_path = square_path(&root, Kind::Obstacles, other);
+        std::fs::create_dir_all(other_path.parent().unwrap()).unwrap();
+        std::fs::write(&other_path, &bytes).unwrap();
         assert!(read_tile(&root, other.tile(0), Kind::Obstacles).is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }

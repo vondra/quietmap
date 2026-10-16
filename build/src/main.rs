@@ -88,6 +88,17 @@ impl Arguments {
             .find(|(name, _)| name == key)
             .map(|(_, value)| value.as_str())
     }
+
+    /// `--terrain`, the year root a builder reads the ground from: the tree it builds (`--out`,
+    /// not complete yet) or a complete one of this layout; one of another layout would read as
+    /// all ocean.
+    fn terrain(&self, out: &Path) -> Result<&Path, String> {
+        let terrain = Path::new(self.get("terrain")?);
+        if terrain != out {
+            tiles::check_year_complete(terrain)?;
+        }
+        Ok(terrain)
+    }
 }
 
 /// The squares of `--squares`: `X:Y,X:Y,..`, `all` (every z9 square of the world) or `@FILE`
@@ -270,7 +281,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let written = terrain_fine::build(
                 &parse_squares(options.get("squares")?)?,
                 &models,
-                Path::new(options.get("terrain")?),
+                options.terrain(&out)?,
                 &out,
             )?;
             eprintln!(
@@ -350,7 +361,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 let (tiles, written) = boxes::build_square(
                     (shuffled, &days),
                     (square, &weather),
-                    Path::new(options.get("terrain")?),
+                    options.terrain(&out)?,
                     rule,
                     &out,
                 )?;
@@ -387,7 +398,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 let written = boxes::events::build_square(
                     (shuffled, &days),
                     (square, &weather),
-                    Path::new(options.get("terrain")?),
+                    options.terrain(&out)?,
                     &out,
                 )?;
                 eprintln!(
@@ -412,7 +423,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let only: Vec<&str> = options
                 .optional("only")
                 .map_or(Vec::new(), |names| names.split(',').collect());
-            let terrain = Path::new(options.get("terrain")?);
+            let terrain = options.terrain(&out)?;
             let chosen: Vec<(&str, boxes::check::CheckPoint)> = points
                 .iter()
                 .map(|point| {

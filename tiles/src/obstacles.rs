@@ -8,7 +8,7 @@
 //! Most cells hold nothing (96 % of the world's): a bitmap marks the occupied ones and counts them
 //! before every 64, so a cell finds its runs in place. A footprint id is its z9 square (the high 32
 //! bits) and its ordinal there: an outline keeps the ordinal and the row of its square in the
-//! file's table of them, and its vertices run to where the next outline's begin. Every section
+//! tile's table of them, and its vertices run to where the next outline's begin. Every section
 //! starts 4-aligned, as the GPU reads it.
 //!
 //! ```text
@@ -37,7 +37,7 @@ const CELL_INDEX_BYTES: usize = CELL_WORDS * (8 + 2);
 const RUN_BYTES: usize = 8;
 const OUTLINE_BYTES: usize = 12;
 const VERTEX_BYTES: usize = 4;
-/// The most footprint squares a file names: an outline keeps its square's row in a byte.
+/// The most footprint squares a tile names: an outline keeps its square's row in a byte.
 const MAXIMUM_SQUARES: usize = 256;
 /// An outline's kind is its last byte's low two bits, its envelope the rest.
 const ENVELOPE_SHIFT: u8 = 2;
@@ -47,7 +47,7 @@ pub const CELL_STEPS: i64 = 256;
 pub const CELLS_PER_SIDE: i64 = 128;
 /// Cells per tile.
 pub const CELLS: usize = (CELLS_PER_SIDE * CELLS_PER_SIDE) as usize;
-/// The tallest outline a file holds: heights are u16 decimetres.
+/// The tallest outline a tile holds: heights are u16 decimetres.
 pub const MAXIMUM_HEIGHT_M: f64 = u16::MAX as f64 / 10.0;
 /// The most vertices one outline holds (u16 counts; outlines are never split).
 pub const MAXIMUM_VERTICES: usize = u16::MAX as usize;
@@ -145,7 +145,7 @@ fn height_code(height_m: f64) -> u16 {
     code as u16
 }
 
-/// The bytes of an obstacles file: header, the occupied cells' index, the footprint squares, runs,
+/// The bytes of an obstacles tile: header, the occupied cells' index, the footprint squares, runs,
 /// outline records, vertices. `outlines` are stored in the given order, which must be sorted by
 /// footprint id so the rings of one footprint are consecutive; the cell index follows from their
 /// edges.

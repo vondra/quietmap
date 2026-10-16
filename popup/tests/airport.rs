@@ -93,7 +93,7 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
         };
         ROWS * COLUMNS
     ];
-    std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
+    std::fs::write(root.join("2026").join("weather"), encode_weather(&weather)).unwrap();
     let write = |kind, bytes: Vec<u8>| {
         tiles::square::write_tiles(&root.join("2026"), kind, &[(TILE, bytes)]).unwrap();
     };

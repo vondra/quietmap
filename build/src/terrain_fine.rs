@@ -255,6 +255,7 @@ pub fn build(
             }
         }
         if rasters.is_empty() {
+            write_square(out, Kind::TerrainFine, square, &[])?;
             continue;
         }
         let land = tiles_held(terrain_root, Kind::Terrain, square)?;

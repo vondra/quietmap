@@ -210,12 +210,13 @@ and walls, and every source.
 
 ## The files
 
-Everything a click or the painter reads lies in one tree of files. The world is cut into the
-standard web-map tiles of zoom 12, 6.3 km wide in Prague and 9.8 km at the equator, and those into
-squares of zoom 9, eight by eight tiles. Each kind of data has a directory, and in it one file a
-square holds the square's tiles of that kind behind a directory of where each begins: a click
-reads exactly the tiles its rings need, each in one read. A square with nothing of a kind has no
-file of it, a tile with nothing takes no bytes: the open sea has no terrain. A tile holds its
+Everything a click or the painter reads lies in one tree of files, a directory a year. The world
+is cut into the standard web-map tiles of zoom 12, 6.3 km wide in Prague and 9.8 km at the
+equator, and those into squares of zoom 9, eight by eight tiles. Each square has a directory, and
+in it one file a kind of data holds the square's tiles of that kind behind a directory of where
+each begins: a click reads exactly the tiles its rings need, each in one read, and a set of square
+directories is a whole cutout of the world. A square with nothing of a kind has no file of it, a
+tile with nothing takes no bytes: the open sea has no terrain. A tile holds its
 kind's records each number in the fewest bytes its meaning needs, to a step below what moves an
 answer, read in place without decoding: no text, no general compressor, a value repeated in a tile
 kept once in a table of it. Only the terrain carries a coder: a smooth field's information is the
@@ -223,34 +224,35 @@ residual of a planar prediction of its heights, stored in zstd.
 The world takes 1.08 TB in 377,082 files (October 2026).
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
-<svg viewBox="0 0 440 242" role="img" aria-label="A zoom-9 square of eight by eight tiles with tile 2212/1387 of Prague's centre marked, and the seven files holding the square's tiles, one a kind of data, beside the weather table and the flight tracks" style="display: block; width: 100%; max-width: 480px; height: auto; margin: 0 auto" font-size="12">
+<svg viewBox="0 0 400 260" role="img" aria-label="A zoom-9 square of eight by eight tiles with tile 2212/1387 of Prague's centre marked, and the square's directory holding its seven files, one a kind of data, beside the year's weather table and flight tracks" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
 <rect x="8" y="34" width="128" height="128" fill="none" stroke="currentColor" stroke-width="1.2"/>
 <path d="M24 34V162M40 34V162M56 34V162M72 34V162M88 34V162M104 34V162M120 34V162M8 50H136M8 66H136M8 82H136M8 98H136M8 114H136M8 130H136M8 146H136" fill="none" stroke="currentColor" stroke-opacity=".3" stroke-width=".75"/>
 <rect x="72" y="82" width="16" height="16" fill="#2f7fd8"/>
 <text x="8" y="22" fill="currentColor" font-weight="600">z9 square 276/173</text>
 <text x="8" y="180" fill="currentColor" fill-opacity=".7">8 × 8 tiles of zoom 12,</text>
 <text x="8" y="196" fill="currentColor" fill-opacity=".7">each 6.3 km in Prague</text>
-<path d="M165 27V54M165 36H171M165 54H171M181 63V228M181 72H187M181 228H187" fill="none" stroke="currentColor" stroke-opacity=".45"/>
-<rect x="188" y="65" width="250" height="128" rx="4" fill="#2f7fd8" fill-opacity=".13"/>
+<path d="M165 27V36M165 36H171M181 45V246M181 54H187M181 72H187M181 246H187" fill="none" stroke="currentColor" stroke-opacity=".45"/>
+<rect x="198" y="83" width="192" height="122" rx="4" fill="#2f7fd8" fill-opacity=".13"/>
 <g fill="currentColor" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
 <text x="160" y="22">release/</text>
-<text x="176" y="40">weather</text>
-<text x="176" y="58">2026/</text>
-<g font-size="10.5">
-<text x="192" y="80">terrain/276_173.terrain</text>
-<text x="192" y="97">terrain-fine/276_173.terrain-fine</text>
-<text x="192" y="114">obstacles/276_173.obstacles</text>
-<text x="192" y="131">sources/276_173.sources</text>
-<text x="192" y="148">aircraft/276_173.aircraft</text>
-<text x="192" y="165">aircraft-far/276_173.aircraft-far</text>
-<text x="192" y="182">aircraft-events/276_173.aircraft-events</text>
+<text x="176" y="40">2026/</text>
+<text x="192" y="58">weather</text>
+<text x="192" y="76">276/173/</text>
+<g font-size="11.5">
+<text x="206" y="99">terrain</text>
+<text x="206" y="115">terrain-fine</text>
+<text x="206" y="131">obstacles</text>
+<text x="206" y="147">sources</text>
+<text x="206" y="163">aircraft</text>
+<text x="206" y="179">aircraft-far</text>
+<text x="206" y="195">aircraft-events</text>
 </g>
-<text x="192" y="232">aircraft-tracks/</text>
+<text x="192" y="250">aircraft-tracks/</text>
 </g>
-<text x="192" y="210" fill="currentColor" fill-opacity=".7" font-size="11">each the square's 64 tiles of its kind</text>
-<text x="314" y="232" fill="currentColor" fill-opacity=".7" font-size="11.5">256 files</text>
+<text x="206" y="222" fill="currentColor" fill-opacity=".7" font-size="11">each the square's 64 tiles of its kind</text>
+<text x="314" y="250" fill="currentColor" fill-opacity=".7" font-size="11.5">256 files</text>
 </svg>
-<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">Tile 2212/1387 in Prague's centre lies in zoom-9 square 276/173: each kind of data keeps the square's 64 tiles in one file, a directory of where each begins first. The weather table lies beside the year, the flight tracks in it.</figcaption>
+<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">Tile 2212/1387 in Prague's centre lies in zoom-9 square 276/173, whose directory keeps the square's 64 tiles of each kind of data in one file, a directory of where each begins first. The year's weather table and flight tracks lie beside the squares.</figcaption>
 </figure>
 
 | Kind | A tile holds | The world |
@@ -263,8 +265,9 @@ The world takes 1.08 TB in 377,082 files (October 2026).
 | `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 64 GB, 2.6 million tiles in 57,670 files |
 | `aircraft-events` | per cell 390 m wide in Prague, the flights of a day whose loudest moment reaches 50, 60 and 70 dB | 9.6 GB, 1.6 million tiles in 35,830 files |
 
-Beside the tiles lie the year's flight tracks, 28 GB in 256 files, read only to draw a listed
-flight, and the weather table, 16.6 MB for every half degree.
+Beside the squares lie the year's flight tracks, 28 GB in 256 files, read only to draw a listed
+flight, and its weather table, 16.6 MB for every half degree: a 30-year climatology, the same in
+every year.
 
 A tile's sources are pieces and the records they share. A piece is a point or a straight line —
 its two ends, to 19 cm in Prague — and the number of its record. A record holds what the pieces of
@@ -327,7 +330,7 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
 |---|---|---|
 | `terrain` | `tiles/src/terrain.rs` | the one-arc-second node window that brackets the tile: neighbours share their seam nodes; a sample touching a node without data is refused, never guessed; height, sealing, tree cover and crown height a node |
 | `terrain-fine` | `tiles/src/terrain_fine.rs` | a national model's detail on the 1/6" lattice, its height less its own 1" average, faded towards its edges and voids; blocks of 128 x 128 cells, each one zstd frame behind a directory, so a click decodes only the blocks its rays' ends touch |
-| square files | `tiles/src/square.rs` | `<year>/<kind>/<x9>_<y9>.<kind>`: a zoom-9 square's 64 tiles of a kind behind the 65 offsets where each begins, row-major from the north-west; a tile with nothing of the kind takes no bytes; written to a temporary file of its own and renamed into place |
+| square files | `tiles/src/square.rs` | `<year>/<x9>/<y9>/<kind>`: a zoom-9 square's 64 tiles of a kind behind the 65 offsets where each begins, row-major from the north-west; a tile with nothing of the kind takes no bytes; written to a temporary file of its own, synced and renamed into place |
 | `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile): a bitmap marks the occupied cells and counts them before every 64, so a cell finds its runs in place; an outline's footprint id is its square's row in the tile's table and its ordinal |
 | `sources` | `tiles/src/sources.rs` | 12-byte lines and 8-byte points, 32-byte records, each distinct emission row (per octave band and period a u16 in 0.01 dB) and display once, 8-byte deck entries (a bridge line's deck altitude at its ends); a display is its layer's fields typed by one schema (`tiles/src/sources/display.rs`: texts in the tile's table, numbers as whole counts of their field's decimal step), as the builder wrote them |
 | `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with only the periods it is heard in and its loudest flight pieces, its slab a row of the tile's band table, its flights a day as a 16-bit rate; the tile's flight table; a piece's ends from its box's centroid (the farthest exact); a box finds its periods and pieces from the counts every 32 boxes |
@@ -352,9 +355,10 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
   box's at the middle of its z9 square; roads roll at the place's yearly air temperature
   (WorldClim 2.1, CNOSSOS-EU Eq. 2.2.10), with the gradient and junction terms.
 - Tiles are read whole, a ring's asked for together: each square file's directory once, then
-  every tile with one read of its bytes, one task a read. The exceptions read by position: a fine
-  terrain tile's blocks decoded on first use, the weather table's nodes, and the flight tracks (a
-  file's directory, then each listed flight's points).
+  every tile with one read of its bytes, one task a read; a fine terrain tile is read whole when a
+  ray's end first needs it and its blocks are decoded on first use. The exceptions read by
+  position: the weather table's nodes and the flight tracks (a file's directory, then each listed
+  flight's points).
 
 </details>
 
