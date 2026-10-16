@@ -20,6 +20,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -123,6 +124,10 @@ fn open(year_root: &Path, kind: Kind, square: Square) -> Result<Option<SquareFil
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(fail(error.to_string())),
     };
+    // Exactly the bytes asked for: the kernel's readahead would read on past a tile into the
+    // square's next ones (2 MB on an md array).
+    // SAFETY: an advice on an open descriptor; a refusal leaves the reads correct.
+    unsafe { libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_RANDOM) };
     let length = file
         .metadata()
         .map_err(|error| fail(error.to_string()))?

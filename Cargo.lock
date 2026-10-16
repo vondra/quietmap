@@ -1244,6 +1244,7 @@ dependencies = [
 name = "tiles"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rayon",
  "serde_json",
  "zstd",
