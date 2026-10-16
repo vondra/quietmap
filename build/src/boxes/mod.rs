@@ -415,10 +415,15 @@ pub fn build_square(
         .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
         .collect::<Result<_, _>>()
         .map_err(|error| error.to_string())?;
-    let placements: Vec<Placement> = rules
-        .iter()
-        .map(|rule| Placement::new(&near, &terrain, rule.level_step_db))
-        .collect();
+    // One terrain pyramid for all the rules: built for each, it took most of the CPU of all but
+    // the heaviest squares.
+    let mut placements: Vec<Placement> = Vec::new();
+    for rule in rules {
+        placements.push(match placements.first() {
+            Some(first) => first.with_level_step(rule.level_step_db),
+            None => Placement::new(&near, &terrain, rule.level_step_db),
+        });
+    }
     let placed: Vec<(&Placement, usize)> = placements
         .iter()
         .zip(rules)
