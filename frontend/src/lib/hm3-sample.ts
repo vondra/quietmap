@@ -1,5 +1,6 @@
 /** Cached heatmap cell readouts from the same grid and byte decoding as rendering. */
-import { fetchAndDecodeHM3, HM3_BYTE_SONE, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from './hm3-decoder.ts'
+import { HM3_BYTE_SONE, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from './hm3-decoder.ts'
+import { fetchSourceTile } from './hm3-combine.ts'
 import { lngLatToTileFloat } from './tile-math.ts'
 import { MIN_ZOOM, WORLD_EXTENT, type TileBuilds } from './tile-urls.ts'
 
@@ -76,7 +77,7 @@ export function tileCells(url: string): Promise<SampledTile> {
     return hit.promise
   }
   const entry: TileCellsEntry = {
-    promise: fetchAndDecodeHM3(url, undefined, 'low')
+    promise: fetchSourceTile(url, undefined, 'low')
       .then((decoded): SampledTile => decoded?.cells ?? 'absent')
       .catch((): SampledTile => {
         setTimeout(() => { if (tileCellsCache.get(url) === entry) tileCellsCache.delete(url) }, FAILED_TILE_RETRY_MS)

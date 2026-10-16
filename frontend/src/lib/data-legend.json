@@ -1,0 +1,243 @@
+{
+  "barriers": [
+    {
+      "colour": "#00beff",
+      "label": "noise barrier",
+      "opacity": 1.0
+    }
+  ],
+  "buildings": [
+    {
+      "colour": "#ffeda0",
+      "label": "3 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#feb24c",
+      "label": "8 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#f03b20",
+      "label": "15 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#bd0026",
+      "label": "25 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#6e016b",
+      "label": "50 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#280046",
+      "label": "100 m",
+      "opacity": 1.0
+    }
+  ],
+  "elevation": [
+    {
+      "colour": "#9cbecd",
+      "label": "sea",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#449c3a",
+      "label": "100 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#efd658",
+      "label": "300 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#b94436",
+      "label": "800 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#664e88",
+      "label": "1,800 m",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#e5e5ef",
+      "label": "4,000 m",
+      "opacity": 1.0
+    }
+  ],
+  "forest": [
+    {
+      "colour": "#15803d",
+      "label": "25 % canopy",
+      "opacity": 0.22
+    },
+    {
+      "colour": "#15803d",
+      "label": "50 % canopy",
+      "opacity": 0.45
+    },
+    {
+      "colour": "#15803d",
+      "label": "100 % canopy",
+      "opacity": 0.9
+    }
+  ],
+  "hard": [
+    {
+      "colour": "#f7bb17",
+      "label": "10 % hard",
+      "opacity": 0.36
+    },
+    {
+      "colour": "#eb791e",
+      "label": "50 % hard",
+      "opacity": 0.6
+    },
+    {
+      "colour": "#dc2626",
+      "label": "100 % hard",
+      "opacity": 0.9
+    }
+  ],
+  "others": [
+    {
+      "colour": "#7b3294",
+      "label": "industry",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#008080",
+      "label": "wind turbine",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#b8860b",
+      "label": "bells, calls to prayer",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#d01c8b",
+      "label": "people outside bars",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#1a9850",
+      "label": "sport and play",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#4d6a8a",
+      "label": "parking",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#2166ac",
+      "label": "ships",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#404040",
+      "label": "airport ground",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#e6550d",
+      "label": "level-crossing horns",
+      "opacity": 1.0
+    }
+  ],
+  "traffic": [
+    {
+      "colour": "#fed976",
+      "label": "100 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#feb24c",
+      "label": "1,000 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#fd8d3c",
+      "label": "5,000 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#f03c20",
+      "label": "15,000 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#bd0026",
+      "label": "40,000 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#67000d",
+      "label": "100,000 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#f03c20",
+      "label": "counted",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#f03c20",
+      "label": "modelled",
+      "opacity": 0.59
+    },
+    {
+      "colour": "#f03c20",
+      "label": "estimated by class",
+      "opacity": 0.31
+    }
+  ],
+  "trains": [
+    {
+      "colour": "#9ecae1",
+      "label": "1 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#6baed6",
+      "label": "10 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#2171b5",
+      "label": "50 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#08316c",
+      "label": "150 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#3e007d",
+      "label": "300 a day",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#2171b5",
+      "label": "timetabled",
+      "opacity": 1.0
+    },
+    {
+      "colour": "#2171b5",
+      "label": "partly timetabled",
+      "opacity": 0.59
+    },
+    {
+      "colour": "#2171b5",
+      "label": "estimated",
+      "opacity": 0.31
+    }
+  ]
+}

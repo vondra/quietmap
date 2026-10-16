@@ -2,6 +2,9 @@
 // refinement, errors and aborts, the loudest flights, an opened row's segments), the detailed
 // calculation, layer switches, search, and the phone sheet.
 import { expect, test } from '@playwright/test'
+import { combineLayerCells } from '../src/lib/hm3-combine'
+import { HM3_BYTE_SONE } from '../src/lib/hm3-decoder'
+import { fmtSone } from '../src/utils/formatters'
 import { computedPiece, FIXTURE_FLIGHTS, pieceRun, popupUpdate, roadContributor, withAircraft } from './answers'
 import {
   FIXTURE_DB,
@@ -24,6 +27,8 @@ import {
 } from './support'
 
 const badge = (page: import('@playwright/test').Page) => page.locator('[data-testid="noise-badge"]:visible')
+/** A one-cell grid at `sone`, as the fixture's tiles carry it. */
+const soneCells = (sone: number) => Uint8Array.of(Math.round(80 + 20 * Math.log2(sone)))
 const ALL_LAYERS = 'road,railway,industrial,building,ship,aircraft'
 const lden = (page: import('@playwright/test').Page) => page.locator('[data-testid="lden"]:visible')
 
@@ -94,25 +99,31 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
 
   await page.locator('button[aria-label="Close"]:visible').click()
   await expect(page.locator('[data-testid="detail-popup"]:visible')).toHaveCount(0)
-  // A layer alone shows its own loudness; tapping it again brings every layer, the total, back.
-  const road = page.getByTestId('layer-road').filter({ visible: true })
-  const rail = page.getByTestId('layer-railway').filter({ visible: true })
+  // Each switch turns its layer over: the railway off leaves the road (the only other layer the
+  // fixture publishes), the road off and the railway on the railway alone, both with every other
+  // layer off their combination, every layer on the total again.
+  const layer = (id: string) => page.getByTestId(`layer-${id}`).filter({ visible: true })
+  const [road, rail] = [layer('road'), layer('railway')]
+  const hover = page.getByTestId('heatmap-hover')
   await expect(road).toHaveAttribute('aria-pressed', 'true')
   await expect(rail).toHaveAttribute('aria-pressed', 'true')
   await rail.click()
-  await expect(rail).toHaveAttribute('aria-pressed', 'true')
-  await expect(road).toHaveAttribute('aria-pressed', 'false')
-  await page.mouse.move(x, y)
-  await expect(page.getByTestId('heatmap-hover')).toHaveText(`${RAILWAY_SONE.toFixed(1)} sone`)
-  await road.click()
-  await expect(road).toHaveAttribute('aria-pressed', 'true')
   await expect(rail).toHaveAttribute('aria-pressed', 'false')
-  await page.mouse.move(x + 1, y)
-  await expect(page.getByTestId('heatmap-hover')).toHaveText(`${ROAD_SONE.toFixed(1)} sone`)
-  await road.click()
-  await expect(rail).toHaveAttribute('aria-pressed', 'true')
+  await expect(road).toHaveAttribute('aria-pressed', 'true')
   await page.mouse.move(x, y)
-  await expect(page.getByTestId('heatmap-hover')).toHaveText(`${TOTAL_SONE} sone`)
+  await expect(hover).toHaveText(`${ROAD_SONE.toFixed(1)} sone`)
+  await road.click()
+  await rail.click()
+  await expect(road).toHaveAttribute('aria-pressed', 'false')
+  await page.mouse.move(x + 1, y)
+  await expect(hover).toHaveText(`${RAILWAY_SONE.toFixed(1)} sone`)
+  await road.click()
+  for (const id of ['industrial', 'building', 'ship', 'aircraft']) await layer(id).click()
+  await page.mouse.move(x, y)
+  await expect(hover).toHaveText(`${fmtSone(HM3_BYTE_SONE[combineLayerCells([soneCells(ROAD_SONE), soneCells(RAILWAY_SONE)])[0]])} sone`)
+  for (const id of ['industrial', 'building', 'ship', 'aircraft']) await layer(id).click()
+  await page.mouse.move(x + 1, y)
+  await expect(hover).toHaveText(`${TOTAL_SONE} sone`)
 })
 
 test('desktop: an error line replaces the partial answer, a new click aborts the old request', async ({ page }) => {
@@ -284,15 +295,23 @@ test.describe('mobile', () => {
     await page.getByRole('button', { name: 'Toggle layers panel' }).tap()
     const panel = page.locator('[data-testid="layers-panel"]:visible')
     await expect(panel).toBeVisible()
-    // The layer shown alone, tapped, brings every layer (the total) back; another tapped is alone.
+    // Each switch turns its own layer over.
     const road = panel.getByTestId('layer-road')
     const rail = panel.getByTestId('layer-railway')
     await expect(road).toHaveAttribute('aria-pressed', 'true')
     await expect(rail).toHaveAttribute('aria-pressed', 'false')
-    await road.tap()
+    await rail.tap()
     await expect(rail).toHaveAttribute('aria-pressed', 'true')
     await expect(road).toHaveAttribute('aria-pressed', 'true')
-    await rail.tap()
+    await road.tap()
     await expect(road).toHaveAttribute('aria-pressed', 'false')
+    await expect(rail).toHaveAttribute('aria-pressed', 'true')
+    // A data layer on shows its legend: the renderer's colours and what they stand for.
+    await page.route('**/api/raster/**', route => route.fulfill({ status: 204 }))
+    await page.getByRole('button', { name: 'Advanced' }).filter({ visible: true }).tap()
+    await page.getByTestId('data-layer-traffic').filter({ visible: true }).tap()
+    const legend = page.getByTestId('legend-traffic').filter({ visible: true })
+    await expect(legend).toContainText('15,000 a day')
+    await expect(legend).toContainText('estimated by class')
   })
 })

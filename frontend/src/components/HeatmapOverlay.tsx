@@ -1,6 +1,6 @@
-// The noise heatmap: HM3 tiles of one source (the total or one layer: loudness does not add over
-// layers) decoded and palette-mapped in the browser, as deck.gl tiles below the base zoom and one
-// stitched image past it.
+// The noise heatmap: HM3 tiles of one source (the total, one layer or a combination of layers,
+// `hm3-combine`) decoded and palette-mapped in the browser, as deck.gl tiles below the base zoom
+// and one stitched image past it.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { TileLayer } from '@deck.gl/geo-layers'

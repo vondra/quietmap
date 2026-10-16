@@ -1,34 +1,35 @@
 // The data layers: the ground, the forest, obstacles and traffic every click computes over, drawn
 // from the served release by `qm-raster`
-// (`/api/raster/{id}/{z}/{x}/{y}.png`). Its zooms: the server's (server/src/routes/raster.ts).
+// (`/api/raster/{id}/{z}/{x}/{y}.png`). Its zooms: the server's (server/src/routes/raster.ts); its
+// colours: the panel's legend (`data-legend.json`).
 export const DATA_LAYERS = [
   {
     id: 'elevation', label: 'Elevation', minzoom: 10, opacity: 0.75,
-    tooltip: 'Ground height above sea level at every lattice node (1 arc-second), shaded by its slope: the hills that screen and the ground every ray crosses. Green low, yellow 300 m, red 800 m, purple 1,800 m.',
+    tooltip: 'Ground height above sea level at every lattice node (1 arc-second), shaded by its slope: the hills that screen and the ground every ray crosses.',
   },
   {
     id: 'forest', label: 'Forest', minzoom: 10, opacity: 0.8,
-    tooltip: 'Tree cover at every lattice node: the darker the green, the denser the canopy. Sound passing through the crowns loses ISO 9613-2\'s foliage attenuation, by this cover and the crowns\' height; the ground under them counts as soft ground.',
+    tooltip: 'Tree cover at every lattice node. Sound passing through the crowns loses ISO 9613-2\'s foliage attenuation, by this cover and the crowns\' height; the ground under them counts as soft ground.',
   },
   {
     id: 'hard', label: 'Hard ground', minzoom: 10, opacity: 0.7,
-    tooltip: 'Acoustically hard share of the ground at every lattice node, yellow little to red all: paved, built over or water reflects sound, open soil and grass absorb it (CNOSSOS ground factor G = 1 - hard share).',
+    tooltip: 'Acoustically hard share of the ground at every lattice node: paved, built over or water reflects sound, open soil and grass absorb it (CNOSSOS ground factor G = 1 - hard share).',
   },
   {
     id: 'buildings', label: 'Buildings', minzoom: 13, opacity: 0.85,
-    tooltip: 'Buildings as the computation screens and reflects with them, coloured by height: yellow 3 m, orange 8 m, red 15 m, dark red 25 m, purple 50 m and more.',
+    tooltip: 'Buildings as the computation screens and reflects with them, by height.',
   },
   {
     id: 'traffic', label: 'Road traffic', minzoom: 13, opacity: 1,
-    tooltip: 'Vehicles a day on every road: yellow 100, orange 5,000, red 15,000, dark red 40,000 and more. Solid where counted, half where a model makes them (mostly from the buildings around), faint where a fixed estimate per road class stands.',
+    tooltip: 'Vehicles a day on every road: solid where counted, half where a model makes them (mostly from the buildings around), faint where a fixed estimate per road class stands.',
   },
   {
     id: 'trains', label: 'Trains', minzoom: 11, opacity: 1,
-    tooltip: 'Trains a day on every track, trams included: light blue 1, blue 10, dark blue 50, navy 150, purple 300 and more. Solid where timetables give all of them, half where they give some, faint where none do.',
+    tooltip: 'Trains a day on every track, trams included: solid where timetables give all of them, half where they give some, faint where none do.',
   },
   {
     id: 'others', label: 'Other sources', minzoom: 12, opacity: 1,
-    tooltip: 'The other sources every click computes, where it computes them (a dot per site, or per cell of an area): purple industry, teal wind turbines, gold church bells and calls to prayer, pink people outside bars and restaurants, green sport and play, slate car parks and street parking, blue ships (their density cells), grey the airports\' taxiways and runways, orange the horns sounded on the approach to level crossings (the United States and Canada). Buildings\' own sound (heat pumps, air conditioners, school yards, warehouses) is not drawn here: the Buildings layer shows the buildings.',
+    tooltip: 'The other sources every click computes, where it computes them: a dot per site, or per cell of an area (ships by their density cells); the horns sound on the approach to level crossings in the United States and Canada. Buildings\' own sound (heat pumps, air conditioners, school yards, warehouses) is not drawn here: the Buildings layer shows the buildings.',
   },
   {
     id: 'barriers', label: 'Noise barriers', minzoom: 13, opacity: 1,

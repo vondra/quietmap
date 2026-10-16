@@ -26,6 +26,20 @@ fn building_colour(height_m: f64) -> [u8; 4] {
     [r, g, b, 255]
 }
 
+/// The legend of the buildings (their colour at each stop's height) or the noise barriers.
+pub fn legend(layer: Layer) -> Vec<([u8; 4], String)> {
+    match layer {
+        Layer::Barriers => vec![(BARRIER, "noise barrier".into())],
+        _ => HEIGHT_STOPS
+            .iter()
+            .map(|&(height_m, _)| {
+                let label = format!("{} m", crate::legend::thousands(height_m as u32));
+                (building_colour(height_m), label)
+            })
+            .collect(),
+    }
+}
+
 /// Fills the pixels whose centres lie inside an odd number of the rings (pixel coordinates).
 fn fill_even_odd(rings: &[Vec<[f64; 2]>], colour: [u8; 4], pixels: &mut [[u8; 4]]) {
     let (top, bottom) = rings

@@ -2,9 +2,11 @@
 //! (standard XYZ) of the data under the computation, as a PNG on stdout: the terrain's height,
 //! forest cover or hard ground per lattice node, the buildings by height or the noise barriers of
 //! the obstacles, or the roads' vehicles and the railways' trains a day and every other source of
-//! the sources. Where the release has nothing to show the tile is transparent.
+//! the sources. Where the release has nothing to show the tile is transparent. `qm-raster
+//! --legend` prints the layers' legends for the map's panel (`legend`).
 
 mod ground;
+mod legend;
 mod outlines;
 mod png;
 mod sources;
@@ -185,6 +187,11 @@ fn run(arguments: &[String]) -> Result<Vec<u8>, String> {
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.iter().any(|argument| argument == "--legend") {
+        let text = serde_json::to_string_pretty(&legend::legend()).expect("JSON");
+        println!("{text}");
+        return;
+    }
     match run(&arguments) {
         Ok(png) => std::io::stdout().write_all(&png).unwrap_or_else(|error| {
             eprintln!("qm-raster: {error}");

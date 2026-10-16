@@ -9,7 +9,7 @@ import FlightTrackLayer from './FlightTrackLayer'
 import SegmentFanLayer from './SegmentFanLayer'
 import QuietZonesLayer from './QuietZonesLayer'
 import HeatmapOverlay from './HeatmapOverlay'
-import { HEATMAP_LAYERS, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
+import { HEATMAP_LAYERS, sourceOf, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
 import AboutControl from './AboutControl'
 import DataLayersOverlay from './DataLayersOverlay'
@@ -89,14 +89,13 @@ export default function MapView({
   }, [onGeolocateReadyChange])
 
   const tileBuild = useTileBuild()
-  // The map shows one source: loudness does not add over layers, so every layer on shows the total
-  // and one layer alone shows that layer's own loudness (`SourceToggles`). A layer the manifest
-  // does not publish (no archive painted yet) has no tiles to fetch.
+  // The layers on, as one source: every layer the painted total, one its own tiles, several their
+  // combination (`hm3-combine`). A layer the manifest does not publish (no archive painted yet) has
+  // no tiles to fetch.
   const heatmapSource = useMemo((): HeatmapSource | null => {
     const active = HEATMAP_LAYERS.filter(s => !!heatmapLayers?.[s])
-    if (active.length === 0) return null
-    if (active.length > 1) return 'total'
-    return tileBuild === null || active[0] in tileBuild.byLayer ? active[0] : null
+    if (active.length === HEATMAP_LAYERS.length) return 'total'
+    return sourceOf(active.filter(s => tileBuild === null || s in tileBuild.byLayer))
   }, [heatmapLayers, tileBuild])
 
   useEffect(() => {

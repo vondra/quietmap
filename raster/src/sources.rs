@@ -215,6 +215,57 @@ fn other_style(layer: SourceLayer, fields: &[Value]) -> Option<([u8; 4], f64, f6
     Some(([family[0], family[1], family[2], 255], width, rank))
 }
 
+/// The legend of the roads (vehicles a day, and how sure), the railways (trains a day, and how
+/// sure) or the other sources (their families).
+pub fn legend(layer: Layer) -> Vec<([u8; 4], String)> {
+    let line = |stops: &[(f64, [f64; 3])], value: f64, alpha: u8| {
+        let [r, g, b] = ramp(stops, value.log10()).map(|channel| channel.round() as u8);
+        [r, g, b, alpha]
+    };
+    let busy = |stops: &[(f64, [f64; 3])], values: &[u32], sure: [&str; 3]| {
+        let mut entries: Vec<([u8; 4], String)> = values
+            .iter()
+            .map(|&value| {
+                let label = format!("{} a day", crate::legend::thousands(value));
+                (line(stops, f64::from(value), COUNTED_ALPHA), label)
+            })
+            .collect();
+        let middle = f64::from(values[values.len() / 2]);
+        entries.extend(
+            [COUNTED_ALPHA, MODELLED_ALPHA, FIXED_ALPHA]
+                .into_iter()
+                .zip(sure)
+                .map(|(alpha, label)| (line(stops, middle, alpha), label.to_owned())),
+        );
+        entries
+    };
+    match layer {
+        Layer::Traffic => busy(
+            &TRAFFIC_STOPS,
+            &[100, 1_000, 5_000, 15_000, 40_000, 100_000],
+            ["counted", "modelled", "estimated by class"],
+        ),
+        Layer::Trains => busy(
+            &TRAIN_STOPS,
+            &[1, 10, 50, 150, 300],
+            ["timetabled", "partly timetabled", "estimated"],
+        ),
+        _ => [
+            (INDUSTRY, "industry"),
+            (TURBINE, "wind turbine"),
+            (BELLS_AND_CALLS, "bells, calls to prayer"),
+            (PEOPLE, "people outside bars"),
+            (SPORT_AND_PLAY, "sport and play"),
+            (PARKING, "parking"),
+            (SHIPS, "ships"),
+            (AIRPORT, "airport ground"),
+            (HORNS, "level-crossing horns"),
+        ]
+        .map(|(family, label)| ([family[0], family[1], family[2], 255], label.to_owned()))
+        .to_vec(),
+    }
+}
+
 /// The map tile's pixels from the sources files of `tiles`: the roads (`Layer::Traffic`), the
 /// railways (`Layer::Trains`) or every other source (`Layer::Others`, its points as dots).
 pub fn render(

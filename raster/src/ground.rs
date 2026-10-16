@@ -77,17 +77,62 @@ fn elevation(terrain: &Terrain, row: u32, column: u32, latitude_deg: f64) -> [u8
 fn percent_colour(layer: Layer, node: Node) -> [u8; 4] {
     match layer {
         Layer::Forest if (1..=PERCENT_MAX).contains(&node.forest_percent) => {
-            let alpha = (229.5 * f64::from(node.forest_percent) / 100.0).round() as u8;
-            [FOREST[0], FOREST[1], FOREST[2], alpha]
+            forest_colour(node.forest_percent)
         }
         Layer::Hard if (1..=PERCENT_MAX).contains(&node.impervious_percent) => {
-            let share = f64::from(node.impervious_percent) / 100.0;
-            let [r, g, b] = std::array::from_fn(|channel| {
-                (HARD_LOW[channel] + share * (HARD_HIGH[channel] - HARD_LOW[channel])).round() as u8
-            });
-            [r, g, b, (255.0 * (0.3 + 0.6 * share)).round() as u8]
+            hard_colour(node.impervious_percent)
         }
         _ => TRANSPARENT,
+    }
+}
+
+fn forest_colour(percent: u8) -> [u8; 4] {
+    let alpha = (229.5 * f64::from(percent) / 100.0).round() as u8;
+    [FOREST[0], FOREST[1], FOREST[2], alpha]
+}
+
+fn hard_colour(percent: u8) -> [u8; 4] {
+    let share = f64::from(percent) / 100.0;
+    let [r, g, b] = std::array::from_fn(|channel| {
+        (HARD_LOW[channel] + share * (HARD_HIGH[channel] - HARD_LOW[channel])).round() as u8
+    });
+    [r, g, b, (255.0 * (0.3 + 0.6 * share)).round() as u8]
+}
+
+/// Flat ground's colour at `height_m` (a slope shades it darker or lighter).
+fn flat_colour(height_m: f64) -> [u8; 4] {
+    let factor = 0.55 + 0.6 * shade(0.0, 0.0);
+    let [r, g, b] =
+        ramp(&HEIGHT_STOPS, height_m).map(|value| (value * factor).round().clamp(0.0, 255.0) as u8);
+    [r, g, b, 255]
+}
+
+/// The legend of a ground layer: its colours at the heights, covers and shares named.
+pub fn legend(layer: Layer) -> Vec<([u8; 4], String)> {
+    match layer {
+        Layer::Elevation => [
+            (0, "sea"),
+            (100, ""),
+            (300, ""),
+            (800, ""),
+            (1_800, ""),
+            (4_000, ""),
+        ]
+        .map(|(height_m, name)| {
+            let label = if name.is_empty() {
+                format!("{} m", crate::legend::thousands(height_m))
+            } else {
+                name.to_owned()
+            };
+            (flat_colour(f64::from(height_m)), label)
+        })
+        .to_vec(),
+        Layer::Forest => [25, 50, 100]
+            .map(|percent| (forest_colour(percent), format!("{percent} % canopy")))
+            .to_vec(),
+        _ => [10, 50, 100]
+            .map(|percent| (hard_colour(percent), format!("{percent} % hard")))
+            .to_vec(),
     }
 }
 

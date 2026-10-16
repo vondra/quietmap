@@ -1,4 +1,4 @@
-// The layer panel's noise-layer switches: every layer (the total) or one alone.
+// The layer panel's noise-layer switches, each its own: any layers together.
 import { Car, TrainFront, Plane, Building2, Factory, Ship } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { HeatmapLayer } from '../lib/tile-urls'
@@ -11,10 +11,8 @@ interface LayerRow {
   icon: ReactNode
 }
 
-// The layer panel: the noise layers, all on by default (the map shows the total). Loudness does
-// not add over layers, so a layer is seen alone or within the total: tapping a layer while all
-// are on shows it alone, tapping the layer shown alone brings every layer back, tapping another
-// shows that one alone (see MapView).
+// The layer panel: the noise layers, all on by default (the map shows the total); each switch
+// turns its layer on or off, the map showing the layers on together (see MapView).
 const LAYER_ROWS: LayerRow[] = [
   { id: 'road', label: 'Roads', tooltip: 'Cars, lorries, buses and motorcycles', icon: <Car className="size-4" /> },
   { id: 'railway', label: 'Railways', tooltip: 'Trains and trams', icon: <TrainFront className="size-4" /> },
@@ -29,11 +27,9 @@ interface SourceTogglesProps {
   onHeatmapLayersChange: (layers: Record<string, boolean>) => void
 }
 
-/** The switches after tapping `id`: alone if it was not the one shown alone, else every layer. */
+/** The switches after tapping `id`: its layer turned over, the others kept. */
 function toggled(layers: Record<string, boolean>, id: HeatmapLayer): Record<string, boolean> {
-  const on = LAYER_ROWS.filter(row => !!layers[row.id])
-  const alone = on.length === 1 && on[0].id === id
-  return Object.fromEntries(LAYER_ROWS.map(row => [row.id, alone || row.id === id]))
+  return Object.fromEntries(LAYER_ROWS.map(row => [row.id, row.id === id ? !layers[row.id] : !!layers[row.id]]))
 }
 
 export default function SourceToggles({

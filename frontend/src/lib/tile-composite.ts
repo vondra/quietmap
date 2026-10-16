@@ -5,7 +5,8 @@
 // component's HeatmapSource union back would create a type cycle
 // (buildKey/tileUrl accept strings anyway).
 
-import { fetchAndDecodeHM3, HM3_NO_LEVEL, TILE_PX } from './hm3-decoder'
+import { HM3_NO_LEVEL, TILE_PX } from './hm3-decoder'
+import { fetchSourceTile } from './hm3-combine'
 import { composeOffThread } from './compose-off-thread'
 import { lngLatToTileFloat, tileXToLng, tileYToLat } from './tile-math'
 import { buildKey, tileUrl, type TileBuilds } from './tile-urls'
@@ -70,7 +71,7 @@ export async function buildComposite(
       // 'low' priority: composite fetches carry no abort and a superseded
       // batch (up to 96 requests) must not outrank the fresh view's sharp
       // tiles.
-      return fetchAndDecodeHM3(tileUrl(build, source, z, wx, ty), undefined, 'low')
+      return fetchSourceTile(tileUrl(build, source, z, wx, ty), undefined, 'low')
         .catch(() => null)
     }),
   )
