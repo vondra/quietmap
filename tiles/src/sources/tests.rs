@@ -1,4 +1,4 @@
-//! The sources file round trip: pieces as lines and points, attributes, decks, shared emission
+//! The sources tile round trip: pieces as lines and points, attributes, decks, shared emission
 //! rows and displays, every display field kind with its nulls.
 
 use super::*;

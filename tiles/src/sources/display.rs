@@ -1,5 +1,5 @@
 //! What the click panel shows of a source, as typed fields: one schema per layer (each field's
-//! name and how it is stored), a display record per distinct display of a file, a string table
+//! name and how it is stored), a display record per distinct display of a tile, a string table
 //! holding each distinct text once. The builders hand a display over as the positional JSON array
 //! of its layer's fields, the readers get the same array back, so the panel's fields keep their
 //! names and JSON types; a number keeps the step of its field.
@@ -209,7 +209,7 @@ fn decimal_count(value: f64, decimals: u8, bytes: u8, name: &str) -> i64 {
     count as i64
 }
 
-/// The display records and string table of a file being written.
+/// The display records and string table of a tile being written.
 #[derive(Default)]
 pub struct DisplayTable {
     pub records: Vec<u8>,

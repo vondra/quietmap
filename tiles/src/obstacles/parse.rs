@@ -1,4 +1,4 @@
-//! Reading `obstacles` files: every count, offset and index checked once, then plain accessors.
+//! Reading `obstacles` tiles: every count, offset and index checked once, then plain accessors.
 
 use super::{
     CELL_WORDS, CELLS, ENVELOPE_SHIFT, EnvelopeClass, HEADER_BYTES, MAGIC, MAXIMUM_SQUARES,
@@ -6,7 +6,7 @@ use super::{
 };
 use crate::FormatError;
 
-/// A parsed obstacles file borrowing its bytes; every index in it was checked by [`Self::parse`].
+/// A parsed obstacles tile borrowing its bytes; every index in it was checked by [`Self::parse`].
 #[derive(Clone, Copy)]
 pub struct Obstacles<'a> {
     occupied_words: &'a [u8],
@@ -193,7 +193,7 @@ impl<'a> Obstacles<'a> {
         self.first_runs.len() / 4 - 1
     }
 
-    /// The footprint squares the file names.
+    /// The footprint squares the tile names.
     pub fn square_count(&self) -> usize {
         self.squares.len() / 4
     }

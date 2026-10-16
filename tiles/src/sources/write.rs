@@ -1,4 +1,4 @@
-//! Writing a sources file: the lines, then the points, the attribute records, the distinct
+//! Writing a sources tile: the lines, then the points, the attribute records, the distinct
 //! emission rows, the decks of the lines on bridges, the display records and their strings.
 
 use super::display::DisplayTable;
@@ -65,7 +65,7 @@ pub fn attribute_key(attribute: &Attribute) -> Vec<u8> {
     key
 }
 
-/// The bytes of a sources file. The lines keep their order, then the points theirs; a deck names
+/// The bytes of a sources tile. The lines keep their order, then the points theirs; a deck names
 /// a line (a piece on a bridge has two ends) by its index in `pieces`, in piece order.
 pub fn encode(pieces: &[Piece], attributes: &[Attribute], decks: &[Deck]) -> Vec<u8> {
     let (lines, points): (Vec<&Piece>, Vec<&Piece>) =

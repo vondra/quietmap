@@ -3,7 +3,7 @@
 //! the model's height less its own 1" average, faded to nothing towards its edges and voids. A
 //! ray's ground within 100 m of its ends is the `terrain` tile's bilinear height plus this detail,
 //! where a berm, a cutting or a road on a slope narrower than the 1" lattice screens or exposes it
-//! (the D4's berm at Mníšek 3.5 dB, a road on a valley shelf 15.5 dB, measured 2026-10-10); where a tile has no file the detail is nothing
+//! (the D4's berm at Mníšek 3.5 dB, a road on a valley shelf 15.5 dB, measured 2026-10-10); where a tile has none the detail is nothing
 //! and the 1" heights stand as they are. The window is the `terrain` tile's, six times as fine;
 //! the detail is in the heights' 0.2 m steps, signed. Stored in blocks of 128 x 128 cells, each
 //! block one zstd frame of its planar prediction's residual (as `terrain`), behind a directory, so a
@@ -11,7 +11,7 @@
 //! tiles, measured on Czechia's clicks).
 
 use crate::FormatError;
-use crate::terrain::{Window, predicted, unpredict};
+use crate::terrain::{MAX_WINDOW_NODES, Window, predicted, unpredict};
 use std::sync::OnceLock;
 
 /// Fine intervals in one interval of the one-arc-second lattice.
@@ -69,7 +69,7 @@ fn encode_block(codes: &[u16], columns: usize) -> Vec<u8> {
     zstd::bulk::compress(&planes, ZSTD_LEVEL).expect("zstd compresses a buffer")
 }
 
-/// The bytes of a fine terrain file: the header (magic, window), a directory of each block's
+/// The bytes of a fine terrain tile: the header (magic, window), a directory of each block's
 /// frame end (u32 LE, from the first frame's start, blocks row-major), then the frames.
 pub fn encode(window: Window, details: &[i16]) -> Vec<u8> {
     assert_eq!(details.len(), window.node_count());
@@ -108,7 +108,7 @@ pub fn encode(window: Window, details: &[i16]) -> Vec<u8> {
     bytes
 }
 
-/// A parsed fine terrain file: its blocks decoded when first read.
+/// A parsed fine terrain tile: its blocks decoded when first read.
 pub struct FineTerrain {
     window: Window,
     bytes: Vec<u8>,
@@ -133,8 +133,9 @@ impl FineTerrain {
             rows: word(16),
             columns: word(20),
         };
-        if window.rows < 2 || window.columns < 2 {
-            return Err(FormatError("terrain-fine: a window without cells"));
+        let most = (MAX_WINDOW_NODES - 1) * FINE_PER_NODE as u32 + 1;
+        if !(2..=most).contains(&window.rows) || !(2..=most).contains(&window.columns) {
+            return Err(FormatError("terrain-fine: a window no tile has"));
         }
         let (down, across) = (blocks_along(window.rows), blocks_along(window.columns));
         let count = (down * across) as usize;
@@ -147,7 +148,7 @@ impl FineTerrain {
         for block in 0..count {
             let end = first + word(HEADER_BYTES + 4 * block) as usize;
             if end < start || end > bytes.len() {
-                return Err(FormatError("terrain-fine: a frame outside the file"));
+                return Err(FormatError("terrain-fine: a frame outside the tile"));
             }
             frames.push((start, end));
             start = end;
@@ -285,7 +286,7 @@ mod tests {
     use crate::geo::TileId;
 
     /// Every node comes back as written through blocks of every shape (a window of 2.3 blocks by
-    /// 1.5), negative and positive alike; a cut file and a bad frame are errors.
+    /// 1.5), negative and positive alike; a cut tile and a bad frame are errors.
     #[test]
     fn a_fine_tile_decodes_to_the_details_it_was_encoded_from() {
         let window = Window {

@@ -1,4 +1,4 @@
-//! Obstacles format: round trip, the cell table, the supercover walk and corrupt files.
+//! Obstacles format: round trip, the cell table, the supercover walk and corrupt tiles.
 
 use super::*;
 use crate::geo::{GlobalSteps, TILES_PER_AXIS, TileId};
@@ -192,7 +192,7 @@ fn corrupt_files_are_rejected() {
     );
 }
 
-/// A file names each footprint square once; ids keep their square across the table.
+/// A tile names each footprint square once; ids keep their square across the table.
 #[test]
 fn footprints_of_two_squares_keep_their_ids() {
     let mut outlines = courtyard_block_and_wall();

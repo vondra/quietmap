@@ -75,7 +75,7 @@ pub fn check_year_complete(year_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// A tile file whose bytes do not follow its kind's format: the click fails, never answers quieter.
+/// A tile whose bytes do not follow its kind's format: the click fails, never answers quieter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FormatError(pub &'static str);
 

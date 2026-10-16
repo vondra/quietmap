@@ -47,7 +47,7 @@ pub fn for_each_edge_cell(start: [i64; 2], end: [i64; 2], mut visit: impl FnMut(
     }
 }
 
-/// The tiles whose cells an outline's edges pass through: every file that must store it.
+/// The tiles whose cells an outline's edges pass through: every tile that must store it.
 /// `vertices` run continuously (unwrapped across the antimeridian); rows beyond the poles have no
 /// tiles.
 pub fn tiles_crossed(vertices: &[GlobalSteps]) -> Vec<TileId> {

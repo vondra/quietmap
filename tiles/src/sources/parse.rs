@@ -1,4 +1,4 @@
-//! Reading a sources file in place: pieces, attributes and decks decode on demand, a display only
+//! Reading a sources tile in place: pieces, attributes and decks decode on demand, a display only
 //! for the contributors the panel shows.
 
 use super::display::read_record;
@@ -21,7 +21,7 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
 }
 
-/// A parsed sources file borrowing its bytes.
+/// A parsed sources tile borrowing its bytes.
 pub struct Sources<'a> {
     lines: &'a [u8],
     points: &'a [u8],
