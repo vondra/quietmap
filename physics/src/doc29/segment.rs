@@ -398,8 +398,9 @@ pub fn lmax_reach_m(emission: &SegmentEmission, threshold_db: f64) -> f64 {
     if reaches(far) {
         return far;
     }
-    // The curve falls with the slant: halve the ratio of the bracket in lg d.
-    for _ in 0..24 {
+    // The curve falls with the slant: halve the ratio of the bracket in lg d, 12 times (the far
+    // end then within 0.2 % of the crossing, beyond it: the readers prune by the reach).
+    for _ in 0..12 {
         let middle = (near * far).sqrt();
         if reaches(middle) {
             near = middle;
