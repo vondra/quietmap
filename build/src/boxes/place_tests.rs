@@ -148,7 +148,10 @@ fn a_descent_keeps_every_piece_within_an_eighth_of_its_box() {
 /// short, through a corner, along an edge, climbing through bands (the builders cut tile by tile).
 #[test]
 fn a_tile_cut_is_the_whole_cut_within_it() {
-    let tiles: HashSet<TileId> = [0, 1, 2].iter().flat_map(|&ring| PRAGUE.ring(ring)).collect();
+    let tiles: HashSet<TileId> = [0, 1, 2]
+        .iter()
+        .flat_map(|&ring| PRAGUE.ring(ring))
+        .collect();
     let terrain = HashMap::new();
     let placement = Placement::new(&tiles, &terrain, BOX_EDGE_LEVEL_STEP_DB);
     let corner = Mercator {
