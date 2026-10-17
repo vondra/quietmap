@@ -250,6 +250,7 @@ fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet
         let class = c.get("road_class")?.as_primitive::<UInt8Type>();
         let estimated = c.get("traffic_estimated")?.as_primitive::<UInt8Type>();
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
+        let names = c.get("name")?.as_string::<i32>();
         let aadt = [
             f64s("aadt_light")?,
             f64s("aadt_medium")?,
@@ -267,6 +268,7 @@ fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet
             counted.push(super::road_copies::CountedRow {
                 row: first + row,
                 class: class.value(row),
+                name: names.value(row).to_string(),
                 ends: [
                     (start_x.value(row), start_y.value(row)),
                     (end_x.value(row), end_y.value(row)),
