@@ -188,7 +188,7 @@ function IntoView({ children }: { children: ReactNode }) {
   return <div ref={ref} className="scroll-mt-2">{children}</div>
 }
 
-/** A row of the list: a contributor, or the aircraft layer as a whole; ranked by its Nden alone. */
+/** A row of the list: a contributor, or the aircraft layer as a whole; ranked by its share. */
 interface ListEntry extends HiddenRow {
   rank: number
 }

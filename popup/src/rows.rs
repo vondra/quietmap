@@ -6,7 +6,7 @@ use crate::percentiles::{Line, Resolution, distributions_of, heard};
 use crate::update::Contributor;
 use physics::bands::PERIODS;
 use rayon::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use tiles::sources::Layer;
 
 /// One row of the visitor's list.
@@ -93,71 +93,73 @@ fn object(contributor: &Contributor, display: &serde_json::Value) -> Object {
     Object::Group(contributor.group_key)
 }
 
-/// The rows of the `heard` contributors (`fields` reads a display), unranked: each part scored
-/// alone by its own Nden and how it is heard; a row of several parts by their lines and steady
-/// sound together on the curves of its loudest part's layer (`curves`).
-pub fn heard_rows<'a>(
-    heard_contributors: Vec<&'a Contributor>,
+/// The rows of the `heard` contributors, each object's parts joined (`fields` reads a display,
+/// one by one), unscored; and the displays by group key, for the rows the list sends
+/// ([`score_rows`]).
+pub fn heard_rows(
+    heard_contributors: Vec<&Contributor>,
     fields: &dyn Fn(&crate::percentiles::Group) -> Result<serde_json::Value, String>,
-    curves: &(dyn Fn(Layer) -> &'a [Curve; PERIODS] + Sync),
-) -> Result<Vec<Row>, String> {
-    // The display records are read one by one; the parts scored in parallel.
-    let displays: Vec<(&Contributor, serde_json::Value)> = heard_contributors
-        .into_iter()
-        .map(|contributor| Ok((contributor, fields(&contributor.group())?)))
-        .collect::<Result<_, String>>()?;
-    let scored: Vec<(Contributor, Option<Line>, Object)> = displays
-        .par_iter()
-        .map(|(contributor, display)| {
-            let line = Line::of(
-                &contributor.group(),
-                &crate::percentiles::Passes::read(contributor.layer, display),
-            );
-            let own = match &line {
-                Some(line) => own_nden(Some(line), [0.0; PERIODS], curves(contributor.layer)),
-                None => own_nden(None, contributor.energy, curves(contributor.layer)),
-            };
-            let mut part = (*contributor).clone();
-            part.nden_sone = Some(own);
-            part.heard = heard(&part, display);
-            (part, line, object(contributor, display))
-        })
-        .collect();
-    let mut objects: BTreeMap<Object, Vec<(Contributor, Option<Line>)>> = BTreeMap::new();
-    for (part, line, object) in scored {
-        objects.entry(object).or_default().push((part, line));
+) -> Result<(Vec<Row>, HashMap<u64, serde_json::Value>), String> {
+    let mut objects: BTreeMap<Object, Vec<Contributor>> = BTreeMap::new();
+    let mut displays = HashMap::new();
+    for contributor in heard_contributors {
+        let display = fields(&contributor.group())?;
+        objects
+            .entry(object(contributor, &display))
+            .or_default()
+            .push(contributor.clone());
+        displays.insert(contributor.group_key, display);
     }
-    let rows: Vec<Row> = objects
+    let rows = objects
         .into_values()
-        .map(|mut parts| {
-            let alone = |part: &Contributor| part.nden_sone.unwrap_or(0.0);
-            parts.sort_by(|(a, _), (b, _)| {
-                alone(b)
-                    .total_cmp(&alone(a))
-                    .then(a.group_key.cmp(&b.group_key))
-            });
-            let nden_sone = if parts.len() == 1 {
-                parts[0].0.nden_sone
-            } else {
-                let steady = std::array::from_fn(|period| {
-                    parts
-                        .iter()
-                        .filter(|(_, line)| line.is_none())
-                        .map(|(part, _)| part.energy[period])
-                        .sum()
-                });
-                let lines: Vec<Line> = parts.iter().filter_map(|(_, line)| line.clone()).collect();
-                let distributions = distributions_of(&lines, steady, Resolution::CLICK);
-                Some(loudness(&distributions, curves(parts[0].0.layer)).nden_sone)
-            };
-            Row {
-                parts: parts.into_iter().map(|(part, _)| part).collect(),
-                nden_sone,
-                share: None,
-            }
+        .map(|parts| Row {
+            parts,
+            nden_sone: None,
+            share: None,
         })
         .collect();
-    Ok(rows)
+    Ok((rows, displays))
+}
+
+/// Scores the rows the list sends, in parallel: each part alone by its own Nden and how it is
+/// heard; a row of several parts by their lines and steady sound together on the curves of the
+/// layer of its part loudest alone (`curves`).
+pub fn score_rows<'a>(
+    rows: &mut [Row],
+    displays: &HashMap<u64, serde_json::Value>,
+    curves: &(dyn Fn(Layer) -> &'a [Curve; PERIODS] + Sync),
+) {
+    rows.par_iter_mut().for_each(|row| {
+        let mut lines = Vec::new();
+        let mut steady = [0.0; PERIODS];
+        for part in &mut row.parts {
+            let display = &displays[&part.group_key];
+            let line = Line::of(
+                &part.group(),
+                &crate::percentiles::Passes::read(part.layer, display),
+            );
+            part.nden_sone = Some(match &line {
+                Some(line) => own_nden(Some(line), [0.0; PERIODS], curves(part.layer)),
+                None => own_nden(None, part.energy, curves(part.layer)),
+            });
+            part.heard = heard(part, display);
+            match line {
+                Some(line) => lines.push(line),
+                None => (0..PERIODS).for_each(|period| steady[period] += part.energy[period]),
+            }
+        }
+        row.nden_sone = if row.parts.len() == 1 {
+            row.parts[0].nden_sone
+        } else {
+            let alone = |part: &&Contributor| part.nden_sone.unwrap_or(0.0);
+            let loudest = row
+                .parts
+                .iter()
+                .max_by(|a, b| alone(a).total_cmp(&alone(b)));
+            let distributions = distributions_of(&lines, steady, Resolution::CLICK);
+            loudest.map(|part| loudness(&distributions, curves(part.layer)).nden_sone)
+        };
+    });
 }
 
 /// Gives the `rows` their parts' `shares` of the place's loudness, in the order of their parts, and
@@ -239,7 +241,6 @@ mod tests {
             nden_sone: None,
             share: None,
         };
-        // As `heard_rows` leaves them: a row's parts the loudest alone first.
         let mut rows = vec![
             row(vec![(1, 1.22)]),
             row(vec![(3, 0.90), (2, 0.50)]),
