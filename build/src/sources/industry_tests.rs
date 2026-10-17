@@ -183,3 +183,37 @@ fn profiles_resolve_nace_then_subtype_then_type_with_their_heights() {
 fn a_weighted_sum(profile: &IndustrialProfile) -> f64 {
     physics::emission::spectrum::a_weighted_level_db(&profile.spectrum_db)
 }
+
+/// A site's points inside a building take it as their own: a 200 m square factory whose west half is
+/// one hall gives the hall's id to the points standing in it and none to the others.
+#[test]
+fn a_site_point_inside_a_building_takes_it_as_its_own() {
+    let (x, y) = (1 << 29, 1 << 29);
+    // 200 m of the equator in z30 cells.
+    let side = (200.0 / crate::dev4::Z30_QUANTUM_M) as i32;
+    let square = |x0: i32, x1: i32| vec![(x0, y), (x1, y), (x1, y + side), (x0, y + side)];
+    let site = IndustrialRow {
+        centroid: (x + side / 2, y + side / 2),
+        ring: square(x, x + side),
+        area_m2: None,
+        ..row(3)
+    };
+    let mut hall = RingIndex::default();
+    hall.add(42, vec![vec![square(x, x + side / 2)]]);
+    let mut out = Vec::new();
+    place(&site, &emission(&site).unwrap(), &hall, &mut out);
+    let inside = out
+        .iter()
+        .filter(|piece| piece.attribute.footprint_id == 42)
+        .count();
+    let outside = out
+        .iter()
+        .filter(|piece| piece.attribute.footprint_id == 0)
+        .count();
+    assert!(
+        inside > 0 && outside > 0,
+        "{inside} inside, {outside} outside of {}",
+        out.len()
+    );
+    assert_eq!(inside + outside, out.len());
+}

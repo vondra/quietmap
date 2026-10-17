@@ -50,6 +50,7 @@ mod dev4;
 mod low_profile;
 mod obstacles;
 mod period;
+mod rings;
 mod screening;
 mod sources;
 mod stage1;

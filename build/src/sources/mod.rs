@@ -268,6 +268,13 @@ fn build_square(
 ) -> Result<(usize, decks::DeckCounts), String> {
     let owned = |item: &Converted| Square::of(item.tile) == square;
     let mut converted = Vec::new();
+    // The industrial sites the buildings of the square and its neighbours may stand in.
+    let mut around: Vec<Square> = (square.with_neighbours().into_iter())
+        .flat_map(Square::with_neighbours)
+        .collect();
+    around.sort_unstable_by_key(|square| (square.x, square.y));
+    around.dedup();
+    let industrial_sites = industry::site_outlines(dev4, &around)?;
     let reach = Reach::of_square(square);
     let decks = decks::Decks::of_square(dev4, square, out)?;
     for neighbour in square.with_neighbours() {
@@ -286,7 +293,12 @@ fn build_square(
             (road_traffic, places.venues),
             &mut converted,
         )?;
-        building::convert(dev4, (climate, places), neighbour, &mut converted)?;
+        building::convert(
+            dev4,
+            (climate, places),
+            (neighbour, &industrial_sites),
+            &mut converted,
+        )?;
         ship::convert(dev4, neighbour, &mut converted)?;
         airport::convert(airport_traffic, neighbour, &mut converted)?;
         converted.retain(owned);
