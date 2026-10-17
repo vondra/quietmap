@@ -21,7 +21,7 @@ Train, DART and Luas counts: [Transport for Ireland timetable](https://www.trans
 
 Ireland has open building outlines but no open heights or floor counts. Heights: OpenStreetMap tags and the typical height for the footprint size.
 
-Terrain from Geological Survey Ireland's laser survey, where it flew.
+Terrain from Geological Survey Ireland's [laser survey](https://gsi.geodata.gov.ie/) (CC BY 4.0), where it flew.
 
 ## Homes and places
 
@@ -29,4 +29,4 @@ Homes mapped in OpenStreetMap: 7 heat pumps and 4 air conditioners (the region's
 
 ## Checked against
 
-Dublin's network.
+Dublin's network ([validation](/about/validation)).

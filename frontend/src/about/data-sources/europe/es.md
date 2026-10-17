@@ -28,15 +28,15 @@ The northern narrow-gauge lines (former Feve), Euskotren, and metros and trams o
 
 ## Industry
 
-Wind turbines are OpenStreetMap points. A turbine paired with an entry in the [Castilla-La Mancha turbine register](https://datosabiertos.castillalamancha.es/dataset/aerogeneradores), the only open regional register, one to one and nearest first within 500 m, takes its rated power and hub height from it. Elsewhere a turbine keeps the rating OpenStreetMap tags, if any.
+Wind turbines are OpenStreetMap points. A turbine paired with an entry in the [Castilla-La Mancha turbine register](https://datosabiertos.castillalamancha.es/dataset/aerogeneradores) (CC BY-SA), the only open regional register, one to one and nearest first within 500 m, takes its rated power and hub height from it. Elsewhere a turbine keeps the rating OpenStreetMap tags, if any.
 
 The register adds 53 turbines OpenStreetMap lacks.
 
 ## Buildings and terrain
 
-Floor counts: [Catastro](https://www.catastro.hacienda.gob.es/INSPIRE/buildings/ES.SDGC.BU.atom.xml), where a cadastre building lies within 30 m of the OpenStreetMap building. The file does not cover every province; elsewhere the height is the typical height for the footprint size.
+Floor counts: [Catastro](https://www.catastro.hacienda.gob.es/INSPIRE/buildings/ES.SDGC.BU.atom.xml) (Dirección General del Catastro), where a cadastre building lies within 30 m of the OpenStreetMap building. The file does not cover every province; elsewhere the height is the typical height for the footprint size.
 
-Terrain from IGN's MDT05 from the PNOA laser survey; the west of the mainland, from Vigo to Badajoz, is not loaded and takes the GEDTM30 world model.
+Terrain from IGN's [MDT05](https://centrodedescargas.cnig.es/) from the PNOA laser survey (© Instituto Geográfico Nacional, CC BY 4.0); the west of the mainland, from Vigo to Badajoz, is not loaded and takes the GEDTM30 world model.
 
 ## Homes and places
 

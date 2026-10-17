@@ -336,10 +336,9 @@ layer. Flights are not pieces: they are the boxes described under Aircraft.
 
 - `fetch/` downloads the extra datasets: noise barriers, bus routes, national terrain models,
   wind turbines, venues, WorldClim, places of worship, the TEN-T rail network.
-- `build/` (`qm-build`) writes the tiles and every source's sound power. The ground inputs are still
-  an earlier version's prepared tables (September 2026, its code on the `qm260904` branch),
-  converted by `qm-build dev4` (`build/src/dev4.rs`); builders that read the raw sources replace
-  them one input at a time. Its other steps: `weather`, `terrain-fine`, `traffic` (the trips buildings
+- `build/` writes the tiles and every source's sound power. The ground inputs are still tables
+  prepared in September 2026 by an earlier version of the code; builders that read the raw sources
+  replace them one input at a time. Its other steps: `weather`, `terrain-fine`, `traffic` (the trips buildings
   make), `airport-traffic`, `geoid`, the aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.
 - `tiles/` holds each kind's tile format, writer and reader, and the square files that hold the

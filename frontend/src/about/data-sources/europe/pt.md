@@ -28,7 +28,7 @@ Fertagus trains over the 25 de Abril bridge and the Lisbon trams have no feed lo
 
 ## Buildings and terrain
 
-Terrain from DGT's laser survey (2 m) for about 11 % of the country; the rest from the GEDTM30 world model.
+Terrain from DGT's laser survey ([MDT LiDAR](https://www.dgterritorio.gov.pt/levantamento-lidar-de-portugal-continental-0), 2 m; CC BY 4.0) for about 11 % of the country; the rest from the GEDTM30 world model.
 
 ## Homes and places
 
