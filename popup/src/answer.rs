@@ -536,7 +536,6 @@ pub fn answer(
         let timing = timing.transpose()?;
         let mut layers = layer_answers(&selections);
         let mut rows: Vec<crate::rows::Row>;
-        let mut rest_nden_sone = None;
         let mut rest_share = None;
         let (percentiles, loudness) = match &timing {
             None => {
@@ -559,61 +558,26 @@ pub fn answer(
                         .find(|(own, _)| *own == layer)
                         .map_or(curves, |(_, curves)| curves)
                 };
-                // The visitor's list ranks by each row's own Nden, alone, so a steady road leads
-                // brief passes louder in energy.
+                // Every heard row's share of the loudness, which the visitor's list ranks by and
+                // shows (`rows::rank_by_share`); each keeps its own Nden, alone, for its details.
                 let (heard, quiet): (Vec<_>, Vec<_>) =
                     all_contributors(&selections).partition(|c| listed(c));
-                rows = crate::rows::ranked_rows(heard, &fields, &own_curves)?;
-                let shown = rows.len().min(CONTRIBUTORS_SHOWN);
-                let unlisted = || {
-                    rows[shown..]
-                        .iter()
-                        .flat_map(|row| row.parts.iter())
-                        .chain(quiet.iter().copied())
-                };
-                set_unlisted(&mut layers, unlisted());
-                // Each row's share of the loudness, the rows' own Nden not adding up to it.
-                let named: Vec<&crate::update::Contributor> = rows[..shown]
-                    .iter()
-                    .flat_map(|row| row.parts.iter())
-                    .collect();
+                rows = crate::rows::heard_rows(heard, &fields, &own_curves)?;
+                let named: Vec<&crate::update::Contributor> =
+                    rows.iter().flat_map(|row| row.parts.iter()).collect();
                 let shares = crate::shares::row_shares(
                     &selections,
                     &named,
                     (&click_lines.0, click_lines.1),
                     curves,
                 );
-                // What the list leaves out, together: its own distribution's Nden.
-                let rest: [f64; PERIODS] = std::array::from_fn(|p| {
-                    layers
-                        .iter()
-                        .filter_map(|layer| layer.unlisted.map(|energy| energy[p]))
-                        .sum()
-                });
-                let (rest_lines, rest_steady) =
-                    crate::percentiles::rest_lines(unlisted(), rest, &passes)?;
-                rest_nden_sone = Some(
-                    crate::loudness::loudness(
-                        &crate::percentiles::distributions_of(
-                            &rest_lines,
-                            rest_steady,
-                            Resolution::CLICK,
-                        ),
-                        curves,
-                    )
-                    .nden_sone,
-                );
+                crate::rows::rank_by_share(&mut rows, &shares.listed);
+                let shown = rows.len().min(CONTRIBUTORS_SHOWN);
+                let unlisted = rows[shown..].iter().flat_map(|row| row.parts.iter());
+                set_unlisted(&mut layers, unlisted.chain(quiet.iter().copied()));
+                let unlisted_share: f64 = rows[shown..].iter().filter_map(|row| row.share).sum();
+                rest_share = Some(shares.rest + unlisted_share);
                 rows.truncate(shown);
-                let mut part_shares = shares.listed.iter();
-                for row in &mut rows {
-                    let mut together = 0.0;
-                    for (part, &share) in row.parts.iter_mut().zip(&mut part_shares) {
-                        part.share = Some(share);
-                        together += share;
-                    }
-                    row.share = Some(together);
-                }
-                rest_share = Some(shares.rest);
                 if let Some(layer) = layers
                     .iter_mut()
                     .find(|layer| layer.layer == Layer::Aircraft)
@@ -665,7 +629,6 @@ pub fn answer(
             partial: !last_ring,
             percentiles,
             loudness,
-            rest_nden_sone,
             rest_share,
             aircraft_kinds,
             aircraft_events,

@@ -29,8 +29,8 @@ export interface NoiseDetailContentProps {
 
 const NDEN_TOOLTIP = 'How loud the place sounds over the whole day: every moment by its loudness\n'
   + 'to the ear (ISO 532-1), the evening 5 dB and the night 10 dB louder, as in Lden.\n'
-  + 'Twice the sone sounds twice as loud. Each row: the source alone, and its\n'
-  + 'share of the whole.'
+  + 'Twice the sone sounds twice as loud. Each row: its share of that loudness;\n'
+  + 'opened, how loud it sounds alone.'
 
 const LDEN_TOOLTIP = 'All sources together over the day (EU Directive 2002/49): the evening\n'
   + 'counts 5 dB and the night 10 dB louder. Each period in the detailed calculation.'
@@ -39,14 +39,15 @@ export default function NoiseDetailContent({ data, onHighlight, calculationOpen 
   const [centerLat, centerLng] = data.center
   const answered = data.total_lden != null && !data.partial
   // The popup sends the ground contributors above its 0 dB display floor; the list ranks what is
-  // heard by how loud each source is alone over the day (its Nden). The aircraft layer is one
-  // row, at its rank, from 0 dB up. What the list does not show is one last row.
+  // heard by its share of the place's loudness, the number each row shows (before the final
+  // update by its Lden). The aircraft layer is one row, at its rank, from 0 dB up. What the list
+  // does not show is one last row.
   const aircraft = data.sources.find(s => s.source_type === 'aircraft')
   const aircraftEntry = aircraft && aircraft.lden != null
-    ? [{ rank: rowRank(aircraft.nden_sone, aircraft.lden), layer: aircraft }]
+    ? [{ rank: rowRank(aircraft.share, aircraft.lden), layer: aircraft }]
     : []
   const entries: ListEntry[] = [
-    ...data.top_contributors.map(c => ({ rank: rowRank(c.nden_sone, c.received_lden), contributor: c })),
+    ...data.top_contributors.map(c => ({ rank: rowRank(c.share, c.received_lden), contributor: c })),
     ...aircraftEntry.filter(e => (e.layer.lden ?? 0) > 0),
   ].sort((a, b) => b.rank - a.rank)
   const quietAircraft = aircraftEntry.filter(e => (e.layer.lden ?? 0) <= 0)
@@ -60,9 +61,6 @@ export default function NoiseDetailContent({ data, onHighlight, calculationOpen 
   const folded = entries.filter((_, row) => !shownMask[row])
   const hidden = [...folded, ...quietAircraft]
   const rest = restSources(data.sources, hidden)
-  // The popup's Nden of what it left out knows nothing of the rows folded here: with them the last
-  // row has no Nden.
-  const restNden = hidden.length > 0 && data.rest_nden_sone != null ? null : data.rest_nden_sone
   const percentOf = (entry: ListEntry) => (percents.length ? percents[entries.indexOf(entry)] : undefined)
   const restPercent = percents.length
     ? folded.reduce((sum, e) => sum + (percentOf(e) ?? 0), percents[entries.length])
@@ -85,7 +83,7 @@ export default function NoiseDetailContent({ data, onHighlight, calculationOpen 
   const shown = shownEntries.map(listRow)
   if (rest != null) {
     shown.push(
-      <RestRow key="rest" sources={rest} nden={restNden} percent={restPercent}>
+      <RestRow key="rest" sources={rest} percent={restPercent}>
         {folded.length > 0 ? folded.map(listRow) : undefined}
       </RestRow>,
     )

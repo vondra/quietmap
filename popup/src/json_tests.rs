@@ -18,7 +18,6 @@ fn streamed_loudness_shares_do_not_cross_the_list_cutoff_by_rounding() {
         partial: false,
         percentiles: None,
         loudness: None,
-        rest_nden_sone: None,
         rest_share: Some(below_cutoff),
         aircraft_kinds: None,
         aircraft_events: None,

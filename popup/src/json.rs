@@ -437,7 +437,6 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             json!({"mean_sone": {"day": sone(mean[0]), "evening": sone(mean[1]), "night": sone(mean[2])},
                 "nden_sone": sone(loudness.nden_sone)})
         }),
-        "rest_nden_sone": update.rest_nden_sone.map(sone),
         "rest_share": update.rest_share,
         "top_contributors": contributors,
         "top_flights": flights,
