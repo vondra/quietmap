@@ -36,4 +36,4 @@ Homes mapped in OpenStreetMap: 47 heat pumps and 4 air conditioners (the region'
 
 ## Checked against
 
-Silenzi in Quota's quiet mountains.
+Silenzi in Quota's quiet mountains ([validation](/about/validation)).

@@ -36,7 +36,7 @@ Level-crossing horns: [Transport Canada Grade Crossings Inventory](https://open.
 
 ## Industry
 
-Wind turbines: [Canadian Wind Turbine Database](https://open.canada.ca/data/en/dataset/79fdad93-9025-49ad-ba16-c26d718cc070) from Natural Resources Canada. Each database turbine is paired with one OSM turbine within 500 m, nearest pairs first, and gives it the database's rated power and hub height.
+Wind turbines: [Canadian Wind Turbine Database](https://open.canada.ca/data/en/dataset/79fdad93-9025-49ad-ba16-c26d718cc070) from Natural Resources Canada (Open Government Licence – Canada). Each database turbine is paired with one OSM turbine within 500 m, nearest pairs first, and gives it the database's rated power and hub height.
 
 Power plants: WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. Other factories are OSM industrial areas with an inferred type. The federal National Pollutant Release Inventory is not used.
 
@@ -48,7 +48,7 @@ Global Fishing Watch AIS vessel density.
 
 ## Buildings and terrain
 
-Terrain from MRDEM-30 (Natural Resources Canada).
+Terrain from [MRDEM-30](https://open.canada.ca/data/en/dataset/957782bf-847c-4644-a757-e383c0057995) (Natural Resources Canada, Open Government Licence – Canada).
 
 ## Homes and places
 

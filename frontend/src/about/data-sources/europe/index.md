@@ -8,17 +8,17 @@ intro: National road censuses in 15 countries, passenger timetables in 24, stree
 ## Roads
 
 - National traffic census (motorways and main roads, rarely city streets): Czechia, Denmark, Finland, France, Germany, Great Britain, Ireland, Italy, the Netherlands, Norway, Poland, Slovenia, Spain, Sweden, Switzerland.
-- City streets: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities), 35 cities from Lisbon to Helsinki; Amsterdam's file is the city's traffic model, not counts. A count applies to the OSM way it was published for, or to a road along its line with the same street name or a similar road class. Where a city publishes no truck count, trucks take the median share of the road's class in the cities that publish one; weekday-only counts are scaled to the annual average by 0.9274, the median ratio in cities that publish both. Prague, Brno and Vienna also have their own city counts.
+- City streets: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities) (CC BY 4.0, with each city's own terms: ODbL for Paris, Grenoble, Rennes and Montpellier, CC BY-SA 4.0 for Brno), 35 cities from Lisbon to Helsinki; Amsterdam's file is the city's traffic model, not counts. A count applies to the OSM way it was published for, or to a road along its line with the same street name or a similar road class. Where a city publishes no truck count, trucks take the median share of the road's class in the cities that publish one; weekday-only counts are scaled to the annual average by 0.9274, the median ratio in cities that publish both. Prague, Brno and Vienna also have their own city counts.
 
-Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads — everywhere but Cyprus, Russia and Ukraine, whose main roads keep a fixed estimate per class. Secondary and tertiary roads without a count follow a fit of the trips made within 5 km, except in Russia and Ukraine. Poland's 10,876 noise screens come from its national topographic database (BDOT10k), the Netherlands' from Rijkswaterstaat.
+Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads — everywhere but Cyprus, Russia and Ukraine, whose main roads keep a fixed estimate per class. Secondary and tertiary roads without a count follow a fit of the trips made within 5 km, except in Russia and Ukraine.
 
 ## Railways
 
 24 European countries have a passenger timetable loaded; train counts are those of one busy Wednesday. Great Britain, Romania, Slovenia, Lithuania, Belarus, Moldova, Ukraine and most of the Balkans have none.
 
-Lines without a timetable use the class default, in trains per day: main line 80 passenger and 20 freight (24.5 freight in Germany, 5.5 in France, 12.0 in Poland, 13.5 in Czechia, 27.1 in Austria, 31.4 in Switzerland), branch line 30 and 5, industrial siding 15 freight, tram track 120, light rail 80; Russia and Ukraine have their own. In 28 countries the freight defaults are scaled so that each country's lines carry its official goods train-kilometres (Eurostat 2024; Great Britain 2019); Belgium and Greece publish none and keep the defaults' total. In 12 countries the passenger defaults exceed the national passenger train-kilometres and are lowered to them. Lines mapped as passenger-only carry no freight. Track in tunnels emits no noise.
+Lines without a timetable use the class default, in trains per day: main line 80 passenger and 20 freight (24.5 freight in Germany, 5.5 in France, 12.0 in Poland, 13.5 in Czechia, 27.1 in Austria, 31.4 in Switzerland), branch line 30 and 5, industrial siding 15 freight, tram track 120, light rail 80; Russia and Ukraine have their own. In 28 countries the freight defaults are scaled so that each country's lines carry its official goods train-kilometres ([Eurostat](https://ec.europa.eu/eurostat) 2024; Great Britain 2019); Belgium and Greece publish none and keep the defaults' total. In 12 countries the passenger defaults exceed the national passenger train-kilometres and are lowered to them. Lines mapped as passenger-only carry no freight. Track in tunnels emits no noise.
 
-No loaded European timetable contains freight trains: freight comes from the defaults. In the EU it is drawn to the TEN-T freight network: a line on a core corridor carries twice the freight trains of another TEN-T freight line and eight times those of a line off the network. In the EU, Switzerland, Norway and Great Britain 36.8 % of it runs at night (23-07 h), from the counts at Germany's 19 railway noise monitors.
+No loaded European timetable contains freight trains: freight comes from the defaults. In the EU it is drawn to the TEN-T freight network ([EU TEN-T](https://transport.ec.europa.eu/transport-themes/infrastructure-and-investment/trans-european-transport-network-ten-t_en) maps, GISCO): a line on a core corridor carries twice the freight trains of another TEN-T freight line and eight times those of a line off the network. In the EU, Switzerland, Norway and Great Britain 36.8 % of it runs at night (23-07 h), from the counts at Germany's 19 railway noise monitors (Eisenbahn-Bundesamt, railway noise monitoring 2023).
 
 ## Industry
 
@@ -32,12 +32,14 @@ Building heights are measured in Prague, North Rhine-Westphalia and the Netherla
 
 Terrain comes from national laser surveys in Austria, Belgium, Czechia, Denmark, France, Germany (without Berlin), Ireland (where flown), the Netherlands, Poland, Portugal (about 11 % of it), Spain (without the west of the mainland), Sweden and Switzerland, and from national models drawn from contours in Great Britain (OS Terrain 50) and Italy (TINITALY); elsewhere from the GEDTM30 world model.
 
+Tree cover comes from [Copernicus Tree Cover Density](https://land.copernicus.eu/en/products/high-resolution-layer-tree-cover-density), and hard ground is refined by [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness).
+
 ## Homes and places
 
 Homes emit the heat pumps and air conditioners their country's households own. Churches ring their bells three times a day and a Sunday peal; Orthodox churches ring before their services. In most of Europe only mosques with a mapped minaret call, once on Fridays; in Albania, Bosnia and Herzegovina, Bulgaria, Cyprus, Greece, Kosovo, Montenegro, North Macedonia, Romania, Serbia and Russia they call five times a day.
 
 ## Ships
 
-European seas: [EMODnet vessel density](https://emodnet.ec.europa.eu/en/human-activities) 2024, built from AIS position reports. Rivers and inland ports, which EMODnet does not cover, take Global Fishing Watch's AIS vessel presence.
+European seas: [EMODnet Human Activities](https://emodnet.ec.europa.eu/en/human-activities) vessel density 2024 (CC BY 4.0), built from AIS position reports. Rivers and inland ports, which EMODnet does not cover, take Global Fishing Watch's AIS vessel presence.
 
 Layer computation is described on the [data preparation page](/about/data-preparation).

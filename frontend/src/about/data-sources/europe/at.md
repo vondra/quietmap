@@ -19,7 +19,7 @@ Train and tram counts: [ÖBB timetable](https://data.oebb.at/de/datensaetze~soll
 
 ## Buildings and terrain
 
-Terrain from Austria's terrain model (DGM, 10 m).
+Terrain from Austria's terrain model ([DGM](https://www.data.gv.at/katalog/dataset/dgm), 10 m; geoland.at, CC BY 4.0).
 
 ## Homes and places
 

@@ -22,7 +22,7 @@ The Paris metro and city trams are not covered: no RATP feed is loaded. Their su
 
 ## Buildings and terrain
 
-Terrain from IGN's RGE ALTI.
+Terrain from IGN's [RGE ALTI](https://geoservices.ign.fr/rgealti) (© IGN, Licence Ouverte 2.0).
 
 ## Homes and places
 
@@ -30,4 +30,4 @@ Homes mapped in OpenStreetMap: 20 heat pumps and 24 air conditioners per 100 hom
 
 ## Checked against
 
-Bruitparif's stations; Paris's street stations.
+Bruitparif's stations; Paris's street stations ([validation](/about/validation)).

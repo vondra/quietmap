@@ -30,15 +30,15 @@ Train, tram and U-Bahn counts: national DELFI timetable from [gtfs.de](https://g
 
 ## Industry
 
-Wind turbines are OpenStreetMap points. A turbine paired with a [Marktstammdatenregister](https://www.marktstammdatenregister.de/) entry, one to one and nearest first within 500 m, takes its rated power and hub height from the register.
+Wind turbines are OpenStreetMap points. A turbine paired with a [Marktstammdatenregister](https://www.marktstammdatenregister.de/MaStR/Datendownload) (Bundesnetzagentur, Datenlizenz Deutschland – Namensnennung 2.0) entry, one to one and nearest first within 500 m, takes its rated power and hub height from the register.
 
 The register adds 1,265 turbines OpenStreetMap lacks and removes 523 it calls dismantled.
 
 ## Buildings and terrain
 
-North Rhine-Westphalia: measured heights from the [NRW 3D building model LoD1](https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod1_gml/). Elsewhere: OpenStreetMap tags, floor counts, Overture heights and the typical height for the footprint size. The federal LoD1-DE model is not open.
+North Rhine-Westphalia: measured heights from the [NRW 3D building model LoD1](https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod1_gml/) (Datenlizenz Deutschland – Zero 2.0). Elsewhere: OpenStreetMap tags, floor counts, Overture heights and the typical height for the footprint size. The federal LoD1-DE model is not open.
 
-Terrain from the laser surveys of 15 Länder (DGM1, DGM5); Berlin's is not loaded.
+Terrain from the laser surveys of 15 Länder (DGM1, DGM5, via [hoehendaten.de](https://hoehendaten.de/)); Berlin's is not loaded. Bayern (Bayerische Vermessungsverwaltung), Niedersachsen (LGLN), Bremen (GDI Bremen), Schleswig-Holstein (LVermGeo SH) and Mecklenburg-Vorpommern (LAIV) publish theirs under CC BY 4.0; Brandenburg (LGB), Baden-Württemberg (LGL-BW), Hamburg (LGV), Rheinland-Pfalz, Saarland (LVGL), Sachsen (GeoSN), Sachsen-Anhalt and Thüringen (TLBG) under Datenlizenz Deutschland – Namensnennung 2.0; Hessen (HVBG) and Nordrhein-Westfalen (Geobasis NRW) under Datenlizenz Deutschland – Zero 2.0.
 
 ## Homes and places
 
@@ -46,4 +46,4 @@ Homes mapped in OpenStreetMap: 4 heat pumps and 6 air conditioners per 100 homes
 
 ## Checked against
 
-The Eisenbahn-Bundesamt's railway monitors.
+The Eisenbahn-Bundesamt's railway monitors ([validation](/about/validation)).

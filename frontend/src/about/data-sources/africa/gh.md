@@ -29,4 +29,4 @@ Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes (South Africa's 
 
 ## Checked against
 
-The Accra campaign of 2019.
+The Accra campaign of 2019 ([validation](/about/validation)).

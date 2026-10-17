@@ -23,13 +23,13 @@ Train, tram and metro counts: the Swedish feed on [public-transport.earth](https
 
 ## Industry
 
-Wind turbines are OpenStreetMap points. A turbine paired with a built turbine in the [Vindbrukskollen register](https://vbk.lansstyrelsen.se/), one to one and nearest first within 500 m, takes its rated power and hub height from the register; the others keep the rating OpenStreetMap tags, if any.
+Wind turbines are OpenStreetMap points. A turbine paired with a built turbine in the [Vindbrukskollen register](https://vbk.lansstyrelsen.se/) (Länsstyrelserna, CC0), one to one and nearest first within 500 m, takes its rated power and hub height from the register; the others keep the rating OpenStreetMap tags, if any.
 
 The register adds 393 turbines OpenStreetMap lacks and removes 57 it calls dismantled.
 
 ## Buildings and terrain
 
-Terrain from Lantmäteriet's laser survey.
+Terrain from Lantmäteriet's laser survey ([Markhöjdmodell](https://www.lantmateriet.se/sv/geodata/vara-produkter/produktlista/markhojdmodell-nedladdning/), © Lantmäteriet; CC BY 4.0).
 
 ## Homes and places
 

@@ -13,7 +13,7 @@ Day, evening and night split: [FHWA TMAS](https://www.fhwa.dot.gov/policyinforma
 
 Minor collectors and local streets are not in HPMS, whose values reach 60 % of the length of motorways, trunks and primaries and 1 % of secondary, tertiary and unclassified roads. Uncounted local streets carry the trips their buildings make, secondary and tertiary roads the trips made within 5 km of them. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)).
 
-Vehicle mix: where not counted, FHWA's state mix by road group and area (table VM-4), motorcycles included; electric cars 1.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 105 km/h.
+Vehicle mix: where not counted, FHWA's state mix by road group and area ([Highway Statistics](https://www.fhwa.dot.gov/policyinformation/statistics.cfm), table VM-4), motorcycles included; electric cars 1.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 105 km/h.
 
 Unsigned roads: a primary road 64 km/h in towns, 89 outside (cars drive 75 on a two-way one).
 
@@ -23,11 +23,11 @@ Passenger trains: [Amtrak GTFS timetable](https://content.amtrak.com/content/gtf
 
 Freight: BNSF, Union Pacific, CSX and Norfolk Southern publish no schedules; main lines take the class default of 20 freight trains a day, branches 5.
 
-Level-crossing horns: [FRA Highway-Rail Crossing Inventory](https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6) (Form 6180.71). Public at-grade crossings with trains sound on approach; full-day quiet zones and Chicago-excused crossings stay silent, partial zones at night.
+Level-crossing horns: [FRA Highway-Rail Crossing Inventory](https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6) (Form 6180.71; public domain). Public at-grade crossings with trains sound on approach; full-day quiet zones and Chicago-excused crossings stay silent, partial zones at night.
 
 ## Industry
 
-Wind turbines: [US Wind Turbine Database](https://eerscmap.usgs.gov/uswtdb/) from USGS, LBNL and DOE. Each database turbine is paired with one OSM turbine within 500 m, nearest pairs first, and gives it the database's rated power and hub height.
+Wind turbines: [US Wind Turbine Database](https://energy.usgs.gov/uswtdb/) from USGS, LBNL and DOE (public domain). Each database turbine is paired with one OSM turbine within 500 m, nearest pairs first, and gives it the database's rated power and hub height.
 
 Power plants: WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. Other factories are OSM industrial areas with an inferred type. The EPA Toxics Release Inventory is not used.
 
@@ -39,7 +39,7 @@ Global Fishing Watch AIS vessel density.
 
 ## Buildings and terrain
 
-Terrain from USGS's 3DEP (the 48 states and Alaska); noise barriers from OpenStreetMap and the inventories of Washington, Florida and Virginia.
+Terrain from USGS's [3DEP](https://www.sciencebase.gov/catalog/item/4f70aa9fe4b058caae3f8de5) (the 48 states and Alaska; public domain); noise barriers from OpenStreetMap and the inventories of Washington ([WSDOT Noise Walls](https://geo.wa.gov/datasets/WSDOT::wsdot-noise-walls/about)), Florida ([FDOT Noise Barriers](https://www.geoplan.ufl.edu/noise-barrier-inventory/)) and Virginia ([VDOT Noise Barrier Study](https://www.arcgis.com/home/item.html?id=695b47c2cede44aebcade31fd8bc3901)).
 
 ## Homes and places
 
@@ -47,4 +47,4 @@ Homes: heat pumps and air conditioners as the RECS survey counts them. Mosques: 
 
 ## Checked against
 
-Minneapolis–St Paul airport's monitors.
+Minneapolis–St Paul airport's monitors ([validation](/about/validation)).

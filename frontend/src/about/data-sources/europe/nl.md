@@ -23,13 +23,13 @@ Train, tram and metro counts: Dutch national timetable from [public-transport.ea
 
 ## Industry
 
-Wind turbines: OpenStreetMap's standing turbines with RIVM's register's power and height. The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium.
+Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium.
 
 ## Buildings and terrain
 
-Buildings take their measured height from [3DBAG](https://3dbag.nl/) first, then OpenStreetMap tags, floor counts, Overture heights and the typical height for the footprint size. Noise walls along state roads come from the Rijkswaterstaat [barrier inventory](https://data.overheid.nl/dataset/15743-geluidswerende-voorzieningen--gwv-) (CC0).
+Buildings take their measured height from [3DBAG](https://3dbag.nl/) (CC BY 4.0) first, then OpenStreetMap tags, floor counts, Overture heights and the typical height for the footprint size. Noise walls along state roads come from the Rijkswaterstaat [barrier inventory](https://data.overheid.nl/dataset/15743-geluidswerende-voorzieningen--gwv-) (CC0).
 
-Terrain from AHN4 (laser survey).
+Terrain from [AHN4](https://www.ahn.nl/dataroom) (laser survey; CC0 1.0).
 
 ## Homes and places
 
