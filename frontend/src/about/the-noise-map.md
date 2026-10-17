@@ -1,12 +1,12 @@
 ---
 title: The noise map
-intro: What the colours mean, and how they are computed ahead of time for every pixel with the click's physics.
+intro: What the colours mean, and how the map is painted ahead of time for every pixel with the popup's physics.
 ---
 
-The colours show how loud each place sounds, in sone, as a click there would answer: the map is
-computed ahead of time, pixel by pixel, from the same data and physics. For the exact answer at a
-place, click it. A place not yet painted is clear, without the quiet zones' green, and its hover
-reads "—"; a click there computes it all the same.
+The colours show how loud each place sounds, in sone, as the popup there would answer: the map is
+painted ahead of time, pixel by pixel, from the same data and physics. For the exact answer at a
+place and what makes it, open the popup there. A place not yet painted is clear, without the quiet
+zones' green, and its hover reads "—"; the popup computes it all the same.
 
 ## Colours
 
@@ -21,22 +21,36 @@ scale still reads in grey and with red-green colour blindness.
 ## Layers
 
 The map shows any of the noise layers together: roads, railways, industry, buildings, ships and
-aircraft. All six read the painted total and one alone its own loudness. Loudness does not add
-like energy, so two to five layers are estimated from each layer's own: their loudness raised to a
-power that grows with the loudest layer's level (1.0 at 22 phon, 1.9 at 62, 3.1 at 87 phon),
-summed and taken back. Against the painted total of all six this is within 1 phon at 90 % of the
-places where two layers or more sound, and within 2 phon at 98 %. Quiet zones wash green every
-place where the total stays at or below a chosen loudness, from 0.25 to 4 sone.
+aircraft. All six show the painted total, one alone its own loudness, and two to five an estimate
+from each layer's own. Quiet zones wash green every place where the total stays at or below a
+chosen loudness, from 0.25 to 4 sone.
 
-Advanced shows the data every click computes over: elevation, forest, hard ground, buildings by
+<details>
+<summary><strong>How two to five layers are combined</strong></summary>
+
+Loudness does not add like energy, so each layer's loudness is raised to a power that grows with
+the loudest layer's level (1.0 at 22 phon, 1.9 at 62, 3.1 at 87 phon), summed and taken back.
+Against the painted total of all six this is within 1 phon at 90 % of the places where two layers
+or more sound, and within 2 phon at 98 %.
+
+</details>
+
+Advanced shows the data the popup computes over: elevation, forest, hard ground, buildings by
 height, road traffic (vehicles a day), trains a day, the other sources (turbines, bells, terraces,
 car parks, airports) and noise barriers; each layer switched on shows its legend.
 
 ## How it is painted
 
-The map is painted in tiles of zoom 12, 1,024 × 1,024 pixels (6 m apart in Prague), each in
-blocks of 16 × 16 pixels (100 m in Prague). A ground source counts as loud at a point where its
-upper bound there reaches 20 dB.
+The map is painted in tiles of 1,024 × 1,024 pixels, 6 m apart in London. Every loud source is
+computed exactly at the corners of blocks 16 pixels wide and at every pixel it is near; what is
+far is blended between the corners, and the faint hum of far, quiet sources is computed on a
+coarser grid. A pixel inside a building shows the building's loudest façade, as the popup does.
+
+<details>
+<summary><strong>How a tile is painted</strong></summary>
+
+The tiles are the web map's of zoom 12, each in blocks of 16 × 16 pixels (95 m in London). A ground
+source counts as loud at a point where its upper bound there reaches 20 dB.
 
 - At every block corner, each loud source is computed exactly.
 - A block's pixels compute exactly the loud sources that cross the block or one of the eight around
@@ -44,8 +58,8 @@ upper bound there reaches 20 dB.
   weighs at most 20 % of the layer's loud sources at the block's quietest corner.
 - What is left out is blended between the block's four corners, and weakened at a pixel as much as
   the block's computed far sources are there, as behind a house.
-- The hum, the sources under 20 dB, is estimated with the click's physics and error budget at
-  points 64 pixels apart (390 m in Prague), and blended between them in decibels: it falls off
+- The hum, the sources under 20 dB, is estimated with the popup's physics and error budget at
+  points 64 pixels apart (380 m in London), and blended between them in decibels: it falls off
   steeply from its nearest sources, and a blend in energy read quiet places by their loudest point.
 
 An open block hearing only the hum and flights takes its loudness from shared corners, without
@@ -76,9 +90,9 @@ Buildings and their façade receivers keep the exact computations.
 <circle cx="15" cy="305" r="2.4" fill="currentColor"/>
 <path d="M8 323H22" fill="none" stroke="#2f7fd8" stroke-width="1.6"/>
 <circle cx="15" cy="341" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/>
-<g fill="currentColor"><text x="30" y="291">exact: loud sources in P's 3 × 3 blocks</text><text x="30" y="309">block corners (16 px, 100 m): every loud source</text><text x="30" y="327">a piece the corners admit, exact at P</text><text x="30" y="345">hum points (64 px, 390 m): quiet sources</text></g>
+<g fill="currentColor"><text x="30" y="291">exact: loud sources in P's 3 × 3 blocks</text><text x="30" y="309">block corners (16 px, 95 m): every loud source</text><text x="30" y="327">a piece the corners admit, exact at P</text><text x="30" y="345">hum points (64 px, 380 m): quiet sources</text></g>
 </svg>
-<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">Part of a tile painted at 1,024 pixels, distances in Prague. Road A crosses the blocks around pixel P and is computed exactly there. Road B is computed at the corners of P's block; its loudest pieces there are computed exactly at P too, their rays here passing a house, and the rest of it is blended between the corners. The quiet sources come from the hum points.</figcaption>
+<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">Part of a tile painted at 1,024 pixels, distances in London. Road A crosses the blocks around pixel P and is computed exactly there. Road B is computed at the corners of P's block; its loudest pieces there are computed exactly at P too, their rays here passing a house, and the rest of it is blended between the corners. The quiet sources come from the hum points.</figcaption>
 </figure>
 
 Each block blends only the sources it leaves out, so neighbouring blocks blend different
@@ -91,22 +105,30 @@ where screening does not apply, every corner reads the same boxes within reach, 
 and average flight lines stay at least 8 km away. Their energies and energies times the flights' rate and passing
 duration are blended to the block corners, keeping how their noise changes over time. The
 quiet sources may be omitted only when their summed bounds can change a layer's exact loud
-energy by at most 0.1 dB in every period. Otherwise the painter uses the click's bound-proportional
+energy by at most 0.1 dB in every period. Otherwise the painter uses the popup's bound-proportional
 sampling and 0.05 dB confidence budget, batches the selected rays on the graphics card and
 applies the sampling weights to their spectra.
-A pixel inside a building shows the building's loudest façade, as a click
+A pixel inside a building shows the building's loudest façade, as the popup
 inside it does: of the receivers 0.1 m in front of its walls, a party wall's left out, the three
 whose painted pixel in front is loudest are computed like pixels, without the building's own
-reflection, and the loudest of them counts. Both choices go by the ground sources, as a click's
-does: the flights do not pick the façade.
+reflection, and the loudest of them counts. Both choices go by the ground sources, as the popup's
+do: the flights do not pick the façade.
 
-A pixel's loudness is computed as a click computes it, at a coarser grain: the levels over time in
-steps of 2 dB, two states of the weather, and four groups of the day's hours, one of the evening's
-and three of the night's, where a click takes 0.5 dB, ten states and every hour. Each layer and the
-total are stored in steps of half a phon, 3.5 % of loudness; zoomed out, a pixel is the mean
-loudness of the pixels under it.
+A pixel's loudness is computed as the popup computes it, at a coarser grain: the levels over time
+in steps of 2 dB, two states of the weather, and four groups of the day's hours, one of the
+evening's and three of the night's, where the popup takes 0.5 dB, ten states and every hour. Each
+layer and the total are stored in steps of half a phon, 3.5 % of loudness; zoomed out, a pixel is
+the mean loudness of the pixels under it.
 
-## How close it comes to a click
+</details>
+
+## How close it comes to the popup
+
+The map should agree with the popup within 1 phon, 7 % of loudness, at any point. The painter is
+checked against two references, and the total meets its limits; single layers miss some.
+
+<details>
+<summary><strong>The limits and the last check</strong></summary>
 
 The painter is held to two references. The etalon is the same tile with every loud ground source
 and the flights computed exactly at every outdoor pixel, the hum, the flights' spectra and the
@@ -114,8 +136,8 @@ loudness grain taken as the painter takes them: over the pixels of 1 sone or mor
 the total may differ from it by more than 0.5 phon at no more than 20 % of them, by more than 1
 phon (7 % of loudness) at no more than 1 %, by more than 3 phon at 0.01 %
 and by more than 6 phon at 0.001 %, with a bias under 0.5 phon; at most 0.25 % may fall on the
-other side of 1 sone, and a pixel under 1 sone may be off by at most 10 phon. And where the map is
-clicked, it should agree with the click within 1 phon.
+other side of 1 sone, and a pixel under 1 sone may be off by at most 10 phon. And at any point it
+should agree with the popup within 1 phon.
 
 On one pixel in 16 of four squares in central Bohemia (248,909 of 1 sone or more, October 2026)
 the total meets every limit: 0.07 % over 1 phon, 3 pixels over 3 phon, none over 6 phon or across
@@ -130,6 +152,8 @@ source and pixel in Prague (October 2026) the two agree within 0.006 dB for 99 %
 0.03 dB for 99.9 %. Single precision puts 90 pairs more than 1 dB apart, up to 23 dB, where a ray
 grazes the terrain or crosses a building's edge; all but one of them lie more than 20 dB below the
 loudest source at their pixel.
+
+</details>
 
 ## In the code
 
@@ -183,5 +207,5 @@ Loud is one rule for the painter, its etalon and the hum: `popup::candidates::lo
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB). `qm-paint-gpu check` measures the card against the
 cores on random pairs, `check-loudness` on random pixels' loudness and `check-flights` on a square's
 aircraft lattices; `etalon` paints the reference,
-`compare` scores a map against it, and `popup` writes the click's loudness at random pixels as a
+`compare` scores a map against it, and `popup` writes the popup's loudness at random pixels as a
 sparse reference.
