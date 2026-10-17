@@ -11,6 +11,7 @@
 
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
 use crate::low_profile::{LowProfileLookup, height_is_per_building, ring_area_m2};
+use crate::rings::RingIndex;
 use crate::screening::{RowGeometry, ScreeningOutline, row_outlines};
 use arrow_array::{
     Array, BinaryArray, Float32Array, Int16Array, Int32Array, Int64Array, RecordBatch, UInt8Array,
@@ -252,6 +253,39 @@ fn wall_height_m(height_source: u8, stored_m: i16) -> f32 {
     } else {
         f32::from(stored_m)
     }
+}
+
+/// The footprints of `square`'s buildings whose centroid `near` admits, by their global ids (the
+/// obstacles' own), into `index`: what a site's point may stand inside.
+pub fn building_footprints(
+    dev4: &Dev4,
+    square: Square,
+    near: &dyn Fn((i32, i32)) -> bool,
+    index: &mut RingIndex,
+) -> Result<(), String> {
+    let Some(table) = dev4.table(square, "structures.arrow")? else {
+        return Ok(());
+    };
+    let context = |error: String| format!("structures.arrow of {square:?}: {error}");
+    require_stamp(&table, "structures_contract", "structures_v5").map_err(context)?;
+    for batch in &table.batches {
+        let rows = Rows::of(batch).map_err(context)?;
+        for row in 0..rows.kind.len() {
+            if rows.kind.value(row) != KIND_BUILDING
+                || rows.geom.is_null(row)
+                || rows.ordinal.is_null(row)
+            {
+                continue;
+            }
+            if !Rows::position(rows.centroid, row).is_some_and(near) {
+                continue;
+            }
+            if let Some(parts) = decode_parts(rows.geom.value(row)) {
+                index.add(footprint_id(square, rows.ordinal.value(row)), parts);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The outlines of one square's structures.arrow for which `keep` holds, x taken on the copy of

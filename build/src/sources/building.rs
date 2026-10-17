@@ -19,6 +19,7 @@ use crate::climate::Climate;
 use crate::dev4::{
     Dev4, Square, cell, column, degrees_to_z30, positive, require_stamp, text, z30_corner_degrees,
 };
+use crate::rings::RingIndex;
 use crate::screening::BUILDING_HEIGHT_MAX_M;
 use crate::structures::{decode_parts, footprint_id};
 use crate::traffic::building_load;
@@ -35,6 +36,8 @@ use std::collections::HashMap;
 use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
 
 const KIND_BUILDING: u8 = 0;
+/// dev4's class of a residential block, and of every building tagged only building=yes.
+const RESIDENTIAL_MULTI: u8 = 0;
 /// dev4 `height_source` of an emission-only ground activity (no structure stands there).
 const HEIGHT_SOURCE_GROUND_ACTIVITY: u8 = 7;
 const GROUND_ACTIVITY_SOURCE_HEIGHT_M: f64 = 1.5;
@@ -148,7 +151,7 @@ fn class_label(class: u8) -> &'static str {
 pub fn convert(
     dev4: &Dev4,
     (climate, places): (&Climate, Places),
-    square: Square,
+    (square, industrial_sites): (Square, &RingIndex),
     out: &mut Vec<Converted>,
 ) -> Result<usize, String> {
     // A square without buildings still has its mapped places.
@@ -170,6 +173,12 @@ pub fn convert(
     let mut hospitality: HashMap<u64, u64> = HashMap::new();
     for batch in batches {
         for row in read_batch(batch, square).map_err(context)? {
+            // A building dev4 could only call residential (building=yes) inside an industrial site
+            // is the site's: its sound is the site's own.
+            if row.class == RESIDENTIAL_MULTI && industrial_sites.containing(row.centroid).is_some()
+            {
+                continue;
+            }
             let Some(emission) = building_emission(&row, Some((country_iso, climate))) else {
                 continue;
             };

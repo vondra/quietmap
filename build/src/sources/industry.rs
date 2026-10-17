@@ -12,13 +12,18 @@ use super::facilities::{
     plant_output_mw, substation_power,
 };
 use super::{Converted, fields, group_key};
-use crate::dev4::{Dev4, Square, Table, column, positive, require_stamp, text, z30_corner_degrees};
+use crate::dev4::{
+    Dev4, Square, Table, column, degrees_to_z30, positive, require_stamp, text, z30_corner_degrees,
+};
+use crate::rings::{RingIndex, z30_cells};
+use crate::structures::building_footprints;
 use arrow_array::{
     BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array, UInt16Array,
 };
 use physics::emission::industrial::*;
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
+use std::collections::HashSet;
 use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
 
 /// Sites up to this area emit from one point, larger ones from cells of this side (dev4).
@@ -26,6 +31,11 @@ const SINGLE_POINT_UP_TO_M2: f64 = 5_000.0;
 const CELL_M: f64 = 75.0;
 /// The area of a site with neither a stored area nor a ring.
 const DEFAULT_SITE_AREA_M2: f64 = 10_000.0;
+/// How far outside a site's outline a building's centroid may lie while the building still holds a
+/// point of the site (a hall across the site's edge).
+const FOOTPRINT_REACH_M: f64 = 300.0;
+/// The cells of the index the sites' reach marks: 2^14 z30 cells, about 600 m of Web Mercator.
+const REACH_CELL_SHIFT: u32 = 14;
 
 /// One `industrial.arrow` row as the conversion reads it; tags are kept for power rows only.
 pub struct IndustrialRow {
@@ -157,17 +167,77 @@ pub fn convert(dev4: &Dev4, target: Square, out: &mut Vec<Converted>) -> Result<
         let osm = (row.osm_kind.as_str(), row.osm_id);
         joins.add_row(row.source_type, osm, row.centroid, &row.ring, &row.tags);
     }
-    let mut emitting = 0;
-    for row in &rows {
-        if let Some(emission) = row_emission(row, &joins) {
-            place(row, emission, out);
-            emitting += 1;
+    let emitting: Vec<_> = (rows.iter())
+        .filter_map(|row| Some((row, row_emission(row, &joins)?)))
+        .collect();
+    // The buildings the sites' points may stand in: a point inside one emits from it as its own,
+    // which does not screen it (the Clacton-Holland Haven sewage works' loudest point stood in an
+    // unmapped hall, screened 16-24 dB every way; a quarter of the industrial sound of Essex, Prague
+    // and the Ruhr stood in buildings, 2026-10-17).
+    let mut reach = HashSet::new();
+    for (row, _) in &emitting {
+        let ((x0, y0), (x1, y1)) = site_reach(row);
+        for cx in x0 >> REACH_CELL_SHIFT..=x1 >> REACH_CELL_SHIFT {
+            for cy in y0 >> REACH_CELL_SHIFT..=y1 >> REACH_CELL_SHIFT {
+                reach.insert((cx, cy));
+            }
         }
     }
-    Ok(emitting)
+    let mut footprints = RingIndex::default();
+    if !reach.is_empty() {
+        let near =
+            |(x, y): (i32, i32)| reach.contains(&(x >> REACH_CELL_SHIFT, y >> REACH_CELL_SHIFT));
+        for square in target.with_neighbours() {
+            building_footprints(dev4, square, &near, &mut footprints)?;
+        }
+    }
+    for (row, emission) in &emitting {
+        place(row, emission, &footprints, out);
+    }
+    Ok(emitting.len())
 }
 
-fn place(row: &IndustrialRow, emission: RowEmission, out: &mut Vec<Converted>) {
+/// The z30 box of a site's outline (its centroid without one), widened by [`FOOTPRINT_REACH_M`].
+fn site_reach(row: &IndustrialRow) -> ((i32, i32), (i32, i32)) {
+    let (latitude, _) = z30_corner_degrees(row.centroid.0, row.centroid.1);
+    let margin = z30_cells(FOOTPRINT_REACH_M, latitude);
+    let points = row.ring.iter().chain(std::iter::once(&row.centroid));
+    let (mut low, mut high) = (row.centroid, row.centroid);
+    for &(x, y) in points {
+        (low, high) = ((low.0.min(x), low.1.min(y)), (high.0.max(x), high.1.max(y)));
+    }
+    (
+        (low.0.saturating_sub(margin), low.1.saturating_sub(margin)),
+        (high.0.saturating_add(margin), high.1.saturating_add(margin)),
+    )
+}
+
+/// The outlines of the industrial sites of `squares`: an unnamed building inside one is the site's,
+/// not a home (`building::convert`; the Clacton-Holland Haven sewage works' hall was a block of
+/// flats with heat pumps, 2026-10-17).
+pub fn site_outlines(dev4: &Dev4, squares: &[Square]) -> Result<RingIndex, String> {
+    let mut rows = Vec::new();
+    for &square in squares {
+        if let Some(table) = dev4.table(square, "industrial.arrow")? {
+            read_rows(&table, &mut rows)
+                .map_err(|error| format!("industrial.arrow of {square:?}: {error}"))?;
+        }
+    }
+    let mut index = RingIndex::default();
+    for (at, row) in rows.into_iter().enumerate() {
+        if row.ring.len() >= 3 {
+            index.add(at as u64, vec![vec![row.ring]]);
+        }
+    }
+    Ok(index)
+}
+
+fn place(
+    row: &IndustrialRow,
+    emission: &RowEmission,
+    footprints: &RingIndex,
+    out: &mut Vec<Converted>,
+) {
     let centroid = z30_corner_degrees(row.centroid.0, row.centroid.1);
     let points = emission.area_m2.map(|area_m2| {
         site_points(&Site {
@@ -203,14 +273,24 @@ fn place(row: &IndustrialRow, emission: RowEmission, out: &mut Vec<Converted>) {
         emission: emission.sound.band_levels_db(),
         display: fields(display),
     };
+    let own = |position: (i32, i32)| footprints.containing(position).unwrap_or(0);
     match (points, emission.area_m2) {
-        (Some(points), Some(area_m2)) => push_site_points(&points, area_m2, &attribute, out),
+        (Some(points), Some(area_m2)) => {
+            let first = out.len();
+            push_site_points(&points, area_m2, &attribute, out);
+            for (piece, point) in out[first..].iter_mut().zip(&points) {
+                piece.attribute.footprint_id = own(degrees_to_z30(point.lat, point.lon));
+            }
+        }
         _ => {
             let (tile, ends) = point_piece(centroid.0, centroid.1);
             out.push(Converted {
                 tile,
                 ends,
-                attribute,
+                attribute: Attribute {
+                    footprint_id: own(row.centroid),
+                    ..attribute
+                },
                 deck_m: None,
             });
         }
