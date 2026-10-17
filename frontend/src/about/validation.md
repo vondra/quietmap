@@ -34,7 +34,7 @@ the current version, October 2026.
 | Paris streets: [Ville de Paris](https://opendata.paris.fr/explore/dataset/bruit-evolution-de-l-indice-du-bruit-mesure-sur-des-stations-parisiennes) (ODbL), measured by Bruitparif, Lden 2025 | 16 | −3.2 dB | 3.2 dB |
 | Barcelona: [Ajuntament de Barcelona](https://opendata-ajuntament.barcelona.cat/data/dataset/xarxasoroll-equipsmonitor-dades) (CC BY 4.0), Lden 2025 | 154 | −1.6 dB | 4.2 dB |
 | Madrid: [Ayuntamiento de Madrid](https://datos.madrid.es/dataset/211356-0-contaminacion-acustica) (CC BY 4.0), Lden 2025 | 31 | +2.4 dB | 3.4 dB |
-| Dublin: [Dublin City Council](https://data.smartdublin.ie/sonitus-api) (CC BY), Lden 2025 | 14 | −4.4 dB | 5.5 dB |
+| Dublin: [Dublin City Council](https://data.smartdublin.ie/sonitus-api) (CC BY), Lden 2025 | 14 | −4.3 dB | 5.4 dB |
 | Poland's roads: [Chief Inspectorate of Environmental Protection](https://dane.gov.pl/pl/dataset/1404) (CC BY 4.0), 06–22 h, 2018–2024, at 5,351 points | 6,616 | +0.4 dB | 3.0 dB |
 | Germany's railways: [Eisenbahn-Bundesamt](https://www.laerm-monitoring.de), trains only, 06–22 and 22–06 h, 2023 | 19 | −0.4 and −3.2 dB | 1.7 and 3.3 dB |
 | Prague airport: [Letiště Praha](https://www.prg.aero), aircraft only, 06–22 and 22–06 h, January 2026 | 14 and 13 | −0.3 and +1.0 dB | 1.8 and 2.0 dB |
