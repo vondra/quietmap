@@ -25,9 +25,10 @@ pub struct LayerAnswer {
     pub evaluated: usize,
     pub candidates: usize,
     /// The aircraft layer's own Nden, its flights and its ground operations alone (the final
-    /// update's): what ranks it, one row, in the visitor's list.
+    /// update's): shown when its row opens.
     pub nden_sone: Option<f64>,
-    /// The aircraft row's share of the click's loudness (the final update's).
+    /// The aircraft row's share of the click's loudness (the final update's): what ranks it, one
+    /// row, in the visitor's list.
     pub share: Option<f64>,
     /// A ground layer's energy beyond the contributors sent: the list's last row.
     pub unlisted: Option<[f64; PERIODS]>,
@@ -57,9 +58,9 @@ pub struct Contributor {
     /// How it is heard: its passes per hour and whether they run together (the final update's;
     /// `None` for a steady source).
     pub heard: Option<crate::percentiles::Heard>,
-    /// Its own Nden, alone (the final update's): what ranks it in the visitor's list.
+    /// Its own Nden, alone (the final update's), shown when its row opens.
     pub nden_sone: Option<f64>,
-    /// Its share of the click's loudness (the final update's).
+    /// Its share of the click's loudness (the final update's): what ranks it in the visitor's list.
     pub share: Option<f64>,
     /// How its sound reaches the receiver, summed over its evaluated pieces.
     pub path: crate::evaluate::Path,
@@ -175,8 +176,7 @@ pub fn set_unlisted<'c>(
     }
 }
 
-/// Every contributor, the loudest first by `key` (its Lden energy, or in the final update its own
-/// Nden, as the visitor's list ranks them).
+/// Every contributor, the loudest first by `key` (a partial update's list: its Lden energy).
 pub fn ranked_contributors<C: std::borrow::Borrow<Contributor>>(
     mut contributors: Vec<C>,
     key: impl Fn(&Contributor) -> f64,

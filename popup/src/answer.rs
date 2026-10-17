@@ -562,7 +562,8 @@ pub fn answer(
                 // shows (`rows::rank_by_share`); each keeps its own Nden, alone, for its details.
                 let (heard, quiet): (Vec<_>, Vec<_>) =
                     all_contributors(&selections).partition(|c| listed(c));
-                rows = crate::rows::heard_rows(heard, &fields, &own_curves)?;
+                let displays;
+                (rows, displays) = crate::rows::heard_rows(heard, &fields)?;
                 let named: Vec<&crate::update::Contributor> =
                     rows.iter().flat_map(|row| row.parts.iter()).collect();
                 let shares = crate::shares::row_shares(
@@ -578,6 +579,7 @@ pub fn answer(
                 let unlisted_share: f64 = rows[shown..].iter().filter_map(|row| row.share).sum();
                 rest_share = Some(shares.rest + unlisted_share);
                 rows.truncate(shown);
+                crate::rows::score_rows(&mut rows, &displays, &own_curves);
                 if let Some(layer) = layers
                     .iter_mut()
                     .find(|layer| layer.layer == Layer::Aircraft)

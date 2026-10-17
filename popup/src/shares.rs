@@ -63,11 +63,13 @@ pub fn row_shares(
         .collect();
     // What holds steady outside the lines: a listed row without a line its energy, the aircraft
     // layer what its flights and lines leave of it, the rest the remainder.
-    let mut steady = vec![[0.0; PERIODS]; listed.len() + 2];
-    for (row, contributor) in listed.iter().enumerate() {
-        if !lines.iter().any(|line| line.key == contributor.group_key) {
-            steady[row] = contributor.energy;
-        }
+    let mut steady: Vec<[f64; PERIODS]> = listed
+        .iter()
+        .map(|contributor| contributor.energy)
+        .collect();
+    steady.extend([[0.0; PERIODS]; 2]);
+    for &owner in owners.iter().filter(|&&owner| owner < aircraft) {
+        steady[owner] = [0.0; PERIODS];
     }
     let aircraft_energy = aircraft_layer.map_or([0.0; PERIODS], |layer| layer.answer_energy());
     for period in 0..PERIODS {

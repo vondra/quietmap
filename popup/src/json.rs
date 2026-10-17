@@ -66,8 +66,7 @@ fn aircraft_kinds(kinds: &[f64; 5]) -> Value {
     Value::Object(object)
 }
 
-/// A loudness to three significant digits (0.432, 4.32, 43.2): the list ranks by it, the visitor
-/// reads two.
+/// A loudness to three significant digits (0.432, 4.32, 43.2); the visitor reads two.
 fn sone(value: f64) -> f64 {
     let digits = (2 - value.max(0.001).log10().floor() as i32).max(0);
     let scale = 10f64.powi(digits);
@@ -146,7 +145,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         let mut object = Map::new();
         object.insert("source_type".into(), json!(layer.layer.name()));
         periods(&mut object, &layer.energy);
-        // The aircraft layer is one row of the list: its own Nden ranks it there.
+        // The aircraft layer is one row of the list: its own Nden, shown when the row opens.
         if let Some(own) = layer.nden_sone {
             object.insert("nden_sone".into(), json!(sone(own)));
         }
@@ -244,7 +243,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 }),
             );
         }
-        // An object of several sources: each part, the loudest alone first, with its display,
+        // An object of several sources: each part, the largest share first, with its display,
         // what it delivers and its share.
         if row.parts.len() > 1 {
             let mut parts = Vec::new();
