@@ -111,13 +111,18 @@ export function subtypeLabel(sourceType: string, subtype: string): string {
   return SUBTYPE_LABELS[sourceType]?.[subtype.split(':')[0]] || subtype.replace(/_/g, ' ')
 }
 
-/** The class a contributor's label falls back to: road class, rail type, building or site type. */
-export function contributorClass(c: Contributor): string {
+/** The class a source's facts name: road class, rail type, building or site type. */
+function metadataClass(metadata: Record<string, unknown> | null | undefined): string {
   for (const key of ['road_class', 'rail_type', 'building_type', 'source_type']) {
-    const value = c.metadata?.[key]
+    const value = metadata?.[key]
     if (typeof value === 'string' && value) return value
   }
-  return c.subtype ?? ''
+  return ''
+}
+
+/** The class a contributor's label falls back to: road class, rail type, building or site type. */
+export function contributorClass(c: Contributor): string {
+  return metadataClass(c.metadata) || (c.subtype ?? '')
 }
 
 /** What a reference alone is the number of: a bare "2404" tells a visitor nothing, "Road 2404" does
@@ -130,10 +135,15 @@ function kindOf(c: Contributor): string {
   return cls ? subtypeLabel(c.source_type, cls) : SOURCE_LABELS[c.source_type] ?? c.source_type
 }
 
-/** What a part of an object makes the sound: a place's guests (with the place's name where it is
- *  not the row's, two places sharing a building), its bells or call to prayer, else the building
- *  itself (its ventilation, cooling and heating). */
-export function partLabel(metadata: Record<string, unknown> | null, rowName: string): string {
+/** What a part of a row makes the sound: a building's guests (with the place's name where it is not
+ *  the row's, two places sharing a building), its bells or call to prayer, else the building itself
+ *  (its ventilation, cooling and heating); a part of another layer's row its class in words (a
+ *  street and the service road under its name: náměstí Míru's read "Building" twice, 2026-10-17). */
+export function partLabel(sourceType: string, metadata: Record<string, unknown> | null, rowName: string): string {
+  if (sourceType !== 'building') {
+    const cls = metadataClass(metadata)
+    return cls ? subtypeLabel(sourceType, cls) : SOURCE_LABELS[sourceType] ?? sourceType
+  }
   const kind = typeof metadata?.building_type === 'string' ? metadata.building_type : ''
   const name = typeof metadata?.name === 'string' ? metadata.name : ''
   if (kind === 'church_bells') return 'Bells'

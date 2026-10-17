@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { aircraftKindShares, contributorLabel, labelNamesClass, subtypeLabel } from '../src/components/noise/labels.ts'
+import { aircraftKindShares, contributorLabel, labelNamesClass, partLabel, subtypeLabel } from '../src/components/noise/labels.ts'
 
 const road = (name, metadata) => ({
   id: 'r', source_type: 'road', name, subtype: 'tertiary', distance_m: 38,
@@ -50,4 +50,13 @@ test('a place whose sound is its people reads as the place alone; boats in plain
 test('the aircraft makeup reads largest first', () => {
   assert.deepEqual(aircraftKindShares({ propeller: 0.09, airliners: 0.78, helicopters: 0.13 }),
     [['Airliners', 0.78], ['Helicopters', 0.13], ['Propeller aircraft', 0.09]])
+})
+
+test('a part reads as what makes its sound: a building\'s bells or guests, another row\'s part its class', () => {
+  // náměstí Míru: the tertiary street and a service road under its name, one row; it read "Building" twice.
+  assert.equal(partLabel('road', { road_class: 'tertiary', name: 'náměstí Míru' }, 'náměstí Míru'), 'Tertiary road')
+  assert.equal(partLabel('road', { road_class: 'service', name: 'náměstí Míru' }, 'náměstí Míru'), 'Service road')
+  assert.equal(partLabel('building', { building_type: 'church_bells' }, 'St Ludmila'), 'Bells')
+  assert.equal(partLabel('building', { building_type: 'people_bar', name: 'U Pinkasů' }, 'Jungmannova 15'), 'Guests outside U Pinkasů')
+  assert.equal(partLabel('building', null, 'Jungmannova 15'), 'Building')
 })
