@@ -39,7 +39,7 @@ Five pages, each from the simple to the exact, down to the code:
   estimated in your country.
 - [Data preparation](/about/data-preparation): how a road, a railway, a flight or a factory gets
   its sound power.
-- [Noise at a point](/about/noise-at-a-point): what a click shows, and how it is computed.
+- [Noise at a point](/about/noise-at-a-point): what the popup shows, and how it is computed.
 - [The noise map](/about/the-noise-map): what the colours mean, and how they are painted.
 - [Validation](/about/validation): how close the model comes to real measurements.
 
@@ -49,16 +49,16 @@ Five pages, each from the simple to the exact, down to the code:
 Computed — a physics model (CNOSSOS-EU for ground sources, ECAC Doc 29 for aircraft) over public data. The model is continuously checked against real monitoring stations; see [Validation](/about/validation).
 
 **How accurate is it?**
-It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from. The [validation](/about/validation) page shows the gaps network by network.
+It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the number as approximate, and open the popup there to see exactly what it is built from. The [validation](/about/validation) page shows the gaps network by network.
 
-**Why does my quiet street show 50 dB?**
-Click it. Most surprises have a visible cause: a road with no measured traffic carries the trips the buildings around it make or a class default, a nearby factory is classified by registry sector, or the dominant source is something you've tuned out. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
+**Why is my quiet street orange?**
+Open the popup there: it lists what makes the noise, the largest share first. Most surprises have a visible cause: a road nobody counted carries the trips the buildings around it make or its class's average, a nearby factory is as loud as its sector, or the loudest source is one you no longer notice. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
 
 **Why are there no low-flying aircraft where I live?**
 The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, flights aren't received and the layer reads too quiet or empty: near Lagos and Cairo airports 5–20 dB low, over parts of Siberia and the Amazon with no aircraft at all — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
 
 **Why is the map clear in places?**
-By design: under 1 sone, about as loud as a quiet room, the map has no colour. A blank area can also mean missing source data, or a place the map has not painted yet. A click still gives the level there, however low.
+By design: under 1 sone, about as loud as a quiet room, the map has no colour. A blank area can also mean missing source data, or a place the map has not painted yet. The popup still gives the level there, however low.
 
 **Can I use screenshots or embed the map?**
 Yes, free, with visible "quietmap.org" attribution — details in the [terms of use](/about/terms).
