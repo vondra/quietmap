@@ -15,7 +15,7 @@ use super::{Converted, fields, group_key};
 use crate::dev4::{
     Dev4, Square, Table, column, degrees_to_z30, positive, require_stamp, text, z30_corner_degrees,
 };
-use crate::rings::{RingIndex, z30_cells};
+use crate::rings::{RingIndex, across_antimeridian, z30_cells};
 use crate::structures::building_footprints;
 use arrow_array::{
     BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array, UInt16Array,
@@ -65,16 +65,21 @@ pub struct RowEmission {
     pub rated_power_kw: Option<f64>,
 }
 
-/// A row's emission with the facility evidence of `joins`; `None` when silent: a dead site
-/// (`suppressed`), a gas station, a rail yard (PLAN-z13 DROP), a wind turbine or farm outline
-/// (`turbines`), an inactive site, a transformer (its rating joins its substation), an unknown type, a solar generator
-/// inside its plant (the plant emits) or an untagged solar node without a footprint.
-pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmission> {
+/// Whether a row is no site that sounds: a dead site (`suppressed`), a gas station, a rail yard
+/// (PLAN-z13 DROP), a wind turbine or farm outline (`turbines`), an inactive site, a transformer
+/// (its rating joins its substation) or an unknown type.
+fn silent_site(row: &IndustrialRow) -> bool {
     let silent_type = matches!(
         row.source_type,
         SOURCE_RAIL_YARD | SOURCE_WIND_TURBINE | SOURCE_WIND_OUTLINE | SOURCE_INACTIVE
     ) || row.source_type >= SOURCE_TRANSFORMER;
-    if row.suppressed || silent_type || is_gas_substation(&row.tags) {
+    row.suppressed || silent_type || is_gas_substation(&row.tags)
+}
+
+/// A row's emission with the facility evidence of `joins`; `None` when silent ([`silent_site`]), a
+/// solar generator inside its plant (the plant emits) or an untagged solar node without a footprint.
+pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmission> {
+    if silent_site(row) {
         return None;
     }
     if row.source_type == SOURCE_SOLAR_FARM
@@ -206,15 +211,21 @@ fn site_reach(row: &IndustrialRow) -> ((i32, i32), (i32, i32)) {
     for &(x, y) in points {
         (low, high) = ((low.0.min(x), low.1.min(y)), (high.0.max(x), high.1.max(y)));
     }
+    // An outline across the antimeridian would reach the long way round: its centroid alone.
+    if across_antimeridian(low.0, high.0) {
+        (low, high) = (row.centroid, row.centroid);
+    }
     (
         (low.0.saturating_sub(margin), low.1.saturating_sub(margin)),
         (high.0.saturating_add(margin), high.1.saturating_add(margin)),
     )
 }
 
-/// The outlines of the industrial sites of `squares`: an unnamed building inside one is the site's,
-/// not a home (`building::convert`; the Clacton-Holland Haven sewage works' hall was a block of
-/// flats with heat pumps, 2026-10-17).
+/// The outlines of the industrial sites that sound in `squares`: a building dev4 can only call a
+/// residential block inside one is the site's, not a home (`building::convert`; the
+/// Clacton-Holland Haven sewage works' hall was a block of flats with heat pumps, 2026-10-17). A
+/// silent outline (a wind farm's, a rail yard's, an inactive site's) holds homes: their sound
+/// would go with nothing in its place.
 pub fn site_outlines(dev4: &Dev4, squares: &[Square]) -> Result<RingIndex, String> {
     let mut rows = Vec::new();
     for &square in squares {
@@ -225,7 +236,7 @@ pub fn site_outlines(dev4: &Dev4, squares: &[Square]) -> Result<RingIndex, Strin
     }
     let mut index = RingIndex::default();
     for (at, row) in rows.into_iter().enumerate() {
-        if row.ring.len() >= 3 {
+        if row.ring.len() >= 3 && !silent_site(&row) {
             index.add(at as u64, vec![vec![row.ring]]);
         }
     }

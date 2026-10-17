@@ -23,6 +23,7 @@ pub mod period_shares;
 pub mod prayer_times;
 pub mod rail;
 pub mod road;
+pub mod road_copies;
 pub mod road_junctions;
 pub mod road_slope;
 pub mod road_traffic;

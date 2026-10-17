@@ -173,12 +173,6 @@ pub fn convert(
     let mut hospitality: HashMap<u64, u64> = HashMap::new();
     for batch in batches {
         for row in read_batch(batch, square).map_err(context)? {
-            // A building dev4 could only call residential (building=yes) inside an industrial site
-            // is the site's: its sound is the site's own.
-            if row.class == RESIDENTIAL_MULTI && industrial_sites.containing(row.centroid).is_some()
-            {
-                continue;
-            }
             let Some(emission) = building_emission(&row, Some((country_iso, climate))) else {
                 continue;
             };
@@ -192,6 +186,13 @@ pub fn convert(
                     worship: row.class == WORSHIP,
                     group_key: key,
                 });
+            }
+            // A building dev4 could only call a residential block (building=yes among them)
+            // inside an industrial site is the site's: its sound is the site's own. It still
+            // hosts the bells or the call mapped in it, which its walls must not screen.
+            if row.class == RESIDENTIAL_MULTI && industrial_sites.containing(row.centroid).is_some()
+            {
+                continue;
             }
             if row.class == HOSPITALITY && row.footprint_id != 0 {
                 hospitality.insert(row.footprint_id, key);
