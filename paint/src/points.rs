@@ -6,7 +6,7 @@
 //! corners; its loudness by the popup's model ([`crate::sone`]). Checked interpolation lives in
 //! [`crate::quiet`]; every point reaching this painter computes its own sound.
 
-use crate::blocks::{Block, admit, meets};
+use crate::blocks::{Block, Corner, admission_counts, admit, meets};
 use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Pair, Point, evaluate_all};
 use crate::flights::blend_flights;
 use crate::paint::{Corners, Grid, Painted, corner_weights, rectangle_at};
@@ -56,13 +56,28 @@ impl PointPainter<'_> {
     /// Block `at` (row-major among the square's blocks): the loud sources crossing it or the eight
     /// around, and those its corners admit.
     pub fn block(&self, near: &mut Vec<u32>, at: usize) -> Block {
+        let (local, around) = self.block_sources(near, at);
+        admit(local, around)
+    }
+
+    /// How many sources block `at`'s pixels evaluate exactly and whether its corners leave any out
+    /// ([`admission_counts`]).
+    pub fn block_admission(&self, near: &mut Vec<u32>, at: usize) -> (usize, bool) {
+        let (local, around) = self.block_sources(near, at);
+        admission_counts(local, around)
+    }
+
+    /// Block `at`'s own sources (crossing it or the eight around) and its four corners.
+    fn block_sources(&self, near: &mut Vec<u32>, at: usize) -> (Vec<u32>, [&Corner; 4]) {
         let (square, grid) = (self.square, self.grid);
         let blocks = grid.pixels / grid.block;
         let (i, j) = (at % blocks, at / blocks);
         let b = grid.block as f64;
         let (x, y) = (i as f64 * b, j as f64 * b);
         let (low, high) = rectangle_at(square, grid.pixels, x - b, y - b, x + 2.0 * b, y + 2.0 * b);
-        square.index.reaching(low, high, near);
+        // The pieces that may lie within the rectangle, not every one whose reach covers it: the same
+        // crossing pieces in the same order.
+        square.index.within(low, high, 0.0, near);
         let local: Vec<u32> = (near.iter().copied())
             .filter(|&index| {
                 let [a, b] = square.candidates[index as usize].ends_m;
@@ -71,7 +86,7 @@ impl PointPainter<'_> {
             .collect();
         let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
             .map(|(di, dj)| &self.corners.corners[(j + dj) * (blocks + 1) + i + di]);
-        admit(local, around)
+        (local, around)
     }
 
     /// Each point's paint, `None` for one in a building: `places[k]` is its block's slot among

@@ -27,7 +27,7 @@ impl QuietBlocks {
         let candidates = (0..side * side)
             .into_par_iter()
             .map_init(Vec::new, |near, at| {
-                let block = painter.block(near, at);
+                let (exact, leaves_out) = painter.block_admission(near, at);
                 let (x, y) = ((at % side) * grid.block, (at / side) * grid.block);
                 let (low, high) = rectangle_at(
                     square,
@@ -38,10 +38,8 @@ impl QuietBlocks {
                     (y + grid.block) as f64,
                 );
                 (
-                    block.exact.is_empty()
-                        && block.left_groups.is_empty()
-                        && square.obstacles.is_open_rectangle(low, high),
-                    block.exact.len(),
+                    exact == 0 && !leaves_out && square.obstacles.is_open_rectangle(low, high),
+                    exact,
                 )
             })
             .collect::<Vec<_>>();

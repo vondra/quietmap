@@ -4,6 +4,28 @@
 use crate::exact::{LAYERS, PairEnergy};
 use physics::bands::{PERIODS, lden_energy};
 use std::collections::HashSet;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// Source indices hashed by one multiplication (Fibonacci hashing): the standard hasher's SipHash
+/// took 4 % of a New York square's cores while its card waited (2026-10-17).
+#[derive(Default)]
+struct IndexHasher(u64);
+
+impl Hasher for IndexHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, _: &[u8]) {
+        unreachable!("an index set hashes u32 indices only")
+    }
+
+    fn write_u32(&mut self, index: u32) {
+        self.0 = u64::from(index).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+type IndexSet = HashSet<u32, BuildHasherDefault<IndexHasher>>;
 
 /// A block's corners admit their loudest sources, layer by layer, until the energy each corner has
 /// not admitted is at most this share of the block's quietest corner's: dev1's speed dial
@@ -103,10 +125,10 @@ pub(crate) fn meets(a: [f64; 2], b: [f64; 2], low: [f64; 2], high: [f64; 2]) -> 
 }
 
 /// dev1's admission of a block: its own sources `local`, then at each corner in turn, layer by
-/// layer, the corner's loudest until the energy it has not admitted is within the budget; and the
-/// energy the admitted leave out at each corner.
-pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
-    let mut admitted: HashSet<u32> = local.iter().copied().collect();
+/// layer, the corner's loudest until the energy it has not admitted is within the budget. The
+/// sources admitted (`local` first), of them those beyond `local`, and the set of all.
+fn admission(local: Vec<u32>, corners: [&Corner; 4]) -> (Vec<u32>, Vec<u32>, IndexSet) {
+    let mut admitted: IndexSet = local.iter().copied().collect();
     let mut exact = local;
     let mut beyond = Vec::new();
     for layer in 0..LAYERS {
@@ -132,9 +154,29 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
             }
         }
     }
+    (exact, beyond, admitted)
+}
+
+/// How many sources a block's pixels evaluate exactly and whether its corners leave any out: what
+/// a quiet block's test asks of every block, without the groups left out (building and sorting
+/// those was most of the cores' work while a New York square's card waited, 2026-10-17).
+pub(crate) fn admission_counts(local: Vec<u32>, corners: [&Corner; 4]) -> (usize, bool) {
+    let (exact, _, admitted) = admission(local, corners);
+    let leaves_out = (corners.iter())
+        .flat_map(|corner| corner.ranked.iter().flatten())
+        .any(|source| !admitted.contains(&source.index));
+    (exact.len(), leaves_out)
+}
+
+/// dev1's admission of a block ([`admission`]) and the energy the admitted leave out at each
+/// corner, of it each source group's.
+pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
+    let (mut exact, mut beyond, admitted) = admission(local, corners);
     let mut left_out = [[[0.0; PERIODS]; LAYERS]; 4];
-    // Each source left out at a corner, with its Lden energy and distance there.
-    let mut left: Vec<(LeftGroup, f64, [f64; 4])> = Vec::new();
+    // Each source left out at a corner as a small key (its group, Lden energy and index there) and
+    // the corner: sorting the whole 360-byte groups moved more memory than anything else in a New
+    // York square (2026-10-17).
+    let mut left: Vec<(u64, f64, u32, usize, &Ranked)> = Vec::new();
     for (c, corner) in corners.iter().enumerate() {
         for (layer, ranked) in corner.ranked.iter().enumerate() {
             for source in ranked
@@ -144,45 +186,47 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
                 for (total, value) in left_out[c][layer].iter_mut().zip(source.energy.mixed) {
                     *total += value;
                 }
-                let mut group = LeftGroup {
-                    key: source.group,
-                    at_corners: [PairEnergy::default(); 4],
-                    loudest: source.index,
-                    nearest: [u32::MAX; 4],
-                };
-                group.at_corners[c] = source.energy;
-                group.nearest[c] = source.index;
-                let mut distances = [f64::INFINITY; 4];
-                distances[c] = source.distance_m;
-                left.push((group, source.lden, distances));
+                left.push((source.group, source.lden, source.index, c, source));
             }
         }
     }
     // One entry a group: its loudest source (ties to the lowest index) the representative, at each
-    // corner its nearest.
+    // corner the sum of its sources there in that order and its nearest.
     left.sort_unstable_by(|a, b| {
-        (a.0.key.cmp(&b.0.key))
+        (a.0.cmp(&b.0))
             .then(b.1.total_cmp(&a.1))
-            .then(a.0.loudest.cmp(&b.0.loudest))
+            .then(a.2.cmp(&b.2))
     });
-    left.dedup_by(|later, kept| {
-        if later.0.key != kept.0.key {
-            return false;
-        }
-        for c in 0..4 {
-            let (into, from) = (&mut kept.0.at_corners[c], later.0.at_corners[c]);
-            for p in 0..PERIODS {
-                into.mixed[p] += from.mixed[p];
-                into.states[0][p] += from.states[0][p];
-                into.states[1][p] += from.states[1][p];
+    let mut left_groups: Vec<LeftGroup> = Vec::new();
+    let mut nearest_m = [f64::INFINITY; 4];
+    for &(key, _, index, c, source) in &left {
+        match left_groups.last_mut() {
+            Some(group) if group.key == key => {
+                let into = &mut group.at_corners[c];
+                for p in 0..PERIODS {
+                    into.mixed[p] += source.energy.mixed[p];
+                    into.states[0][p] += source.energy.states[0][p];
+                    into.states[1][p] += source.energy.states[1][p];
+                }
+                if source.distance_m < nearest_m[c] {
+                    (nearest_m[c], group.nearest[c]) = (source.distance_m, index);
+                }
             }
-            if later.2[c] < kept.2[c] {
-                (kept.2[c], kept.0.nearest[c]) = (later.2[c], later.0.nearest[c]);
+            _ => {
+                let mut group = LeftGroup {
+                    key,
+                    at_corners: [PairEnergy::default(); 4],
+                    loudest: index,
+                    nearest: [u32::MAX; 4],
+                };
+                group.at_corners[c] = source.energy;
+                group.nearest[c] = index;
+                nearest_m = [f64::INFINITY; 4];
+                nearest_m[c] = source.distance_m;
+                left_groups.push(group);
             }
         }
-        true
-    });
-    let left_groups = left.into_iter().map(|(group, ..)| group).collect();
+    }
     exact.sort_unstable();
     beyond.sort_unstable();
     let admitted_at_corners = corners.map(|corner| {
