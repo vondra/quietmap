@@ -151,7 +151,7 @@ flight number, else as a generic jet.
 The year is summed into boxes of airspace: a cell of the map's grid and a slab of height above the
 highest ground around it. A box holds its flights' sound energy by day, evening and night at the
 ten distances of the noise tables, and its two loudest flights for the click's list; a box's Lden
-reads back within 0.2 dB of its flights summed one by one, a period's within 0.3 dB. Where no
+reads back within 0.25 dB of its flights summed one by one, and so does each period. Where no
 receiver is near, low flights are missing: near nine of 59 large airports (Beijing, Shanghai
 Pudong, Cairo, Casablanca, Riyadh, Tehran, Accra, Moscow Sheremetyevo, Lagos) the map reads 5 to
 23 dB too quiet.
@@ -328,8 +328,8 @@ altitude at its two ends.
 | Ships | a point every 250 m over a cell of vessel density | a cell |
 | Airports | a straight stretch of a runway or taxiway, at most 250 m | an airport's ground operations, in the aircraft row |
 
-Three tiles of central Prague hold 46,543 road pieces, half of them shorter than 21 m and the
-longest 250 m; 6,977 railway pieces; 2,938 industrial points and 74,149 points of the buildings
+Three tiles of central Prague hold 49,172 road pieces, half of them shorter than 21 m and the
+longest 250 m; 7,885 railway pieces; 3,622 industrial points and 74,377 points of the buildings
 layer. Flights are not pieces: they are the boxes described under Aircraft.
 
 ## In the code
