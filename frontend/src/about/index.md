@@ -86,7 +86,7 @@ Some of it was built while hiking the forests of La Palma — changes discussed 
 
 quietmap.org is an internal project of [Miton](https://www.miton.cz/en/).
 
-The [product code is open source](https://github.com/vondra/quietmap/tree/r070) under the Apache License 2.0, and the computations are transparent and reproducible from public data.
+The [product code is open source](https://github.com/vondra/quietmap/tree/main) under the Apache License 2.0, and the computations are transparent and reproducible from public data.
 
 ## Credits & terms
 

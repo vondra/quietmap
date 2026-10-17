@@ -29,7 +29,7 @@ Lazio, Campania, Veneto and Sicily have no feed. Class defaults apply there: 80 
 
 ## Buildings and terrain
 
-Terrain from TINITALY.
+Terrain from [TINITALY 1.1](https://tinitaly.pi.ingv.it) (INGV; CC BY 4.0).
 
 ## Homes and places
 
@@ -37,4 +37,4 @@ Homes mapped in OpenStreetMap: 16 heat pumps and 56 air conditioners per 100 hom
 
 ## Checked against
 
-Silenzi in Quota's quiet mountains.
+Silenzi in Quota's quiet mountains ([validation](/about/validation)).

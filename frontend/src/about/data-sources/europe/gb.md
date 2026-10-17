@@ -28,7 +28,7 @@ Official English noise map, 120 m from the M25 at junction 17: the model reads 5
 
 ## Buildings and terrain
 
-Terrain from Ordnance Survey's Terrain 50.
+Terrain from Ordnance Survey's [Terrain 50](https://osdatahub.os.uk/) (© Ordnance Survey, Open Government Licence 3.0); its gaps from Copernicus GLO-30.
 
 ## Homes and places
 

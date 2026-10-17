@@ -19,7 +19,7 @@ Train, S-tog, metro and light rail counts: [Rejseplanen timetable](https://www.r
 
 ## Industry
 
-Wind turbines are OpenStreetMap points. A turbine paired with an [Energistyrelsen register](https://ens.dk/) entry, one to one and nearest first within 500 m, takes its rated power and hub height from the register.
+Wind turbines are OpenStreetMap points. A turbine paired with an [Energistyrelsen register](https://ens.dk/) (Danish Energy Agency) entry, one to one and nearest first within 500 m, takes its rated power and hub height from the register.
 
 The register adds 76 turbines OpenStreetMap lacks and removes 92 it calls dismantled.
 
@@ -27,7 +27,7 @@ The register adds 76 turbines OpenStreetMap lacks and removes 92 it calls disman
 
 The building register BBR has floors and heights for every building; the bulk download requires an account and is not loaded. Heights: OpenStreetMap tags and the typical height for the footprint size.
 
-Terrain from Denmark's laser survey (DHM).
+Terrain from Denmark's laser survey ([DHM/Terræn](https://dataforsyningen.dk/data/930), Danish Agency for Climate Data; CC BY 4.0).
 
 ## Homes and places
 

@@ -23,7 +23,7 @@ Train and tram counts: national timetable of [opentransportdata.swiss](https://o
 
 ## Buildings and terrain
 
-Terrain from swissALTI3D.
+Terrain from [swissALTI3D](https://www.swisstopo.admin.ch/en/height-models) (© swisstopo; free use with source indication, swisstopo OGD).
 
 ## Homes and places
 
@@ -31,4 +31,4 @@ Homes mapped in OpenStreetMap: 7 heat pumps (the region's median) and 10 air con
 
 ## Checked against
 
-Zurich airport's monitors.
+Zurich airport's monitors ([validation](/about/validation)).

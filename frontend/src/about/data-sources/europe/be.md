@@ -22,11 +22,11 @@ Lines without a count take the class defaults. No Belgian timetable includes fre
 
 ## Industry
 
-Wind turbines: OpenStreetMap's standing turbines with RIVM's register's power and height. The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium.
+Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium.
 
 ## Buildings and terrain
 
-Terrain from Flanders' DHMV II and Wallonia's laser survey.
+Terrain from Flanders' [DHMV II](https://metadata.vlaanderen.be/srv/api/records/f52b1a13-86bc-4b64-8256-88cc0d1a8735) (Digitaal Vlaanderen; Modellicentie gratis hergebruik v1.0) and Wallonia's laser survey ([MNT](https://geoportail.wallonie.be), SPW; CC BY 4.0).
 
 ## Homes and places
 
