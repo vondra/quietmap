@@ -232,55 +232,59 @@ fn with_motorcycles(flows: [f64; 4], share: f64) -> [f64; 4] {
     ]
 }
 
-/// Local-class rows (residential, living street, service) whose count repeats the daily total of
-/// a main-class counted row of the same name in the square: copies a conflation put on a
-/// boulevard's side lanes and squares (Madrid's Castellana side lane carried the main
-/// carriageway's 35,989 vehicles a day, the station by it read 5 dB too loud). They take the
-/// traffic their buildings make, as uncounted rows do.
+/// The rows whose count is a main road's copy (`road_copies`): the counted rows, their ends and
+/// their roads' cross-sections, at the latitude of the first.
 fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet<usize>, String> {
-    let mut main: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
-    let mut locals = Vec::new();
+    let mut counted = Vec::new();
     let mut first = 0;
     for batch in &table.batches {
         let c = Columns { batch };
+        let i32s = |name| c.get(name).map(|a| a.as_primitive::<Int32Type>());
+        let f64s = |name| c.get(name).map(|a| a.as_primitive::<Float64Type>());
+        let (start_x, start_y, end_x, end_y) = (
+            i32s("start_gx")?,
+            i32s("start_gy")?,
+            i32s("end_gx")?,
+            i32s("end_gy")?,
+        );
         let class = c.get("road_class")?.as_primitive::<UInt8Type>();
         let estimated = c.get("traffic_estimated")?.as_primitive::<UInt8Type>();
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
-        let names = c.get("name")?.as_string::<i32>();
-        let aadt = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
-            .map(|name| c.get(name).map(|a| a.as_primitive::<Float64Type>()));
         let aadt = [
-            aadt[0].clone()?,
-            aadt[1].clone()?,
-            aadt[2].clone()?,
-            aadt[3].clone()?,
+            f64s("aadt_light")?,
+            f64s("aadt_medium")?,
+            f64s("aadt_heavy")?,
+            f64s("aadt_moto")?,
         ];
+        let cross_section = f64s("cross_section_aadt")?;
         for row in 0..batch.num_rows() {
-            let (source, name) = (source_id.value(row), names.value(row));
-            if source == PRIOR_SOURCE_ID || guessed(source, estimated.value(row)) || name.is_empty()
+            let source = source_id.value(row);
+            let vehicles: f64 = aadt.iter().map(|column| column.value(row)).sum();
+            if source == PRIOR_SOURCE_ID || guessed(source, estimated.value(row)) || vehicles <= 0.0
             {
                 continue;
             }
-            let total = aadt
-                .iter()
-                .map(|column| column.value(row))
-                .sum::<f64>()
-                .round() as i64;
-            match class.value(row) {
-                5..=7 if total > 0 => locals.push((first + row, name.to_string(), total)),
-                0..=4 | 10..=12 if total > 0 => {
-                    main.entry(name.to_string()).or_default().push(total)
-                }
-                _ => {}
-            }
+            counted.push(super::road_copies::CountedRow {
+                row: first + row,
+                class: class.value(row),
+                ends: [
+                    (start_x.value(row), start_y.value(row)),
+                    (end_x.value(row), end_y.value(row)),
+                ],
+                vehicles,
+                cross_section: if cross_section.value(row) > 0.0 {
+                    cross_section.value(row)
+                } else {
+                    vehicles
+                },
+            });
         }
         first += batch.num_rows();
     }
-    Ok(locals
-        .into_iter()
-        .filter(|(_, name, total)| main.get(name).is_some_and(|totals| totals.contains(total)))
-        .map(|(row, _, _)| row)
-        .collect())
+    let latitude = counted.first().map_or(0.0, |row| {
+        z30_corner_degrees(row.ends[0].0, row.ends[0].1).0
+    });
+    Ok(super::road_copies::copied_counts(&counted, latitude))
 }
 
 /// The square's counted rows that count motorcycles, by class group.

@@ -8,6 +8,14 @@ use std::collections::HashMap;
 
 /// The index's cell: 2^14 z30 cells, about 600 m of Web Mercator.
 const CELL_SHIFT: u32 = 14;
+/// Half the world's width in z30 cells: an outline wider than this crosses the antimeridian.
+const HALF_WORLD: i32 = 1 << 29;
+
+/// Whether an outline with these x bounds crosses the antimeridian: its vertices lie near both
+/// edges of the z30 grid, and read as they are it would span the world the long way round.
+pub fn across_antimeridian(low_x: i32, high_x: i32) -> bool {
+    high_x - low_x > HALF_WORLD
+}
 
 /// Outlines with ids: each of its parts an exterior ring and its holes.
 #[derive(Default)]
@@ -23,7 +31,9 @@ impl RingIndex {
         for &(x, y) in exteriors {
             (low, high) = ((low.0.min(x), low.1.min(y)), (high.0.max(x), high.1.max(y)));
         }
-        if low.0 > high.0 {
+        // An outline across the antimeridian is left out (a few islands' buildings by 180°): its
+        // points take no building, its buildings stay homes.
+        if low.0 > high.0 || across_antimeridian(low.0, high.0) {
             return;
         }
         let at = self.items.len() as u32;
@@ -88,6 +98,25 @@ mod tests {
 
     /// A square with a square hole, and a second outline overlapping it: a position in the hole is
     /// only the second's, one outside both is none's.
+    /// An outline across the antimeridian holds nothing, the long way round included.
+    #[test]
+    fn an_outline_across_the_antimeridian_holds_nothing() {
+        let world = 1 << 30;
+        let mut index = RingIndex::default();
+        index.add(
+            3,
+            vec![vec![vec![
+                (world - 100, 0),
+                (100, 0),
+                (100, 100),
+                (world - 100, 100),
+            ]]],
+        );
+        for position in [(50, 50), (world - 50, 50), (1 << 29, 50)] {
+            assert_eq!(index.containing(position), None);
+        }
+    }
+
     #[test]
     fn a_position_is_held_by_the_outline_around_it_and_not_by_a_hole() {
         let mut index = RingIndex::default();
