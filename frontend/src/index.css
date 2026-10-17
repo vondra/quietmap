@@ -220,6 +220,13 @@ html, body {
   .about-prose li { @apply my-1 pl-1; }
   .about-prose li::marker { @apply text-muted-foreground; }
   .about-prose strong { @apply font-semibold text-foreground; }
+  .about-prose .about-abbr { @apply relative cursor-help no-underline outline-none; }
+  .about-prose .about-abbr::after { content: "?"; @apply ml-px align-super text-[0.65em] font-semibold text-primary; }
+  .about-prose .about-abbr:hover::before, .about-prose .about-abbr:focus::before {
+    content: attr(data-meaning);
+    @apply absolute bottom-full left-0 z-20 mb-1 w-64 max-w-[80vw] rounded-md border border-border bg-popover p-2
+      text-xs font-normal leading-snug text-popover-foreground shadow-md;
+  }
   .about-prose table { @apply my-3 w-full text-sm; }
   .about-prose thead { @apply border-b border-border; }
   .about-prose th { @apply py-1 pr-3 text-left font-semibold text-foreground; }
