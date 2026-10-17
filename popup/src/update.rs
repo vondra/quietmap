@@ -90,8 +90,6 @@ pub struct Update<'u> {
     pub percentiles: Option<crate::percentiles::Percentiles>,
     /// How loud the click sounds, Nden (the final update's).
     pub loudness: Option<crate::loudness::Loudness>,
-    /// The Nden of everything the list leaves out, together and steady (the final update's).
-    pub rest_nden_sone: Option<f64>,
     /// Its share of the click's loudness (the final update's).
     pub rest_share: Option<f64>,
     /// What the aircraft layer is made of, Lden energies (final update): airliners, regional and
@@ -220,7 +218,6 @@ pub fn empty_answer(
         partial: false,
         percentiles: None,
         loudness: None,
-        rest_nden_sone: None,
         rest_share: None,
         aircraft_kinds: None,
         aircraft_events: None,

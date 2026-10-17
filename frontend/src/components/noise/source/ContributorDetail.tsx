@@ -1,9 +1,9 @@
 // The opened body of a source row, a block apart from the next: a contributor's class and the facts
-// of its layer, its sound path, its levels by period, then its segments, computed when opened; the
-// aircraft layer's makeup, its levels, the flights of a day by their peak level here and its loudest
-// flights.
+// of its layer, its sound path, its levels by period and how loud it sounds alone, then its
+// segments, computed when opened; the aircraft layer's makeup, its levels and loudness alone, the
+// flights of a day by their peak level here and its loudest flights.
 import type { AircraftEvents, AircraftKind, Contributor, ContributorPart, PeriodLevels, TopFlight } from '../../../types/noise'
-import { fmtCount, fmtDbValue, fmtPercent, wholePercents } from '../../../utils/formatters'
+import { fmtCount, fmtDbValue, fmtPercent, fmtSone, wholePercents } from '../../../utils/formatters'
 import { FadingText } from '../../ui/fading-text'
 import { HoverText } from '../../ui/info-tip'
 import { aircraftEventRows } from '../aircraft-events'
@@ -19,16 +19,23 @@ const DETAIL = `mb-2 ml-2 mr-5 space-y-2 ${DETAIL_TEXT}`
 const LEVELS_TOOLTIP = 'The level here by period (local time): day 07–19, evening 19–23, night 23–07.\n'
   + 'Lden counts the evening 5 dB and the night 10 dB louder.'
 
-/** The level by day, evening and night, and Lden. */
-function LevelsTable({ received }: { received: PeriodLevels }) {
+const ALONE_TOOLTIP = 'How loud this source would sound over the day if nothing else sounded\n'
+  + '(Nden). Sources do not add up in sone: the row shows its share of the place.'
+
+/** The level by day, evening and night, and Lden; how loud it sounds alone over the day (Nden),
+ *  once the final update tells. */
+function LevelsTable({ received, alone }: { received: PeriodLevels, alone?: number | null }) {
   return (
-    <DetailTable
-      head={['', 'Day', 'Evening', 'Night', 'Lden']}
-      rows={[[
-        <HoverText title={LEVELS_TOOLTIP}>dB</HoverText>,
-        ...[received.ld, received.le, received.ln, received.lden].map(fmtDbValue),
-      ]]}
-    />
+    <>
+      <DetailTable
+        head={['', 'Day', 'Evening', 'Night', 'Lden']}
+        rows={[[
+          <HoverText title={LEVELS_TOOLTIP}>dB</HoverText>,
+          ...[received.ld, received.le, received.ln, received.lden].map(fmtDbValue),
+        ]]}
+      />
+      {alone != null && <div><HoverText title={ALONE_TOOLTIP}>Alone</HoverText>: {fmtSone(alone)} sone</div>}
+    </>
   )
 }
 
@@ -62,7 +69,7 @@ export function ContributorDetail({ c, click }: { c: Contributor, click?: Segmen
       </div>
       {c.parts && c.parts.length > 1 && <PartsTable parts={c.parts} rowName={c.name} />}
       {c.path && <PathTable path={c.path} />}
-      <LevelsTable received={c.received} />
+      <LevelsTable received={c.received} alone={c.nden_sone} />
       {click && <SegmentsSection c={c} click={click} />}
     </div>
   )
@@ -119,8 +126,10 @@ function FlightsByPeakTable({ events }: { events: AircraftEvents }) {
   )
 }
 
-export function AircraftLayerDetail({ received, kinds, events, flights, onHighlightFlight }: {
+export function AircraftLayerDetail({ received, alone, kinds, events, flights, onHighlightFlight }: {
   received: PeriodLevels
+  /** The flights and ground operations alone, Nden (the final update's). */
+  alone?: number | null
   kinds?: Partial<Record<AircraftKind, number>>
   events?: AircraftEvents
   flights: TopFlight[]
@@ -135,7 +144,7 @@ export function AircraftLayerDetail({ received, kinds, events, flights, onHighli
           rows={shares.map(([label, share]) => [label, `${Math.round(100 * share)} %`])}
         />
       )}
-      <LevelsTable received={received} />
+      <LevelsTable received={received} alone={alone} />
       {events && <FlightsByPeakTable events={events} />}
       <TopFlightsTable flights={flights} onHighlightFlight={onHighlightFlight} />
     </div>

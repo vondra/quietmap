@@ -25,9 +25,6 @@ use tiles::sources::Layer;
 /// Contributors under this share of their period's energy count as steady (their fluctuation does
 /// not move a percentile of the sum).
 const FLUCTUATING_SHARE_MIN: f64 = 1e-4;
-/// The same for the list's last row, everything it leaves out: a coarser account of a row that
-/// names nothing ([`rest_lines`]).
-const REST_SHARE_MIN: f64 = 1e-2;
 /// Day, evening and night shares of a road's daily flow where its fields carry none (sources built
 /// before the shares by country): motorways, trunks and their links; other roads.
 const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
@@ -542,21 +539,6 @@ pub const HOLDS_MEAN_LAMBDA: f64 = 10.0;
 /// too rare to count.
 pub const HELD_EXCEEDED: f64 = 1e-3;
 pub const HELD_SHARE: f64 = 1e-2;
-
-/// The lines of what the list leaves out, summing to `total` per period, for its last row's Nden:
-/// those over [`REST_SHARE_MIN`] of it, each at its period's mean flow every hour (the hours'
-/// profile moved that Nden by 1.7 % at most at ten places and took it 3-4 times as long,
-/// 2026-10-09); and what is left, steady.
-pub fn rest_lines<'a>(
-    contributors: impl Iterator<Item = &'a crate::update::Contributor>,
-    total: [f64; PERIODS],
-    passes: &dyn Fn(&Group) -> Result<Passes, String>,
-) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
-    let groups = contributors.map(|contributor| contributor.group());
-    let (mut lines, steady) = lines(groups, total, REST_SHARE_MIN, passes)?;
-    at_mean_flow(&mut lines);
-    Ok((lines, steady))
-}
 
 /// Every line at its period's mean flow every hour.
 pub(crate) fn at_mean_flow(lines: &mut [Line]) {

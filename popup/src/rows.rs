@@ -11,7 +11,7 @@ use tiles::sources::Layer;
 
 /// One row of the visitor's list.
 pub struct Row {
-    /// Its parts, the loudest alone first: that one names the row.
+    /// Its parts, the largest share first ([`rank_by_share`]): that one names the row.
     pub parts: Vec<Contributor>,
     /// Its own Nden, its parts alone together (the final update's).
     pub nden_sone: Option<f64>,
@@ -93,10 +93,10 @@ fn object(contributor: &Contributor, display: &serde_json::Value) -> Object {
     Object::Group(contributor.group_key)
 }
 
-/// The rows of the `heard` contributors (`fields` reads a display), the loudest first: each part
-/// scored alone by its own Nden and how it is heard; a row of several parts by their lines and
-/// steady sound together on the curves of its loudest part's layer (`curves`).
-pub fn ranked_rows<'a>(
+/// The rows of the `heard` contributors (`fields` reads a display), unranked: each part scored
+/// alone by its own Nden and how it is heard; a row of several parts by their lines and steady
+/// sound together on the curves of its loudest part's layer (`curves`).
+pub fn heard_rows<'a>(
     heard_contributors: Vec<&'a Contributor>,
     fields: &dyn Fn(&crate::percentiles::Group) -> Result<serde_json::Value, String>,
     curves: &(dyn Fn(Layer) -> &'a [Curve; PERIODS] + Sync),
@@ -127,7 +127,7 @@ pub fn ranked_rows<'a>(
     for (part, line, object) in scored {
         objects.entry(object).or_default().push((part, line));
     }
-    let mut rows: Vec<Row> = objects
+    let rows: Vec<Row> = objects
         .into_values()
         .map(|mut parts| {
             let alone = |part: &Contributor| part.nden_sone.unwrap_or(0.0);
@@ -157,13 +157,33 @@ pub fn ranked_rows<'a>(
             }
         })
         .collect();
+    Ok(rows)
+}
+
+/// Gives the `rows` their parts' `shares` of the place's loudness, in the order of their parts, and
+/// ranks rows and parts by them: the share is the number a row shows and the list is cut by. A
+/// row's own Nden, alone, is no rank: a steady sound under louder ones keeps little of it in the
+/// mix (Prague-Dejvice, 2026-10-17: a road and the flights 1.2 sone alone each, 6 and 12 % of the
+/// place), and ranked by it the list folded a lane of 5 % under rows of 2 %.
+pub fn rank_by_share(rows: &mut [Row], shares: &[f64]) {
+    let share = |part: &Contributor| part.share.unwrap_or(0.0);
+    let mut shares = shares.iter();
+    for row in rows.iter_mut() {
+        for (part, &part_share) in row.parts.iter_mut().zip(&mut shares) {
+            part.share = Some(part_share);
+        }
+        row.parts.sort_by(|a, b| {
+            share(b)
+                .total_cmp(&share(a))
+                .then(a.group_key.cmp(&b.group_key))
+        });
+        row.share = Some(row.parts.iter().map(share).sum());
+    }
     rows.sort_by(|a, b| {
-        b.nden_sone
-            .unwrap_or(0.0)
-            .total_cmp(&a.nden_sone.unwrap_or(0.0))
+        (b.share.unwrap_or(0.0))
+            .total_cmp(&a.share.unwrap_or(0.0))
             .then(a.principal().group_key.cmp(&b.principal().group_key))
     });
-    Ok(rows)
 }
 
 #[cfg(test)]
@@ -200,6 +220,43 @@ mod tests {
             object(&guests, &json!({"name": "Bar", "object": "ff"})),
             Object::Group(255)
         );
+    }
+
+    /// Prague-Dejvice's rows: the road and the flights alike alone, the flights twice the share;
+    /// the lane, quieter alone, as large a share as the road. The list ranks by share, and so
+    /// does a row's parts.
+    #[test]
+    fn rows_rank_by_their_share_of_the_place_not_by_their_loudness_alone() {
+        let row = |parts: Vec<(u64, f64)>| Row {
+            parts: parts
+                .into_iter()
+                .map(|(key, alone)| {
+                    let mut part = contributor(key, Layer::Road, 40.0, 100.0);
+                    part.nden_sone = Some(alone);
+                    part
+                })
+                .collect(),
+            nden_sone: None,
+            share: None,
+        };
+        // As `heard_rows` leaves them: a row's parts the loudest alone first.
+        let mut rows = vec![
+            row(vec![(1, 1.22)]),
+            row(vec![(3, 0.90), (2, 0.50)]),
+            row(vec![(4, 1.16)]),
+        ];
+        rank_by_share(&mut rows, &[0.055, 0.002, 0.050, 0.117]);
+        let order: Vec<u64> = rows.iter().map(|row| row.principal().group_key).collect();
+        assert_eq!(order, [4, 1, 2]);
+        assert_eq!(
+            rows[2]
+                .parts
+                .iter()
+                .map(|part| part.group_key)
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert!((rows[2].share.unwrap() - 0.052).abs() < 1e-12);
     }
 
     #[test]

@@ -94,10 +94,10 @@ export interface Contributor {
   distance_m: number
   received_lden: Level
   received: PeriodLevels
-  /** It alone: its Nden in sone (the final update's), as the list ranks it. */
+  /** It alone: its Nden in sone (the final update's), shown when its row opens. */
   nden_sone?: number
   /** Its share of the place's loudness, a fraction (the final update's): every moment's loudness
-   *  shared by the sources' energy then, so the rows add up to the whole. */
+   *  shared by the sources' energy then, so the rows add up to the whole; the list ranks by it. */
   share?: number
   path?: SourcePath
   /** Its parts when its object has several sources, the loudest alone first. */
@@ -279,9 +279,8 @@ export interface PopupUpdate {
   /** With the final update only. */
   percentiles?: PopupPercentiles | null
   loudness?: PopupLoudness | null
-  /** Everything the list leaves out, together and steady: its Nden in sone (the final update's). */
-  rest_nden_sone?: number | null
-  /** Its share of the place's loudness, a fraction (the final update's). */
+  /** Everything the list leaves out, together: its share of the place's loudness, a fraction (the
+   *  final update's). */
   rest_share?: number | null
   /** An opened row's 24 loudest pieces, loudest first, and how all of it arrives (the final
    *  update, when asked with `source=`). */
