@@ -26,12 +26,20 @@ export function heardText(sourceType: string, heard: Contributor['heard'], metad
   return null
 }
 
+/** A road's daily traffic both ways, where dev4 paired its carriageways into a cross-section; it
+ *  writes 0 elsewhere (a one-way street, an unpaired carriageway), where the row's own traffic is
+ *  the road's (São Paulo's Praça da Sé read "<0.001 veh/h" over its 619 an hour, 2026-10-17). */
+export function wholeRoadPerDay(metadata: Contributor['metadata'] | undefined): number | undefined {
+  const daily = metadata?.cross_section_aadt
+  return typeof daily === 'number' && daily > 0 ? daily : undefined
+}
+
 /** A road's vehicles an hour by day, both directions: its cross-section's daily traffic, the day's
  *  share of it over the day's 12 hours (a carriageway's own passes are one direction's). */
 function roadPerHourByDay(metadata: Contributor['metadata'] | undefined): number | undefined {
-  const daily = metadata?.cross_section_aadt
+  const daily = wholeRoadPerDay(metadata)
   const shares = metadata?.period_shares
-  return typeof daily === 'number' && Array.isArray(shares) && typeof shares[0] === 'number'
+  return daily !== undefined && Array.isArray(shares) && typeof shares[0] === 'number'
     ? (daily * shares[0]) / PERIOD_HOURS.day
     : undefined
 }
