@@ -13,10 +13,18 @@ import { setDocumentTitle } from '../utils/page-title'
 /** Where a page lists the pages below it (the regions, a region's countries); a page without it lists none. */
 const SUBPAGES_MARKER = '<!-- SUBPAGES -->'
 
-/** An image named without a path is one of the About pages' own (public/about/images). */
+/** An image named without a path is one of the About pages' own (public/about/images). An
+ *  abbreviation (`<abbr title="…">`) shows a small question mark and its meaning on hover, focus or
+ *  tap, as phones show no title (owner 2026-10-17: "zkratky dávej otazníkem po najetí vysvětlivky"). */
 const COMPONENTS: Components = {
   img: ({ src, alt, ...props }) => (
     <img src={typeof src === 'string' && !/^(https?:)?\//.test(src) ? `/about/images/${src}` : src} alt={alt} {...props} />
+  ),
+  abbr: ({ title, children }) => (
+    <abbr className="about-abbr" data-meaning={title} aria-label={title ? `${String(children)}: ${title}` : undefined}
+      tabIndex={0}>
+      {children}
+    </abbr>
   ),
 }
 
