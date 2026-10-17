@@ -26,8 +26,8 @@ whole place: each period and layer, the weather, the façade the point is answer
 levels exceeded 5 to 90 % of the time.
 
 <p>
-<img src="click.jpg" alt="A click on náměstí Míru in Prague: the level and its sources, the loudest road opened with its data and sound path" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
-<img src="calculation.jpg" alt="The same click's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
+<img src="click.jpg" alt="The popup at Greenwich in London: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
+<img src="calculation.jpg" alt="The same point's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
 </p>
 
 <details>
@@ -102,8 +102,8 @@ and adds it all up.
 
 The popup reads the point's tile and its eight neighbours, computes and sends a first answer. Then
 it reads one more ring of tiles at a time until every ground source within 12 km and every flight
-within 16 km is covered, sending the whole answer again after each ring. At Baker Street in London
-it reads 218 MB in 115 reads, the flight tracks and the weather among them.
+within 16 km is covered, sending the whole answer again after each ring. At Greenwich in London it
+reads 219 MB in 114 reads, the flight tracks and the weather among them.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 268" role="img" aria-label="Seven by seven tiles around a point in London: the inner three by three give the first answer, five by five cover the ground sources within 12 km, seven by seven the flights within 16 km" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">

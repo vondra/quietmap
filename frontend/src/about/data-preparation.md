@@ -320,7 +320,7 @@ The datasets are credited on [Data sources](/about/data-sources).
 Everything the popup and the painter read is one tree of files. The world is cut into squares 49 km
 wide in London (zoom 9 of the web map's tiles), and each square keeps one file for each kind of
 data: the terrain, the buildings and walls, the sound sources and three of flights. The popup reads
-only the tiles around its point, each with one read. The world takes 1.08 TB in 377,082 files.
+only the tiles around its point, each with one read. The world takes 1.07 TB in 377,082 files.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 244" role="img" aria-label="A zoom-9 square of eight by eight tiles with tile 2046/1362 of central London marked, and the square's directory holding its six files, one a kind of data, beside the year's weather table and flight tracks" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -367,7 +367,7 @@ a smooth field's information is the residual of a planar prediction of its heigh
 | `terrain` | the ground's height every arc-second (31 m north to south), how much of it is sealed, its tree cover and how tall the trees stand | 202 GB, 7.0 million tiles in 117,367 files |
 | `terrain-fine` | where a 5 m national model exists, what the arc-second grid misses, every sixth of an arc-second | 6.2 GB, 15,289 tiles in 301 files |
 | `obstacles` | the outlines and heights of buildings and walls, listed by cells 48 m wide in London | 130 GB, 1.4 million tiles in 37,434 files |
-| `sources` | every ground source, as points and straight pieces | 170 GB, 2.2 million tiles in 70,810 files |
+| `sources` | every ground source, as points and straight pieces | 169 GB, 2.2 million tiles in 70,810 files |
 | `aircraft` | a year of flights, summed into boxes of airspace | 466 GB, 2.6 million tiles in 57,670 files |
 | `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 64 GB, 2.6 million tiles in 57,670 files |
 | `aircraft-events` | per cell 380 m wide in London, the flights of a day whose loudest moment reaches 50, 60 and 70 dB | 9.6 GB, 1.6 million tiles in 35,830 files |
@@ -418,7 +418,7 @@ altitude at its two ends.
 | Airports | a straight stretch of a runway or taxiway, at most 250 m | an airport's ground operations, in the aircraft row |
 
 Three tiles of central London, from Hammersmith to Bermondsey, hold 69,475 road pieces, half of
-them shorter than 18 m; 5,932 railway pieces; 2,514 industrial points, 155,008 points of the
+them shorter than 18 m; 5,932 railway pieces; 2,514 industrial points, 153,965 points of the
 buildings layer and 589 of ships on the Thames. Flights are not pieces: they are the boxes
 described under Aircraft.
 
