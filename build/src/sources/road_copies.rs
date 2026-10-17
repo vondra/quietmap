@@ -3,8 +3,9 @@
 //! the main road's traffic a second time (London's Station Approach carried Marylebone Road's 43,031
 //! vehicles a day beside the road's own 42,783; 792 such ways in 153 squares, Brno's city counts
 //! 437 of them, the EU city set 207, Amsterdam's traffic model 121, 2026-10-17,
-//! `evidence/2026-10-17/main-road-copies/`). Such a row takes its own model, as an uncounted row
-//! does.
+//! `evidence/2026-10-17/main-road-copies/`); or a road's side lane of its name anywhere in the
+//! square (Madrid's Castellana side lane carried the main carriageway's 35,989 vehicles a day, the
+//! station by it read 5 dB too loud). Such a row takes its own model, as an uncounted row does.
 
 use crate::rings::z30_cells;
 use std::collections::{HashMap, HashSet};
@@ -18,18 +19,20 @@ const COPY_TOLERANCE: f64 = 0.1;
 /// dev4's main classes, motorway to tertiary: a count of one of them is the road's own.
 const MAIN_CLASSES: std::ops::RangeInclusive<u8> = 0..=4;
 
-/// A row with a count of its own: its table row, dev4 class, ends (z30), daily vehicles and the
-/// cross-section of its road (both carriageways; its own count where dev4 gives none).
+/// A row with a count of its own: its table row, dev4 class, name, ends (z30), daily vehicles and
+/// the cross-section of its road (both carriageways; its own count where dev4 gives none).
 pub struct CountedRow {
     pub row: usize,
     pub class: u8,
+    pub name: String,
     pub ends: [(i32, i32); 2],
     pub vehicles: f64,
     pub cross_section: f64,
 }
 
 /// The rows below the main classes whose count is within `COPY_TOLERANCE` of the count or the
-/// cross-section of a main row within `COPY_REACH_M`, at `latitude_deg`.
+/// cross-section of a main row within `COPY_REACH_M`, at `latitude_deg`, or is the very count of a
+/// main row of its name.
 pub fn copied_counts(rows: &[CountedRow], latitude_deg: f64) -> HashSet<usize> {
     let reach = f64::from(z30_cells(COPY_REACH_M, latitude_deg));
     // The main rows by the cells their reach covers, cells as wide as the reach.
@@ -46,23 +49,33 @@ pub fn copied_counts(rows: &[CountedRow], latitude_deg: f64) -> HashSet<usize> {
         (cell(x0)..=cell(x1)).flat_map(move |x| (cell(y0)..=cell(y1)).map(move |y| (x, y)))
     };
     let mut main: HashMap<(i64, i64), Vec<&CountedRow>> = HashMap::new();
+    let mut named: HashMap<&str, HashSet<i64>> = HashMap::new();
     for row in rows.iter().filter(|row| MAIN_CLASSES.contains(&row.class)) {
         for at in cells_of(row.ends) {
             main.entry(at).or_default().push(row);
+        }
+        if !row.name.is_empty() {
+            named
+                .entry(&row.name)
+                .or_default()
+                .insert(row.vehicles.round() as i64);
         }
     }
     let repeats = |vehicles: f64, of: f64| of > 0.0 && (vehicles - of).abs() <= COPY_TOLERANCE * of;
     rows.iter()
         .filter(|row| !MAIN_CLASSES.contains(&row.class))
         .filter(|row| {
-            cells_of(row.ends)
-                .filter_map(|at| main.get(&at))
-                .flatten()
-                .any(|road| {
-                    (repeats(row.vehicles, road.cross_section)
-                        || repeats(row.vehicles, road.vehicles))
-                        && segments_apart(row.ends, road.ends) <= reach
-                })
+            named
+                .get(row.name.as_str())
+                .is_some_and(|counts| counts.contains(&(row.vehicles.round() as i64)))
+                || cells_of(row.ends)
+                    .filter_map(|at| main.get(&at))
+                    .flatten()
+                    .any(|road| {
+                        (repeats(row.vehicles, road.cross_section)
+                            || repeats(row.vehicles, road.vehicles))
+                            && segments_apart(row.ends, road.ends) <= reach
+                    })
         })
         .map(|row| row.row)
         .collect()
@@ -117,6 +130,7 @@ mod tests {
         let row = |row, class, ends: [(f64, f64); 2], vehicles, cross_section| CountedRow {
             row,
             class,
+            name: String::new(),
             ends: ends.map(|(x, y)| at(x, y)),
             vehicles,
             cross_section,
@@ -132,5 +146,28 @@ mod tests {
         let mut copies: Vec<usize> = copied_counts(&rows, 51.5).into_iter().collect();
         copies.sort_unstable();
         assert_eq!(copies, [2, 3]);
+    }
+
+    /// Madrid's Castellana: a side lane of the road's name 300 m from the counted carriageway
+    /// with its very count is a copy; one of another count, or of another name, is not.
+    #[test]
+    fn a_side_lane_with_its_roads_name_and_count_is_a_copy_wherever_it_lies() {
+        let m = 1.0 / (crate::dev4::Z30_QUANTUM_M * 40.4f64.to_radians().cos());
+        let at = |x_m: f64, y_m: f64| ((x_m * m) as i32, (y_m * m) as i32);
+        let row = |row, class, name: &str, y_m, vehicles| CountedRow {
+            row,
+            class,
+            name: name.into(),
+            ends: [at(0.0, y_m), at(200.0, y_m)],
+            vehicles,
+            cross_section: vehicles,
+        };
+        let rows = [
+            row(0, 1, "Paseo de la Castellana", 0.0, 35_989.0),
+            row(1, 5, "Paseo de la Castellana", 300.0, 35_989.0),
+            row(2, 5, "Paseo de la Castellana", 400.0, 12_000.0),
+            row(3, 5, "Calle de Serrano", 500.0, 35_989.0),
+        ];
+        assert_eq!(copied_counts(&rows, 40.4), HashSet::from([1]));
     }
 }
