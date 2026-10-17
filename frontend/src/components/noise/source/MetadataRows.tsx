@@ -7,6 +7,7 @@
 import type { ReactNode } from 'react'
 import type { Contributor, ContributorMetadata } from '../../../types/noise'
 import { fmt, fmtCompact, fmtCount, fmtInt, txtTable, type TableRow } from '../../../utils/formatters'
+import { wholeRoadPerDay } from '../heard'
 import { HoverText } from '../../ui/info-tip'
 import { subtypeLabel } from '../labels'
 import { fieldText, lineRow } from '../shared'
@@ -62,9 +63,9 @@ function RoadRows({ m }: { m: ContributorMetadata }) {
   const moto = num(m, 'aadt_moto') ?? 0
   const estimated = { traffic_estimated: num(m, 'traffic_estimated') ?? 0 }
   const total = light + medium + heavy + moto
-  const crossSection = num(m, 'cross_section_aadt') ?? 0
+  const crossSection = wholeRoadPerDay(m)
   // The headline is the whole road; the classes below are this carriageway's.
-  const wholeRoad = crossSection > 0
+  const wholeRoad = crossSection !== undefined
   const dataset = datasetLine(num(m, 'source_id'))
   const trafficText = txtTable([
     ...(wholeRoad ? [['Whole road, both ways', `${fmtInt(crossSection)}/day`] as [string, string]] : []),

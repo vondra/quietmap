@@ -22,6 +22,9 @@ test('a road\'s figure is both directions: its cross-section\'s day traffic', ()
   // K Letišti at Ruzyně: each carriageway passes 214 an hour by day, the road 6,421 a day, 79.9 % by day.
   assert.equal(heardText('road', heard(213.8, 83.5, 38.5), { cross_section_aadt: 6421, period_shares: [0.799, 0.116, 0.085] }), '428 veh/h')
   assert.equal(heardText('road', undefined, { cross_section_aadt: 6421, period_shares: [0.799, 0.116, 0.085] }), '428 veh/h')
+  // São Paulo's Praça da Sé, a one-way street dev4 paired with nothing (cross-section 0): its own
+  // 619 an hour, not "<0.001 veh/h".
+  assert.equal(heardText('road', heard(619.26, 477.71, 159.24, true), { cross_section_aadt: 0, period_shares: [0.7, 0.18, 0.12] }), '619 veh/h')
 })
 
 test('trains read by the day; a steady source says nothing', () => {
