@@ -174,7 +174,7 @@ export function SegmentsSection({ c, click }: { c: Contributor, click: SegmentsC
                   <SegmentRow
                     piece={piece}
                     color={colors[index]}
-                    part={several ? partLabel(piece.metadata, c.name) : null}
+                    part={several ? partLabel(c.source_type, piece.metadata, c.name) : null}
                     open={opened === index}
                     onToggle={() => {
                       setOpened(opened === index ? null : index)

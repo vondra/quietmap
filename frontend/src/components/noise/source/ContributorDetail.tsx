@@ -43,7 +43,7 @@ function PartsTable({ parts, rowName }: { parts: ContributorPart[], rowName: str
     <DetailTable
       head={[<HoverText title={PARTS_TOOLTIP}>Breakdown</HoverText>, 'dB Lden', 'Share']}
       rows={parts.map((part, k) => [
-        partLabel(part.metadata, rowName),
+        partLabel(part.source_type, part.metadata, rowName),
         fmtDbValue(part.received.lden),
         percents[k] == null ? '' : fmtPercent(percents[k]),
       ])}
