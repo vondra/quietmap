@@ -207,13 +207,14 @@ html, body {
 
 /* The About pages' prose (components/AboutPage.tsx), as dev4 set it: a classic descending heading
    hierarchy, a compact rhythm where the headings carry the section breaks, grey body text with dark
-   emphasis and links, and a borderless table with its header rule (owner 2026-07-10, -16, -17). */
+   emphasis, links underlined (bold alone did not read as a link, owner 2026-10-17), and a borderless
+   table with its header rule (owner 2026-07-10, -16, -17). */
 @layer components {
   .about-prose { @apply text-sm leading-relaxed text-muted-foreground; }
   .about-prose h2 { @apply mt-10 mb-2 text-2xl font-bold text-foreground; }
   .about-prose h3 { @apply mt-6 mb-2 text-lg font-semibold text-foreground; }
   .about-prose p { @apply my-3; }
-  .about-prose a { @apply font-medium text-primary no-underline hover:underline; }
+  .about-prose a { @apply font-medium text-primary underline underline-offset-2 hover:decoration-2; }
   .about-prose ul { @apply my-3 list-disc pl-6; }
   .about-prose ol { @apply my-3 list-decimal pl-6; }
   .about-prose li { @apply my-1 pl-1; }
