@@ -35,9 +35,10 @@ junctions and the place's yearly air temperature.
   buildings make, OpenStreetMap's and Overture's, routed along the street network to the nearest
   main road.
 - **A count beside its road.** A count that a dataset put on a service road, side lane, street or
-  ramp beside the counted road, within 10 % of that road's own and within 30 m of it, belongs to
-  the road: the way takes its own model. At London's Baker Street the service road beside
-  Marylebone Road carried the road's 43,031 vehicles a day a second time.
+  ramp beside the counted road, within 10 % of that road's own and within 30 m of it, or on a side
+  lane of the road's name with its very count, belongs to the road: the way takes its own model.
+  At London's Baker Street the service road beside Marylebone Road carried the road's 43,031
+  vehicles a day a second time.
 - **Vehicle mix.** A count's own mix where it gives one; otherwise a main road takes the counted
   median of its class, a local street 1 % medium and 2 % heavy vehicles, a US road its state's mix
   ([<abbr title="the US Federal Highway Administration">FHWA</abbr>](https://www.fhwa.dot.gov/policyinformation/statistics.cfm),
