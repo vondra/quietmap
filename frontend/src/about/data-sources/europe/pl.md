@@ -31,7 +31,7 @@ Trams without a feed (Gdańsk, Poznań, Wrocław, Łódź and others) default to
 
 ## Buildings and terrain
 
-Terrain from GUGiK's terrain model (NMT, 10 m); noise barriers from OpenStreetMap and Poland's topographic database (BDOT10k): 10,876 screens.
+Terrain from GUGiK's terrain model ([NMT](https://www.geoportal.gov.pl/), 10 m; free access under the Polish geodetic law); noise barriers from OpenStreetMap and Poland's topographic database [BDOT10k](https://www.geoportal.gov.pl/pl/dane/baza-danych-obiektow-topograficznych-bdot10k/) (GUGiK; free of charge, any use): 10,876 screens.
 
 ## Homes and places
 
@@ -39,4 +39,4 @@ Homes mapped in OpenStreetMap: 4 heat pumps and 2 air conditioners per 100 homes
 
 ## Checked against
 
-GIOŚ's road monitoring.
+GIOŚ's road monitoring ([validation](/about/validation)).

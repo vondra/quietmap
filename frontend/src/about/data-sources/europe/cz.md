@@ -36,13 +36,13 @@ yet.
 
 Prague: measured height for every building, from the
 [IPR Praha relative building heights](https://opendata.geoportalpraha.cz/maps/ad9aca20e9c042d2b52eb31ff18961b6)
-(one-metre aerial survey).
+(one-metre aerial survey; CC BY).
 
 Elsewhere: floor count and building use from the
-[RÚIAN register](https://www.cuzk.cz/Uvod/Produkty-a-sluzby/RUIAN/) where a register
+[RÚIAN register](https://www.cuzk.cz/Uvod/Produkty-a-sluzby/RUIAN/) (© ČÚZK) where a register
 point lies within 30 m of the building; otherwise the typical height for the footprint size.
 
-Terrain from ČÚZK's laser survey DMR 5G.
+Terrain from ČÚZK's laser survey [DMR 5G](https://ags.cuzk.gov.cz/opendata/) (© ČÚZK, CC BY 4.0).
 
 ## Homes and places
 
@@ -50,4 +50,4 @@ Homes mapped in OpenStreetMap: 6 heat pumps and 16 air conditioners per 100 home
 
 ## Checked against
 
-Prague airport's monitors.
+Prague airport's monitors ([validation](/about/validation)).
