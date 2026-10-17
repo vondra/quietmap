@@ -24,7 +24,7 @@ Freight comes from the class defaults, scaled to the country's goods train-kilom
 
 ## Checked against
 
-Official English noise map, 120 m from the M25: the model was about 13 dB too loud because a cutting and a noise wall were missing from the data. Details under [how we check it](/about/validation).
+Official English noise map, 120 m from the M25 at junction 17: the model reads 5.8 dB above it (63.1 against 57.2 dB Lden). The cutting and the noise wall, missing from the data when it read about 13 dB too loud, now screen the motorway by 10 to 15 dB. Details under [how we check it](/about/validation).
 
 ## Buildings and terrain
 

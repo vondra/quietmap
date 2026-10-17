@@ -49,7 +49,7 @@ Source: recorded flights. A year of [adsb.lol](https://adsb.lol/), September 202
 August 2026, with the flights only [ADSBExchange](https://www.adsbexchange.com/) received
 added from 11 sample days. Both rely on volunteer ground receivers, which are sparse in much
 of Africa; flights nobody records are missing, so aircraft noise is understated there —
-near Cairo, Casablanca, Accra and Lagos airports by 5 to 20 dB.
+near Cairo, Casablanca, Accra and Lagos airports by 5 to 23 dB, at Lagos the most.
 
 ## Ships
 
