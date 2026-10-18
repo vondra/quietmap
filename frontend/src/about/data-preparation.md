@@ -297,7 +297,8 @@ deliveries, building sites, garden machinery, music and festivals.
   and nights three quarters of the seats are taken (ÖNORM's design value), on weekdays fewer by
   Melbourne's and Paris's counts; the daytime 30 % is an assumption. The guests are heard while
   they are there, the seats in the terrace season and the opening hours, the door crowd while the
-  place is open, not as a murmur all year at their mean.
+  place is open (its hours all year, a terrace beside it at its mean over the year), not as a
+  murmur all year at their mean.
 - **What screens.** A wall without a height stands 4 m. Open car parks, carports, open roofs and
   underground footprints do not screen.
 
