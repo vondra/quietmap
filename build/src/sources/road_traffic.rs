@@ -201,7 +201,7 @@ pub fn thai_rural_road_ref(reference: &str) -> bool {
 }
 
 /// Counted tertiary roads are the busier ones wherever counting selects them (Czechia's census
-/// counts 21 % of its III-class roads by length around Bosen, Germany's and Poland's 14 and 20 %
+/// counts 21 % of its III-class roads by length in a sampled square, Germany's and Poland's 14 and 20 %
 /// of their tertiary roads in the sampled squares, reading 5 dB over the pooled model), and the
 /// pooled model is fitted on them. Where whole networks or random samples are counted, tertiary
 /// roads carry less at the same trip ends, most where buildings are few (dB from the pooled
@@ -358,8 +358,8 @@ impl BuildingTraffic {
         match (class, flow, model) {
             (c, Some(flow), _) if TREE_CLASSES.contains(&c) => Some(f64::from(flow)),
             // In a town an unclassified street also collects what passes through; outside one it
-            // is a village's lane (the owner: the lane by the hotel in Bosen carries its 33 cars a
-            // day, where the fit on British and French minor roads put 301).
+            // is a village's lane (one by a village hotel carries its 33 cars a day, where the fit
+            // on British and French minor roads put 301).
             (UNCLASSIFIED, flow, Some(model)) => {
                 let routed = flow.map_or(0.0, f64::from);
                 if built_up == URBAN {

@@ -2,14 +2,16 @@
 //! above the ground, in the Building layer as dev4 shows them: the area law over the polygon (a
 //! node takes its class's reference footprint; a line is no area and emits from its centroid),
 //! ranges by shots a year unless roofed. Motorsport (PLAN-z13 DROP) and unknown classes are silent.
-//! Street parking serves the buildings around it: no more cars park and leave there in a day than
-//! the trip ends of those buildings made by cars that park on the street (houses' cars mostly
-//! park on their plots, flats' cars on the street), shared by all the street parking spaces
-//! around; the car-park rate of every space taken is the most it carries. Driving to and from a
-//! space is the street's road traffic, not the parking's. A car park is heard in its movements and
-//! a range in its shots, events in their share of each period as bells are: heard steady, 69
-//! movements a day on Na Spitalce's street strip read 1.96 sone, more than the flights over it
-//! (1.16) and four times the 65 cars a day passing on the street (0.50, 2026-10-18).
+//! Parking serves the buildings around it: no more cars park and leave there in a day than the
+//! trip ends of those buildings, shared by all the spaces around, on a street strip only the trip
+//! ends made by cars that park on the street (houses' cars mostly park on their plots, flats' cars
+//! on the street); the car-park rate of every space taken is the most a space carries (at that
+//! rate a mountain hotel's 127-space lot took 865 movements a day, where the roads to it carry
+//! 303 and 353 vehicles). Driving to and from a space is the road traffic, not the parking's. A
+//! car park is heard in its movements, a range in its shots and every other area in use, in their
+//! share of each period as bells are: heard steady, 69 movements a day on a Prague villa street's
+//! strip read 1.96 sone, more than the flights over it (1.16) and four times the 65 cars a day
+//! passing on the street (0.50, 2026-10-18).
 
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
@@ -132,16 +134,19 @@ fn parking_spaces(row: &LeisureRow, area_m2: f64) -> f64 {
         .map_or(0.0, |per_space| area_m2 / per_space)
 }
 
-/// The street parking of a square against the trip ends of its buildings (`grid`) made by cars
-/// that park on the street (`street_shares`).
-struct StreetParking {
-    grid: Vec<f32>,
-    street_shares: Vec<f32>,
-    /// Street parking spaces per cell.
+/// The parking spaces of one kind in a square (street strips or lots) against the trip ends of
+/// its buildings that may park in them, both per grid cell.
+struct ParkingBudget {
+    trip_ends: Vec<f64>,
     spaces: Vec<f64>,
 }
 
-impl StreetParking {
+impl ParkingBudget {
+    fn new(trip_ends: Vec<f64>) -> Self {
+        let spaces = vec![0.0; trip_ends.len()];
+        ParkingBudget { trip_ends, spaces }
+    }
+
     fn around(values: impl Fn(usize) -> f64, (row, column): (usize, usize)) -> f64 {
         let reach = STREET_PARKING_REACH_CELLS;
         let mut sum = 0.0;
@@ -154,12 +159,12 @@ impl StreetParking {
     }
 
     /// The share of the car-park rate at `cell`: each nearby origin divides its trips among
-    /// all street spaces within its reach, and a space carries at most the car-park rate.
+    /// all the spaces within its reach, and a space carries at most the car-park rate.
     fn share(&self, cell: (usize, usize)) -> f64 {
         let movements_per_space = Self::around(
             |k| {
                 // Each origin cell divides its budget among all spaces it can serve.
-                let trips = f64::from(self.grid[k]) * f64::from(self.street_shares[k]);
+                let trips = self.trip_ends[k];
                 if trips == 0.0 {
                     return 0.0;
                 }
@@ -172,7 +177,7 @@ impl StreetParking {
     }
 }
 
-/// Converts the leisure rows of one dev4 square, street parking bound by the trip ends of the
+/// Converts the leisure rows of one dev4 square, its car parks bound by the trip ends of the
 /// square's buildings under `traffic` when given; returns how many rows emit.
 pub fn convert(
     dev4: &Dev4,
@@ -191,20 +196,31 @@ pub fn convert(
     for batch in &table.batches {
         rows.extend(read_batch(batch).map_err(context)?);
     }
-    let street_parking = match traffic {
+    // A street strip takes the trip ends made by cars that park on the street, a lot any of them.
+    let budgets = match traffic {
         Some(dir) => crate::traffic::read(dir, square)?.map(|traffic| -> Result<_, String> {
-            let mut spaces = vec![0.0; GRID_SIDE * GRID_SIDE];
-            for row in rows.iter().filter(|row| row.class == CAR_PARK_STREET) {
+            let street_shares = street_parking_shares(dev4, square)?;
+            let ends = |k: usize| f64::from(traffic.grid[k]);
+            let cells = 0..traffic.grid.len();
+            let mut street = ParkingBudget::new(
+                cells
+                    .clone()
+                    .map(|k| ends(k) * f64::from(street_shares[k]))
+                    .collect(),
+            );
+            let mut lots = ParkingBudget::new(cells.map(ends).collect());
+            for row in &rows {
+                let budget = match row.class {
+                    CAR_PARK_STREET => &mut street,
+                    CAR_PARK => &mut lots,
+                    _ => continue,
+                };
                 if let Some((_, area_m2)) = row_emission(row) {
                     let (r, c) = grid_cell(square, row.centroid);
-                    spaces[r * GRID_SIDE + c] += parking_spaces(row, area_m2);
+                    budget.spaces[r * GRID_SIDE + c] += parking_spaces(row, area_m2);
                 }
             }
-            Ok(StreetParking {
-                grid: traffic.grid,
-                street_shares: street_parking_shares(dev4, square)?,
-                spaces,
-            })
+            Ok((street, lots))
         }),
         None => None,
     }
@@ -225,8 +241,13 @@ pub fn convert(
             }
             let spaces = parking_spaces(&row, area_m2);
             let mut movements = spaces * PARKING_MOVEMENTS_PER_SPACE_DAY;
-            if let (CAR_PARK_STREET, Some(parking)) = (row.class, street_parking.as_ref()) {
-                let share = parking.share(grid_cell(square, row.centroid));
+            let budget = budgets.as_ref().and_then(|(street, lots)| match row.class {
+                CAR_PARK_STREET => Some(street),
+                CAR_PARK => Some(lots),
+                _ => None,
+            });
+            if let Some(budget) = budget {
+                let share = budget.share(grid_cell(square, row.centroid));
                 if share <= 0.0 {
                     continue;
                 }
@@ -244,7 +265,7 @@ pub fn convert(
                 cell_m: CELL_M,
             };
             let decibels = (sound.day_dba * 10.0).round() / 10.0;
-            let events = events_of(row.class, &sound, movements);
+            let heard = heard_of(row.class, &sound, movements);
             let attribute = Attribute {
                 layer: Layer::Building,
                 height_m: SOURCE_HEIGHT_M,
@@ -254,7 +275,7 @@ pub fn convert(
                 footprint_id: 0,
                 group_key: group_key(&["leisure", &row.osm_kind, &row.osm_id.to_string()]),
                 emission: sound.band_levels_db(),
-                display: fields(match events {
+                display: fields(match heard {
                     Some((per_day, duty)) => json!([
                         row.name,
                         class_label(row.class),
@@ -263,7 +284,7 @@ pub fn convert(
                         area_m2.round(),
                         "",
                         decibels,
-                        (spaces > 0.0).then(|| movements.round()),
+                        (spaces > 0.0).then_some(movements),
                         per_day,
                         duty
                     ]),
@@ -285,36 +306,53 @@ pub fn convert(
     Ok(emitting)
 }
 
-/// How a row is heard in time: a range in its shots, a second each at its single-shot energy level
-/// by day (the level's reference second: a real shot is shorter, so a range reads somewhat loud);
-/// a car park in its `movements` at a movement's power; `None` for the areas heard steady over
-/// their hours.
-fn events_of(class: u8, sound: &SoundPower, movements: f64) -> Option<([f64; 3], [f64; 3])> {
+/// How a row is heard in time: its events a day by period where it has events, and the share of
+/// each period it sounds. A range in its shots, a second each at its single-shot energy level by
+/// day (the level's reference second: a real shot is shorter, so a range reads somewhat loud); a
+/// car park in its `movements` at a movement's power; any other area in use at its anchor.
+fn heard_of(class: u8, sound: &SoundPower, movements: f64) -> Option<(Option<[f64; 3]>, [f64; 3])> {
+    let events = |per_day: f64, while_sounding_dba: f64| {
+        let (events, duty) = heard_in_events(sound, per_day, while_sounding_dba);
+        Some((Some(events), duty))
+    };
     if class == SHOOTING {
         let per_day = SHOTS_PER_YEAR / 365.0;
-        let shot_dba = sound.day_dba + 10.0 * (PERIOD_HOURS[0] * 3_600.0 / per_day).log10();
-        return Some(heard_in_events(sound, per_day, shot_dba));
+        return events(
+            per_day,
+            sound.day_dba + 10.0 * (PERIOD_HOURS[0] * 3_600.0 / per_day).log10(),
+        );
     }
-    (movements > 0.0).then(|| heard_in_events(sound, movements, PARKING_MOVEMENT_DBA))
+    if movements > 0.0 {
+        return events(movements, PARKING_MOVEMENT_DBA);
+    }
+    let in_use_db = leisure_profile(class)?.in_use_db;
+    (in_use_db > 0.0).then(|| (None, displayed(sounding(sound, sound.day_dba + in_use_db))))
+}
+
+/// The share of each period a source sounds at `while_sounding_dba`: its mean over that power.
+fn sounding(sound: &SoundPower, while_sounding_dba: f64) -> [f64; 3] {
+    let offsets = [0.0, sound.evening_offset_db, sound.night_offset_db];
+    std::array::from_fn(|p| 10f64.powf((sound.day_dba + offsets[p] - while_sounding_dba) / 10.0))
+}
+
+/// Shares rounded up to the display's five decimals, so a period with energy never falls silent.
+fn displayed(shares: [f64; 3]) -> [f64; 3] {
+    shares.map(|share| (share.min(1.0) * 1e5).ceil() / 1e5)
 }
 
 /// A source of `per_day` events, each sounding at `while_sounding_dba`: its events by period as the
-/// seconds they sound fall, and the share of each period they sound, its mean over that power
-/// (rounded up to the display's five decimals, so a period with energy never falls silent; under
-/// 0.1 events a day that stretches them).
+/// seconds they sound fall, and the share of each period they sound (rounded up, which under 0.1
+/// events a day stretches them).
 fn heard_in_events(
     sound: &SoundPower,
     per_day: f64,
     while_sounding_dba: f64,
 ) -> ([f64; 3], [f64; 3]) {
-    let offsets = [0.0, sound.evening_offset_db, sound.night_offset_db];
-    let on: [f64; 3] = std::array::from_fn(|p| {
-        10f64.powf((sound.day_dba + offsets[p] - while_sounding_dba) / 10.0)
-    });
+    let on = sounding(sound, while_sounding_dba);
     let hours: f64 = (0..3).map(|p| on[p] * PERIOD_HOURS[p]).sum();
     (
         std::array::from_fn(|p| per_day * on[p] * PERIOD_HOURS[p] / hours),
-        std::array::from_fn(|p| (on[p].min(1.0) * 1e5).ceil() / 1e5),
+        displayed(on),
     )
 }
 
@@ -400,25 +438,55 @@ mod tests {
         assert!((range.day_dba - 110.0).abs() < 0.05 && area_m2 == 10_000.0);
     }
 
-    /// Na Spitalce's street strip (69.1 dB(A) by day, 69 movements a day) is heard in its
+    /// A Prague villa street's strip (69.1 dB(A) by day, 69 movements a day) is heard in its
     /// movements, 4 s each at a movement's power in every period; a rifle range in its 55 shots a
-    /// day, a second each by day; a pitch steady over its hours.
+    /// day, a second each by day; a grass pitch in use, 4 h of the week's 84 by day for 40 weeks,
+    /// and a court an eighth of the day, their uses uncounted.
     #[test]
-    fn parking_movements_and_shots_are_heard_as_events() {
+    fn parking_movements_shots_and_play_are_heard_as_events() {
         let mut strip = leisure_sound_power(CAR_PARK_STREET, 411.0).unwrap();
         strip.day_dba = 69.1;
-        let (movements, duty) = events_of(CAR_PARK_STREET, &strip, 69.0).unwrap();
+        let (movements, duty) = heard_of(CAR_PARK_STREET, &strip, 69.0).unwrap();
+        let movements = movements.unwrap();
         assert!((movements.iter().sum::<f64>() - 69.0).abs() < 0.02);
         for period in 0..3 {
             let seconds = duty[period] * PERIOD_HOURS[period] * 3_600.0 / movements[period];
             assert!((seconds - 4.0).abs() < 0.1, "period {period}: {seconds} s");
         }
         let (range, _) = row_emission(&node(SHOOTING)).unwrap();
-        let (shots, duty) = events_of(SHOOTING, &range, 0.0).unwrap();
+        let (shots, duty) = heard_of(SHOOTING, &range, 0.0).unwrap();
+        let shots = shots.unwrap();
         assert!((shots[0] - 20_000.0 / 365.0).abs() < 0.01 && shots[1] + shots[2] < 0.001);
         assert!((duty[0] * PERIOD_HOURS[0] * 3_600.0 / shots[0] - 1.0).abs() < 0.01);
         let (pitch, _) = row_emission(&node(PITCH)).unwrap();
-        assert_eq!(events_of(PITCH, &pitch, 0.0), None);
+        let (uses, duty) = heard_of(PITCH, &pitch, 0.0).unwrap();
+        let played = 4.0 * 40.0 / (84.0 * 52.0);
+        assert!(
+            uses.is_none() && (duty[0] - played).abs() < 0.001,
+            "{duty:?}"
+        );
+        assert!(duty[2] < 0.001);
+        let (court, _) = row_emission(&node(TENNIS)).unwrap();
+        let (_, duty) = heard_of(TENNIS, &court, 0.0).unwrap();
+        assert!((duty[0] - 0.126).abs() < 0.001, "{duty:?}");
+    }
+
+    /// A lot carries no more movements than the trip ends around it: 100 a day shared by 50
+    /// spaces are 2 a space, 0.29 of the car-park rate; a lot nobody's trips end near is silent.
+    #[test]
+    fn a_lot_carries_the_trip_ends_around_it() {
+        let cell = |row: usize, column: usize| row * GRID_SIDE + column;
+        let mut trip_ends = vec![0.0; GRID_SIDE * GRID_SIDE];
+        trip_ends[cell(10, 10)] = 100.0;
+        let mut lots = ParkingBudget::new(trip_ends);
+        lots.spaces[cell(10, 11)] = 50.0;
+        lots.spaces[cell(40, 40)] = 50.0;
+        let share = lots.share((10, 11));
+        assert!(
+            (share - 2.0 / PARKING_MOVEMENTS_PER_SPACE_DAY).abs() < 1e-9,
+            "{share}"
+        );
+        assert_eq!(lots.share((40, 40)), 0.0);
     }
 
     /// A mapped terrace 10 m from a cafe is the cafe's (its guests are the people converter's); one

@@ -271,11 +271,14 @@ deliveries, building sites, garden machinery, music and festivals.
 - **Shops, schools, hotels and other buildings** emit by type, area and assumed hours; the data
   often cannot tell a warehouse from a workshop.
 - **Sports pitches** radiate [Sport England](https://www.sportengland.org)'s typical in-use level
-  (58 dB LAeq,1h at 10 m) for their hours of play; outdoor shooting ranges fire 20,000 shots a year
-  by day.
+  (58 dB LAeq,1h at 10 m) for their hours of play, a grass pitch 4 hours a week by day for 40
+  weeks; courts, playgrounds, pools and terraces their active level for about an eighth of the day,
+  stadiums on match days. Each is heard while in use, not as a steady hum at its mean. Outdoor
+  shooting ranges fire 20,000 shots a year by day.
 - **Car parks** follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
   (LfU 2007): 63 dB(A) for one movement an hour, 0.4 movements a space an hour from 06 to 22 h and
-  0.05 at night; street parking carries only the cars of the buildings around it. A movement
+  0.05 at night at most; a car park carries no more cars than the trip ends of the buildings
+  around it, street parking only those of the cars that park on the street. A movement
   sounds as 4 seconds at the peak of a car pulling away (the study's 67 dB(A) at 7.5 m; SEL 71 dB
   against LAmax 65 dB at 10 m in [Hepworth Acoustics](https://www.hepworth-acoustics.co.uk)'s
   measured car parks); a lot's search for a space makes it longer. A shooting range's shots sound

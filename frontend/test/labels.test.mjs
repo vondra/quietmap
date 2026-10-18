@@ -17,7 +17,7 @@ test('a road known only by its number reads as a road with that number', () => {
 })
 
 test('a named road reads as its name, even with a number', () => {
-  assert.equal(contributorLabel(road('Šárecká', { road_class: 'tertiary', name: 'Šárecká', ref: '2404' })), 'Šárecká')
+  assert.equal(contributorLabel(road('Vinohradská', { road_class: 'tertiary', name: 'Vinohradská', ref: '2404' })), 'Vinohradská')
 })
 
 test('a road with neither name nor number reads as its class', () => {

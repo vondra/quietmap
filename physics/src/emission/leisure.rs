@@ -38,6 +38,10 @@ pub struct LeisureProfile {
     pub spectrum_db: [f64; BANDS],
     pub evening_offset_db: f64,
     pub night_offset_db: f64,
+    /// How far over its annual mean the area sounds while in use (dB): the season and duty cut
+    /// its mean took from its active anchor, so it is heard at the anchor for that share of the
+    /// time; 0 for a car park, heard in its movements.
+    pub in_use_db: f64,
     /// Lot area per parking space: car parks add the parking study's searching traffic.
     pub m2_per_parking_space: Option<f64>,
     /// The largest area the law counts.
@@ -57,10 +61,20 @@ const fn profile(
         spectrum_db: spectrum,
         evening_offset_db: evening,
         night_offset_db: night,
+        in_use_db: SEASON_AND_DUTY_DB,
         m2_per_parking_space: None,
         area_cap_m2: f64::INFINITY,
     }
 }
+
+/// The season and duty cut of courts, playgrounds, pools and terraces from their active anchors
+/// (below): in use 10^-0.9, an eighth, of the day.
+const SEASON_AND_DUTY_DB: f64 = 9.0;
+/// A grass pitch's cut, 4 h of a week's 84 by day for 40 weeks; a booked artificial one's, 30.6 h.
+const GRASS_PITCH_IN_USE_DB: f64 = 14.4;
+const ARTIFICIAL_PITCH_IN_USE_DB: f64 = 4.4;
+/// A stadium's, its match days.
+const STADIUM_IN_USE_DB: f64 = 12.0;
 
 const PLAYERS: [f64; BANDS] = [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -4.0];
 /// Movements a parking space sees in a day at the car-park rates below (0.40 an hour 06-22, 0.05
@@ -89,18 +103,22 @@ const CAR_PARK_SPECTRUM: [f64; BANDS] = [8.5, -1.0, -4.2, -5.5, -5.3, -5.8, -10.
 /// (Parkplatzlaermstudie, LfU Bayern 2007): 63 dB(A) per space and movement, 0.40 movements per
 /// space and hour by day (06-22) and 0.05 by night, 23.8 m2 per space on a lot and 13.3 on a
 /// street strip (medians of OSM polygons with `capacity`), re-averaged onto 19-23 and 23-07.
+/// Every area but a car park is heard in use, at its anchor for the share of the time its cut
+/// leaves (`in_use_db`): a court played an eighth of the day is not a steady hum at its mean.
 pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
     let car_park = |per_m2: f64, reference_m2: f64, m2_per_space: f64| LeisureProfile {
+        in_use_db: 0.0,
         m2_per_parking_space: Some(m2_per_space),
         ..profile(per_m2, reference_m2, CAR_PARK_SPECTRUM, -1.1, -6.3)
     };
-    let pitch = |per_m2: f64, evening: f64| LeisureProfile {
+    let pitch = |per_m2: f64, evening: f64, in_use_db: f64| LeisureProfile {
+        in_use_db,
         area_cap_m2: PITCH_AREA_CAP_M2,
         ..profile(per_m2, 7_000.0, PLAYERS, evening, -25.0)
     };
     Some(match class {
-        PITCH => pitch(45.4, -1.2),
-        ARTIFICIAL_TURF_PITCH => pitch(55.4, -0.3),
+        PITCH => pitch(45.4, -1.2, GRASS_PITCH_IN_USE_DB),
+        ARTIFICIAL_TURF_PITCH => pitch(55.4, -0.3, ARTIFICIAL_PITCH_IN_USE_DB),
         PADEL => profile(
             58.0,
             200.0,
@@ -143,7 +161,10 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
             0.0,
             -15.0,
         ),
-        STADIUM => profile(40.0, 7_000.0, PLAYERS, -3.0, -12.0),
+        STADIUM => LeisureProfile {
+            in_use_db: STADIUM_IN_USE_DB,
+            ..profile(40.0, 7_000.0, PLAYERS, -3.0, -12.0)
+        },
         CAR_PARK => car_park(45.3, 1_000.0, 23.8),
         CAR_PARK_STREET => car_park(47.8, 100.0, 13.3),
         _ => return None,
