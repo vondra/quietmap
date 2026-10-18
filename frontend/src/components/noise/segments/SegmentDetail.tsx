@@ -4,7 +4,7 @@
 // map). A ray opens to the angle it stands for, its length, its air absorption and the ground and
 // walls it was computed over; a point's one ray, which its sound path already tells, shows its
 // ground alone. Opening the segment computes the click again for it alone (`piece=`), every ray
-// with its ground and walls (owner 2026-10-10: "pod každým paprskem (úhlem) detail horizontů").
+// with its ground and walls (owner 2026-10-10: the horizons under every ray).
 import { useEffect, useState } from 'react'
 import { streamPopup } from '../../../lib/popup-stream'
 import type { PopupPiece, RayProfile, RayTerms } from '../../../types/noise'

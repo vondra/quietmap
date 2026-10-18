@@ -161,8 +161,8 @@ fn batch() -> RecordBatch {
         (
             "addr_street",
             Arc::new(StringArray::from(vec![
-                Some("Vinohradska"),
-                Some("Slezska"),
+                Some("Gower Street"),
+                Some("Store Street"),
                 None,
                 None,
             ])),
@@ -191,7 +191,7 @@ fn rows_carry_the_footprint_id_of_their_screening_outline() {
     assert_eq!(rows[1].centroid, (1 << 29, 400));
     assert_eq!(
         (rows[0].address.as_str(), rows[1].address.as_str()),
-        ("Vinohradska 12", "Slezska")
+        ("Gower Street 12", "Store Street")
     );
     assert_eq!(
         (rows[0].height_tag_m, rows[0].floors, rows[0].ring.len()),

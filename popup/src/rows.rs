@@ -165,8 +165,8 @@ pub fn score_rows<'a>(
 /// Gives the `rows` their parts' `shares` of the place's loudness, in the order of their parts, and
 /// ranks rows and parts by them: the share is the number a row shows and the list is cut by. A
 /// row's own Nden, alone, is no rank: a steady sound under louder ones keeps little of it in the
-/// mix (Prague-Dejvice, 2026-10-17: a road and the flights 1.2 sone alone each, 6 and 12 % of the
-/// place), and ranked by it the list folded a lane of 5 % under rows of 2 %.
+/// mix (a Prague villa street, 2026-10-17: a road and the flights 1.2 sone alone each, 6 and 12 % of
+/// the place), and ranked by it the list folded a lane of 5 % under rows of 2 %.
 pub fn rank_by_share(rows: &mut [Row], shares: &[f64]) {
     let share = |part: &Contributor| part.share.unwrap_or(0.0);
     let mut shares = shares.iter();
@@ -224,7 +224,7 @@ mod tests {
         );
     }
 
-    /// Prague-Dejvice's rows: the road and the flights alike alone, the flights twice the share;
+    /// A Prague villa street's rows: the road and the flights alike alone, the flights twice the share;
     /// the lane, quieter alone, as large a share as the road. The list ranks by share, and so
     /// does a row's parts.
     #[test]

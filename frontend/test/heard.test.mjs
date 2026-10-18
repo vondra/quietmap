@@ -8,7 +8,7 @@ import { flightsText, heardText } from '../src/components/noise/heard.ts'
 const heard = (day, evening, night, steady = false) => ({ per_hour: { day, evening, night }, steady })
 
 test('a road reads as its vehicles an hour by day, a steady or a quiet one too', () => {
-  // La Palma's lanes listed "19 veh/h" over "14 veh/day", a motorway "steady" (owner 2026-10-13):
+  // An island's lanes listed "19 veh/h" over "14 veh/day", a motorway "steady" (owner 2026-10-13):
   // one figure, one unit down the column.
   assert.equal(heardText('road', heard(916, 845, 317, true)), '916 veh/h')
   assert.equal(heardText('road', heard(76, 59, 20)), '76 veh/h')
