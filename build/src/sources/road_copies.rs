@@ -18,6 +18,13 @@ const COPY_REACH_M: f64 = 30.0;
 const COPY_TOLERANCE: f64 = 0.1;
 /// dev4's main classes, motorway to tertiary: a count of one of them is the road's own.
 const MAIN_CLASSES: std::ops::RangeInclusive<u8> = 0..=4;
+/// The classes a road's side lanes and squares are mapped as (residential, living street,
+/// service): one with the road's name and very count is the road's wherever it lies. An
+/// unclassified row or a link of the road's name and count is the road going on (a census section
+/// across a change of class: Prague's links and Brno's unclassified ways kept their counts in r072).
+const SIDE_CLASSES: std::ops::RangeInclusive<u8> = 5..=7;
+/// The classes whose count a side lane of their name repeats: the main ones and their links.
+const NAMED_CLASSES: [std::ops::RangeInclusive<u8>; 2] = [0..=4, 10..=12];
 
 /// A row with a count of its own: its table row, dev4 class, name, ends (z30), daily vehicles and
 /// the cross-section of its road (both carriageways; its own count where dev4 gives none).
@@ -31,8 +38,8 @@ pub struct CountedRow {
 }
 
 /// The rows below the main classes whose count is within `COPY_TOLERANCE` of the count or the
-/// cross-section of a main row within `COPY_REACH_M`, at `latitude_deg`, or is the very count of a
-/// main row of its name.
+/// cross-section of a main row within `COPY_REACH_M`, at `latitude_deg`; and the side lanes with the
+/// very count of a road of their name.
 pub fn copied_counts(rows: &[CountedRow], latitude_deg: f64) -> HashSet<usize> {
     let reach = f64::from(z30_cells(COPY_REACH_M, latitude_deg));
     // The main rows by the cells their reach covers, cells as wide as the reach.
@@ -54,6 +61,12 @@ pub fn copied_counts(rows: &[CountedRow], latitude_deg: f64) -> HashSet<usize> {
         for at in cells_of(row.ends) {
             main.entry(at).or_default().push(row);
         }
+    }
+    for row in rows.iter().filter(|row| {
+        NAMED_CLASSES
+            .iter()
+            .any(|classes| classes.contains(&row.class))
+    }) {
         if !row.name.is_empty() {
             named
                 .entry(&row.name)
@@ -65,9 +78,10 @@ pub fn copied_counts(rows: &[CountedRow], latitude_deg: f64) -> HashSet<usize> {
     rows.iter()
         .filter(|row| !MAIN_CLASSES.contains(&row.class))
         .filter(|row| {
-            named
-                .get(row.name.as_str())
-                .is_some_and(|counts| counts.contains(&(row.vehicles.round() as i64)))
+            SIDE_CLASSES.contains(&row.class)
+                && named
+                    .get(row.name.as_str())
+                    .is_some_and(|counts| counts.contains(&(row.vehicles.round() as i64)))
                 || cells_of(row.ends)
                     .filter_map(|at| main.get(&at))
                     .flatten()
@@ -149,7 +163,8 @@ mod tests {
     }
 
     /// Madrid's Castellana: a side lane of the road's name 300 m from the counted carriageway
-    /// with its very count is a copy; one of another count, or of another name, is not.
+    /// with its very count is a copy; one of another count, of another name, or the road going on
+    /// unclassified, is not.
     #[test]
     fn a_side_lane_with_its_roads_name_and_count_is_a_copy_wherever_it_lies() {
         let m = 1.0 / (crate::dev4::Z30_QUANTUM_M * 40.4f64.to_radians().cos());
@@ -167,6 +182,7 @@ mod tests {
             row(1, 5, "Paseo de la Castellana", 300.0, 35_989.0),
             row(2, 5, "Paseo de la Castellana", 400.0, 12_000.0),
             row(3, 5, "Calle de Serrano", 500.0, 35_989.0),
+            row(4, 9, "Paseo de la Castellana", 600.0, 35_989.0),
         ];
         assert_eq!(copied_counts(&rows, 40.4), HashSet::from([1]));
     }

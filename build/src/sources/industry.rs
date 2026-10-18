@@ -65,21 +65,16 @@ pub struct RowEmission {
     pub rated_power_kw: Option<f64>,
 }
 
-/// Whether a row is no site that sounds: a dead site (`suppressed`), a gas station, a rail yard
-/// (PLAN-z13 DROP), a wind turbine or farm outline (`turbines`), an inactive site, a transformer
-/// (its rating joins its substation) or an unknown type.
-fn silent_site(row: &IndustrialRow) -> bool {
+/// A row's emission with the facility evidence of `joins`; `None` when silent: a dead site
+/// (`suppressed`), a gas station, a rail yard (PLAN-z13 DROP), a wind turbine or farm outline
+/// (`turbines`), an inactive site, a transformer (its rating joins its substation), an unknown type, a solar generator
+/// inside its plant (the plant emits) or an untagged solar node without a footprint.
+pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmission> {
     let silent_type = matches!(
         row.source_type,
         SOURCE_RAIL_YARD | SOURCE_WIND_TURBINE | SOURCE_WIND_OUTLINE | SOURCE_INACTIVE
     ) || row.source_type >= SOURCE_TRANSFORMER;
-    row.suppressed || silent_type || is_gas_substation(&row.tags)
-}
-
-/// A row's emission with the facility evidence of `joins`; `None` when silent ([`silent_site`]), a
-/// solar generator inside its plant (the plant emits) or an untagged solar node without a footprint.
-pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmission> {
-    if silent_site(row) {
+    if row.suppressed || silent_type || is_gas_substation(&row.tags) {
         return None;
     }
     if row.source_type == SOURCE_SOLAR_FARM
@@ -221,11 +216,11 @@ fn site_reach(row: &IndustrialRow) -> ((i32, i32), (i32, i32)) {
     )
 }
 
-/// The outlines of the industrial sites that sound in `squares`: a building dev4 can only call a
-/// residential block inside one is the site's, not a home (`building::convert`; the
-/// Clacton-Holland Haven sewage works' hall was a block of flats with heat pumps, 2026-10-17). A
-/// silent outline (a wind farm's, a rail yard's, an inactive site's) holds homes: their sound
-/// would go with nothing in its place.
+/// The outlines of the industrial sites of `squares`: a building dev4 can only call a residential
+/// block inside one is the site's, not a home (`building::convert`; the Clacton-Holland Haven
+/// sewage works' hall was a block of flats with heat pumps, 2026-10-17); a rail yard's or a dead
+/// site's buildings are not homes either. A wind farm's outline is farmland around its turbines:
+/// its houses are homes.
 pub fn site_outlines(dev4: &Dev4, squares: &[Square]) -> Result<RingIndex, String> {
     let mut rows = Vec::new();
     for &square in squares {
@@ -236,7 +231,7 @@ pub fn site_outlines(dev4: &Dev4, squares: &[Square]) -> Result<RingIndex, Strin
     }
     let mut index = RingIndex::default();
     for (at, row) in rows.into_iter().enumerate() {
-        if row.ring.len() >= 3 && !silent_site(&row) {
+        if row.ring.len() >= 3 && row.source_type != SOURCE_WIND_OUTLINE {
             index.add(at as u64, vec![vec![row.ring]]);
         }
     }
