@@ -68,12 +68,16 @@ fn a_bar_has_people_at_its_door_and_empties_when_it_closes() {
     assert!((modelled - night).abs() < 1e-9, "{modelled} {night}");
     // By day the door crowd stands only from 19 h: the day's 18 h is open but empty.
     assert!(sound.evening_offset_db > 49.0);
+    // There all year: the whole evening and 4 of the night's 8 hours, its dispersal's among them.
+    assert_eq!(venue_duty(&bar), [0.0, 1.0, 0.5]);
 }
 
 /// A restaurant's terrace from 12 to 15 h and from 18 to 22 h in a season of 0.3 of the year has
 /// people outside 0.3 of 4 of the day's 12 hours (12, 13, 14 and 18 h), 0.1, and of 3 of the
-/// evening's 4, 0.225, nobody at night; a bar's door crowd stands there all year, its 19-22 h the
-/// whole evening and 4 of the night's 8 hours (23 to 01 h and the 02 h it empties in).
+/// evening's 4, 0.225, nobody at night. A pub open 12-24 h with its terrace to 23 h and its door
+/// crowd from 19 h: the seats alone by day, 7 of 12 hours at the season's 0.5; the door's evening
+/// all year; at night 23 h and the midnight it empties in. A beer garden empties its seasonal
+/// guests into the night's first hour, there the season's share of that one hour.
 #[test]
 fn people_are_heard_in_the_hours_they_are_outside() {
     let (lunch, dinner) = (hours(12, 15), hours(18, 22));
@@ -100,19 +104,34 @@ fn people_are_heard_in_the_hours_they_are_outside() {
         "{duty:?}"
     );
     assert_eq!(duty[2], 0.0);
-    let (open, closed) = (hours(18, 26), [[false; 24]; 7]);
-    let bar = Venue {
-        seats: 0.0,
+    let (open, seats) = (hours(12, 24), hours(12, 23));
+    let pub_with_terrace = Venue {
+        seats: 30.0,
         season_share: 0.5,
         open: &open,
-        terrace: &closed,
+        terrace: &seats,
         door_from_hour: Some(19),
         evening_dba: LIVELY_DBA,
         night_dba: STANDING_DBA,
         drinking: true,
         crowd_dba: None,
     };
-    assert_eq!(venue_duty(&bar), [0.0, 1.0, 0.5]);
+    let duty = venue_duty(&pub_with_terrace);
+    assert!((duty[0] - 7.0 * 0.5 / 12.0).abs() < 1e-12, "{duty:?}");
+    assert_eq!((duty[1], duty[2]), (1.0, 0.25));
+    let garden = hours(11, 23);
+    let beer_garden = Venue {
+        seats: 100.0,
+        season_share: 0.4,
+        open: &garden,
+        terrace: &garden,
+        door_from_hour: None,
+        evening_dba: LIVELY_DBA,
+        night_dba: STANDING_DBA,
+        drinking: true,
+        crowd_dba: None,
+    };
+    assert!((venue_duty(&beer_garden)[2] - 0.4 / 8.0).abs() < 1e-12);
 }
 
 /// Ballesteros's five places along 40 m gather 0.20 people a m2 at the weekend's peak: 91.3 dB(A)
