@@ -13,7 +13,8 @@
 //! 1.5-2.0 and 2.9-6.5 times, Paris's busy and quiet nights 5-6 dB apart). Drinking places keep
 //! 2.4 people at their door while open (Kaplan 2019, 72 bars), and the hour after they close
 //! still carries their last hour's people 5 dB down (Paris's Halles profile). Seats and street
-//! crowds count in the terrace season only.
+//! crowds count in the terrace season only. The people are heard in use: at their mean over the
+//! hours of the year they are outside ([`venue_duty`]), silent the rest.
 
 use super::DAY_ONLY_OFFSET_DB;
 use super::spectrum::SoundPower;
@@ -75,8 +76,10 @@ fn energy(level_dba: f64) -> f64 {
     10f64.powf(level_dba / 10.0)
 }
 
-/// The people of a place hour by hour of the week as sound power (energy), before the dispersal.
-fn hour_energy(venue: &Venue, day: usize, hour: usize) -> f64 {
+/// The people of a place in an hour of the week as sound power (energy), before the dispersal:
+/// those at its door, there all year, and those on its seats and in the street crowd, there in the
+/// terrace season (its share of the year counted in).
+fn hour_energy(venue: &Venue, day: usize, hour: usize) -> [f64; 2] {
     let p = period(hour);
     let weekday_db = match (p, weekend(day, hour)) {
         (0, _) | (_, true) => 0.0,
@@ -108,16 +111,15 @@ fn hour_energy(venue: &Venue, day: usize, hour: usize) -> f64 {
         Some(crowd) if venue.open[day][hour] && p == 2 => venue.season_share * busy * energy(crowd),
         _ => 0.0,
     };
-    seated + door + crowd
+    [door, seated + crowd]
 }
 
-/// The place's people as a source: the mean sound power of each period over the week (closed hours
-/// silent), a raised voice's spectrum; `None` when nobody is ever outside.
-pub fn venue_sound_power(venue: &Venue) -> Option<SoundPower> {
-    let mut sums = [0.0; 3];
-    for day in 0..7 {
-        for hour in 0..24 {
-            let mut hour_sum = hour_energy(venue, day, hour);
+/// Each hour of the week: its period and its people's energy at the door and in the season, a
+/// drinking place's last hour 5 dB down in the night hour after it closes.
+fn week_hours<'a>(venue: &'a Venue<'a>) -> impl Iterator<Item = (usize, [f64; 2])> + 'a {
+    (0..7).flat_map(move |day| {
+        (0..24).map(move |hour| {
+            let mut parts = hour_energy(venue, day, hour);
             let (before_day, before_hour) = if hour == 0 {
                 ((day + 6) % 7, 23)
             } else {
@@ -125,10 +127,22 @@ pub fn venue_sound_power(venue: &Venue) -> Option<SoundPower> {
             };
             let just_closed = venue.open[before_day][before_hour] && !venue.open[day][hour];
             if venue.drinking && just_closed && period(hour) == 2 {
-                hour_sum += hour_energy(venue, before_day, before_hour) * energy(DISPERSAL_DB);
+                let before = hour_energy(venue, before_day, before_hour);
+                for (part, last) in parts.iter_mut().zip(before) {
+                    *part += last * energy(DISPERSAL_DB);
+                }
             }
-            sums[period(hour)] += hour_sum;
-        }
+            (period(hour), parts)
+        })
+    })
+}
+
+/// The place's people as a source: the mean sound power of each period over the week (closed hours
+/// silent), a raised voice's spectrum; `None` when nobody is ever outside.
+pub fn venue_sound_power(venue: &Venue) -> Option<SoundPower> {
+    let mut sums = [0.0; 3];
+    for (p, [door, season]) in week_hours(venue) {
+        sums[p] += door + season;
     }
     let levels: [f64; 3] = std::array::from_fn(|p| {
         let mean = sums[p] / (7.0 * PERIOD_HOURS[p]);
@@ -161,6 +175,24 @@ pub fn venue_sound_power(venue: &Venue) -> Option<SoundPower> {
         evening_offset_db: offset(levels[1]),
         night_offset_db: offset(levels[2]),
     })
+}
+
+/// The share of each period's hours over the year that the place has people outside: every hour of
+/// its door crowd, the season's share of its hours on the seats or in the street crowd. Heard in
+/// use, they sound at their mean over that share and are silent the rest of the time, as play is
+/// ([`super::leisure`]): a hut's terrace full on summer days, not murmuring all year.
+pub fn venue_duty(venue: &Venue) -> [f64; 3] {
+    let mut hours = [0.0; 3];
+    for (p, [door, season]) in week_hours(venue) {
+        hours[p] += if door > 0.0 {
+            1.0
+        } else if season > 0.0 {
+            venue.season_share
+        } else {
+            0.0
+        };
+    }
+    std::array::from_fn(|p| hours[p] / (7.0 * PERIOD_HOURS[p]))
 }
 
 /// The street crowd of a cluster at the weekend's peak (dB(A) over its 40 m), from the weighted

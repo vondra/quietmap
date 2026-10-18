@@ -240,8 +240,8 @@ each value (Kurze's statistics of moving sources). A road with 600 vehicles an h
 series of passes 20 m away and a steady sound from about 80 m; one flight a day 1 km away is near
 its peak for about half a minute. Sources add up only within the same moment, so the sum is taken
 for every hour of road traffic and ten states of the weather; bells, calls, a car park's cars, a
-range's shots and courts, pitches, playgrounds, pools and terraces in use sound in their share of
-the period; industry, the other buildings and ships are steady. That gives the levels exceeded 5
+range's shots, courts, pitches, playgrounds, pools and terraces in use and the guests outside bars
+and restaurants sound in their share of the period; industry, the other buildings and ships are steady. That gives the levels exceeded 5
 to 90 % of the time.
 
 Nden is every moment's loudness after ISO 532-1 (Zwicker), from the spectrum received in that

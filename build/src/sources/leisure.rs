@@ -19,7 +19,7 @@ use super::cells::{
 };
 use super::facilities::{Tags, parse_tags};
 use super::venues::{Seating, Venues};
-use super::{Converted, fields, group_key};
+use super::{Converted, displayed_duty, fields, group_key};
 use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
 use crate::traffic::{GRID_SIDE, grid_cell, street_parking_shares};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
@@ -320,18 +320,16 @@ fn heard_of(class: u8, sound: &SoundPower, movements: f64) -> (Option<[f64; 3]>,
         return events(movements, PARKING_MOVEMENT_DBA);
     }
     let in_use_db = leisure_profile(class).map_or(0.0, |profile| profile.in_use_db);
-    (None, displayed(sounding(sound, sound.day_dba + in_use_db)))
+    (
+        None,
+        displayed_duty(sounding(sound, sound.day_dba + in_use_db)),
+    )
 }
 
 /// The share of each period a source sounds at `while_sounding_dba`: its mean over that power.
 fn sounding(sound: &SoundPower, while_sounding_dba: f64) -> [f64; 3] {
     let offsets = [0.0, sound.evening_offset_db, sound.night_offset_db];
     std::array::from_fn(|p| 10f64.powf((sound.day_dba + offsets[p] - while_sounding_dba) / 10.0))
-}
-
-/// Shares rounded up to the display's five decimals, so a period with energy never falls silent.
-fn displayed(shares: [f64; 3]) -> [f64; 3] {
-    shares.map(|share| (share.min(1.0) * 1e5).ceil() / 1e5)
 }
 
 /// A source of `per_day` events, each sounding at `while_sounding_dba`: its events by period as the
@@ -346,7 +344,7 @@ fn heard_in_events(
     let hours: f64 = (0..3).map(|p| on[p] * PERIOD_HOURS[p]).sum();
     (
         std::array::from_fn(|p| per_day * on[p] * PERIOD_HOURS[p] / hours),
-        displayed(on),
+        displayed_duty(on),
     )
 }
 

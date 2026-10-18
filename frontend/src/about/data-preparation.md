@@ -295,7 +295,9 @@ deliveries, building sites, garden machinery, music and festivals.
   doors of bars and pubs from 19 h and of nightclubs, by their mapped opening hours, else the
   country's custom; terrace seats come from Madrid's and Melbourne's registers. On weekend evenings
   and nights three quarters of the seats are taken (ÖNORM's design value), on weekdays fewer by
-  Melbourne's and Paris's counts; the daytime 30 % is an assumption.
+  Melbourne's and Paris's counts; the daytime 30 % is an assumption. The guests are heard while
+  they are there, the seats in the terrace season and the opening hours, the door crowd while the
+  place is open, not as a murmur all year at their mean.
 - **What screens.** A wall without a height stands 4 m. Open car parks, carports, open roofs and
   underground footprints do not screen.
 

@@ -70,6 +70,51 @@ fn a_bar_has_people_at_its_door_and_empties_when_it_closes() {
     assert!(sound.evening_offset_db > 49.0);
 }
 
+/// A restaurant's terrace from 12 to 15 h and from 18 to 22 h in a season of 0.3 of the year has
+/// people outside 0.3 of 4 of the day's 12 hours (12, 13, 14 and 18 h), 0.1, and of 3 of the
+/// evening's 4, 0.225, nobody at night; a bar's door crowd stands there all year, its 19-22 h the
+/// whole evening and 4 of the night's 8 hours (23 to 01 h and the 02 h it empties in).
+#[test]
+fn people_are_heard_in_the_hours_they_are_outside() {
+    let (lunch, dinner) = (hours(12, 15), hours(18, 22));
+    let mut terrace = [[false; 24]; 7];
+    for day in 0..7 {
+        for hour in 0..24 {
+            terrace[day][hour] = lunch[day][hour] || dinner[day][hour];
+        }
+    }
+    let restaurant = Venue {
+        seats: 40.0,
+        season_share: 0.3,
+        open: &terrace,
+        terrace: &terrace,
+        door_from_hour: None,
+        evening_dba: LIVELY_DBA,
+        night_dba: LIVELY_DBA,
+        drinking: false,
+        crowd_dba: None,
+    };
+    let duty = venue_duty(&restaurant);
+    assert!(
+        (duty[0] - 0.1).abs() < 1e-12 && (duty[1] - 0.225).abs() < 1e-12,
+        "{duty:?}"
+    );
+    assert_eq!(duty[2], 0.0);
+    let (open, closed) = (hours(18, 26), [[false; 24]; 7]);
+    let bar = Venue {
+        seats: 0.0,
+        season_share: 0.5,
+        open: &open,
+        terrace: &closed,
+        door_from_hour: Some(19),
+        evening_dba: LIVELY_DBA,
+        night_dba: STANDING_DBA,
+        drinking: true,
+        crowd_dba: None,
+    };
+    assert_eq!(venue_duty(&bar), [0.0, 1.0, 0.5]);
+}
+
 /// Ballesteros's five places along 40 m gather 0.20 people a m2 at the weekend's peak: 91.3 dB(A)
 /// over the segment (the research's 89.6-92.8); three places 86.8 (84.5-88.7); two none.
 #[test]
