@@ -6,7 +6,10 @@
 //! the trip ends of those buildings made by cars that park on the street (houses' cars mostly
 //! park on their plots, flats' cars on the street), shared by all the street parking spaces
 //! around; the car-park rate of every space taken is the most it carries. Driving to and from a
-//! space is the street's road traffic, not the parking's.
+//! space is the street's road traffic, not the parking's. A car park is heard in its movements and
+//! a range in its shots, events in their share of each period as bells are: heard steady, 69
+//! movements a day on Na Spitalce's street strip read 1.96 sone, more than the flights over it
+//! (1.16) and four times the 65 cars a day passing on the street (0.50, 2026-10-18).
 
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
@@ -17,6 +20,7 @@ use super::{Converted, fields, group_key};
 use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
 use crate::traffic::{GRID_SIDE, grid_cell, street_parking_shares};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
+use physics::bands::PERIOD_HOURS;
 use physics::emission::leisure::*;
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
@@ -240,6 +244,7 @@ pub fn convert(
                 cell_m: CELL_M,
             };
             let decibels = (sound.day_dba * 10.0).round() / 10.0;
+            let events = events_of(row.class, &sound, movements);
             let attribute = Attribute {
                 layer: Layer::Building,
                 height_m: SOURCE_HEIGHT_M,
@@ -249,8 +254,8 @@ pub fn convert(
                 footprint_id: 0,
                 group_key: group_key(&["leisure", &row.osm_kind, &row.osm_id.to_string()]),
                 emission: sound.band_levels_db(),
-                display: fields(if spaces > 0.0 {
-                    json!([
+                display: fields(match events {
+                    Some((per_day, duty)) => json!([
                         row.name,
                         class_label(row.class),
                         0.0,
@@ -258,10 +263,11 @@ pub fn convert(
                         area_m2.round(),
                         "",
                         decibels,
-                        movements.round()
-                    ])
-                } else {
-                    json!([
+                        (spaces > 0.0).then(|| movements.round()),
+                        per_day,
+                        duty
+                    ]),
+                    None => json!([
                         row.name,
                         class_label(row.class),
                         0.0,
@@ -269,7 +275,7 @@ pub fn convert(
                         area_m2.round(),
                         "",
                         decibels
-                    ])
+                    ]),
                 }),
             };
             push_site_points(&site_points(&site), area_m2, &attribute, out);
@@ -277,6 +283,39 @@ pub fn convert(
         }
     }
     Ok(emitting)
+}
+
+/// How a row is heard in time: a range in its shots, a second each at its single-shot energy level
+/// by day; a car park in its `movements` at a movement's power; `None` for the areas heard steady
+/// over their hours.
+fn events_of(class: u8, sound: &SoundPower, movements: f64) -> Option<([f64; 3], [f64; 3])> {
+    if class == SHOOTING {
+        let per_day = SHOTS_PER_YEAR / 365.0;
+        let shot_dba = sound.day_dba + 10.0 * (PERIOD_HOURS[0] * 3_600.0 / per_day).log10();
+        return Some(heard_in_events(sound, per_day, shot_dba));
+    }
+    (movements > 0.0).then(|| heard_in_events(sound, movements, PARKING_MOVEMENT_DBA))
+}
+
+/// A source of `per_day` events, each sounding at `while_sounding_dba`: its events by period as its
+/// energy falls, and the share of each period they sound, its mean over that power (rounded up to
+/// the display's five decimals, so a period with energy never falls silent).
+fn heard_in_events(
+    sound: &SoundPower,
+    per_day: f64,
+    while_sounding_dba: f64,
+) -> ([f64; 3], [f64; 3]) {
+    let offsets = [0.0, sound.evening_offset_db, sound.night_offset_db];
+    let level = |p: usize| sound.day_dba + offsets[p];
+    let energy: [f64; 3] = std::array::from_fn(|p| 10f64.powf(level(p) / 10.0) * PERIOD_HOURS[p]);
+    let total: f64 = energy.iter().sum();
+    (
+        std::array::from_fn(|p| (per_day * energy[p] / total * 100.0).round() / 100.0),
+        std::array::from_fn(|p| {
+            let duty = 10f64.powf((level(p) - while_sounding_dba) / 10.0).min(1.0);
+            (duty * 1e5).ceil() / 1e5
+        }),
+    )
 }
 
 fn read_batch(batch: &arrow_array::RecordBatch) -> Result<Vec<LeisureRow>, String> {
@@ -359,6 +398,27 @@ mod tests {
         assert_eq!(row_emission(&archery), None);
         let (range, area_m2) = row_emission(&node(SHOOTING)).unwrap();
         assert!((range.day_dba - 110.0).abs() < 0.05 && area_m2 == 10_000.0);
+    }
+
+    /// Na Spitalce's street strip (69.1 dB(A) by day, 69 movements a day) is heard in its
+    /// movements, 4 s each at a movement's power in every period; a rifle range in its 55 shots a
+    /// day, a second each by day; a pitch steady over its hours.
+    #[test]
+    fn parking_movements_and_shots_are_heard_as_events() {
+        let mut strip = leisure_sound_power(CAR_PARK_STREET, 411.0).unwrap();
+        strip.day_dba = 69.1;
+        let (movements, duty) = events_of(CAR_PARK_STREET, &strip, 69.0).unwrap();
+        assert!((movements.iter().sum::<f64>() - 69.0).abs() < 0.02);
+        for period in 0..3 {
+            let seconds = duty[period] * PERIOD_HOURS[period] * 3_600.0 / movements[period];
+            assert!((seconds - 4.0).abs() < 0.1, "period {period}: {seconds} s");
+        }
+        let (range, _) = row_emission(&node(SHOOTING)).unwrap();
+        let (shots, duty) = events_of(SHOOTING, &range, 0.0).unwrap();
+        assert!((shots[0] - 20_000.0 / 365.0).abs() < 0.01 && shots[1..] == [0.0, 0.0]);
+        assert!((duty[0] * PERIOD_HOURS[0] * 3_600.0 / shots[0] - 1.0).abs() < 0.01);
+        let (pitch, _) = row_emission(&node(PITCH)).unwrap();
+        assert_eq!(events_of(PITCH, &pitch, 0.0), None);
     }
 
     /// A mapped terrace 10 m from a cafe is the cafe's (its guests are the people converter's); one

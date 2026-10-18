@@ -275,7 +275,10 @@ deliveries, building sites, garden machinery, music and festivals.
   by day.
 - **Car parks** follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
   (LfU 2007): 63 dB(A) for one movement an hour, 0.4 movements a space an hour from 06 to 22 h and
-  0.05 at night; street parking carries only the cars of the buildings around it.
+  0.05 at night; street parking carries only the cars of the buildings around it. Each movement
+  sounds 4 seconds, the time a car starting and pulling away is at its loudest (SEL 71 dB against
+  LAmax 65 dB at 10 m in [Hepworth Acoustics](https://www.hepworth-acoustics.co.uk)'s measured car
+  parks); a lot's search for a space makes it longer. A shooting range's shots sound a second each.
 - **Church bells** ring in Europe and Cyprus: prayer bells three times a day and a Sunday peal;
   Orthodox churches, and in 11 Orthodox countries every church of unmapped denomination, ring only
   before Saturday's vespers and Sunday's liturgy. German and Swiss church clocks strike the hours
