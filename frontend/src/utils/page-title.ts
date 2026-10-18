@@ -1,7 +1,7 @@
 /** Single writer for the document (tab/share) title.
  *  Patterns (owner spec 2026-07-10): default "quietmap.org - Find your quiet place";
  *  with a popup open, PLACE comes first, never the number:
- *  "Dejvice, Praha - 62 dB - quietmap.org".
+ *  "Camden, London - 62 dB - quietmap.org".
  *  Kept in sync manually with frontend/index.html <title>/og:title — static
  *  HTML can't import this module, and crawlers read it without executing JS. */
 const BRAND = 'quietmap.org'

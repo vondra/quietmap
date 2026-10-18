@@ -139,7 +139,7 @@ function fetchPhoton(url: URL): Promise<Response> {
   })
 }
 
-/** Place label for the document title ("Dejvice, Praha") — district-level
+/** Place label for the document title ("Camden, London") — district-level
  *  first so titles read like a neighbourhood, not a house number. */
 function formatReversePlace(p: PhotonFeature['properties']): string | null {
   const primary = p.district || p.locality || p.city || p.name || p.state
@@ -207,7 +207,7 @@ export async function searchRoutes(app: FastifyInstance, { photonUrl }: { photon
   })
 
   // Reverse geocode for the tab/share title — place-first titles like
-  // "Dejvice, Praha - 62 dB - quietmap.org" (owner spec 2026-07-10). Same Photon
+  // "Camden, London - 62 dB - quietmap.org" (owner spec 2026-07-10). Same Photon
   // instance and etiquette as /api/search; ~100 m server-side cache.
   app.get<{ Querystring: { lat?: string; lon?: string } }>('/api/reverse', {
     config: { rateLimit: EXPENSIVE_ROUTE_RATE_LIMIT },

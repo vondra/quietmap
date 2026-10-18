@@ -95,7 +95,7 @@ export default function App() {
   }, [detailPosition])
 
   // Tab/share title tracks the open popup: reverse-geocode the position
-  // (place-level, server-cached) and compose "Dejvice, Praha - 62 dB -
+  // (place-level, server-cached) and compose "Camden, London - 62 dB -
   // quietmap.org" — place first, never the number. The lookup is not cancelled
   // by the next click: a name that comes back late still names its recent tab.
   const [detailPlaceName, setDetailPlaceName] = useState<string | null>(null)
