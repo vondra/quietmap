@@ -286,8 +286,9 @@ pub fn convert(
 }
 
 /// How a row is heard in time: a range in its shots, a second each at its single-shot energy level
-/// by day; a car park in its `movements` at a movement's power; `None` for the areas heard steady
-/// over their hours.
+/// by day (the level's reference second: a real shot is shorter, so a range reads somewhat loud);
+/// a car park in its `movements` at a movement's power; `None` for the areas heard steady over
+/// their hours.
 fn events_of(class: u8, sound: &SoundPower, movements: f64) -> Option<([f64; 3], [f64; 3])> {
     if class == SHOOTING {
         let per_day = SHOTS_PER_YEAR / 365.0;
@@ -297,24 +298,23 @@ fn events_of(class: u8, sound: &SoundPower, movements: f64) -> Option<([f64; 3],
     (movements > 0.0).then(|| heard_in_events(sound, movements, PARKING_MOVEMENT_DBA))
 }
 
-/// A source of `per_day` events, each sounding at `while_sounding_dba`: its events by period as its
-/// energy falls, and the share of each period they sound, its mean over that power (rounded up to
-/// the display's five decimals, so a period with energy never falls silent).
+/// A source of `per_day` events, each sounding at `while_sounding_dba`: its events by period as the
+/// seconds they sound fall, and the share of each period they sound, its mean over that power
+/// (rounded up to the display's five decimals, so a period with energy never falls silent; under
+/// 0.1 events a day that stretches them).
 fn heard_in_events(
     sound: &SoundPower,
     per_day: f64,
     while_sounding_dba: f64,
 ) -> ([f64; 3], [f64; 3]) {
     let offsets = [0.0, sound.evening_offset_db, sound.night_offset_db];
-    let level = |p: usize| sound.day_dba + offsets[p];
-    let energy: [f64; 3] = std::array::from_fn(|p| 10f64.powf(level(p) / 10.0) * PERIOD_HOURS[p]);
-    let total: f64 = energy.iter().sum();
+    let on: [f64; 3] = std::array::from_fn(|p| {
+        10f64.powf((sound.day_dba + offsets[p] - while_sounding_dba) / 10.0)
+    });
+    let hours: f64 = (0..3).map(|p| on[p] * PERIOD_HOURS[p]).sum();
     (
-        std::array::from_fn(|p| (per_day * energy[p] / total * 100.0).round() / 100.0),
-        std::array::from_fn(|p| {
-            let duty = 10f64.powf((level(p) - while_sounding_dba) / 10.0).min(1.0);
-            (duty * 1e5).ceil() / 1e5
-        }),
+        std::array::from_fn(|p| per_day * on[p] * PERIOD_HOURS[p] / hours),
+        std::array::from_fn(|p| (on[p].min(1.0) * 1e5).ceil() / 1e5),
     )
 }
 
@@ -415,7 +415,7 @@ mod tests {
         }
         let (range, _) = row_emission(&node(SHOOTING)).unwrap();
         let (shots, duty) = events_of(SHOOTING, &range, 0.0).unwrap();
-        assert!((shots[0] - 20_000.0 / 365.0).abs() < 0.01 && shots[1..] == [0.0, 0.0]);
+        assert!((shots[0] - 20_000.0 / 365.0).abs() < 0.01 && shots[1] + shots[2] < 0.001);
         assert!((duty[0] * PERIOD_HOURS[0] * 3_600.0 / shots[0] - 1.0).abs() < 0.01);
         let (pitch, _) = row_emission(&node(PITCH)).unwrap();
         assert_eq!(events_of(PITCH, &pitch, 0.0), None);
