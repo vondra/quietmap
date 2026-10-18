@@ -162,6 +162,11 @@ fn tunnel_counts(rows: &[CountedRow], tunnels: &[TunnelRow]) -> Vec<Road> {
             }
         }
     }
+    // Each portal's counts once: every row of a portal way meets the chain with them.
+    for counts in portals.values_mut() {
+        counts.sort_by(f64::total_cmp);
+        counts.dedup();
+    }
     (0..tunnels.len())
         .map(|index| {
             let counts = portals.get(&root(&mut chain, index));
