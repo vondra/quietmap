@@ -573,8 +573,8 @@ fn way_rows(
 
 /// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
 /// square, the guessed traffic replaced by the building traffic under `traffic` when given and
-/// the buses of `bus` added to it, a row on a bridge on its deck from `decks`; returns how many
-/// rows emit.
+/// the buses of `bus` added to it, a row on a bridge on its deck from `decks`; returns whether
+/// the square's buildings are mapped (its building traffic modelled), which bounds its parking.
 pub fn convert(
     (dev4, temperature, traffic, bus): (
         &Dev4,
@@ -586,9 +586,9 @@ pub fn convert(
     reach: Option<Reach>,
     decks: &Decks,
     out: &mut Vec<Converted>,
-) -> Result<usize, String> {
+) -> Result<bool, String> {
     let Some(table) = dev4.table(square, "roads.arrow")? else {
-        return Ok(0);
+        return Ok(false);
     };
     for (key, value) in [
         ("grid", "z30"),
@@ -646,7 +646,6 @@ pub fn convert(
     let chains = chains(&mut ways);
     let slopes = row_slopes(&chains, &heights, rows);
     let row_stops = row_junctions(&chains, &junctions, rows);
-    let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {
         let batch_first_row = first_row;
@@ -973,10 +972,9 @@ pub fn convert(
                     deck_m: part.deck(deck_m),
                 });
             }
-            emitting += 1;
         }
     }
-    Ok(emitting)
+    Ok(building_traffic.is_some())
 }
 
 #[cfg(test)]
