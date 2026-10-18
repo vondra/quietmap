@@ -8,7 +8,7 @@
 /// Metres from either end of a ray within which its ground is walked on the 1/6" lattice: a berm,
 /// a cutting or a road's shelf narrower than the 1" lattice screens there (against 5 m heights
 /// every 2 m along the whole ray: the D4's berm at Mníšek 3.52 -> 0.12 dB, Pasito A 1.03 -> 0.20,
-/// Kytín 0.19 -> 0.02; 300 m gains at most 0.12 dB more for three times the added vertices;
+/// a hillside village 0.19 -> 0.02; 300 m gains at most 0.12 dB more for three times the added vertices;
 /// measured 2026-10-10).
 pub const FINE_ENDS_M: f64 = 100.0;
 
