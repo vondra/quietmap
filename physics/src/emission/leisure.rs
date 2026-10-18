@@ -66,6 +66,12 @@ const PLAYERS: [f64; BANDS] = [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -4.0];
 /// Movements a parking space sees in a day at the car-park rates below (0.40 an hour 06-22, 0.05
 /// 22-06).
 pub const PARKING_MOVEMENTS_PER_SPACE_DAY: f64 = 16.0 * 0.40 + 8.0 * 0.05;
+/// A parking movement's sound power while it sounds (dB(A)): the parking study's 63 dB(A) of one
+/// movement an hour over the 4.0 s a car starting and pulling away sounds at its peak, the bulk of
+/// a movement's energy (Hepworth Acoustics' car park measurements at 10 m, report 21911.02 Table 2:
+/// SEL 71, LAmax 65, 10^0.6 s; a door's closing, SEL 69 and LAmax 72, sounds half a second): 63 +
+/// 10 lg(3600 / 4.0). A lot's searching traffic lengthens its movements at this power.
+pub const PARKING_MOVEMENT_DBA: f64 = 92.54;
 
 /// Parkplatzlaermstudie Tab. 25: A-weighted bands of parking movements, turned Z-weighted.
 const CAR_PARK_SPECTRUM: [f64; BANDS] = [8.5, -1.0, -4.2, -5.5, -5.3, -5.8, -10.4, -18.5];
@@ -243,7 +249,7 @@ pub fn shooting_subtype(shooting: Option<&str>, details: &[&str], name: &str) ->
 
 /// Shots a year of a range without register data (dev4 default, the Zurich register 64-ZH
 /// carries real counts), spread over the 12 h day of 365 days.
-const SHOTS_PER_YEAR: f64 = 20_000.0;
+pub const SHOTS_PER_YEAR: f64 = 20_000.0;
 const DAY_SECONDS_PER_YEAR: f64 = 12.0 * 3_600.0 * 365.0;
 
 /// A range's annual day sound power: the single-shot energy level L_E (RIVM Defensie emission

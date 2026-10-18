@@ -14,8 +14,9 @@ always gives the same answer.
 It leads with how loud the place sounds over the day, in sone, then the level in decibels (Lden).
 Below are the sources heard there, the largest share first: a road as one row, a factory, the
 aircraft. Each row tells how often the source passes (vehicles an hour by day, trains a day,
-flights a day above 50 dB, how many times a day bells ring or a call sounds; nothing for a steady
-source), how far it is, and its share of what is heard there. The shares add up to 100 %.
+flights a day above 50 dB, how many times a day bells ring, a call sounds or a car parks or
+leaves; nothing for a steady source), how far it is, and its share of what is heard there. The
+shares add up to 100 %.
 
 Open a row for the source's data (vehicles a day and their mix, speed, a surface other than
 asphalt; trains a day; the flights and their types), what distance, air, buildings, terrain, ground
@@ -238,8 +239,9 @@ random times, and the source's distance and speed tell how much of the time the 
 each value (Kurze's statistics of moving sources). A road with 600 vehicles an hour at 50 km/h is a
 series of passes 20 m away and a steady sound from about 80 m; one flight a day 1 km away is near
 its peak for about half a minute. Sources add up only within the same moment, so the sum is taken
-for every hour of road traffic and ten states of the weather; bells and calls sound in their share
-of the period, industry, buildings and ships are steady. That gives the levels exceeded 5 to 90 %
+for every hour of road traffic and ten states of the weather; bells, calls, a car park's cars and
+a range's shots sound in their share of the period; industry, the other buildings and places, and
+ships are steady. That gives the levels exceeded 5 to 90 %
 of the time.
 
 Nden is every moment's loudness after ISO 532-1 (Zwicker), from the spectrum received in that

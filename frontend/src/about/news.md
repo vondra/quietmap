@@ -5,6 +5,7 @@ intro: What changed in the data and the model, and what comes next.
 
 ## October 2026
 
+- **Parking in its moments.** A car park or a street's parking is heard in its cars' arrivals and departures, four seconds each, no longer as a steady hum; its decibels stay. At Prague's Na Špitálce the street parking's 69 cars in and out a day fell from 1.96 to 0.04 sone alone and from 10 % to 1 % of what is heard there, under the flights over it. A shooting range is heard in its shots.
 - **Industrial sites.** A site's sound no longer starts behind the walls of its own buildings: a point inside one of them emits from that building, and a building on a site that the data knows only as a building or a block of flats is the site's, not a home. Behind the Clacton sewage works in England a sharp shadow 600 m long is gone; 250 m away the works rose from 36-38 to 43-44 dB.
 - **A tunnel's count.** A street over a tunnel no longer carries the tunnel's traffic: in Brno, Kohoutova over the Husovice tunnel carried its 44,000 vehicles a day; in Madrid the avenues over the buried M-30 carried the motorway's 43,000 to 47,000; 117 streets in all.
 - **A count beside its road.** A main road's count that a dataset put on the service road, side lane or ramp beside it now stays the road's: at London's Baker Street the service road beside Marylebone Road carried the road's 43,031 vehicles a day a second time, and the place read 2.3 dB too loud; in Brno hundreds of streets carried the counts of the roads beside them.
