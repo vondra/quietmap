@@ -232,10 +232,10 @@ fn with_motorcycles(flows: [f64; 4], share: f64) -> [f64; 4] {
     ]
 }
 
-/// The rows whose count is a main road's copy (`road_copies`): the counted rows, their ends and
-/// their roads' cross-sections, at the latitude of the first.
+/// The rows whose count is a main road's copy (`road_copies`): the counted rows, their ends, ways'
+/// nodes and roads' cross-sections, and the rows in tunnels, at the latitude of the first.
 fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet<usize>, String> {
-    let mut counted = Vec::new();
+    let (mut counted, mut tunnels) = (Vec::new(), Vec::new());
     let mut first = 0;
     for batch in &table.batches {
         let c = Columns { batch };
@@ -258,9 +258,26 @@ fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet
             f64s("aadt_moto")?,
         ];
         let cross_section = f64s("cross_section_aadt")?;
+        let tunnel = c.get("tunnel")?.as_boolean();
+        let (first_node, last_node) = (
+            c.get("way_start_node")?.as_primitive::<Int64Type>(),
+            c.get("way_end_node")?.as_primitive::<Int64Type>(),
+        );
         for row in 0..batch.num_rows() {
             let source = source_id.value(row);
             let vehicles: f64 = aadt.iter().map(|column| column.value(row)).sum();
+            let ends = [
+                (start_x.value(row), start_y.value(row)),
+                (end_x.value(row), end_y.value(row)),
+            ];
+            let nodes = [first_node.value(row), last_node.value(row)];
+            if tunnel.value(row) {
+                tunnels.push(super::road_copies::TunnelRow {
+                    class: class.value(row),
+                    ends,
+                    nodes,
+                });
+            }
             if source == PRIOR_SOURCE_ID || guessed(source, estimated.value(row)) || vehicles <= 0.0
             {
                 continue;
@@ -269,10 +286,8 @@ fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet
                 row: first + row,
                 class: class.value(row),
                 name: names.value(row).to_string(),
-                ends: [
-                    (start_x.value(row), start_y.value(row)),
-                    (end_x.value(row), end_y.value(row)),
-                ],
+                ends,
+                nodes,
                 vehicles,
                 cross_section: if cross_section.value(row) > 0.0 {
                     cross_section.value(row)
@@ -286,7 +301,9 @@ fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet
     let latitude = counted.first().map_or(0.0, |row| {
         z30_corner_degrees(row.ends[0].0, row.ends[0].1).0
     });
-    Ok(super::road_copies::copied_counts(&counted, latitude))
+    Ok(super::road_copies::copied_counts(
+        &counted, &tunnels, latitude,
+    ))
 }
 
 /// The square's counted rows that count motorcycles, by class group.
