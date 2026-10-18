@@ -38,7 +38,10 @@ junctions and the place's yearly air temperature.
   ramp beside the counted road, within 10 % of that road's own and within 30 m of it, or on a side
   lane of the road's name with its very count, belongs to the road: the way takes its own model.
   At London's Baker Street the service road beside Marylebone Road carried the road's 43,031
-  vehicles a day a second time.
+  vehicles a day a second time. A tunnel, which emits nothing and keeps no traffic in the data,
+  counts as its road at its portals: in Brno, Kohoutova over the Husovice tunnel carried the
+  tunnel's 44,000 vehicles a day; in Madrid the avenues over the buried M-30 carried the
+  motorway's.
 - **Vehicle mix.** A count's own mix where it gives one; otherwise a main road takes the counted
   median of its class, a local street 1 % medium and 2 % heavy vehicles, a US road its state's mix
   ([<abbr title="the US Federal Highway Administration">FHWA</abbr>](https://www.fhwa.dot.gov/policyinformation/statistics.cfm),

@@ -5,7 +5,11 @@
 //! 437 of them, the EU city set 207, Amsterdam's traffic model 121, 2026-10-17,
 //! `evidence/2026-10-17/main-road-copies/`); or a road's side lane of its name anywhere in the
 //! square (Madrid's Castellana side lane carried the main carriageway's 35,989 vehicles a day, the
-//! station by it read 5 dB too loud). Such a row takes its own model, as an uncounted row does.
+//! station by it read 5 dB too loud). A main road's tunnel counts as its road at the portals: dev4
+//! keeps the source of a tunnel's count and zeroes its vehicles, as a tunnel emits nothing, and the
+//! streets over it carried the count (Brno's Kohoutova the Husovice tunnel's 44,000 a day, Madrid
+//! Río's avenues the M-30's 43,071 and 46,995; 117 ways in 6,771 squares with tunnels, 2026-10-18,
+//! `evidence/2026-10-18/tunnel-copies/`). Such a row takes its own model, as an uncounted row does.
 
 use crate::rings::z30_cells;
 use std::collections::{HashMap, HashSet};
@@ -26,23 +30,39 @@ const SIDE_CLASSES: std::ops::RangeInclusive<u8> = 5..=7;
 /// The classes whose count a side lane of their name repeats: the main ones and their links.
 const NAMED_CLASSES: [std::ops::RangeInclusive<u8>; 2] = [0..=4, 10..=12];
 
-/// A row with a count of its own: its table row, dev4 class, name, ends (z30), daily vehicles and
-/// the cross-section of its road (both carriageways; its own count where dev4 gives none).
+/// A row with a count of its own: its table row, dev4 class, name, ends (z30), its way's first and
+/// last OSM nodes, daily vehicles and the cross-section of its road (both carriageways; its own
+/// count where dev4 gives none).
 pub struct CountedRow {
     pub row: usize,
     pub class: u8,
     pub name: String,
     pub ends: [(i32, i32); 2],
+    pub nodes: [i64; 2],
     pub vehicles: f64,
     pub cross_section: f64,
 }
 
+/// A row in a tunnel: its dev4 class, ends (z30) and its way's first and last OSM nodes.
+pub struct TunnelRow {
+    pub class: u8,
+    pub ends: [(i32, i32); 2],
+    pub nodes: [i64; 2],
+}
+
+/// A main road's row or tunnel row: its ends (z30) and the counts a copy of it repeats.
+type Road = ([(i32, i32); 2], Vec<f64>);
+
 /// The rows below the main classes whose count is within `COPY_TOLERANCE` of the count or the
-/// cross-section of a main row within `COPY_REACH_M`, at `latitude_deg`; and the side lanes with the
-/// very count of a road of their name.
-pub fn copied_counts(rows: &[CountedRow], latitude_deg: f64) -> HashSet<usize> {
+/// cross-section of a main row or a main road's tunnel within `COPY_REACH_M`, at `latitude_deg`;
+/// and the side lanes with the very count of a road of their name.
+pub fn copied_counts(
+    rows: &[CountedRow],
+    tunnels: &[TunnelRow],
+    latitude_deg: f64,
+) -> HashSet<usize> {
     let reach = f64::from(z30_cells(COPY_REACH_M, latitude_deg));
-    // The main rows by the cells their reach covers, cells as wide as the reach.
+    // Cells as wide as the reach, and those a row's reach covers.
     let cell = |z30: f64| (z30 / reach).floor() as i64;
     let cells_of = |[a, b]: [(i32, i32); 2]| {
         let (x0, x1) = (
@@ -55,11 +75,19 @@ pub fn copied_counts(rows: &[CountedRow], latitude_deg: f64) -> HashSet<usize> {
         );
         (cell(x0)..=cell(x1)).flat_map(move |x| (cell(y0)..=cell(y1)).map(move |y| (x, y)))
     };
-    let mut main: HashMap<(i64, i64), Vec<&CountedRow>> = HashMap::new();
+    // The main roads' rows and tunnels with the counts a copy repeats, by the cells their reach covers.
+    let roads: Vec<Road> = rows
+        .iter()
+        .filter(|row| MAIN_CLASSES.contains(&row.class))
+        .map(|row| (row.ends, vec![row.vehicles, row.cross_section]))
+        .chain(tunnel_counts(rows, tunnels))
+        .filter(|(_, counts)| !counts.is_empty())
+        .collect();
+    let mut main: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     let mut named: HashMap<&str, HashSet<i64>> = HashMap::new();
-    for row in rows.iter().filter(|row| MAIN_CLASSES.contains(&row.class)) {
-        for at in cells_of(row.ends) {
-            main.entry(at).or_default().push(row);
+    for (road, (ends, _)) in roads.iter().enumerate() {
+        for at in cells_of(*ends) {
+            main.entry(at).or_default().push(road);
         }
     }
     for row in rows.iter().filter(|row| {
@@ -85,13 +113,60 @@ pub fn copied_counts(rows: &[CountedRow], latitude_deg: f64) -> HashSet<usize> {
                 || cells_of(row.ends)
                     .filter_map(|at| main.get(&at))
                     .flatten()
-                    .any(|road| {
-                        (repeats(row.vehicles, road.cross_section)
-                            || repeats(row.vehicles, road.vehicles))
-                            && segments_apart(row.ends, road.ends) <= reach
+                    .any(|&road| {
+                        let (ends, counts) = &roads[road];
+                        counts.iter().any(|&of| repeats(row.vehicles, of))
+                            && segments_apart(row.ends, *ends) <= reach
                     })
         })
         .map(|row| row.row)
+        .collect()
+}
+
+/// The rows of main roads' tunnels (a main class or a link) with their road's counts at the
+/// portals: the vehicles and cross-sections of the counted main rows whose ways meet the tunnel's
+/// chain of ways at a node (Husovice's portals carry 22,000 a carriageway, 44,000 both, the count
+/// of Kohoutova over it). Not a link's: a counted ramp at a portal would repeat its own count.
+fn tunnel_counts(rows: &[CountedRow], tunnels: &[TunnelRow]) -> Vec<Road> {
+    fn root(chain: &mut [usize], mut at: usize) -> usize {
+        while chain[at] != at {
+            chain[at] = chain[chain[at]];
+            at = chain[at];
+        }
+        at
+    }
+    let tunnels: Vec<&TunnelRow> = tunnels
+        .iter()
+        .filter(|tunnel| {
+            NAMED_CLASSES
+                .iter()
+                .any(|classes| classes.contains(&tunnel.class))
+        })
+        .collect();
+    // The chains: the tunnel ways that share a node.
+    let mut chain: Vec<usize> = (0..tunnels.len()).collect();
+    let mut at_node: HashMap<i64, usize> = HashMap::new();
+    for (index, tunnel) in tunnels.iter().enumerate() {
+        for node in tunnel.nodes {
+            let other = *at_node.entry(node).or_insert(index);
+            let (a, b) = (root(&mut chain, index), root(&mut chain, other));
+            chain[a] = b;
+        }
+    }
+    let mut portals: HashMap<usize, Vec<f64>> = HashMap::new();
+    for row in rows.iter().filter(|row| MAIN_CLASSES.contains(&row.class)) {
+        for node in row.nodes {
+            if let Some(&tunnel) = at_node.get(&node) {
+                let counts = portals.entry(root(&mut chain, tunnel)).or_default();
+                counts.extend([row.vehicles, row.cross_section]);
+            }
+        }
+    }
+    (0..tunnels.len())
+        .map(|index| {
+            let counts = portals.get(&root(&mut chain, index));
+            (tunnels[index].ends, counts.cloned().unwrap_or_default())
+        })
         .collect()
 }
 
@@ -146,6 +221,7 @@ mod tests {
             class,
             name: String::new(),
             ends: ends.map(|(x, y)| at(x, y)),
+            nodes: [2 * row as i64, 2 * row as i64 + 1],
             vehicles,
             cross_section,
         };
@@ -157,7 +233,7 @@ mod tests {
             row(4, 7, [(20.0, -5.0), (180.0, -5.0)], 4_000.0, 4_000.0),
             row(5, 5, [(20.0, -100.0), (180.0, -100.0)], 43_000.0, 43_000.0),
         ];
-        let mut copies: Vec<usize> = copied_counts(&rows, 51.5).into_iter().collect();
+        let mut copies: Vec<usize> = copied_counts(&rows, &[], 51.5).into_iter().collect();
         copies.sort_unstable();
         assert_eq!(copies, [2, 3]);
     }
@@ -174,6 +250,7 @@ mod tests {
             class,
             name: name.into(),
             ends: [at(0.0, y_m), at(200.0, y_m)],
+            nodes: [2 * row as i64, 2 * row as i64 + 1],
             vehicles,
             cross_section: vehicles,
         };
@@ -184,6 +261,43 @@ mod tests {
             row(3, 5, "Calle de Serrano", 500.0, 35_989.0),
             row(4, 9, "Paseo de la Castellana", 600.0, 35_989.0),
         ];
-        assert_eq!(copied_counts(&rows, 40.4), HashSet::from([1]));
+        assert_eq!(copied_counts(&rows, &[], 40.4), HashSet::from([1]));
+    }
+
+    /// Brno's Husovice tunnel at 49.2° N: a trunk in two tunnel ways, counted outside its portal
+    /// with 22,000 a carriageway and 44,000 both; the street over it with either count is a copy, a
+    /// street beside it with 5,000 is not, nor one over a tunnel whose portals carry no count.
+    #[test]
+    fn a_street_over_a_tunnel_with_the_count_at_its_portals_is_a_copy() {
+        let m = 1.0 / (crate::dev4::Z30_QUANTUM_M * 49.2f64.to_radians().cos());
+        let at = |x_m: f64, y_m: f64| ((x_m * m) as i32, (y_m * m) as i32);
+        let row =
+            |row, class, [x0, x1]: [f64; 2], y_m, nodes, vehicles, cross_section| CountedRow {
+                row,
+                class,
+                name: String::new(),
+                ends: [at(x0, y_m), at(x1, y_m)],
+                nodes,
+                vehicles,
+                cross_section,
+            };
+        let tunnel = |[x0, x1]: [f64; 2], nodes| TunnelRow {
+            class: 1,
+            ends: [at(x0, 0.0), at(x1, 0.0)],
+            nodes,
+        };
+        let rows = [
+            row(0, 1, [480.0, 600.0], 0.0, [3, 4], 22_000.0, 44_000.0),
+            row(1, 5, [50.0, 250.0], 5.0, [10, 11], 44_000.0, 44_000.0),
+            row(2, 5, [50.0, 250.0], -8.0, [12, 13], 22_000.0, 44_000.0),
+            row(3, 5, [50.0, 250.0], 15.0, [14, 15], 5_000.0, 5_000.0),
+            row(4, 5, [1_000.0, 1_200.0], 5.0, [16, 17], 44_000.0, 44_000.0),
+        ];
+        let tunnels = [
+            tunnel([0.0, 300.0], [1, 2]),
+            tunnel([300.0, 480.0], [2, 3]),
+            tunnel([1_000.0, 1_200.0], [20, 21]),
+        ];
+        assert_eq!(copied_counts(&rows, &tunnels, 49.2), HashSet::from([1, 2]));
     }
 }
