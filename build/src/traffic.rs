@@ -445,7 +445,7 @@ fn grid_offset(rows: usize) -> usize {
 }
 
 /// The grid of a square's traffic file alone (the rows' flows are not read).
-fn read_grid(out: &Path, square: Square) -> Result<Option<Vec<f32>>, String> {
+pub fn read_grid(out: &Path, square: Square) -> Result<Option<Vec<f32>>, String> {
     use std::io::{Read, Seek, SeekFrom};
     let path = path(out, square);
     let context = |error: std::io::Error| format!("{}: {error}", path.display());

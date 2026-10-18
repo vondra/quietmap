@@ -280,7 +280,7 @@ fn build_square(
     let decks = decks::Decks::of_square(dev4, square, out)?;
     for neighbour in square.with_neighbours() {
         let road_reach = (neighbour != square).then_some(reach);
-        road::convert(
+        let buildings_mapped = road::convert(
             (dev4, &climate.mean, road_traffic, bus),
             neighbour,
             road_reach,
@@ -291,7 +291,7 @@ fn build_square(
         leisure::convert(
             dev4,
             neighbour,
-            (road_traffic, places.venues),
+            (road_traffic.filter(|_| buildings_mapped), places.venues),
             &mut converted,
         )?;
         building::convert(
