@@ -67,10 +67,12 @@ const PLAYERS: [f64; BANDS] = [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -4.0];
 /// 22-06).
 pub const PARKING_MOVEMENTS_PER_SPACE_DAY: f64 = 16.0 * 0.40 + 8.0 * 0.05;
 /// A parking movement's sound power while it sounds (dB(A)): the parking study's 63 dB(A) of one
-/// movement an hour over the 4.0 s a car starting and pulling away sounds at its peak, the bulk of
-/// a movement's energy (Hepworth Acoustics' car park measurements at 10 m, report 21911.02 Table 2:
-/// SEL 71, LAmax 65, 10^0.6 s; a door's closing, SEL 69 and LAmax 72, sounds half a second): 63 +
-/// 10 lg(3600 / 4.0). A lot's searching traffic lengthens its movements at this power.
+/// movement an hour held for 4.0 s, 63 + 10 lg(3600 / 4.0). That is a car's accelerated departure
+/// at its peak (the study's Tab. 35: 67 dB(A) at 7.5 m, 92.5 dB(A) of power), the bulk of a
+/// movement's energy; Hepworth Acoustics' car parks at 10 m (report 21911.02 Table 2) hold an
+/// engine start and pull-away's energy at its peak as long (SEL 71, LAmax 65: 10^0.6 s; a door's
+/// closing, SEL 69 and LAmax 72, half a second). A lot's searching traffic lengthens its movements
+/// at this power.
 pub const PARKING_MOVEMENT_DBA: f64 = 92.54;
 
 /// Parkplatzlaermstudie Tab. 25: A-weighted bands of parking movements, turned Z-weighted.
