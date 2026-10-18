@@ -2,17 +2,18 @@
 //! as sources (`physics::emission::people`, `venues`; research 2026-10-04, people): each place one
 //! point 1.5 m up in front of the wall of the building it is mapped in (`outside`), with its seats
 //! and door crowd by its hours and its country's customs, the terrace season of its climate, and
-//! its share of the street crowd where the places along 40 m of street weigh three or more.
+//! its share of the street crowd where the places along 40 m of street weigh three or more, heard
+//! in the hours of the year it has people outside (its display's duty).
 
 use super::Converted;
 use super::cells::{Site, Z30Ring, push_site_points, site_points};
 use super::venues::{VenueKind, VenueSite, cluster_weight, customs, hours, seats};
-use super::{fields, group_key, metres, object_key};
+use super::{displayed_duty, fields, group_key, metres, object_key};
 use crate::climate::Climate;
 use crate::dev4::{degrees_to_z30, z30_corner_degrees};
 use physics::emission::people::{
     EATING_DBA, LEAST_SEASON_SHARE, LIVELY_DBA, STANDING_DBA, TERRACE_SEASON_C, Venue,
-    street_crowd_dba, venue_sound_power,
+    street_crowd_dba, venue_duty, venue_sound_power,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -147,7 +148,7 @@ pub fn convert_people(
                 (loudest * 10.0).round() / 10.0,
                 null,
                 null,
-                null,
+                displayed_duty(venue_duty(&venue)),
                 host.map(object_key)
             ])),
         };

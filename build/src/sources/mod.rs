@@ -191,6 +191,12 @@ pub fn fields(display: serde_json::Value) -> Vec<serde_json::Value> {
     fields
 }
 
+/// A source heard in use: its share of each period sounding as its display writes it, rounded up to
+/// the display's five decimals so a period with energy never falls silent.
+pub fn displayed_duty(shares: [f64; 3]) -> [f64; 3] {
+    shares.map(|share| (share.min(1.0) * 1e5).ceil() / 1e5)
+}
+
 /// A source's object as its display writes it: the group key of the source it is a part of, as
 /// the popup writes a group's id.
 pub fn object_key(group_key: u64) -> String {
