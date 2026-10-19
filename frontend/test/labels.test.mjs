@@ -59,4 +59,6 @@ test('a part reads as what makes its sound: a building\'s bells or guests, anoth
   assert.equal(partLabel('building', { building_type: 'church_bells' }, 'St Ludmila'), 'Bells')
   assert.equal(partLabel('building', { building_type: 'people_bar', name: 'U Pinkasů' }, 'Jungmannova 15'), 'Guests outside U Pinkasů')
   assert.equal(partLabel('building', null, 'Jungmannova 15'), 'Building')
+  assert.equal(partLabel('building', { building_type: 'kitchen_extract', name: 'Jungmannova 15' }, 'Jungmannova 15'), 'Kitchen extract')
+  assert.equal(partLabel('building', { building_type: 'restaurant_bar', name: 'Jungmannova 15' }, 'Jungmannova 15'), 'Building')
 })

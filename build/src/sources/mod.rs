@@ -6,6 +6,7 @@ pub mod airport;
 pub mod bells;
 pub mod building;
 pub mod building_plant;
+pub mod building_rows;
 pub mod bus;
 pub mod calls;
 pub mod cells;

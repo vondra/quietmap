@@ -208,10 +208,11 @@ const LAYER_ROWS: Record<string, (props: { m: ContributorMetadata }) => ReactNod
 }
 
 /** When a source's stored sound power holds: a venue's people at their busiest, an event while it
- *  sounds, every other source by day. */
+ *  sounds, a shop's, an office's or a restaurant's plant while it runs, every other source by day. */
 function soundPowerWhen(m: ContributorMetadata): string {
   const type = text(m, 'building_type')
   if (type.startsWith('people_')) return 'at its busiest'
+  if (['commercial', 'restaurant_bar', 'kitchen_extract'].includes(type)) return 'while running'
   return type === 'church_bells' || type === 'call_to_prayer' ? 'while sounding' : 'by day'
 }
 

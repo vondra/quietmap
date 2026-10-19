@@ -105,3 +105,45 @@ fn a_node_on_its_outline_is_one_place() {
         "another name is another place"
     );
 }
+
+/// A building's places are open when any is; its kitchen runs an hour either side of its
+/// restaurant's hours; without a place that cooks it has none.
+#[test]
+fn a_buildings_places_give_its_open_and_kitchen_hours() {
+    let place = |kind: VenueKind, hours: &str| VenueSite {
+        lat: 50.08,
+        lon: 14.42,
+        kind,
+        seating: Seating::Unknown,
+        area_m2: 0.0,
+        hours: parse(hours),
+        name: String::new(),
+    };
+    let customs = customs(iso(b"CZ"));
+    let restaurant = place(VenueKind::Restaurant, "Mo-Su 11:00-22:00");
+    let cafe = place(VenueKind::Cafe, "Mo-Su 07:00-19:00");
+    let both = place_hours(&[&cafe, &restaurant], &customs);
+    assert_eq!(open_hours(&both.open, 3), (7..=21).collect::<Vec<_>>());
+    assert_eq!(
+        open_hours(&both.kitchen.unwrap(), 3),
+        (10..=22).collect::<Vec<_>>()
+    );
+    let bar = place(VenueKind::Bar, "Mo-Su 18:00-01:00");
+    let drinks = place_hours(&[&cafe, &bar], &customs);
+    assert_eq!(drinks.kitchen, None);
+    let mut expected = vec![0];
+    expected.extend(7..=23);
+    assert_eq!(open_hours(&drinks.open, 3), expected);
+}
+
+/// A building of bars and restaurants with no place mapped in it keeps a restaurant's hours in its
+/// country, its kitchen among them.
+#[test]
+fn an_unmapped_building_of_restaurants_keeps_a_restaurants_hours() {
+    let hours = unmapped_place_hours(&customs(iso(b"CZ")));
+    assert_eq!(open_hours(&hours.open, 2), [12, 13, 14, 18, 19, 20, 21]);
+    assert_eq!(
+        open_hours(&hours.kitchen.unwrap(), 2),
+        [11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 22]
+    );
+}

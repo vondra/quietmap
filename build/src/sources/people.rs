@@ -114,10 +114,6 @@ pub fn convert_people(
         let Some(sound) = venue_sound_power(&venue) else {
             continue;
         };
-        let loudest = [0.0, sound.evening_offset_db, sound.night_offset_db]
-            .iter()
-            .fold(f64::NEG_INFINITY, |a, &b| a.max(b))
-            + sound.day_dba;
         let ring: Z30Ring = Vec::new();
         let point = Site {
             centroid: z30_corner_degrees(position.0, position.1),
@@ -145,7 +141,7 @@ pub fn convert_people(
                 0,
                 0,
                 "",
-                (loudest * 10.0).round() / 10.0,
+                (sound.loudest_dba() * 10.0).round() / 10.0,
                 null,
                 null,
                 displayed_duty(venue_duty(&venue)),

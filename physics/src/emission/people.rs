@@ -16,9 +16,8 @@
 //! crowds count in the terrace season only. The people are heard in use: at their mean over the
 //! hours of the year they are outside ([`venue_duty`]), silent the rest.
 
-use super::DAY_ONLY_OFFSET_DB;
 use super::spectrum::SoundPower;
-use crate::bands::{BANDS, PERIOD_HOURS};
+use crate::bands::{BANDS, PERIOD_HOURS, WeekHours, level_db, period_of_hour};
 
 pub const EATING_DBA: f64 = 63.6;
 pub const LIVELY_DBA: f64 = 70.7;
@@ -36,9 +35,6 @@ const DISPERSAL_DB: f64 = -5.0;
 /// A cluster's street crowd covers 40 m of an 8 m street (Ballesteros 2014's segments).
 const CROWD_AREA_M2: f64 = 40.0 * 8.0;
 
-/// Hours of a week, `[weekday][hour]`, Monday first.
-pub type WeekHours = [[bool; 24]; 7];
-
 /// A place's people outside: its seats and the share of the year they are used, its open and
 /// terrace hours, the hour its door crowd starts (`None`: none), what its seated guests do in the
 /// evening and at night (dB(A) a person), whether it empties into the street when it closes, and
@@ -53,14 +49,6 @@ pub struct Venue<'a> {
     pub night_dba: f64,
     pub drinking: bool,
     pub crowd_dba: Option<f64>,
-}
-
-fn period(hour: usize) -> usize {
-    match hour {
-        7..=18 => 0,
-        19..=22 => 1,
-        _ => 2,
-    }
 }
 
 /// Friday's and Saturday's evenings and the nights after them.
@@ -80,7 +68,7 @@ fn energy(level_dba: f64) -> f64 {
 /// those at its door, there all year, and those on its seats and in the street crowd, there in the
 /// terrace season (its share of the year counted in).
 fn hour_energy(venue: &Venue, day: usize, hour: usize) -> [f64; 2] {
-    let p = period(hour);
+    let p = period_of_hour(hour);
     let weekday_db = match (p, weekend(day, hour)) {
         (0, _) | (_, true) => 0.0,
         (1, false) => WEEKDAY_EVENING_DB,
@@ -126,13 +114,13 @@ fn week_hours<'a>(venue: &'a Venue<'a>) -> impl Iterator<Item = (usize, [f64; 2]
                 (day, hour - 1)
             };
             let just_closed = venue.open[before_day][before_hour] && !venue.open[day][hour];
-            if venue.drinking && just_closed && period(hour) == 2 {
+            if venue.drinking && just_closed && period_of_hour(hour) == 2 {
                 let before = hour_energy(venue, before_day, before_hour);
                 for (part, last) in parts.iter_mut().zip(before) {
                     *part += last * energy(DISPERSAL_DB);
                 }
             }
-            (period(hour), parts)
+            (period_of_hour(hour), parts)
         })
     })
 }
@@ -144,37 +132,10 @@ pub fn venue_sound_power(venue: &Venue) -> Option<SoundPower> {
     for (p, [door, season]) in week_hours(venue) {
         sums[p] += door + season;
     }
-    let levels: [f64; 3] = std::array::from_fn(|p| {
-        let mean = sums[p] / (7.0 * PERIOD_HOURS[p]);
-        if mean > 0.0 {
-            10.0 * mean.log10()
-        } else {
-            f64::NEG_INFINITY
-        }
-    });
-    let loudest = levels.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    if !loudest.is_finite() {
-        return None;
-    }
-    // A silent day keeps the near-silence other day-less sources carry.
-    let day = if levels[0].is_finite() {
-        levels[0]
-    } else {
-        loudest + DAY_ONLY_OFFSET_DB
-    };
-    let offset = |level: f64| {
-        if level.is_finite() {
-            level - day
-        } else {
-            DAY_ONLY_OFFSET_DB
-        }
-    };
-    Some(SoundPower {
-        day_dba: day,
-        spectrum_db: VOICE_SPECTRUM,
-        evening_offset_db: offset(levels[1]),
-        night_offset_db: offset(levels[2]),
-    })
+    SoundPower::of_period_means(
+        std::array::from_fn(|p| level_db(sums[p] / (7.0 * PERIOD_HOURS[p]))),
+        VOICE_SPECTRUM,
+    )
 }
 
 /// The share of each period's hours over the year that the place has people outside: every hour of

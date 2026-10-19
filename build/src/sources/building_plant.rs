@@ -1,5 +1,6 @@
 //! The outdoor units of homes: the air-source heat pumps that heat them and the air conditioners
-//! that cool them, by country and climate (research 2026-10-02, building-plant). A dwelling
+//! that cool them, by country and climate (research 2026-10-02, building-plant); and the share of
+//! shops' and offices' floor that cools (research 2026-10-18, building-plant-hours). A dwelling
 //! carries its country's units per household, each running the share of the hours its climate
 //! asks for: dev4 gave every dwelling of the world one heat pump at 57 dB(A) all year, where 2 %
 //! of British and 60 % of Norwegian households own one, and 88.5 % of Japanese households own 2.37
@@ -115,36 +116,80 @@ const COUNTRIES: [([u8; 2], Option<f64>, Option<f64>); 35] = [
     (*b"ZA", None, Some(0.06)),
 ];
 
+/// Of the floor of shops, offices, restaurants and bars, the share cooled in 2015 (Heat Roadmap
+/// Europe D3.2 section 5.3, from the EU28's sales and stocks of units).
+const SERVICE_COOLED: [([u8; 2], f64); 28] = [
+    (*b"AT", 0.083),
+    (*b"BE", 0.238),
+    (*b"BG", 0.283),
+    (*b"CY", 0.847),
+    (*b"CZ", 0.099),
+    (*b"DE", 0.089),
+    (*b"DK", 0.074),
+    (*b"EE", 0.068),
+    (*b"ES", 0.727),
+    (*b"FI", 0.113),
+    (*b"FR", 0.225),
+    (*b"GB", 0.225),
+    (*b"GR", 0.871),
+    (*b"HR", 0.294),
+    (*b"HU", 0.124),
+    (*b"IE", 0.052),
+    (*b"IT", 0.735),
+    (*b"LT", 0.089),
+    (*b"LU", 0.112),
+    (*b"LV", 0.073),
+    (*b"MT", 0.847),
+    (*b"NL", 0.101),
+    (*b"PL", 0.104),
+    (*b"PT", 0.222),
+    (*b"RO", 0.293),
+    (*b"SE", 0.196),
+    (*b"SI", 0.208),
+    (*b"SK", 0.145),
+];
+/// Outside Europe, HRE's saturation: the United States' share where it is hot (reached by Cyprus
+/// and Malta), as HRE takes the US share at the same climate for where cooling saturates.
+const WORLD_SERVICE_COOLED: f64 = 0.847;
+
 /// UN M49 regions: members, heat pumps and cooling units per household (the medians of the
-/// measured members; South-East Asia's regional figure; Sub-Saharan Africa South Africa's).
-const REGIONS: [(&str, f64, f64); 11] = [
-    // GB 0.02, IE 0.07, DK 0.19, EE 0.32, SE 0.38, FI 0.47, NO 0.60; cooling GB alone.
+/// measured members; South-East Asia's regional figure; Sub-Saharan Africa South Africa's), and in
+/// Europe the median service floor cooled of [`SERVICE_COOLED`]'s members.
+const REGIONS: [(&str, f64, f64, Option<f64>); 11] = [
+    // GB 0.02, IE 0.07, DK 0.19, EE 0.32, SE 0.38, FI 0.47, NO 0.60; cooling GB alone; service
+    // IE .052 EE .068 LV .073 DK .074 LT .089 FI .113 SE .196 GB .225.
     (
         "AX DK EE FO FI GG IS IE IM JE LV LT NO SJ SE GB",
         0.32,
         0.04,
+        Some(0.0815),
     ),
-    // AT 0.09, BE 0.06, FR 0.20, DE 0.04, NL 0.07; AT .08 BE .12 FR .245 DE .06 NL .12 CH .10.
-    ("AT BE FR DE LI LU MC NL CH", 0.07, 0.11),
-    // PT 0.08, ES 0.09, IT 0.16; MT .84 GR .76 IT .56 HR .55 SI .44 ES .41 PT .17.
+    // AT 0.09, BE 0.06, FR 0.20, DE 0.04, NL 0.07; AT .08 BE .12 FR .245 DE .06 NL .12 CH .10;
+    // service AT .083 DE .089 NL .101 LU .112 FR .225 BE .238.
+    ("AT BE FR DE LI LU MC NL CH", 0.07, 0.11, Some(0.1065)),
+    // PT 0.08, ES 0.09, IT 0.16; MT .84 GR .76 IT .56 HR .55 SI .44 ES .41 PT .17; service SI .208
+    // PT .222 HR .294 ES .727 IT .735 MT .847 GR .871.
     (
         "AL AD BA HR GI GR VA IT MT ME MK PT SM RS SI ES XK",
         0.09,
         0.55,
+        Some(0.727),
     ),
-    // PL 0.04, SK 0.04, CZ 0.06; BG .61 HU .28 CZ .16 RO .16 PL .02.
-    ("BY BG CZ HU PL MD RO RU SK UA", 0.04, 0.16),
+    // PL 0.04, SK 0.04, CZ 0.06; BG .61 HU .28 CZ .16 RO .16 PL .02; service CZ .099 PL .104 HU
+    // .124 SK .145 BG .283 RO .293.
+    ("BY BG CZ HU PL MD RO RU SK UA", 0.04, 0.16, Some(0.1345)),
     // Japan 2.37, China 1.46, Korea 0.86.
-    ("CN HK MO KP JP MN KR TW", 0.0, 1.46),
-    ("BN KH ID LA MY MM PH SG TH TL VN", 0.0, 0.29),
+    ("CN HK MO KP JP MN KR TW", 0.0, 1.46, None),
+    ("BN KH ID LA MY MM PH SG TH TL VN", 0.0, 0.29, None),
     // India.
-    ("AF BD BT IN IR MV NP PK LK", 0.0, 0.16),
+    ("AF BD BT IN IR MV NP PK LK", 0.0, 0.16, None),
     // Mexico and Brazil.
     (
         "AI AG AW BS BB BQ VG KY CU CW DM DO GD GP HT JM MQ MS PR BL KN LC MF VC SX TT TC VI BZ CR \
          SV GT HN MX NI PA AR BO BV BR CL CO EC FK GF GY PY PE GS SR UY VE",
         0.0,
         0.16,
+        None,
     ),
     // South Africa, the region's only measured country.
     (
@@ -152,12 +197,36 @@ const REGIONS: [(&str, f64, f64); 11] = [
          ST BW SZ LS NA ZA BJ BF CV CI GM GH GN GW LR ML MR NE NG SH SN SL TG",
         0.0,
         0.06,
+        None,
     ),
     // Australia's units heat and cool in New Zealand too.
-    ("AU NZ NF", 0.49, 0.59),
+    ("AU NZ NF", 0.49, 0.59, None),
     // Canada's for its neighbours.
-    ("BM GL PM", 0.13, 0.45),
+    ("BM GL PM", 0.13, 0.45, None),
 ];
+
+fn is_member(members: &str, code: [u8; 2]) -> bool {
+    members
+        .split_ascii_whitespace()
+        .any(|member| member.as_bytes() == code)
+}
+
+/// The share of the floor of shops, offices, restaurants and bars cooled in `country_iso` (ISO 3166
+/// alpha-2, little-endian): its own, else its European region's median, else HRE's saturation.
+pub fn cooled_service_share(country_iso: u16) -> f64 {
+    let code = country_iso.to_le_bytes();
+    SERVICE_COOLED
+        .iter()
+        .find(|(iso, _)| *iso == code)
+        .map(|&(_, share)| share)
+        .or_else(|| {
+            REGIONS
+                .iter()
+                .find(|(members, ..)| is_member(members, code))
+                .and_then(|region| region.3)
+        })
+        .unwrap_or(WORLD_SERVICE_COOLED)
+}
 
 fn country_plant(country_iso: u16) -> Plant {
     let code = country_iso.to_le_bytes();
@@ -187,13 +256,11 @@ fn country_plant(country_iso: u16) -> Plant {
         }
         _ => {}
     }
-    let region = REGIONS.iter().find(|(members, _, _)| {
-        members
-            .split_ascii_whitespace()
-            .any(|member| member.as_bytes() == code)
-    });
+    let region = REGIONS
+        .iter()
+        .find(|(members, ..)| is_member(members, code));
     let (region_heating, region_cooling) = region
-        .map_or((0.0, WORLD_COOLING_UNITS), |&(_, heating, cooling)| {
+        .map_or((0.0, WORLD_COOLING_UNITS), |&(_, heating, cooling, _)| {
             (heating, cooling)
         });
     let measured = COUNTRIES.iter().find(|(iso, _, _)| *iso == code);
@@ -306,12 +373,43 @@ mod tests {
         assert_eq!(country_plant(0).cooling_units, WORLD_COOLING_UNITS);
         for (iso, _, _) in COUNTRIES {
             assert!(
-                REGIONS.iter().any(|(members, _, _)| members
-                    .split_ascii_whitespace()
-                    .any(|m| m.as_bytes() == iso))
+                REGIONS.iter().any(|(members, ..)| is_member(members, iso))
                     || [*b"US", *b"CA"].contains(&iso),
                 "{}",
                 String::from_utf8_lossy(&iso)
+            );
+        }
+    }
+
+    /// The EU's countries cool their service floor as HRE models it, Europe's others as their
+    /// region's median, the rest of the world at HRE's saturation; the regional medians are the
+    /// table's.
+    #[test]
+    fn service_floor_cools_by_country_then_region_then_saturation() {
+        assert_eq!(cooled_service_share(iso(b"CZ")), 0.099);
+        assert_eq!(cooled_service_share(iso(b"ES")), 0.727);
+        assert_eq!(cooled_service_share(iso(b"NO")), 0.0815);
+        assert_eq!(cooled_service_share(iso(b"UA")), 0.1345);
+        for code in [b"US", b"JP", b"IN", b"BR", b"AE"] {
+            assert_eq!(cooled_service_share(iso(code)), WORLD_SERVICE_COOLED);
+        }
+        for (members, _, _, median) in REGIONS {
+            let mut shares: Vec<f64> = SERVICE_COOLED
+                .iter()
+                .filter(|(code, _)| is_member(members, *code))
+                .map(|&(_, share)| share)
+                .collect();
+            shares.sort_by(f64::total_cmp);
+            let middle = shares.len() / 2;
+            let expected = match shares.len() {
+                0 => None,
+                n if n % 2 == 1 => Some(shares[middle]),
+                _ => Some((shares[middle - 1] + shares[middle]) / 2.0),
+            };
+            assert_eq!(
+                median.map(|m| (m * 1e4).round()),
+                expected.map(|e| (e * 1e4).round()),
+                "{members}"
             );
         }
     }

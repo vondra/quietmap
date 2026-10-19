@@ -17,6 +17,18 @@ pub const PERIOD_HOURS: [f64; PERIODS] = [12.0, 4.0, 8.0];
 /// Lden penalties of the evening and night periods.
 pub const PERIOD_PENALTY_DB: [f64; PERIODS] = [0.0, 5.0, 10.0];
 
+/// Hours of a week, `[weekday][hour]`, Monday first; an hour counts when its middle does.
+pub type WeekHours = [[bool; 24]; 7];
+
+/// The period of an hour of the day (0-23).
+pub fn period_of_hour(hour: usize) -> usize {
+    match hour {
+        7..=18 => 0,
+        19..=22 => 1,
+        _ => 2,
+    }
+}
+
 /// Linear energy of a level: 10^(L/10), as an exponential (twice as fast as a power, within
 /// 5e-15 of it).
 pub fn energy(level_db: f64) -> f64 {

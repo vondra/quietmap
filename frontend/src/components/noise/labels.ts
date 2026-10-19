@@ -70,6 +70,7 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     commercial: 'Commercial / office',
     food_retail: 'Shop / supermarket',
     restaurant_bar: 'Restaurant / bar',
+    kitchen_extract: 'Kitchen extract',
     warehouse: 'Warehouse / factory',
     education: 'School',
     healthcare: 'Hospital / clinic',
@@ -136,9 +137,10 @@ function kindOf(c: Contributor): string {
 }
 
 /** What a part of a row makes the sound: a building's guests (with the place's name where it is not
- *  the row's, two places sharing a building), its bells or call to prayer, else the building itself
- *  (its ventilation, cooling and heating); a part of another layer's row its class in words (a
- *  street and the service road under its name: náměstí Míru's read "Building" twice, 2026-10-17). */
+ *  the row's, two places sharing a building), its bells or call to prayer, a restaurant's kitchen
+ *  extract, else the building itself (its cooling and heating); a part of another layer's row its
+ *  class in words (a street and the service road under its name: náměstí Míru's read "Building"
+ *  twice, 2026-10-17). */
 export function partLabel(sourceType: string, metadata: Record<string, unknown> | null, rowName: string): string {
   if (sourceType !== 'building') {
     const cls = metadataClass(metadata)
@@ -149,6 +151,7 @@ export function partLabel(sourceType: string, metadata: Record<string, unknown> 
   if (kind === 'church_bells') return 'Bells'
   if (kind === 'call_to_prayer') return 'Call to prayer'
   if (kind.startsWith('people_')) return name && name !== rowName ? `Guests outside ${name}` : 'Guests outside'
+  if (kind === 'kitchen_extract') return 'Kitchen extract'
   return 'Building'
 }
 

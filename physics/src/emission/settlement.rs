@@ -2,18 +2,22 @@
 //! square metre of gross floor area, `L_W = 10 lg(10^(fixed/10) + GFA 10^(per_m2/10))`, per
 //! building class. The same area law serves the open-air leisure areas. Homes instead carry the
 //! outdoor units their country's households own, each running its climate's share of the hours:
-//! [`plant_sound_power`].
+//! [`plant_sound_power`]; shops, offices, restaurants, cafés and bars their plant in its hours
+//! ([`super::plant`]).
 
 use super::spectrum::SoundPower;
 use crate::bands::BANDS;
 
+/// Shops other than food, offices, kiosks and fuel stations: their cooling plant in business hours.
+pub const COMMERCIAL: u8 = 1;
 /// Sheds, roofs, huts, greenhouses and ruins: uninhabited, they emit nothing.
 pub const SILENT: u8 = 10;
 /// Detached and terraced houses: the apartments' heat-pump floor with a gentler night cut.
 pub const HOUSE: u8 = 11;
 /// Supermarkets and food shops: rooftop refrigeration runs through the night (dev4 audit B2).
 pub const FOOD_RETAIL: u8 = 12;
-/// Restaurants, cafes and bars: the kitchen extract (their guests are the people outside them).
+/// Buildings holding restaurants, cafes and bars: a restaurant's kitchen extract, else their
+/// cooling plant, in their places' hours (their guests are the people outside them).
 pub const HOSPITALITY: u8 = 13;
 
 /// Classes whose noise scales with the footprint, not the floor area: single-volume halls
@@ -52,23 +56,17 @@ const RESIDENTIAL_PLANT: [f64; BANDS] = [-1.0, -1.0, 0.0, 1.0, 1.0, 0.0, -3.0, -
 const BUILDING_SERVICES: [f64; BANDS] = [-1.0, 0.0, 1.0, 1.0, 0.0, -1.0, -3.0, -6.0];
 const HALL_BREAKOUT: [f64; BANDS] = [0.0, 1.0, 1.0, 0.0, -1.0, -2.0, -4.0, -7.0];
 
-/// The profile of a building class; `None` for [`SILENT`]. Classes 0-9: residential (one air
-/// source heat pump L_W 54-62, Daikin EN14825), commercial (AHU and chillers, Guyer), warehouse
-/// or factory (roof and facade breakout), school (yard voices, 71.7 dB just outside in breaks),
-/// hospital (24/7 chillers and gensets), place of worship (a public building's services), hotel, garage (vent fans),
-/// farm (livestock fans), public; food retail re-anchored to one refrigeration unit (RWDI),
-/// hospitality to a kitchen extract (Guyer; its VDI 3770 voices per m2 left to the people outside
-/// the venues, `people`). Unknown classes are residential.
+/// The profile of a building class; `None` for [`SILENT`] and for the classes whose plant runs in
+/// its hours ([`COMMERCIAL`], [`HOSPITALITY`]: [`super::plant`]). Classes 0-9: residential (one
+/// air source heat pump L_W 54-62, Daikin EN14825), warehouse or factory (roof and facade
+/// breakout), school (yard voices, 71.7 dB just outside in breaks), hospital (24/7 chillers and
+/// gensets), place of worship (a public building's services), hotel, garage (vent fans), farm
+/// (livestock fans), public; food retail re-anchored to one refrigeration unit (RWDI). Unknown
+/// classes are residential.
 pub fn building_profile(class: u8) -> Option<BuildingProfile> {
     Some(match class {
         0 => profile(57.0, 25.0, RESIDENTIAL_PLANT, -5.0, -10.0),
-        1 => profile(
-            70.0,
-            30.0,
-            [-1.0, 1.0, 1.0, 1.0, 0.0, -1.0, -3.0, -6.0],
-            -5.0,
-            -10.0,
-        ),
+        SILENT | COMMERCIAL | HOSPITALITY => return None,
         2 => profile(58.0, 45.0, HALL_BREAKOUT, -3.0, -8.0),
         3 => profile(
             66.0,
@@ -103,7 +101,6 @@ pub fn building_profile(class: u8) -> Option<BuildingProfile> {
             -15.0,
         ),
         9 => profile(62.0, 25.0, BUILDING_SERVICES, -8.0, -20.0),
-        SILENT => return None,
         HOUSE => profile(57.0, 22.0, RESIDENTIAL_PLANT, -5.0, -8.0),
         FOOD_RETAIL => profile(
             55.0,
@@ -111,13 +108,6 @@ pub fn building_profile(class: u8) -> Option<BuildingProfile> {
             [1.0, 2.0, 1.0, 0.0, -1.0, -2.0, -4.0, -7.0],
             -2.0,
             -2.0,
-        ),
-        HOSPITALITY => profile(
-            68.0,
-            f64::NEG_INFINITY,
-            [-1.0, 0.0, 1.0, 1.0, 1.0, 0.0, -3.0, -6.0],
-            0.0,
-            -5.0,
         ),
         _ => profile(57.0, 21.0, RESIDENTIAL_PLANT, -5.0, -10.0),
     })
@@ -245,17 +235,17 @@ mod tests {
     }
 
     /// Food retail refrigerates all night and spans at least 12 dB from a kiosk to a hypermarket;
-    /// 24/7 plant classes cut less at night than day-only ones.
+    /// 24/7 plant classes cut less at night than day-only ones; shops, offices and the buildings
+    /// of bars and restaurants have their plant in its hours instead.
     #[test]
     fn operating_patterns_and_size_follow_the_calibration() {
         let food = building_profile(FOOD_RETAIL).unwrap();
         assert_eq!(food.night_offset_db, -2.0);
-        assert!(day(FOOD_RETAIL, 1_000.0, 1) > day(1, 1_000.0, 1) + 5.0);
         assert!(day(FOOD_RETAIL, 80.0, 1) < 70.0);
         assert!(day(FOOD_RETAIL, 8_000.0, 1) - day(FOOD_RETAIL, 80.0, 1) >= 12.0);
-        assert!(day(1, 500.0, 2) > day(0, 500.0, 2));
         let night = |class: u8| building_profile(class).unwrap().night_offset_db;
         assert!(night(4) > night(3) && night(2) > night(9));
-        assert_eq!(night(1), -10.0);
+        assert_eq!(building_profile(COMMERCIAL), None);
+        assert_eq!(building_profile(HOSPITALITY), None);
     }
 }

@@ -1,45 +1,40 @@
 //! Buildings of dev4's `structures.arrow` (kind 0 rows with an OSM id) as sources: the settlement
 //! area law over the gross floor area, homes their dwellings' outdoor units by country and climate
-//! (`building_plant`), at half the building's height (its height tag, else floors x 3 m, else 8 m)
-//! or 1.5 m for a ground activity (an emission-only area); cells of 30 m above 2,000 m2. Each
-//! carries the id of its screening footprint, so it never screens itself. The bells of churches
-//! and the calls of mosques (`bells`, `calls`) hang from them.
+//! (`building_plant`), shops and offices their cooling plant and the buildings of bars and
+//! restaurants a kitchen extract or their cooling plant, heard in the hours they run
+//! (`physics::emission::plant`); at half the building's height (its height tag, else floors x 3
+//! m, else 8 m) or 1.5 m for a ground activity (an emission-only area); cells of 30 m above 2,000
+//! m2. Each carries the id of its screening footprint, so it never screens itself. The bells of
+//! churches and the calls of mosques (`bells`, `calls`) hang from them.
 
 use super::bells::convert_bells;
-use super::building_plant::dwelling_plant;
+use super::building_plant::{cooled_service_share, dwelling_plant};
+pub use super::building_rows::BuildingRow;
+use super::building_rows::{place_outside, read_batch};
 use super::calls::convert_calls;
-use super::cells::{
-    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
-};
+use super::cells::{AUDIBILITY_FLOOR_DBA, Site, push_site_points, resolve_area_m2, site_points};
 use super::outside::OutsidePlacer;
 use super::people::convert_people;
+use super::venues::{PlaceHours, VenueSite, customs, place_hours, unmapped_place_hours};
 use super::worship::Host;
-use super::{Converted, Places, fields, group_key};
+use super::{Converted, Places, displayed_duty, group_key, object_key};
 use crate::climate::Climate;
-use crate::dev4::{
-    Dev4, Square, cell, column, degrees_to_z30, positive, require_stamp, text, z30_corner_degrees,
-};
+use crate::dev4::{Dev4, Square, degrees_to_z30, require_stamp, z30_corner_degrees};
 use crate::rings::RingIndex;
 use crate::screening::BUILDING_HEIGHT_MAX_M;
-use crate::structures::{decode_parts, footprint_id};
 use crate::traffic::building_load;
-use arrow_array::{
-    Array, BinaryArray, Float32Array, Int32Array, Int64Array, RecordBatch, StringArray, UInt8Array,
-    UInt32Array,
-};
+use physics::bands::WeekHours;
+use physics::emission::plant::{BUSINESS_HOURS, Running, cooling_plant, kitchen_extract};
 use physics::emission::settlement::{
-    HOSPITALITY, building_sound_power, is_home, plant_sound_power,
+    COMMERCIAL, HOSPITALITY, building_sound_power, is_footprint_scaled, is_home, plant_sound_power,
 };
 use physics::emission::spectrum::SoundPower;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
 
-const KIND_BUILDING: u8 = 0;
 /// dev4's class of a residential block, and of every building tagged only building=yes.
 const RESIDENTIAL_MULTI: u8 = 0;
-/// dev4 `height_source` of an emission-only ground activity (no structure stands there).
-const HEIGHT_SOURCE_GROUND_ACTIVITY: u8 = 7;
 const GROUND_ACTIVITY_SOURCE_HEIGHT_M: f64 = 1.5;
 /// Storey height and the height of a building with neither a height nor a floor count (dev4).
 const FLOOR_HEIGHT_M: f64 = 3.0;
@@ -48,42 +43,39 @@ const DEFAULT_HEIGHT_M: f64 = 8.0;
 const DEFAULT_FOOTPRINT_M2: f64 = 100.0;
 const SINGLE_POINT_UP_TO_M2: f64 = 2_000.0;
 const CELL_M: f64 = 30.0;
+const WORSHIP: u8 = 5;
 
-/// One building row as the conversion reads it.
-pub struct BuildingRow {
-    pub osm_id: i64,
-    /// The emission centroid, else the screening centroid.
-    pub centroid: (i32, i32),
-    pub ring: Z30Ring,
-    /// The mapped height tag, 0 when none.
-    pub height_tag_m: f64,
-    /// The mapped floor count, 0 when none.
-    pub floors: u8,
-    /// dev4's storeys for the dwellings (its demand storeys, else the floors), 0 when none.
-    pub storeys: u8,
-    pub area_m2: Option<f64>,
-    pub class: u8,
-    pub ground_activity: bool,
-    pub name: String,
-    pub address: String,
-    pub footprint_id: u64,
+/// How a building is heard: steady, by its class's area law or its dwellings' units, or its plant in
+/// use, each plant apart by the name its display gives it (a restaurant's kitchen extract, the
+/// building's cooling under its class).
+#[derive(Debug, PartialEq)]
+pub enum Emitted {
+    Steady(SoundPower),
+    InUse(Vec<(&'static str, Running)>),
 }
+
+/// The display's name of a kitchen extract, a part of its building's row.
+const KITCHEN_EXTRACT: &str = "kitchen_extract";
 
 /// What a building emits and the geometry it was computed for.
 #[derive(Debug, PartialEq)]
 pub struct BuildingEmission {
-    pub sound: SoundPower,
+    pub emitted: Emitted,
     pub source_height_m: f64,
     pub height_m: f64,
     pub floors: u8,
     pub area_m2: f64,
 }
 
-/// A building's emission, a home's from the outdoor units of its dwellings in `country_iso` under
-/// its climate (`None`: the old area law); `None` for silent classes and inaudible levels.
+/// A building's emission in `country_iso` under its climate: a home's from the outdoor units of its
+/// dwellings; a shop's or office's from its cooling plant over its storeys in business hours; a
+/// building of bars and restaurants' from its cooling plant over its footprint while the places
+/// mapped in it are open and a kitchen extract while one cooks (`hosted`); any other's by its
+/// class's area law. `None` for silent classes and inaudible levels.
 pub fn building_emission(
     row: &BuildingRow,
-    home_plant: Option<(u16, &Climate)>,
+    (country_iso, climate): (u16, &Climate),
+    hosted: Option<&PlaceHours>,
 ) -> Option<BuildingEmission> {
     let (height_m, floors) = if row.ground_activity {
         (0.0, 0)
@@ -104,22 +96,59 @@ pub fn building_emission(
         (height_m, floors)
     };
     let area_m2 = resolve_area_m2(row.area_m2, &row.ring, DEFAULT_FOOTPRINT_M2);
-    let sound = match home_plant.filter(|_| is_home(row.class)) {
-        Some((country_iso, climate)) => {
+    let (lat, lon) = z30_corner_degrees(row.centroid.0, row.centroid.1);
+    let emitted = match row.class {
+        class if is_home(class) => {
             let (dwellings, _) = building_load(row.class, row.storeys.max(1), Some(area_m2));
-            let (lat, lon) = z30_corner_degrees(row.centroid.0, row.centroid.1);
             let uses = dwelling_plant(country_iso, climate.degree_days(lat, lon));
-            plant_sound_power(&uses, dwellings)?
+            Emitted::Steady(plant_sound_power(&uses, dwellings)?)
         }
-        None => building_sound_power(row.class, area_m2, floors)?,
+        COMMERCIAL | HOSPITALITY => {
+            // Unknown storeys count one: the 8 m height of an untagged building is no floor count.
+            let floor_area_m2 = if is_footprint_scaled(row.class) || row.ground_activity {
+                area_m2
+            } else {
+                area_m2 * f64::from(row.storeys.max(1))
+            };
+            let cooling = |open: &WeekHours| {
+                let cooling_degree_days = climate.degree_days(lat, lon).cooling;
+                let cooled_share = cooled_service_share(country_iso);
+                cooling_plant(floor_area_m2, cooling_degree_days, cooled_share, open)
+            };
+            let extract = (hosted.and_then(|places| places.kitchen.as_ref()))
+                .and_then(|kitchen| kitchen_extract(area_m2, kitchen));
+            let open = hosted.map_or(&BUSINESS_HOURS, |places| &places.open);
+            let plants: Vec<(&'static str, Running)> = [
+                extract.map(|plant| (KITCHEN_EXTRACT, plant)),
+                cooling(open).map(|plant| (class_label(row.class), plant)),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|(_, plant)| {
+                plant
+                    .sound_power()
+                    .is_some_and(|sound| sound.loudest_dba() >= AUDIBILITY_FLOOR_DBA)
+            })
+            .collect();
+            if plants.is_empty() {
+                return None;
+            }
+            Emitted::InUse(plants)
+        }
+        _ => Emitted::Steady(building_sound_power(row.class, area_m2, floors)?),
     };
+    if let Emitted::Steady(sound) = &emitted
+        && sound.day_dba < AUDIBILITY_FLOOR_DBA
+    {
+        return None;
+    }
     let source_height_m = if row.ground_activity {
         GROUND_ACTIVITY_SOURCE_HEIGHT_M
     } else {
         height_m / 2.0
     };
-    (sound.day_dba >= AUDIBILITY_FLOOR_DBA).then_some(BuildingEmission {
-        sound,
+    Some(BuildingEmission {
+        emitted,
         source_height_m,
         height_m,
         floors,
@@ -169,63 +198,74 @@ pub fn convert(
     let mut emitting = 0;
     // Where bells and loudspeakers hang: every building's centre, height, footprint and name.
     let mut hosts: Vec<Host> = Vec::new();
-    // The bars, restaurants and cafés by footprint: the people mapped inside one are a part of it.
+    let mut emit = |row: &BuildingRow, emission: &BuildingEmission, out: &mut Vec<Converted>| {
+        let key = group_key(&["building", &row.osm_id.to_string()]);
+        if places.worship.is_some() {
+            hosts.push(Host {
+                centre: z30_corner_degrees(row.centroid.0, row.centroid.1),
+                height_m: emission.height_m,
+                footprint_id: row.footprint_id,
+                name: row.name.clone(),
+                worship: row.class == WORSHIP,
+                group_key: key,
+            });
+        }
+        // A building dev4 could only call a residential block (building=yes among them) inside
+        // an industrial site is the site's: its sound is the site's own. It still hosts the bells
+        // or the call mapped in it, which its walls must not screen.
+        if row.class == RESIDENTIAL_MULTI && industrial_sites.containing(row.centroid).is_some() {
+            return 0;
+        }
+        push_building(row, emission, key, out);
+        1
+    };
+    // The buildings of bars, restaurants and cafés wait for the places mapped in them, whose hours
+    // their plant runs; the people mapped inside one are a part of it.
+    let mut hospitality_rows = Vec::new();
     let mut hospitality: HashMap<u64, u64> = HashMap::new();
     for batch in batches {
         for row in read_batch(batch, square).map_err(context)? {
-            let Some(emission) = building_emission(&row, Some((country_iso, climate))) else {
-                continue;
-            };
-            let key = group_key(&["building", &row.osm_id.to_string()]);
-            if places.worship.is_some() {
-                hosts.push(Host {
-                    centre: z30_corner_degrees(row.centroid.0, row.centroid.1),
-                    height_m: emission.height_m,
-                    footprint_id: row.footprint_id,
-                    name: row.name.clone(),
-                    worship: row.class == WORSHIP,
-                    group_key: key,
-                });
+            if row.class == HOSPITALITY {
+                if row.footprint_id != 0 {
+                    let key = group_key(&["building", &row.osm_id.to_string()]);
+                    hospitality.insert(row.footprint_id, key);
+                }
+                hospitality_rows.push(row);
+            } else if let Some(emission) = building_emission(&row, (country_iso, climate), None) {
+                emitting += emit(&row, &emission, out);
             }
-            // A building dev4 could only call a residential block (building=yes among them)
-            // inside an industrial site is the site's: its sound is the site's own. It still
-            // hosts the bells or the call mapped in it, which its walls must not screen.
-            if row.class == RESIDENTIAL_MULTI && industrial_sites.containing(row.centroid).is_some()
-            {
-                continue;
-            }
-            if row.class == HOSPITALITY && row.footprint_id != 0 {
-                hospitality.insert(row.footprint_id, key);
-            }
-            let site = Site {
-                centroid: z30_corner_degrees(row.centroid.0, row.centroid.1),
-                ring: &row.ring,
-                area_m2: emission.area_m2,
-                single_point_up_to_m2: SINGLE_POINT_UP_TO_M2,
-                cell_m: CELL_M,
-            };
-            let decibels = |level: f64| (level * 10.0).round() / 10.0;
-            let attribute = Attribute {
-                layer: Layer::Building,
-                height_m: emission.source_height_m,
-                ground_percent: GROUND_FROM_TERRAIN,
-                platform_half_width_m: 0.0,
-                exclusion_radius_m: 0.0,
-                footprint_id: row.footprint_id,
-                group_key: key,
-                emission: emission.sound.band_levels_db(),
-                display: fields(json!([
-                    row.name,
-                    class_label(row.class),
-                    decibels(emission.height_m),
-                    emission.floors,
-                    emission.area_m2.round(),
-                    row.address,
-                    decibels(emission.sound.day_dba)
-                ])),
-            };
-            push_site_points(&site_points(&site), emission.area_m2, &attribute, out);
-            emitting += 1;
+        }
+    }
+    let venues = places
+        .venues
+        .map_or(&[][..], |venues| venues.in_square(square.x, square.y));
+    let mut placer = OutsidePlacer::new(
+        venues
+            .iter()
+            .map(|site| degrees_to_z30(site.lat, site.lon))
+            .collect(),
+        venues.first().map_or(0.0, |site| site.lat),
+    );
+    if !venues.is_empty() {
+        for batch in batches {
+            place_outside(batch, (square, &hospitality), &mut placer).map_err(context)?;
+        }
+    }
+    let mut hosted: HashMap<u64, Vec<&VenueSite>> = HashMap::new();
+    for (site, host) in venues.iter().zip(placer.hosts()) {
+        if let Some(key) = host {
+            hosted.entry(*key).or_default().push(site);
+        }
+    }
+    let customs = customs(country_iso);
+    for row in &hospitality_rows {
+        let key = group_key(&["building", &row.osm_id.to_string()]);
+        let hours = hosted.get(&key).map_or_else(
+            || unmapped_place_hours(&customs),
+            |sites| place_hours(sites, &customs),
+        );
+        if let Some(emission) = building_emission(row, (country_iso, climate), Some(&hours)) {
+            emitting += emit(row, &emission, out);
         }
     }
     if let Some(worship) = places.worship {
@@ -233,18 +273,7 @@ pub fn convert(
         emitting += convert_bells((&sites, square), &hosts, country_iso, out);
         emitting += convert_calls((&sites, square), &hosts, country_iso, out);
     }
-    let venues = places
-        .venues
-        .map_or(&[][..], |venues| venues.in_square(square.x, square.y));
     if !venues.is_empty() {
-        let points = venues
-            .iter()
-            .map(|site| degrees_to_z30(site.lat, site.lon))
-            .collect();
-        let mut placer = OutsidePlacer::new(points, venues[0].lat);
-        for batch in batches {
-            place_outside(batch, (square, &hospitality), &mut placer).map_err(context)?;
-        }
         emitting += convert_people(
             venues,
             (&placer.positions(), placer.hosts()),
@@ -255,107 +284,69 @@ pub fn convert(
     Ok(emitting)
 }
 
-/// Offers every building footprint of a batch near a place (OpenStreetMap's and Overture's alike:
-/// both screen) to the placer, a bar's, restaurant's or café's (`hospitality`, by footprint id)
-/// with its source's group key.
-fn place_outside(
-    batch: &RecordBatch,
-    (square, hospitality): (Square, &HashMap<u64, u64>),
-    placer: &mut OutsidePlacer,
-) -> Result<(), String> {
-    let kinds = column::<UInt8Array>(batch, "kind")?;
-    let outlines = column::<BinaryArray>(batch, "geom")?;
-    let ordinals = column::<UInt32Array>(batch, "screening_ordinal")?;
-    let centroid = [
-        column::<Int32Array>(batch, "centroid_gx")?,
-        column::<Int32Array>(batch, "centroid_gy")?,
-    ];
-    for row in 0..batch.num_rows() {
-        if kinds.value(row) != KIND_BUILDING
-            || !outlines.is_valid(row)
-            || !centroid.iter().all(|values| values.is_valid(row))
-            || !placer.near((centroid[0].value(row), centroid[1].value(row)))
-        {
-            continue;
-        }
-        let host = cell(ordinals, row)
-            .and_then(|ordinal| hospitality.get(&footprint_id(square, ordinal)).copied());
-        for part in decode_parts(outlines.value(row)).unwrap_or_default() {
-            placer.offer(&part, host);
+/// Pushes the sources of a building that emits under its group `key`: one steady, writing its sound
+/// power by day, or one a plant heard in use, writing its name, its sound power while running and
+/// the share of each period it runs, a second plant a part of the first's object.
+fn push_building(
+    row: &BuildingRow,
+    emission: &BuildingEmission,
+    key: u64,
+    out: &mut Vec<Converted>,
+) {
+    let site = Site {
+        centroid: z30_corner_degrees(row.centroid.0, row.centroid.1),
+        ring: &row.ring,
+        area_m2: emission.area_m2,
+        single_point_up_to_m2: SINGLE_POINT_UP_TO_M2,
+        cell_m: CELL_M,
+    };
+    let points = site_points(&site);
+    let decibels = |level: f64| (level * 10.0).round() / 10.0;
+    let mut push =
+        |sound: &SoundPower, (group_key, name): (u64, &str), level: f64, heard: &[Value]| {
+            let mut display = vec![
+                json!(row.name),
+                json!(name),
+                json!(decibels(emission.height_m)),
+                json!(emission.floors),
+                json!(emission.area_m2.round()),
+                json!(row.address),
+                json!(decibels(level)),
+            ];
+            display.extend_from_slice(heard);
+            let attribute = Attribute {
+                layer: Layer::Building,
+                height_m: emission.source_height_m,
+                ground_percent: GROUND_FROM_TERRAIN,
+                platform_half_width_m: 0.0,
+                exclusion_radius_m: 0.0,
+                footprint_id: row.footprint_id,
+                group_key,
+                emission: sound.band_levels_db(),
+                display,
+            };
+            push_site_points(&points, emission.area_m2, &attribute, out);
+        };
+    match &emission.emitted {
+        Emitted::Steady(sound) => push(sound, (key, class_label(row.class)), sound.day_dba, &[]),
+        Emitted::InUse(plants) => {
+            for (index, (name, plant)) in plants.iter().enumerate() {
+                let Some(sound) = plant.sound_power() else {
+                    continue;
+                };
+                let (part, object) = match index {
+                    0 => (key, Value::Null),
+                    _ => (
+                        group_key(&["building", &row.osm_id.to_string(), name]),
+                        json!(object_key(key)),
+                    ),
+                };
+                let duty = json!(displayed_duty(plant.duty));
+                let heard = [Value::Null, Value::Null, duty, object];
+                push(&sound, (part, name), plant.running_dba, &heard);
+            }
         }
     }
-    Ok(())
-}
-
-const WORSHIP: u8 = 5;
-
-fn read_batch(batch: &RecordBatch, square: Square) -> Result<Vec<BuildingRow>, String> {
-    let bytes = |name: &str| column::<UInt8Array>(batch, name);
-    let (kinds, floors, storeys) = (bytes("kind")?, bytes("floors")?, bytes("storeys")?);
-    let (classes, height_sources) = (bytes("building_type")?, bytes("height_source")?);
-    let integers = |name: &str| column::<Int32Array>(batch, name);
-    let centroid = [integers("centroid_gx")?, integers("centroid_gy")?];
-    let emission_centroid = [
-        integers("emission_centroid_gx")?,
-        integers("emission_centroid_gy")?,
-    ];
-    let floats = |name: &str| column::<Float32Array>(batch, name);
-    let (heights, areas) = (floats("height")?, floats("area_m2")?);
-    let binaries = |name: &str| column::<BinaryArray>(batch, name);
-    let (rings, geometry) = (binaries("emission_geom")?, binaries("geom")?);
-    let texts = |name: &str| column::<StringArray>(batch, name);
-    let (names, streets, numbers) = (
-        texts("name")?,
-        texts("addr_street")?,
-        texts("addr_housenumber")?,
-    );
-    let (ids, ordinals) = (
-        column::<Int64Array>(batch, "osm_id")?,
-        column::<UInt32Array>(batch, "screening_ordinal")?,
-    );
-    let mut rows = Vec::new();
-    for row in 0..batch.num_rows() {
-        let Some(osm_id) = cell(ids, row) else {
-            continue;
-        };
-        if kinds.value(row) != KIND_BUILDING {
-            continue;
-        }
-        let emission_centroid_known = emission_centroid.iter().all(|values| values.is_valid(row));
-        let [x, y] = if emission_centroid_known {
-            emission_centroid
-        } else {
-            centroid
-        };
-        let footprint_id = match (geometry.is_valid(row), cell(ordinals, row)) {
-            (false, _) => 0,
-            (true, Some(ordinal)) => footprint_id(square, ordinal),
-            (true, None) => return Err(format!("row {row} has geometry but no screening_ordinal")),
-        };
-        rows.push(BuildingRow {
-            osm_id,
-            centroid: (x.value(row), y.value(row)),
-            ring: ring_cell(rings, row),
-            height_tag_m: positive(heights, row).unwrap_or(0.0),
-            floors: cell(floors, row).unwrap_or(0),
-            storeys: cell(storeys, row)
-                .filter(|&count| count > 0)
-                .or_else(|| cell(floors, row))
-                .unwrap_or(0),
-            area_m2: positive(areas, row),
-            class: cell(classes, row).unwrap_or(0),
-            ground_activity: cell(height_sources, row) == Some(HEIGHT_SOURCE_GROUND_ACTIVITY),
-            name: text(names, row).to_string(),
-            address: match text(streets, row) {
-                "" => String::new(),
-                street => format!("{street} {}", text(numbers, row))
-                    .trim_end()
-                    .to_string(),
-            },
-            footprint_id,
-        });
-    }
-    Ok(rows)
 }
 
 #[cfg(test)]
