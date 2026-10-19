@@ -271,10 +271,11 @@ deliveries, building sites, garden machinery, music and festivals.
 - **Shops and offices** emit their cooling plant: sized by their floor and their climate, as
   [Heat Roadmap Europe](https://heatroadmap.eu/wp-content/uploads/2018/11/HRE4_D3.2.pdf) sizes
   and runs the cooling of the service sector, in the share of floor it finds cooled in each EU
-  country (Czechia 10 %, Spain 73 %; elsewhere where cooling saturates, 85 %), at the sound power
-  manufacturers declare for units of that capacity. It runs in business hours, Monday to Saturday
-  09-20, for the hours of full load the climate asks, and is heard while it runs, silent at night:
-  in Czechia, where summers are cool, about 30 hours a year.
+  country (Czechia 10 %, Spain 73 %; Europe's other countries their region's middle, Norway 8 %;
+  the rest of the world where cooling saturates, 85 %), at the sound power manufacturers declare
+  for units of that capacity. It runs in business hours, Monday to Saturday 09-20, for the hours
+  of full load the climate asks, and is heard while it runs, silent at night: in Czechia, where
+  summers are cool, about 30 hours a year.
 - **Buildings of restaurants, cafés and bars** emit their cooling while their places are open, and
   a restaurant's kitchen extract while its kitchen runs, an hour either side of its hours: the
   fan law over the footprint, at the 72 dB(A) measured at a fast-food restaurant's exhaust of
