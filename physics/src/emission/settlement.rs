@@ -16,8 +16,9 @@ pub const SILENT: u8 = 10;
 pub const HOUSE: u8 = 11;
 /// Supermarkets and food shops: rooftop refrigeration runs through the night (dev4 audit B2).
 pub const FOOD_RETAIL: u8 = 12;
-/// Buildings holding restaurants, cafes and bars: a restaurant's kitchen extract, else their
-/// cooling plant, in their places' hours (their guests are the people outside them).
+/// Buildings holding restaurants, cafes and bars: their cooling plant in their places' hours and,
+/// where a restaurant cooks, its kitchen extract in its kitchen's (their guests are the people
+/// outside them).
 pub const HOSPITALITY: u8 = 13;
 
 /// Classes whose noise scales with the footprint, not the floor area: single-volume halls

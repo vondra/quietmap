@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 
 /// Source indices hashed by one multiplication (Fibonacci hashing): the standard hasher's SipHash
-/// took 4 % of a New York square's cores while its card waited (2026-10-17).
+/// showed in a dense city square's profile (2026-10-17).
 #[derive(Default)]
 struct IndexHasher(u64);
 
@@ -159,7 +159,7 @@ fn admission(local: Vec<u32>, corners: [&Corner; 4]) -> (Vec<u32>, Vec<u32>, Ind
 
 /// How many sources a block's pixels evaluate exactly and whether its corners leave any out: what
 /// a quiet block's test asks of every block, without the groups left out (building and sorting
-/// those was most of the cores' work while a New York square's card waited, 2026-10-17).
+/// those was most of a dense city square's work on the cores, 2026-10-17).
 pub(crate) fn admission_counts(local: Vec<u32>, corners: [&Corner; 4]) -> (usize, bool) {
     let (exact, _, admitted) = admission(local, corners);
     let leaves_out = (corners.iter())
@@ -174,8 +174,8 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
     let (mut exact, mut beyond, admitted) = admission(local, corners);
     let mut left_out = [[[0.0; PERIODS]; LAYERS]; 4];
     // Each source left out at a corner as a small key (its group, Lden energy and index there) and
-    // the corner: sorting the whole 360-byte groups moved more memory than anything else in a New
-    // York square (2026-10-17).
+    // the corner: sorting the whole 360-byte groups moved more memory than anything else in a
+    // dense city square (2026-10-17).
     let mut left: Vec<(u64, f64, u32, usize, &Ranked)> = Vec::new();
     for (c, corner) in corners.iter().enumerate() {
         for (layer, ranked) in corner.ranked.iter().enumerate() {

@@ -1,11 +1,11 @@
 //! Buildings of dev4's `structures.arrow` (kind 0 rows with an OSM id) as sources: the settlement
 //! area law over the gross floor area, homes their dwellings' outdoor units by country and climate
 //! (`building_plant`), shops and offices their cooling plant and the buildings of bars and
-//! restaurants a kitchen extract or their cooling plant, heard in the hours they run
-//! (`physics::emission::plant`); at half the building's height (its height tag, else floors x 3
-//! m, else 8 m) or 1.5 m for a ground activity (an emission-only area); cells of 30 m above 2,000
-//! m2. Each carries the id of its screening footprint, so it never screens itself. The bells of
-//! churches and the calls of mosques (`bells`, `calls`) hang from them.
+//! restaurants their cooling plant and, where a restaurant cooks, its kitchen extract, heard in the
+//! hours they run (`physics::emission::plant`); at half the building's height (its height tag, else
+//! floors x 3 m, else 8 m) or 1.5 m for a ground activity (an emission-only area); cells of 30 m
+//! above 2,000 m2. Each carries the id of its screening footprint, so it never screens itself. The
+//! bells of churches and the calls of mosques (`bells`, `calls`) hang from them.
 
 use super::bells::convert_bells;
 use super::building_plant::{cooled_service_share, dwelling_plant};

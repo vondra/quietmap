@@ -268,7 +268,9 @@ deliveries, building sites, garden machinery, music and festivals.
 - **Homes** emit the outdoor units of the heat pumps and air conditioners their country's
   households own (surveys in 35 countries, the United States, Canada and the Gulf), for the hours
   their climate asks. Buildings known only from Overture's footprints emit nothing.
-- **Shops and offices** emit their cooling plant: sized by their floor and their climate, as
+- **Food shops and supermarkets** emit their rooftop refrigeration by their footprint, day and
+  night, 2 dB quieter in the evening and at night.
+- **Other shops and offices** emit their cooling plant: sized by their floor and their climate, as
   [Heat Roadmap Europe](https://heatroadmap.eu/wp-content/uploads/2018/11/HRE4_D3.2.pdf) sizes
   and runs the cooling of the service sector, in the share of floor it finds cooled in each EU
   country (Czechia 10 %, Spain 73 %; Europe's other countries their region's middle, Norway 8 %;
@@ -308,9 +310,9 @@ deliveries, building sites, garden machinery, music and festivals.
   country's custom; terrace seats come from Madrid's and Melbourne's registers. On weekend evenings
   and nights three quarters of the seats are taken (ÖNORM's design value), on weekdays fewer by
   Melbourne's and Paris's counts; the daytime 30 % is an assumption. The guests are heard while
-  they are there, the seats in the terrace season and the opening hours, the door crowd while the
-  place is open (its hours all year, a terrace beside it at its mean over the year), not as a
-  murmur all year at their mean.
+  they are there, the seats in the terrace season and the opening hours, the door crowd whenever
+  the place is open, all year, not as a murmur all year at their mean. A terrace mapped within
+  30 m of a place is that place's seats, unless the place is tagged without outdoor seating.
 - **What screens.** A wall without a height stands 4 m. Open car parks, carports, open roofs and
   underground footprints do not screen.
 

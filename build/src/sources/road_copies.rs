@@ -24,8 +24,9 @@ const COPY_TOLERANCE: f64 = 0.1;
 const MAIN_CLASSES: std::ops::RangeInclusive<u8> = 0..=4;
 /// The classes a road's side lanes and squares are mapped as (residential, living street,
 /// service): one with the road's name and very count is the road's wherever it lies. An
-/// unclassified row or a link of the road's name and count is the road going on (a census section
-/// across a change of class: Prague's links and Brno's unclassified ways kept their counts in r072).
+/// unclassified row or a link of the road's name and count elsewhere in the square is the road
+/// going on (a census section across a change of class: Prague's links and Brno's unclassified
+/// ways kept their counts in r072); within the reach of the road, as every lower class, a copy.
 const SIDE_CLASSES: std::ops::RangeInclusive<u8> = 5..=7;
 /// The classes whose count a side lane of their name repeats: the main ones and their links.
 const NAMED_CLASSES: [std::ops::RangeInclusive<u8>; 2] = [0..=4, 10..=12];
