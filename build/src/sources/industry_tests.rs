@@ -163,8 +163,7 @@ fn profiles_resolve_nace_then_subtype_then_type_with_their_heights() {
             sound: expected,
             height_m: 10.0,
             label: "industrial_area",
-            area_m2: Some(3e6),
-            rated_power_kw: None,
+            area_m2: 3e6,
         })
     );
     let warehouse = IndustrialRow {
