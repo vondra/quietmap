@@ -62,8 +62,18 @@ test('a failed drawing answers 500 in words for the visitor, uncached', async (t
 test('a tile whose visitor leaves is not drawn: dropped from the queue, or its drawing killed', async (t) => {
   const scratch = await mkdtemp(join(tmpdir(), 'raster-route-test-'))
   t.after(() => rm(scratch, { recursive: true, force: true }))
-  process.env.FAKE_RASTER_SPAWN_LOG = join(scratch, 'spawned')
+  const spawnLog = join(scratch, 'spawned')
+  process.env.FAKE_RASTER_SPAWN_LOG = spawnLog
   t.after(() => { delete process.env.FAKE_RASTER_SPAWN_LOG })
+  const spawned = async () => (await readFile(spawnLog, 'utf8').catch(() => '')).split('\n').filter(Boolean)
+  // Waits for the drawings the log shows, not a fixed time: under load a drawing starts late.
+  const untilSpawned = async (enough: (lines: string[]) => boolean) => {
+    const deadline = Date.now() + 10_000
+    while (!enough(await spawned())) {
+      assert.ok(Date.now() < deadline, 'the drawings did not start')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+  }
   const server = await app(t)
   const address = await server.listen({ port: 0, host: '127.0.0.1' })
   const get = (path: string, signal?: AbortSignal) => new Promise<number>((resolve, reject) => {
@@ -76,6 +86,7 @@ test('a tile whose visitor leaves is not drawn: dropped from the queue, or its d
   })
   // Every slot draws a slow tile; the next one waits and its visitor leaves.
   const slow = Array.from({ length: RASTER_CONCURRENCY }, (_, x) => get(`barriers/13/${x}/0`))
+  await untilSpawned(lines => lines.length >= RASTER_CONCURRENCY)
   const leaving = new AbortController()
   const waiting = get('elevation/13/100/0', leaving.signal).catch(() => 'left')
   await new Promise(resolve => setTimeout(resolve, 100))
@@ -86,12 +97,13 @@ test('a tile whose visitor leaves is not drawn: dropped from the queue, or its d
   // A drawing whose visitor leaves is killed.
   const leavingDrawn = new AbortController()
   const drawing = get('barriers/13/200/0', leavingDrawn.signal).catch(() => 'left')
-  await new Promise(resolve => setTimeout(resolve, 100))
+  await untilSpawned(lines => lines.includes('200'))
   leavingDrawn.abort()
   assert.equal(await drawing, 'left')
+  // Past the slow tile's 400 ms, had it not been killed.
   await new Promise(resolve => setTimeout(resolve, 600))
-  const spawned = (await readFile(join(scratch, 'spawned'), 'utf8')).trim().split('\n')
-  assert.equal(spawned.filter(line => !line.endsWith('drawn')).length, RASTER_CONCURRENCY + 2)
-  assert.ok(!spawned.includes('100') && spawned.includes('101'))
-  assert.ok(spawned.includes('200') && !spawned.includes('200 drawn'))
+  const lines = await spawned()
+  assert.equal(lines.filter(line => !line.endsWith('drawn')).length, RASTER_CONCURRENCY + 2)
+  assert.ok(!lines.includes('100') && lines.includes('101'))
+  assert.ok(lines.includes('200') && !lines.includes('200 drawn'))
 })
