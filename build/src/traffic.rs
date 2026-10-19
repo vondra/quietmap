@@ -615,42 +615,51 @@ const STREET_PARKING_HOUSES: f64 = 0.15;
 const STREET_PARKING_FLATS: f64 = 0.55;
 const HOUSE_UP_TO_DWELLINGS: f64 = 4.0;
 
-/// A building's weight among its cell's trip ends (dwellings, or visits in dwellings' worth) and
-/// the share of them made by cars that park on the street.
-fn street_parking_weight(building: &BuildingLoad) -> (f64, f64) {
-    if building.dwellings > 0.0 {
-        let share = if building.dwellings <= HOUSE_UP_TO_DWELLINGS {
-            STREET_PARKING_HOUSES
-        } else {
-            STREET_PARKING_FLATS
-        };
-        (building.dwellings, share)
+/// Where the cars of a block of flats, or of the visitors to a shop or an office, park that do not
+/// park on the street: off it, in a lot or a garage (a house's park on its plot).
+const OFF_STREET_FLATS: f64 = 1.0 - STREET_PARKING_FLATS;
+
+/// A building's trip ends as the grid counts them (its dwellings' at `trips_per_dwelling`, its
+/// visits') and those of them made by cars that park on the street and in a lot: a house's
+/// residents' cars park on its plot but for those on the street, a block of flats' and the
+/// visitors' off the street in a lot.
+fn parking_trip_ends(building: &BuildingLoad, trips_per_dwelling: f64) -> [f64; 3] {
+    let residents = building.dwellings * trips_per_dwelling;
+    let [street, lot] = if building.dwellings <= HOUSE_UP_TO_DWELLINGS {
+        [STREET_PARKING_HOUSES, 0.0]
     } else {
-        (
-            building.trips / WORLD_TRIPS_PER_DWELLING,
-            STREET_PARKING_FLATS,
-        )
-    }
+        [STREET_PARKING_FLATS, OFF_STREET_FLATS]
+    };
+    [
+        residents + building.trips,
+        residents * street + building.trips * STREET_PARKING_FLATS,
+        residents * lot + building.trips * OFF_STREET_FLATS,
+    ]
 }
 
-/// Per grid cell of a square: the share of its buildings' trip ends made by cars that park on
-/// the street, dwellings and visits weighed alike; the flats' share in a cell without buildings.
-pub fn street_parking_shares(dev4: &Dev4, square: Square) -> Result<Vec<f32>, String> {
-    let mut cells = vec![(0.0f64, 0.0f64); GRID_SIDE * GRID_SIDE];
+/// Per grid cell of a square: the shares of its buildings' trip ends made by cars that park on the
+/// street and in a lot, its dwellings' at its country's trips per dwelling as the grid's (the
+/// square's country, `Dev4::square_country`); the flats' in a cell without buildings.
+pub fn parking_shares(dev4: &Dev4, square: Square) -> Result<Vec<[f32; 2]>, String> {
+    let trips_per_dwelling = trips_per_dwelling(dev4.square_country(square)?);
+    let mut cells = vec![[0.0f64; 3]; GRID_SIDE * GRID_SIDE];
     for building in read_buildings(dev4, square)? {
         let (row, column) = grid_cell(square, building.at);
-        let (weight, share) = street_parking_weight(&building);
         let cell = &mut cells[row * GRID_SIDE + column];
-        cell.0 += weight;
-        cell.1 += weight * share;
+        for (sum, ends) in cell
+            .iter_mut()
+            .zip(parking_trip_ends(&building, trips_per_dwelling))
+        {
+            *sum += ends;
+        }
     }
     Ok(cells
         .into_iter()
-        .map(|(weight, street)| {
-            if weight > 0.0 {
-                (street / weight) as f32
+        .map(|[all, street, lot]| {
+            if all > 0.0 {
+                [(street / all) as f32, (lot / all) as f32]
             } else {
-                STREET_PARKING_FLATS as f32
+                [STREET_PARKING_FLATS as f32, OFF_STREET_FLATS as f32]
             }
         })
         .collect())
@@ -1160,8 +1169,9 @@ mod tests {
         }
     }
 
-    /// A villa's and a terraced row's cars park mostly on their plots (15 % on the street), a
-    /// block of flats' cars and a shop's visitors mostly on the street (55 %).
+    /// A villa's residents' cars park on its plot (15 % on the street, none in a lot), a block of
+    /// flats' cars and a shop's visitors mostly on the street (55 %), the rest in a lot; a
+    /// dwelling's trips at its country's rate, Czechia's 3.4 a day as China's 1.38.
     #[test]
     fn houses_park_on_their_plots_and_flats_on_the_street() {
         let load = |(dwellings, trips)| BuildingLoad {
@@ -1169,15 +1179,24 @@ mod tests {
             dwellings,
             trips,
         };
-        let villa = street_parking_weight(&load(building_load(0, 3, Some(200.0))));
-        assert_eq!(villa, (2.0, STREET_PARKING_HOUSES));
-        let terrace = street_parking_weight(&load(building_load(11, 2, Some(240.0))));
-        assert_eq!(terrace.1, STREET_PARKING_HOUSES);
-        let flats = street_parking_weight(&load(building_load(0, 5, Some(600.0))));
-        assert_eq!(flats, (37.0, STREET_PARKING_FLATS));
-        let shop = street_parking_weight(&load(building_load(1, 2, Some(500.0))));
-        assert!((shop.0 - 120.0 / WORLD_TRIPS_PER_DWELLING).abs() < 1e-9);
-        assert_eq!(shop.1, STREET_PARKING_FLATS);
+        let close = |got: [f64; 3], want: [f64; 3]| {
+            assert!(
+                got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-9),
+                "{got:?} {want:?}"
+            )
+        };
+        let villa = load(building_load(0, 3, Some(200.0)));
+        assert_eq!((villa.dwellings, villa.trips), (2.0, 0.0));
+        close(parking_trip_ends(&villa, 3.4), [6.8, 6.8 * 0.15, 0.0]);
+        let flats = load(building_load(0, 5, Some(600.0)));
+        assert_eq!(flats.dwellings, 37.0);
+        close(
+            parking_trip_ends(&flats, 1.38),
+            [37.0 * 1.38, 37.0 * 1.38 * 0.55, 37.0 * 1.38 * 0.45],
+        );
+        let shop = load(building_load(1, 2, Some(500.0)));
+        assert_eq!((shop.dwellings, shop.trips), (0.0, 120.0));
+        close(parking_trip_ends(&shop, 1.38), [120.0, 66.0, 54.0]);
     }
 
     #[test]

@@ -36,7 +36,8 @@ junctions and the place's yearly air temperature.
   main road.
 - **A count beside its road.** A count that a dataset put on a service road, side lane, street or
   ramp beside the counted road, within 10 % of that road's own and within 30 m of it, or on a side
-  lane of the road's name with its very count, belongs to the road: the way takes its own model.
+  lane of the road's name with its very count, belongs to the road: the way takes the model of its
+  class (a ramp the major roads'), and where its square has none it carries no traffic of its own.
   At London's Baker Street the service road beside Marylebone Road carried the road's 43,031
   vehicles a day a second time. A tunnel, which emits nothing and keeps no traffic in the data,
   counts as its road at its portals: in Brno, Kohoutova over the Husovice tunnel carried the
@@ -291,8 +292,11 @@ deliveries, building sites, garden machinery, music and festivals.
   shooting ranges fire 20,000 shots a year by day.
 - **Car parks** follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
   (LfU 2007): 63 dB(A) for one movement an hour, 0.4 movements a space an hour from 06 to 22 h and
-  0.05 at night at most; a car park carries no more cars than the trip ends of the buildings
-  around it, street parking only those of the cars that park on the street. A movement
+  0.05 at night at most; where the buildings are mapped, a car park carries no more cars than
+  the trip ends of the buildings around it, street parking only those of the cars that park on
+  the street, the lots those of the cars of flats and visitors that park off it (a house's cars
+  park on its plot): each trip end parks once; elsewhere every space carries the study's rate. A
+  movement
   sounds as 4 seconds at the peak of a car pulling away (the study's 67 dB(A) at 7.5 m; SEL 71 dB
   against LAmax 65 dB at 10 m in [Hepworth Acoustics](https://www.hepworth-acoustics.co.uk)'s
   measured car parks); a lot's search for a space makes it longer. A shooting range's shots sound
