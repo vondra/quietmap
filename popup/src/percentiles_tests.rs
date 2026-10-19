@@ -71,7 +71,7 @@ pub(crate) fn selection(layer: Layer, contributors: Vec<Contributor>) -> LayerSe
     selection
 }
 
-/// 33 vehicles a day at 20 km/h, as the service road by the owner's hotel.
+/// 33 vehicles a day at 20 km/h, as a quiet service road to a hotel.
 fn quiet_road(_: &Group) -> Result<serde_json::Value, String> {
     Ok(
         serde_json::json!({"aadt_light": 31.0, "aadt_heavy": 1.0, "aadt_moto": 1.0,

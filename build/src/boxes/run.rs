@@ -5,7 +5,7 @@
 //! its own, outside the thread pool, and gives the pool only its parallel work inside: a pool
 //! thread waiting for part of one square then takes part of another, never a whole square, which
 //! would hold the first square (and its memory) until the second is done (on 2026-10-16 squares
-//! spawned onto the pool itself nested 390 deep and left 20 of 28 threads asleep).
+//! spawned onto the pool itself nested 390 deep and left most of its threads asleep).
 
 use crate::dev4::Square;
 use std::sync::{Condvar, Mutex};
