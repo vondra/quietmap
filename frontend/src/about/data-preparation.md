@@ -268,8 +268,19 @@ deliveries, building sites, garden machinery, music and festivals.
 - **Homes** emit the outdoor units of the heat pumps and air conditioners their country's
   households own (surveys in 35 countries, the United States, Canada and the Gulf), for the hours
   their climate asks. Buildings known only from Overture's footprints emit nothing.
-- **Shops, schools, hotels and other buildings** emit by type, area and assumed hours; the data
-  often cannot tell a warehouse from a workshop.
+- **Shops and offices** emit their cooling plant: sized by their floor and their climate, as
+  [Heat Roadmap Europe](https://heatroadmap.eu/wp-content/uploads/2018/11/HRE4_D3.2.pdf) sizes
+  and runs the cooling of the service sector, in the share of floor it finds cooled in each EU
+  country (Czechia 10 %, Spain 73 %; elsewhere where cooling saturates, 85 %), at the sound power
+  manufacturers declare for units of that capacity. It runs in business hours, Monday to Saturday
+  09-20, for the hours of full load the climate asks, and is heard while it runs, silent at night:
+  in Czechia, where summers are cool, about 30 hours a year.
+- **Buildings of restaurants, cafés and bars** emit their cooling while their places are open, and
+  a restaurant's kitchen extract while its kitchen runs, an hour either side of its hours: the
+  fan law over the footprint, at the 72 dB(A) measured at a fast-food restaurant's exhaust of
+  316 m2, up to the size of a large restaurant.
+- **Schools, hotels and other buildings** emit by type, area and assumed hours; the data often
+  cannot tell a warehouse from a workshop.
 - **Sports pitches** radiate [Sport England](https://www.sportengland.org)'s typical in-use level
   (58 dB LAeq,1h at 10 m) for their hours of play, a grass pitch 4 hours a week by day for 40
   weeks; courts, playgrounds, pools and terraces their active level for about an eighth of the day,

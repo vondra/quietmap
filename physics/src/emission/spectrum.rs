@@ -3,6 +3,7 @@
 //! their A-weighted sum is the stated level (dev4 audit 2026-06, where unscaled shapes had added
 //! +4.9..+6.4 dB(A)).
 
+use super::DAY_ONLY_OFFSET_DB;
 use crate::bands::{BANDS, PERIODS, a_weighted_energy, level_db};
 
 /// A source's emission as dev4's point models state it.
@@ -17,6 +18,39 @@ pub struct SoundPower {
 }
 
 impl SoundPower {
+    /// A source of the shape `spectrum_db` from each period's mean level (dB(A), `-inf` when silent);
+    /// a silent day keeps the near-silence other day-less sources carry. `None` when every period
+    /// is silent.
+    pub fn of_period_means(levels: [f64; PERIODS], spectrum_db: [f64; BANDS]) -> Option<Self> {
+        let loudest = levels.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if !loudest.is_finite() {
+            return None;
+        }
+        let day = if levels[0].is_finite() {
+            levels[0]
+        } else {
+            loudest + DAY_ONLY_OFFSET_DB
+        };
+        let offset = |level: f64| {
+            if level.is_finite() {
+                level - day
+            } else {
+                DAY_ONLY_OFFSET_DB
+            }
+        };
+        Some(SoundPower {
+            day_dba: day,
+            spectrum_db,
+            evening_offset_db: offset(levels[1]),
+            night_offset_db: offset(levels[2]),
+        })
+    }
+
+    /// The loudest period's mean (dB(A)).
+    pub fn loudest_dba(&self) -> f64 {
+        self.day_dba + self.evening_offset_db.max(self.night_offset_db).max(0.0)
+    }
+
     /// Z-weighted band levels per period whose day A-weighted sum is `day_dba`.
     pub fn band_levels_db(&self) -> [[f64; BANDS]; PERIODS] {
         let day = bands_of_a_weighted_level(self.day_dba, &self.spectrum_db);

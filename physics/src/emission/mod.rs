@@ -2,13 +2,15 @@
 //! (railways, trams and level-crossing horns), [`airport`] (aircraft and vehicles on runways and
 //! taxiways), and the point and area sources stated as a
 //! [`spectrum::SoundPower`]: [`industrial`] (sites, solar farms, substations), [`wind`]
-//! (turbines), [`settlement`] (buildings), [`leisure`] (open-air leisure, shooting ranges) and
-//! [`ships`] (AIS vessel-density cells).
+//! (turbines), [`settlement`] (buildings), [`plant`] (shops', offices' and restaurants' plant in
+//! its hours), [`people`] (the people outside bars and restaurants), [`leisure`] (open-air
+//! leisure, shooting ranges) and [`ships`] (AIS vessel-density cells).
 
 pub mod airport;
 pub mod industrial;
 pub mod leisure;
 pub mod people;
+pub mod plant;
 pub mod rail;
 pub mod road;
 pub mod road_surface;

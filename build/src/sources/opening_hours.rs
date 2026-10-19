@@ -4,9 +4,7 @@
 //! earlier one on the days it names; `24/7`. Months, weeks, holidays (`PH`, `SH`), sunrise and
 //! sunset and anything else make the value unreadable: the caller keeps its defaults.
 
-/// Open hours of a week: `[weekday][hour]`, Monday first; an hour counts when the place is open at
-/// its middle.
-pub type WeekHours = [[bool; 24]; 7];
+use physics::bands::WeekHours;
 
 const DAYS: [&str; 7] = ["mo", "tu", "we", "th", "fr", "sa", "su"];
 

@@ -1,9 +1,65 @@
-//! Building rows: the height ladder, ground activities and footprint ids.
+//! Building rows: the height ladder, ground activities, footprint ids and each class's plant.
 
 use super::*;
-use arrow_array::ArrayRef;
+use crate::sources::building_rows::read_batch;
+use crate::structures::footprint_id;
+use arrow_array::{
+    ArrayRef, BinaryArray, Float32Array, Int32Array, Int64Array, RecordBatch, StringArray,
+    UInt8Array, UInt32Array,
+};
+use physics::emission::plant::kitchen_hours;
 use physics::emission::settlement::{area_law_lw_dba, building_profile};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const CZ: u16 = u16::from_le_bytes(*b"CZ");
+
+fn steady(emission: &BuildingEmission) -> &SoundPower {
+    match &emission.emitted {
+        Emitted::Steady(sound) => sound,
+        Emitted::InUse(plants) => panic!("heard in use: {plants:?}"),
+    }
+}
+
+fn in_use(emission: Option<BuildingEmission>) -> Vec<(&'static str, Running)> {
+    match emission.map(|emission| emission.emitted) {
+        Some(Emitted::InUse(plants)) => plants,
+        other => panic!("not heard in use: {other:?}"),
+    }
+}
+
+/// A climate of Prague's temperatures (a mean of 9.3 C, 18.2 in the warmest quarter, 0.6 in the
+/// coldest: 2,640 heating degree days, 40 cooling) in the cells around `(lat, lon)`, the rest of
+/// the world sea (no degree days).
+fn climate_around(lat: f64, lon: f64) -> Climate {
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    let (cell_row, cell_column) = (
+        ((90.0 - lat) * 6.0) as usize,
+        ((lon + 180.0) * 6.0) as usize,
+    );
+    let grid = |value: f32| {
+        let mut cells = vec![-3.4e38f32; 2_160 * 1_080];
+        for r in cell_row - 1..=cell_row + 1 {
+            cells[r * 2_160 + cell_column - 1..=r * 2_160 + cell_column + 1].fill(value);
+        }
+        cells
+            .iter()
+            .flat_map(|cell| cell.to_le_bytes())
+            .collect::<Vec<u8>>()
+    };
+    let directory = std::env::temp_dir().join(format!(
+        "qm-climate-{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, value) in [("bio1.f32", 9.3), ("bio10.f32", 18.2), ("bio11.f32", 0.6)] {
+        std::fs::write(directory.join(name), grid(value)).unwrap();
+    }
+    let climate = Climate::load(&directory).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    climate
+}
 
 fn row(class: u8, height_tag_m: f64, floors: u8, ground_activity: bool) -> BuildingRow {
     BuildingRow {
@@ -26,24 +82,26 @@ fn row(class: u8, height_tag_m: f64, floors: u8, ground_activity: bool) -> Build
 /// whatever its tags; an untagged building stands 8 m (3 floors) with its source at 4 m.
 #[test]
 fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
-    for class in [1, 3, 7] {
-        let ground = building_emission(&row(class, 0.0, 0, true), None).unwrap();
-        assert_eq!(
-            ground,
-            building_emission(&row(class, 24.0, 8, true), None).unwrap()
-        );
+    // The rows stand at sea, beyond the climate's cells.
+    let climate = climate_around(50.0, 14.5);
+    let emission = |row: &BuildingRow| building_emission(row, (CZ, &climate), None);
+    for class in [3, 7, 9] {
+        let ground = emission(&row(class, 0.0, 0, true)).unwrap();
+        assert_eq!(ground, emission(&row(class, 24.0, 8, true)).unwrap());
         assert_eq!(
             (ground.source_height_m, ground.height_m, ground.floors),
             (1.5, 0.0, 0)
         );
         let profile = building_profile(class).unwrap();
         let expected = area_law_lw_dba(profile.lw_fixed_dba, profile.lw_per_m2_dba, 1_000.0);
-        assert!((ground.sound.day_dba - expected).abs() < 1e-9);
-        let building = building_emission(&row(class, 0.0, 0, false), None).unwrap();
+        assert!((steady(&ground).day_dba - expected).abs() < 1e-9);
+        let building = emission(&row(class, 0.0, 0, false)).unwrap();
         assert_eq!((building.floors, building.source_height_m), (3, 4.0));
     }
+    let shop = emission(&row(COMMERCIAL, 0.0, 0, true)).unwrap();
+    assert_eq!(shop, emission(&row(COMMERCIAL, 24.0, 8, true)).unwrap());
     assert_eq!(
-        building_emission(&row(10, 30.0, 10, false), None),
+        emission(&row(10, 30.0, 10, false)),
         None,
         "sheds are silent"
     );
@@ -52,8 +110,9 @@ fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
 /// The ceiling applies after the whole ladder: tag errors stop at 828 m, 255 floors stay 765 m.
 #[test]
 fn source_height_is_half_the_laddered_height_under_the_tallest_building() {
+    let climate = climate_around(50.0, 14.5);
     let source = |height_tag_m: f64, floors: u8| {
-        building_emission(&row(1, height_tag_m, floors, false), None)
+        building_emission(&row(1, height_tag_m, floors, false), (CZ, &climate), None)
             .unwrap()
             .source_height_m
     };
@@ -209,34 +268,12 @@ fn rows_carry_the_footprint_id_of_their_screening_outline() {
 #[test]
 fn homes_emit_their_dwellings_units_by_country_and_climate() {
     let (lat, lon) = (50.0, 14.5);
-    let (cell_row, cell_column) = (
-        ((90.0 - lat) * 6.0) as usize,
-        ((lon + 180.0) * 6.0) as usize,
-    );
-    // The cells around the place hold the value, the rest of the world is sea.
-    let grid = |value: f32| {
-        let mut cells = vec![-3.4e38f32; 2_160 * 1_080];
-        for r in cell_row - 1..=cell_row + 1 {
-            cells[r * 2_160 + cell_column - 1..=r * 2_160 + cell_column + 1].fill(value);
-        }
-        cells
-            .iter()
-            .flat_map(|cell| cell.to_le_bytes())
-            .collect::<Vec<u8>>()
-    };
-    let directory = std::env::temp_dir().join(format!("qm-climate-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    for (name, value) in [("bio1.f32", 9.3), ("bio10.f32", 18.2), ("bio11.f32", 0.6)] {
-        std::fs::write(directory.join(name), grid(value)).unwrap();
-    }
-    let climate = Climate::load(&directory).unwrap();
-    std::fs::remove_dir_all(&directory).unwrap();
-    let cz = u16::from_le_bytes(*b"CZ");
+    let climate = climate_around(lat, lon);
     let at = crate::dev4::degrees_to_z30(lat, lon);
     let home = |class: u8, storeys: u8, area: f64| {
         let mut home = row(class, 0.0, storeys, false);
         (home.storeys, home.area_m2, home.centroid) = (storeys, Some(area), at);
-        building_emission(&home, Some((cz, &climate))).map(|emission| emission.sound.day_dba)
+        building_emission(&home, (CZ, &climate), None).map(|emission| steady(&emission).day_dba)
     };
     let house = home(0, 1, 120.0).unwrap();
     assert!((house - 45.0).abs() < 0.2, "{house}");
@@ -246,10 +283,74 @@ fn homes_emit_their_dwellings_units_by_country_and_climate() {
         "{flats}"
     );
     assert_eq!(home(0, 1, 20.0), None, "a shed");
-    let shop = row(1, 0.0, 2, false);
-    assert_eq!(
-        building_emission(&shop, Some((cz, &climate))),
-        building_emission(&shop, None),
-        "other classes keep the area law"
+}
+
+/// A shop's plant cools its gross floor area in business hours, in Prague's climate as 9.9 % of
+/// Czechia's service floor is cooled, less in the evening, silent at night. The building of a
+/// restaurant runs its extract over its footprint in the kitchen's hours and its cooling while its
+/// places are open; a building of cafés only its cooling; one with no place mapped in it a
+/// restaurant's.
+#[test]
+fn shops_and_the_buildings_of_bars_and_restaurants_run_their_plant_in_its_hours() {
+    let (lat, lon) = (50.0, 14.5);
+    let climate = climate_around(lat, lon);
+    let at = crate::dev4::degrees_to_z30(lat, lon);
+    let building = |class: u8, floors: u8| BuildingRow {
+        centroid: at,
+        area_m2: Some(200.0),
+        ..row(class, 0.0, floors, false)
+    };
+    let emission = |class: u8, floors: u8, hosted: Option<&PlaceHours>| {
+        in_use(building_emission(
+            &building(class, floors),
+            (CZ, &climate),
+            hosted,
+        ))
+    };
+    let shop: Vec<Running> = emission(COMMERCIAL, 2, None)
+        .into_iter()
+        .map(|(name, plant)| {
+            assert_eq!(name, "commercial");
+            plant
+        })
+        .collect();
+    assert_eq!(shop.len(), 1);
+    assert!(shop[0].duty[0] > 0.0 && shop[0].duty[0] < 0.01, "{shop:?}");
+    assert!(shop[0].duty[1] > 0.0 && shop[0].duty[1] < shop[0].duty[0]);
+    assert_eq!(shop[0].duty[2], 0.0);
+    let one_floor = emission(COMMERCIAL, 1, None);
+    assert!(
+        shop[0].running_dba > one_floor[0].1.running_dba + 4.0,
+        "two floors cool twice the area"
     );
+    let mut lunch_and_dinner = [[false; 24]; 7];
+    for day in &mut lunch_and_dinner {
+        day[12..15].fill(true);
+        day[18..22].fill(true);
+    }
+    let restaurant = PlaceHours {
+        open: lunch_and_dinner,
+        kitchen: Some(kitchen_hours(&lunch_and_dinner)),
+    };
+    let [("kitchen_extract", extract), ("restaurant_bar", cooling)] =
+        &emission(HOSPITALITY, 3, Some(&restaurant))[..]
+    else {
+        panic!("an extract and a cooling plant");
+    };
+    assert_eq!(extract.duty, [7.0 / 12.0, 1.0, 0.0]);
+    assert!(
+        (extract.running_dba - (47.0 + 10.0 * 200f64.log10())).abs() < 1e-9,
+        "its footprint"
+    );
+    assert!(cooling.duty[1] > 0.0 && cooling.duty[0] < extract.duty[0]);
+    let cafes = PlaceHours {
+        open: lunch_and_dinner,
+        kitchen: None,
+    };
+    assert_eq!(
+        emission(HOSPITALITY, 3, Some(&cafes)),
+        [("restaurant_bar", *cooling)]
+    );
+    let unmapped = unmapped_place_hours(&crate::sources::venues::customs(CZ));
+    assert_eq!(emission(HOSPITALITY, 3, Some(&unmapped)).len(), 2);
 }

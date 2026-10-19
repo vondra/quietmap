@@ -3,8 +3,10 @@
 //! 2026-10-04, people): the seats outside, the hours (the mapped `opening_hours`, else the
 //! country's customs) and the weight of a place in a nightlife cluster.
 
-use super::opening_hours::{WeekHours, parse};
+use super::opening_hours::parse;
 use crate::dev4::degrees_to_z30;
+use physics::bands::WeekHours;
+use physics::emission::plant::kitchen_hours;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -339,6 +341,56 @@ pub fn hours(site: &VenueSite, customs: &Customs) -> (WeekHours, WeekHours) {
         }
     };
     (open, terrace)
+}
+
+/// The hours of the places mapped in one building: when any is open, and when its kitchen runs if a
+/// restaurant or a fast-food place cooks there.
+#[derive(Debug, PartialEq)]
+pub struct PlaceHours {
+    pub open: WeekHours,
+    pub kitchen: Option<WeekHours>,
+}
+
+/// The hours of the places `sites` mapped in one building, each place's own or its kind's in its
+/// country.
+pub fn place_hours(sites: &[&VenueSite], customs: &Customs) -> PlaceHours {
+    let mut open = [[false; 24]; 7];
+    let mut cooking = None;
+    for site in sites {
+        let (opening, _) = hours(site, customs);
+        add(&mut open, &opening);
+        if matches!(site.kind, VenueKind::Restaurant | VenueKind::FastFood) {
+            add(cooking.get_or_insert([[false; 24]; 7]), &opening);
+        }
+    }
+    PlaceHours {
+        open,
+        kitchen: cooking.as_ref().map(kitchen_hours),
+    }
+}
+
+/// The hours of a building of bars and restaurants with no place mapped in it: a restaurant's in its
+/// country, as most hold one (69 % of those with a place, 227 squares counted on 2026-10-19).
+pub fn unmapped_place_hours(customs: &Customs) -> PlaceHours {
+    let restaurant = VenueSite {
+        lat: 0.0,
+        lon: 0.0,
+        kind: VenueKind::Restaurant,
+        seating: Seating::Unknown,
+        area_m2: 0.0,
+        hours: None,
+        name: String::new(),
+    };
+    place_hours(&[&restaurant], customs)
+}
+
+/// `hours` and `more` together.
+fn add(hours: &mut WeekHours, more: &WeekHours) {
+    for (day, more_day) in hours.iter_mut().zip(more) {
+        for (hour, &on) in day.iter_mut().zip(more_day) {
+            *hour |= on;
+        }
+    }
 }
 
 #[cfg(test)]
