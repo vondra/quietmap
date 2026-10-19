@@ -4,8 +4,8 @@
 //! `turbines` places the standing ones.
 
 use super::cells::{
-    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, point_piece, push_site_points, resolve_area_m2,
-    ring_area_m2, ring_cell, site_points,
+    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_area_m2,
+    ring_cell, site_points,
 };
 use super::facilities::{
     FacilityJoins, Tags, facility_share, is_gas_substation, is_solar_plant, parse_tags,
@@ -54,15 +54,13 @@ pub struct IndustrialRow {
     pub source_id: u16,
 }
 
-/// What a row emits: its sound power, source height, display label, and its site's area (`None`
-/// for a turbine, one point at its hub without an exclusion radius) or turbine rating.
+/// What a row emits: its sound power, source height, display label and its site's area.
 #[derive(Debug, PartialEq)]
 pub struct RowEmission {
     pub sound: SoundPower,
     pub height_m: f64,
     pub label: &'static str,
-    pub area_m2: Option<f64>,
-    pub rated_power_kw: Option<f64>,
+    pub area_m2: f64,
 }
 
 /// A row's emission with the facility evidence of `joins`; `None` when silent: a dead site
@@ -124,8 +122,7 @@ pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmi
         sound,
         height_m,
         label,
-        area_m2: Some(area_m2),
-        rated_power_kw: None,
+        area_m2,
     })
 }
 
@@ -245,16 +242,15 @@ fn place(
     out: &mut Vec<Converted>,
 ) {
     let centroid = z30_corner_degrees(row.centroid.0, row.centroid.1);
-    let points = emission.area_m2.map(|area_m2| {
-        site_points(&Site {
-            centroid,
-            ring: &row.ring,
-            area_m2,
-            single_point_up_to_m2: SINGLE_POINT_UP_TO_M2,
-            cell_m: CELL_M,
-        })
+    let points = site_points(&Site {
+        centroid,
+        ring: &row.ring,
+        area_m2: emission.area_m2,
+        single_point_up_to_m2: SINGLE_POINT_UP_TO_M2,
+        cell_m: CELL_M,
     });
-    // The area shown is the mapped one (its tag, else its outline): a default is not data.
+    // The area shown is the mapped one (its tag, else its outline): a default is not data. A
+    // site has no hub height or rating (a turbine's fields, `turbines`).
     let display = json!([
         row.name,
         emission.label,
@@ -262,9 +258,9 @@ fn place(
             .or_else(|| ring_area_m2(&row.ring))
             .map(f64::round),
         row.nace.map(|code| format!("{code:04}")),
-        points.as_ref().map_or(1, Vec::len),
-        emission.area_m2.is_none().then_some(emission.height_m),
-        emission.rated_power_kw,
+        points.len(),
+        null,
+        null,
         (emission.sound.day_dba * 10.0).round() / 10.0,
         row.source_id
     ]);
@@ -280,26 +276,10 @@ fn place(
         display: fields(display),
     };
     let own = |position: (i32, i32)| footprints.containing(position).unwrap_or(0);
-    match (points, emission.area_m2) {
-        (Some(points), Some(area_m2)) => {
-            let first = out.len();
-            push_site_points(&points, area_m2, &attribute, out);
-            for (piece, point) in out[first..].iter_mut().zip(&points) {
-                piece.attribute.footprint_id = own(degrees_to_z30(point.lat, point.lon));
-            }
-        }
-        _ => {
-            let (tile, ends) = point_piece(centroid.0, centroid.1);
-            out.push(Converted {
-                tile,
-                ends,
-                attribute: Attribute {
-                    footprint_id: own(row.centroid),
-                    ..attribute
-                },
-                deck_m: None,
-            });
-        }
+    let first = out.len();
+    push_site_points(&points, emission.area_m2, &attribute, out);
+    for (piece, point) in out[first..].iter_mut().zip(&points) {
+        piece.attribute.footprint_id = own(degrees_to_z30(point.lat, point.lon));
     }
 }
 
