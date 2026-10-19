@@ -9,7 +9,7 @@ use super::period_shares::period_shares;
 use super::road_junctions::{Junctions, row_junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, chains, row_slopes};
 use super::road_traffic::{
-    BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km, thai_rural_road_ref,
+    BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, Guess, local_km, thai_rural_road_ref,
 };
 use super::tagged_speeds::tagged_speed_kmh;
 use super::thai_highways::thai_highway;
@@ -306,9 +306,14 @@ fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet
     ))
 }
 
-/// The square's counted rows that count motorcycles, by class group.
-fn local_motorcycles(table: &crate::dev4::Table) -> Result<LocalMotorcycles, String> {
+/// The square's counted rows that count motorcycles, by class group, but those whose count is a
+/// main road's copy (`copies`, rows of the table).
+fn local_motorcycles(
+    table: &crate::dev4::Table,
+    copies: &std::collections::HashSet<usize>,
+) -> Result<LocalMotorcycles, String> {
     let mut local = LocalMotorcycles::default();
+    let mut batch_first_row = 0;
     for batch in &table.batches {
         let c = Columns { batch };
         let class = c.get("road_class")?.as_primitive::<UInt8Type>();
@@ -323,11 +328,14 @@ fn local_motorcycles(table: &crate::dev4::Table) -> Result<LocalMotorcycles, Str
             aadt[3].clone()?,
         ];
         for row in 0..batch.num_rows() {
-            if super::motorcycles::counted(source_id.value(row), estimated.value(row)) {
+            if super::motorcycles::counted(source_id.value(row), estimated.value(row))
+                && !copies.contains(&(batch_first_row + row))
+            {
                 let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
                 local.add(class_index, std::array::from_fn(|k| aadt[k].value(row)));
             }
         }
+        batch_first_row += batch.num_rows();
     }
     Ok(local)
 }
@@ -640,8 +648,8 @@ pub fn convert(
         }
         None => None,
     };
-    let motorcycles = local_motorcycles(&table)?;
     let copies = copied_counts(&table)?;
+    let motorcycles = local_motorcycles(&table, &copies)?;
     let (mut ways, rows) = way_rows(&table, reach)?;
     let chains = chains(&mut ways);
     let slopes = row_slopes(&chains, &heights, rows);
@@ -727,8 +735,21 @@ pub fn convert(
             };
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
             let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
-            let row_guessed = guessed(source_id.value(row), estimated.value(row))
-                || copies.contains(&(batch_first_row + row));
+            let copy = copies.contains(&(batch_first_row + row));
+            let row_guessed = guessed(source_id.value(row), estimated.value(row)) || copy;
+            // Which categories are estimates: all of a copy's, none of its count its own.
+            let estimated_categories = if copy {
+                ALL_CATEGORIES_ESTIMATED
+            } else {
+                estimated.value(row)
+            };
+            let guess = if copy {
+                Guess::Copy
+            } else if source_id.value(row) == PRIOR_SOURCE_ID {
+                Guess::ClassPrior
+            } else {
+                Guess::Fallback
+            };
             // A row closed to motor vehicles carries no guessed traffic (way 977414128 had 317 a
             // day): only what was counted on it and its buses.
             let closed = row_guessed && crate::traffic::CLOSED_ACCESS.contains(&access.value(row));
@@ -737,10 +758,12 @@ pub fn convert(
                 ((i64::from(start_y.value(row)) + i64::from(end_y.value(row))) / 2) as i32,
             );
             // A Thai national highway's rows (motorway to tertiary and unclassified; links and
-            // streets carrying its number are not the highway) take the department's traffic of
-            // the highway in the row's province: its vehicle-km there over these rows' length.
+            // streets carrying its number are not the highway, nor a way carrying its count beside
+            // it) take the department's traffic of the highway in the row's province: its
+            // vehicle-km there over these rows' length.
             let highway = (row_guessed
                 && !closed
+                && !copy
                 && country.value(row) == THAI_ISO
                 && matches!(class_index, 0..=4 | 9))
             .then(|| {
@@ -759,16 +782,15 @@ pub fn convert(
                             built_up.value(row),
                             oneway.value(row) != 0,
                         ),
-                        (
-                            middle_z30,
-                            country.value(row),
-                            source_id.value(row) == PRIOR_SOURCE_ID,
-                        ),
+                        (middle_z30, country.value(row), guess),
                         (thai_rural_road_ref(refs.value(row)), lanes.value(row)),
                     )
                 });
             let mut daily = match modelled {
                 Some(total) => modelled_flows(total, class_index, built_up.value(row)),
+                // A copy has no count of its own: where no model gives it one it carries none, its
+                // main road beside it carrying the count.
+                None if copy => [0.0; 4],
                 None => country_flows(
                     prior,
                     class_index,
@@ -787,7 +809,7 @@ pub fn convert(
             // A US road whose vehicle types nobody counted (HPMS's national layer counts the total
             // only) carries its state's mix on its road group in its area (VM-4).
             let us_mix = (country.value(row) == US_ISO
-                && estimated.value(row) == ALL_CATEGORIES_ESTIMATED)
+                && estimated_categories == ALL_CATEGORIES_ESTIMATED)
                 .then(|| {
                     let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
                     us_vehicle_shares(lat, lon, class_index, built_up.value(row))
@@ -925,7 +947,7 @@ pub fn convert(
                 (daily[1] * 10.0).round() / 10.0,
                 (daily[2] * 10.0).round() / 10.0,
                 (daily[3] * 10.0).round() / 10.0,
-                estimated.value(row),
+                estimated_categories,
                 (scale * cross_section.value(row)).round(),
                 posted,
                 speed,
@@ -942,6 +964,9 @@ pub fn convert(
                     THAI_HIGHWAYS_SOURCE_ID
                 } else if modelled.is_some() {
                     BUILDING_TRAFFIC_SOURCE_ID
+                } else if copy {
+                    // Its buses alone: no dataset counted what it carries.
+                    PRIOR_SOURCE_ID
                 } else {
                     source_id.value(row)
                 },

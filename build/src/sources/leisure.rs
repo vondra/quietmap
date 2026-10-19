@@ -2,17 +2,18 @@
 //! above the ground, in the Building layer as dev4 shows them: the area law over the polygon (a
 //! node takes its class's reference footprint; a line is no area and emits from its centroid),
 //! ranges by shots a year unless roofed. Motorsport (PLAN-z13 DROP) and unknown classes are silent.
-//! Parking serves the buildings around it: no more cars park and leave in a day in the lots
-//! around than the trip ends of those buildings, nor in the street strips than the trip ends made
-//! by cars that park on the street (houses' cars mostly park on their plots, flats' cars on the
-//! street), each kind's shared by its spaces; the car-park rate of every space taken is the most a
-//! space carries, and all a space carries where the square's buildings are not mapped (at that
-//! rate a mountain hotel's 127-space lot took 865 movements a day, where the roads to it carry
-//! 303 and 353 vehicles). Driving to and from a space is the road traffic, not the parking's. A
-//! car park is heard in its movements, a range in its shots and every other area in use, in their
-//! share of each period as bells are: heard steady, 69 movements a day on a Prague villa street's
-//! strip read 1.96 sone, more than the flights over it (1.16) and four times the 65 cars a day
-//! passing on the street (0.50, 2026-10-18).
+//! Parking serves the buildings around it: no more cars park and leave in a day in the street
+//! strips around than the trip ends of those buildings made by cars that park on the street, nor in
+//! the lots than those made by cars that park off it (houses' cars park on their plots, flats' and
+//! visitors' mostly on the street, the rest in lots), each trip end parking once and each kind's
+//! shared by its spaces; the car-park rate of every space taken is the most a space carries, and
+//! all a space carries where the square's buildings are not mapped (at that rate a mountain hotel's
+//! 127-space lot took 865 movements a day, where the roads to it carry 303 and 353 vehicles).
+//! Driving to and from a space is the road traffic, not the parking's. A car park is heard in its
+//! movements, a range in its shots and every other area in use, in their share of each period as
+//! bells are: heard steady, 69 movements a day on a Prague villa street's strip read 1.96 sone,
+//! more than the flights over it (1.16) and four times the 65 cars a day passing on the street
+//! (0.50, 2026-10-18).
 
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
@@ -21,7 +22,7 @@ use super::facilities::{Tags, parse_tags};
 use super::venues::{Seating, Venues};
 use super::{Converted, displayed_duty, fields, group_key};
 use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
-use crate::traffic::{GRID_SIDE, grid_cell, street_parking_shares};
+use crate::traffic::{GRID_SIDE, grid_cell, parking_shares};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
 use physics::bands::PERIOD_HOURS;
 use physics::emission::leisure::*;
@@ -148,6 +149,18 @@ impl ParkingBudget {
         ParkingBudget { trip_ends, spaces }
     }
 
+    /// The street strips' budget and the lots' of a grid of trip ends, each trip end parking once:
+    /// each cell's trip ends times the shares of them made by cars that park on the street and in
+    /// a lot (`crate::traffic::parking_shares`).
+    fn street_and_lots(trip_ends: &[f32], shares: &[[f32; 2]]) -> (Self, Self) {
+        let [street, lots] = [0, 1].map(|kind| {
+            (trip_ends.iter().zip(shares))
+                .map(|(&ends, share)| f64::from(ends) * f64::from(share[kind]))
+                .collect()
+        });
+        (Self::new(street), Self::new(lots))
+    }
+
     fn around(values: impl Fn(usize) -> f64, (row, column): (usize, usize)) -> f64 {
         let reach = STREET_PARKING_REACH_CELLS;
         let mut sum = 0.0;
@@ -198,22 +211,14 @@ pub fn convert(
     for batch in &table.batches {
         rows.extend(read_batch(batch).map_err(context)?);
     }
-    // A street strip takes the trip ends made by cars that park on the street, a lot any of them.
+    // A street strip takes the trip ends made by cars that park on the street, a lot those off it.
     let parking = rows
         .iter()
         .any(|row| matches!(row.class, CAR_PARK | CAR_PARK_STREET));
     let budgets = match traffic.filter(|_| parking) {
         Some(dir) => crate::traffic::read_grid(dir, square)?.map(|grid| -> Result<_, String> {
-            let street_shares = street_parking_shares(dev4, square)?;
-            let ends = |k: usize| f64::from(grid[k]);
-            let cells = 0..grid.len();
-            let mut street = ParkingBudget::new(
-                cells
-                    .clone()
-                    .map(|k| ends(k) * f64::from(street_shares[k]))
-                    .collect(),
-            );
-            let mut lots = ParkingBudget::new(cells.map(ends).collect());
+            let (mut street, mut lots) =
+                ParkingBudget::street_and_lots(&grid, &parking_shares(dev4, square)?);
             for row in &rows {
                 let budget = match row.class {
                     CAR_PARK_STREET => &mut street,
@@ -479,6 +484,21 @@ mod tests {
             "{share}"
         );
         assert_eq!(lots.share((40, 40)), 0.0);
+    }
+
+    /// Each trip end parks once: of 100 a day at a block of flats, where 55 % of the cars park on
+    /// the street, the street strips take 55 and the lots the other 45, not all 100 again; of 100
+    /// at houses the street takes 15 and the lots none, the rest parking on the plots.
+    #[test]
+    fn a_trip_end_parks_on_the_street_in_a_lot_or_on_its_plot_once() {
+        let (street, lots) =
+            ParkingBudget::street_and_lots(&[100.0, 100.0], &[[0.55, 0.45], [0.15, 0.0]]);
+        for (budget, expected) in [(&street, [55.0, 15.0]), (&lots, [45.0, 0.0])] {
+            assert_eq!(budget.trip_ends.len(), 2);
+            for (got, want) in budget.trip_ends.iter().zip(expected) {
+                assert!((got - want).abs() < 1e-4, "{:?}", budget.trip_ends);
+            }
+        }
     }
 
     /// A mapped terrace 10 m from a cafe is the cafe's (its guests are the people converter's); one

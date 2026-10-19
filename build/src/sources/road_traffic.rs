@@ -4,8 +4,9 @@
 //! the counted roads' relation between their traffic and the trip ends generated around them
 //! (fitted on the counted rows of 13 European countries, evidence 2026-10-01, building traffic);
 //! in 58 countries a major road likewise takes its traffic from a model of the counted major roads
-//! (`MAJOR_MODELS`). Only class estimates are replaced: a country's own defaults stay. Squares
-//! whose buildings are not mapped keep dev4's guesses.
+//! (`MAJOR_MODELS`). Class estimates are replaced, a country's own defaults stay, and a count copied
+//! from a main road (`road_copies`) takes the model in every country. Squares whose buildings are
+//! not mapped keep dev4's guesses, and a copy carries none.
 
 use crate::dev4::Square;
 use crate::traffic::{SquareTraffic, Surroundings};
@@ -141,6 +142,17 @@ const MAJOR_MODEL_COUNTRIES: [[u8; 2]; 58] = [
     *b"RU", *b"SE", *b"SI", *b"SJ", *b"SK", *b"SM", *b"UA", *b"US", *b"VA", *b"XK",
 ];
 
+/// Whether the major-road model replaces a major row's guess: a class prior where the model beat
+/// the priors, never a fallback's total, a copy everywhere (a main road's count is no estimate of
+/// its ramp's).
+fn major_model_replaces(guess: Guess, iso: [u8; 2]) -> bool {
+    match guess {
+        Guess::ClassPrior => MAJOR_MODEL_COUNTRIES.contains(&iso),
+        Guess::Fallback => false,
+        Guess::Copy => true,
+    }
+}
+
 /// The model group of a dev4 class: motorway, trunk, primary, a link of any of them.
 fn major_group(class: u8) -> Option<usize> {
     match class {
@@ -248,6 +260,16 @@ const UNCLASSIFIED: u8 = 9;
 /// dev4's built-up code of a row inside a settlement's built-up area.
 const URBAN: u8 = 2;
 
+/// What a guessed row's own traffic is: dev4's class prior (no dataset), a country default or
+/// classification fallback, whose totals stand on a main road, or a main road's count copied onto
+/// it (`road_copies`), none of its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Guess {
+    ClassPrior,
+    Fallback,
+    Copy,
+}
+
 /// A square's building traffic as the conversion reads it.
 pub struct BuildingTraffic {
     traffic: SquareTraffic,
@@ -294,15 +316,16 @@ impl BuildingTraffic {
         (intercept + density + lanes_term + oneway_term).exp()
     }
 
-    /// The modelled daily total of a row whose traffic dev4 guessed, `None` to keep the guess:
-    /// `class` (dev4 code), `built_up` (0 unknown, 1 rural, 2 urban), `middle` (z30).
-    /// `prior` tells a class prior (no dataset) from a country default or classification
-    /// fallback, whose totals stand on a main road (their splits do not).
+    /// The modelled daily total of a row whose traffic dev4 guessed or whose count is a copy,
+    /// `None` where no model replaces it (the conversion keeps a guess and drops a copy): `class`
+    /// (dev4 code), `built_up` (0 unknown, 1 rural, 2 urban), `middle` (z30). A fallback's total
+    /// stands on a main road (its split does not); a copy takes the model of its class wherever
+    /// there is one.
     pub fn total(
         &self,
         row: usize,
         (class, built_up, oneway): (u8, u8, bool),
-        (middle, country_iso, prior): ((i32, i32), u16, bool),
+        (middle, country_iso, guess): ((i32, i32), u16, Guess),
         (thai_rural_road, lanes): (bool, u8),
     ) -> Option<f64> {
         let flow = self
@@ -341,7 +364,7 @@ impl BuildingTraffic {
             })
         };
         if major_group(class).is_some() {
-            if !(prior && MAJOR_MODEL_COUNTRIES.contains(&iso)) {
+            if !major_model_replaces(guess, iso) {
                 return None;
             }
             return Some(self.major_prediction(middle, (class, built_up, oneway, lanes)));
@@ -368,7 +391,7 @@ impl BuildingTraffic {
                     Some(routed)
                 }
             }
-            (_, _, Some(model)) if prior => main(model),
+            (_, _, Some(model)) if guess == Guess::ClassPrior => main(model),
             _ => None,
         }
     }
@@ -441,6 +464,17 @@ mod tests {
         assert!(!MAJOR_MODEL_COUNTRIES.contains(b"TH") && MAJOR_MODEL_COUNTRIES.contains(b"MX"));
         assert_eq!(major_group(11), Some(3));
         assert_eq!(major_group(3), None);
+    }
+
+    /// A ramp whose count is its main road's takes the model, in Thailand too; a class prior only
+    /// where the model beat the priors, a country default's total never.
+    #[test]
+    fn a_copied_count_takes_the_major_model_everywhere() {
+        assert!(major_model_replaces(Guess::Copy, *b"CZ"));
+        assert!(major_model_replaces(Guess::Copy, *b"TH"));
+        assert!(major_model_replaces(Guess::ClassPrior, *b"CZ"));
+        assert!(!major_model_replaces(Guess::ClassPrior, *b"TH"));
+        assert!(!major_model_replaces(Guess::Fallback, *b"CZ"));
     }
 
     #[test]
