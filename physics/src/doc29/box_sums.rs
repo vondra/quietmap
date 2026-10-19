@@ -57,7 +57,6 @@ pub struct BoxSums {
     weighted_squared_gradient: [f64; 3],
     /// Per period and share slant, the pieces' energy by installation.
     installation_energy: [[[f64; 3]; 2]; PERIODS],
-    pieces: u64,
 }
 
 /// What a finished box stores.
@@ -142,60 +141,6 @@ impl BoxSums {
                 weight * unweighted[GEOMETRY_WEIGHT_DISTANCE];
             self.installation_energy[period][1][slot] += weight * tail;
         }
-        self.pieces += 1;
-    }
-
-    /// Adds another box's sums (a partial sum from another thread or day).
-    pub fn merge(&mut self, other: &BoxSums) {
-        for (sums, others) in self.energy.iter_mut().zip(&other.energy) {
-            for (sum, value) in sums.iter_mut().zip(others) {
-                *sum += value;
-            }
-        }
-        for (sum, value) in self.tail_energy.iter_mut().zip(other.tail_energy) {
-            *sum += value;
-        }
-        for (sum, value) in self
-            .energy_over_scaled_distance
-            .iter_mut()
-            .zip(other.energy_over_scaled_distance)
-        {
-            *sum += value;
-        }
-        self.weight += other.weight;
-        for axis in 0..3 {
-            self.weighted_midpoint_m[axis] += other.weighted_midpoint_m[axis];
-        }
-        for period in 0..PERIODS {
-            self.period_weight[period] += other.period_weight[period];
-            self.period_weighted_length_m[period] += other.period_weighted_length_m[period];
-        }
-        for axis in 0..2 {
-            self.weighted_doubled_direction[axis] += other.weighted_doubled_direction[axis];
-            self.weighted_gradient_direction[axis] += other.weighted_gradient_direction[axis];
-        }
-        for (sum, value) in self
-            .weighted_squared_gradient
-            .iter_mut()
-            .zip(other.weighted_squared_gradient)
-        {
-            *sum += value;
-        }
-        for (sums, values) in self
-            .installation_energy
-            .iter_mut()
-            .flatten()
-            .flatten()
-            .zip(other.installation_energy.iter().flatten().flatten())
-        {
-            *sums += values;
-        }
-        self.pieces += other.pieces;
-    }
-
-    /// Pieces added so far.
-    pub fn pieces(&self) -> u64 {
-        self.pieces
     }
 
     /// The box's values; `None` for a box without energy.

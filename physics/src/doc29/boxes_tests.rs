@@ -295,44 +295,6 @@ fn a_box_of_mixed_flows_errs_on_its_extension_only() {
     }
 }
 
-/// Sums merged from two halves equal the sums of the whole.
-#[test]
-fn merged_sums_equal_the_whole() {
-    let pieces = bundle(true);
-    let (mut first, mut second, mut whole) =
-        (BoxSums::default(), BoxSums::default(), BoxSums::default());
-    for (index, (emission, start, end)) in pieces.iter().enumerate() {
-        let half = if index % 2 == 0 {
-            &mut first
-        } else {
-            &mut second
-        };
-        for sums in [half, &mut whole] {
-            sums.add(
-                &SegmentEnergies::of(&emission.npd_distance_levels()),
-                emission.installation,
-                [0.5, 0.3, 0.2],
-                *start,
-                *end,
-            );
-        }
-    }
-    first.merge(&second);
-    let (merged, direct) = (first.values().unwrap(), whole.values().unwrap());
-    assert_eq!(first.pieces(), whole.pieces());
-    for (a, b) in merged
-        .levels_db
-        .iter()
-        .flatten()
-        .zip(direct.levels_db.iter().flatten())
-    {
-        assert!((a - b).abs() < 1e-9, "{a} vs {b}");
-    }
-    assert!((merged.axis_rad - direct.axis_rad).abs() < 1e-9);
-    assert!((merged.gradient - direct.gradient).abs() < 1e-9);
-    assert!((merged.centroid_m[2] - direct.centroid_m[2]).abs() < 1e-6);
-}
-
 /// Jets and turboprops in one box: propellers fall off slower than jets, so far away the mix
 /// is theirs. The shares at the tail anchor and the anchor itself keep the box within 0.4 dB of
 /// its pieces out to 16 km (one share and a tail fitted to the sum read 2 dB low there); the most
