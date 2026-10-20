@@ -28,7 +28,7 @@ use tiles::terrain::{NODES_PER_DEGREE, Terrain, Window};
 pub static TIME_KERNELS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub static KERNEL_SECONDS: Mutex<[f64; 4]> = Mutex::new([0.0; 4]);
 /// Bench only: the ray kernel's warp sums and maxima of its counts (kernels/paint.cu RAY_STATS).
-pub static RAY_STATS: Mutex<[u64; 26]> = Mutex::new([0; 26]);
+pub static RAY_STATS: Mutex<[u64; 39]> = Mutex::new([0; 39]);
 
 fn timed_launch(
     stream: &CudaStream,
@@ -478,7 +478,7 @@ impl Gpu {
             let offsets = driver(device.htod_sync_copy(&offsets))?;
             let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
             let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
-            let stats = driver(device.alloc_zeros::<u64>(26))?;
+            let stats = driver(device.alloc_zeros::<u64>(39))?;
             stream.wait_for_default()?;
             timed_launch(&stream, 1, || driver(unsafe {
                 kernel("pair_rays")?.launch_on_stream(
@@ -515,8 +515,8 @@ impl Gpu {
                     ),
                 )
             }).map(|_| ()))?;
-            for (sum, value) in RAY_STATS.lock().unwrap().iter_mut().zip(read_back(&stream, &stats)?) {
-                *sum += value;
+            for (k, (sum, value)) in RAY_STATS.lock().unwrap().iter_mut().zip(read_back(&stream, &stats)?).enumerate() {
+                *sum = if k >= 26 { (*sum).max(value) } else { *sum + value };
             }
             timed_launch(&stream, 3, || driver(unsafe {
                 kernel("pair_bands_to_points")?.launch_on_stream(

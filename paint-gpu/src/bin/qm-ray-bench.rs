@@ -196,7 +196,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let _ = warps;
     for (i, name) in names.iter().enumerate() {
         let (sum, most) = (stats[2 * i] as f64, stats[2 * i + 1] as f64);
-        println!("stat {name}: per ray {:.2}, lanes busy {:.1} of 32", sum / stats[0] as f64, 32.0 * sum / (32.0 * most).max(1.0));
+        println!("stat {name}: per ray {:.2}, lanes busy {:.1} of 32, most {}", sum / stats[0] as f64, 32.0 * sum / (32.0 * most).max(1.0), stats[26 + i]);
     }
     println!(
         "total: {pairs_total} pairs ({failed_total} failed), count {:.3} s, list {:.3} s, rays {:.3} s, bands {:.3} s",

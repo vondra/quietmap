@@ -100,6 +100,7 @@ __device__ __forceinline__ void warp_stats(unsigned long long* stats, const u32*
         if ((threadIdx.x & 31) == 0) {
             atomicAdd(&stats[2 * i], (unsigned long long)sum);
             atomicAdd(&stats[2 * i + 1], (unsigned long long)most);
+            atomicMax(&stats[2 * RAY_STATS + i], (unsigned long long)most);
         }
     }
 }
