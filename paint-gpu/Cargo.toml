@@ -12,6 +12,10 @@ path = "src/bin/qm-paint.rs"
 name = "qm-paint-gpu"
 path = "src/bin/qm-paint-gpu.rs"
 
+[[bin]]
+name = "qm-ray-bench"
+path = "src/bin/qm-ray-bench.rs"
+
 [dependencies]
 tiles = { path = "../tiles" }
 physics = { path = "../physics" }
