@@ -86,10 +86,19 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float*
     }
 }
 
+// One-warp ray blocks resident on a multiprocessor, which bound a thread's registers: on compute
+// capability 12.0 sixteen (128 registers) beat twelve (168) by 15 %; on 7.0 and 7.5 twelve beat
+// sixteen by 11 and 8 %, the walk's live state kept in registers rather than in local memory
+// (2026-10-20); requiring more than sixteen makes the allowance too small for the walk.
+#if __CUDA_ARCH__ >= 800
+#define RAY_BLOCKS_PER_MULTIPROCESSOR 16
+#else
+#define RAY_BLOCKS_PER_MULTIPROCESSOR 12
+#endif
+
 // Per listed ray, a thread each: its pair's sums (PAIR_SUMS a pair) and mixed bands (PERIODS x BANDS
-// a pair) added to, or its failure to the pair's. Sixteen one-warp blocks allow 128 registers per
-// thread; requiring more warps makes the register allowance too small for the walk's live state.
-extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, 16) ray_transfers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
+// a pair) added to, or its failure to the pair's.
+extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, RAY_BLOCKS_PER_MULTIPROCESSOR) ray_transfers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
                                          const u32* candidate_index, const PairRay* rays, u32 ray_count, float* sums,
                                          float* pair_bands, u32* failed) {
     const SquareScene& square = *square_ptr;

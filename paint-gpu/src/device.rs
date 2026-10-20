@@ -92,9 +92,10 @@ pub const FAILED_NO_TERRAIN: u32 = 2;
 pub const FAILED_CAPACITY: u32 = 4;
 pub const FAILED_LINE_CUTOFF: u32 = 8;
 
-/// One warp per pair-kernel block allows 128 registers per thread with the ray kernel's launch
-/// bounds. Against two-warp blocks at 64 registers, real pixel launches improve by about 5% on
-/// compute capability 12.0, and fixed-pair checks on 7.0 and 7.5 improve by more than half.
+/// One warp per pair-kernel block: the ray kernel's launch bounds (kernels/paint.cu) then give each
+/// thread 128 registers or more. Against two-warp blocks at 64 registers, real pixel launches
+/// improve by about 5% on compute capability 12.0, and fixed-pair checks on 7.0 and 7.5 by more
+/// than half.
 const THREADS_PER_BLOCK: u32 = 32;
 /// Bytes of one listed ray (kernels/evaluate.cuh PairRay).
 const PAIR_RAY_BYTES: usize = 24;
