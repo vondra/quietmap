@@ -409,6 +409,8 @@ impl Gpu {
         // The pairs' bands, which keep each pair's first rays from its counting to its writing
         // (kernels/paint.cu PAIR_RAY_SLOTS), zeroed again before the rays fill them.
         let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
+        // Zeroed before the pairs' stream forks: a launch without rays reads them back unwritten.
+        let sums = driver(device.alloc_zeros::<f32>(PAIR_SUMS * count))?;
         let kernel = |name: &str| {
             device
                 .get_func("paint", name)
@@ -450,7 +452,6 @@ impl Gpu {
         for offset in &mut offsets {
             (*offset, total) = (total, total + *offset);
         }
-        let sums = driver(device.alloc_zeros::<f32>(PAIR_SUMS * count))?;
         if total > 0 {
             let offsets = driver(device.htod_sync_copy(&offsets))?;
             let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
