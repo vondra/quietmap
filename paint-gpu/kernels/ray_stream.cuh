@@ -147,7 +147,7 @@ struct RayStream {
     // The walk's indices of a chunk's candidate vertices waiting for the crossings before them (the
     // ends' vertices, the middle stretches' crests), in order: one a vertex walked, and a crest
     // carried in. Its bytes a multiple of 16 keep the hulls after it aligned for wide loads (65
-    // entries cost a dense city square's rays 7 % on a 2080 Ti, 2026-10-20).
+    // entries cost a dense city square's rays 7 % on compute capability 7.5, 2026-10-20).
     u16 candidates[2 * CHUNK_VERTICES];
     StateStream states[2];
 };
