@@ -7,12 +7,16 @@
 #define RAY_CROSSINGS 1024   // crossings one ray keeps: two a roof, and the walls
 #define RECENT_CROSSINGS 8   // crossings kept to drop one found twice
 #define CONTAINING 8         // footprints a building's source stands in, its own among them
-#define WAITING_TOPS 64      // obstacle tops waiting on a middle stretch's crest
 #define LINE_NODES 64        // quadrature nodes of one line piece (five buckets, each wide one split at its edges)
-// Recent terrain vertices (a power of two): ranges starting among them are summed locally to avoid
-// cancellation. Earlier starts use differences of source moments; the ring's physical span varies
-// with latitude and lattice scale, and an older roof's partial interval can still be short.
+// Recent terrain vertices: ranges starting among them are summed locally to avoid cancellation.
+// Earlier starts use differences of source moments; the window's physical span varies with latitude
+// and lattice scale, and an older roof's partial interval can still be short.
 #define RECENT_VERTICES 128
+// The walk takes the terrain CHUNK_VERTICES vertices at a time, then the crossings and candidates
+// up to where its vertices tell them (ray.cuh walk_ray); it keeps its last VERTEX_RING vertices (a
+// power of two): the recent ones of the crossings still to be taken and of the chunk's own.
+#define CHUNK_VERTICES 64
+#define VERTEX_RING 256
 // ray::CREST_ENDS_M and CREST_SPACING_M: beyond 300 m of both ends only the highest vertex of each
 // 150 m of the ray may diffract.
 #define CREST_ENDS_M 300.0f
@@ -120,8 +124,10 @@ struct RayStream {
     KeptCrossing recent[RECENT_CROSSINGS];   // a ring, the newest at recent_next - 1
     int recent_next;
     int recent_count;
-    // Vertex k of the walk at k % RECENT_VERTICES, `vertices` written so far.
-    TerrainPoint recent_vertices[RECENT_VERTICES];
+    // Vertex k of the walk and the terrain's moments from the source to it at k % VERTEX_RING;
+    // `vertices` kept so far, as the crossing being taken saw them (walk_ray).
+    TerrainPoint ring[VERTEX_RING];
+    Moments ring_prefix[VERTEX_RING];
     int vertices;
     // The roofs closed so far, in order of distance, where they end and the terrain's moments there.
     Roof roofs[ROOFS];
@@ -138,9 +144,11 @@ struct RayStream {
     float closing_x;
     Moments closing_prefix;
     int closing_vertex;
-    // Tops taken while a middle stretch is open, before its crest is known.
-    BandCandidate waiting[WAITING_TOPS];
-    int waiting_count;
+    // The walk's indices of a chunk's candidate vertices waiting for the crossings before them (the
+    // ends' vertices, the middle stretches' crests), in order: one a vertex walked, and a crest
+    // carried in. Its bytes a multiple of 16 keep the hulls after it aligned for wide loads (65
+    // entries cost a dense city square's rays 7 % on compute capability 7.5, 2026-10-20).
+    u16 candidates[2 * CHUNK_VERTICES];
     StateStream states[2];
 };
 
@@ -177,13 +185,19 @@ __device__ __forceinline__ void add_foliage(const PlanePoint& source, const Plan
     crowns.behind_x = x;
 }
 
-// Vertex k of the walk, among the last RECENT_VERTICES.
+// Vertex k of the walk, among the last VERTEX_RING.
 __device__ __forceinline__ TerrainPoint recent_vertex(const RayStream& s, int k) {
-    return s.recent_vertices[k & (RECENT_VERTICES - 1)];
+    return s.ring[k & (VERTEX_RING - 1)];
 }
 
-__device__ __forceinline__ void keep_vertex(RayStream& s, const TerrainPoint& vertex) {
-    s.recent_vertices[s.vertices & (RECENT_VERTICES - 1)] = vertex;
+// Vertex k's terrain moments from the source.
+__device__ __forceinline__ Moments vertex_prefix(const RayStream& s, int k) {
+    return s.ring_prefix[k & (VERTEX_RING - 1)];
+}
+
+__device__ __forceinline__ void keep_vertex(RayStream& s, const TerrainPoint& vertex, const Moments& prefix) {
+    s.ring[s.vertices & (VERTEX_RING - 1)] = vertex;
+    s.ring_prefix[s.vertices & (VERTEX_RING - 1)] = prefix;
     s.vertices++;
 }
 

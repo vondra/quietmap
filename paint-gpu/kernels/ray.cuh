@@ -1,10 +1,11 @@
 // One source-receiver ray in f32 through the terrain and obstacle physics of ray.rs.
 // The obstacles' crossings are listed first (scene.cuh, with the CPU's filters); the terrain
-// is then walked once from the source, its vertices and the crossings taken in order of distance:
-// every candidate at once to both states' bands (rubber_band.rs: a monotone chain of the states'
-// rays) with the terrain's moments from the source to it, a footprint's crossings paired into a roof
-// kept with its rise, the moments to the receiver summed over the vertices kept behind the walk. The
-// CPU builds the same path in arrays before sorting the candidates.
+// is then walked once from the source, a chunk of vertices at a time, and the candidates and
+// crossings each chunk reaches taken in order of distance: every candidate at once to both states'
+// bands (rubber_band.rs: a monotone chain of the states' rays) with the terrain's moments from the
+// source to it, a footprint's crossings paired into a roof kept with its rise, the moments to the
+// receiver summed over the vertices kept behind the walk. The CPU builds the same path in arrays
+// before sorting the candidates.
 
 // Whether a crossing was found before, remembering it otherwise; the crossings of the receiver's
 // building are dropped first (evaluate.rs). crossings::sort_and_deduplicate keeps one crossing per
@@ -108,16 +109,16 @@ __device__ __forceinline__ u32 next_taken_crossing(RayStream& s, int* crossing, 
 }
 
 // One listed crossing at distance `x` on the stretch from `behind` to `ahead` (`prefix_behind` the
-// terrain's moments from the source to behind): its wall as an entry or exit of its footprint's roof,
-// its top a candidate, waiting while a middle stretch's crest is open (`crest_open`).
-__device__ __forceinline__ u32 take_crossing(RayStream& s, BandState* bands, const RayFrame& f, const RayCrossing& c, float x,
-                                             const TerrainPoint& behind, const TerrainPoint& ahead, const Moments& prefix_behind,
-                                             bool crest_open) {
+// terrain's moments from the source to behind, `ahead` the walk's vertex `s.vertices - 1`): its wall
+// as an entry or exit of its footprint's roof, its top a candidate into `top` when it lies between
+// the ray's ends (`*is_top`).
+__device__ __forceinline__ u32 take_crossing(RayStream& s, const RayCrossing& c, float x, const TerrainPoint& behind,
+                                             const TerrainPoint& ahead, const Moments& prefix_behind, BandCandidate* top, bool* is_top) {
     float terrain_z, terrain_g;
     terrain_on(behind, ahead, x, &terrain_z, &terrain_g);
     Moments prefix = prefix_behind;
     add_stretch(prefix, behind.x, x, behind.z, terrain_z, behind.g, terrain_g, 0.0f, s.path.source_ground_z);
-    float top = terrain_z + c.height_m;
+    float height = terrain_z + c.height_m;
     if (c.building) {
         int open = -1;
         for (int k = 0; k < s.open_count; k++) {
@@ -126,7 +127,7 @@ __device__ __forceinline__ u32 take_crossing(RayStream& s, BandState* bands, con
         if (open >= 0) {
             if (s.closing_count == OPEN_ROOFS) return FAILED_CAPACITY;
             s.closing_from[s.closing_count] = s.open[open];
-            s.closing_top[s.closing_count] = top;
+            s.closing_top[s.closing_count] = height;
             s.closing_count++;
             s.closing_x = x;
             s.closing_prefix = prefix;
@@ -134,19 +135,11 @@ __device__ __forceinline__ u32 take_crossing(RayStream& s, BandState* bands, con
             s.open[open] = s.open[--s.open_count];
         } else {
             if (s.open_count == OPEN_ROOFS) return FAILED_CAPACITY;
-            s.open[s.open_count++] = OpenRoof{c.footprint_id, x, top, prefix, s.vertices - 1};
+            s.open[s.open_count++] = OpenRoof{c.footprint_id, x, height, prefix, s.vertices - 1};
         }
     }
-    if (x > 0.0f && x < f.length) {
-        BandCandidate candidate = {x, top, terrain_z, terrain_g, prefix};
-        if (crest_open) {
-            if (s.waiting_count == WAITING_TOPS) return FAILED_CAPACITY;
-            s.waiting[s.waiting_count++] = candidate;
-        } else {
-            u32 failed = stream_candidate(s, bands, f, candidate);
-            if (failed) return failed;
-        }
-    }
+    *is_top = x > 0.0f && x < s.length;
+    *top = BandCandidate{x, height, terrain_z, terrain_g, prefix};
     // Close the roofs at this distance once no other crossing there follows.
     if (c.closes && s.closing_count > 0) return stream_closing_roofs(s);
     return 0;
@@ -181,7 +174,8 @@ __device__ void close_hull(RayStream& s, const StateStream& st, BandState& band,
 
 // The ray's one walk from the source over its terrain vertices (the source, every lattice line
 // crossed, the 1/6" one's within FINE_ENDS_M of either end where the tiles have it, the receiver),
-// each after the crossings before it, then each state's terms. Out of line, once a ray.
+// CHUNK_VERTICES at a time, the crossings and candidates in order of distance after each chunk,
+// then each state's terms. Out of line, once a ray.
 __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float sy, const RayEnds& ends, RayStream& s, Transfer* transfer) {
     GroundSample sample;
     u32 failed = ground_at(ground, s.receiver_x + s.offset_x, s.receiver_y + s.offset_y, &sample);
@@ -211,18 +205,17 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
     s.covered_to = -QM_INFINITY;
     s.open_count = 0;
     s.closing_count = 0;
-    s.waiting_count = 0;
     s.vertices = 0;
     Crowns crowns = {sample, 0.0f, {0.0f, 0.0f}};
     TerrainPoint behind = {0.0f, 0.0f < platform ? fminf(sample.height_m, stand) : sample.height_m, sample.ground_factor};
     Moments prefix_behind = {0.0f, 0.0f, 0.0f};
-    keep_vertex(s, behind);
-    // The open stretch of the middle (its number from the source, -1: none) and its highest vertex;
-    // the next listed crossing and its distance.
-    int open_group = -1, crossing = -1;
-    float crossing_x, last_crossing_x = 0.0f;
+    keep_vertex(s, behind, prefix_behind);
+    // The vertices walked; the open stretch of the middle (its number from the source, -1: none),
+    // the distance of its first vertex, its highest vertex and that one's height; the next listed
+    // crossing, its distance, and the vertex ending the stretch it lies on (`walked` until walked).
+    int walked = 1, open_group = -1, crest = 0, crossing = -1, crossing_ahead = 1;
+    float open_from = 0.0f, crest_z = 0.0f, crossing_x, last_crossing_x = 0.0f;
     if ((failed = next_taken_crossing(s, &crossing, &crossing_x, &last_crossing_x))) return failed;
-    BandCandidate crest = {};
     // The stretches by lattice: their ends and the lattices' scales.
     float stretch_ends[3] = {1.0f, 1.0f, 1.0f};
     int stretch_scales[3] = {1, 1, 1};
@@ -231,56 +224,101 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
     LatticeWalk walk;
     walk_start(ground, stretch_scales[0], sx, sy, s.receiver_x, s.receiver_y, 0.0f, &walk);
     for (bool last = false; !last;) {
-        float t;
-        bool on_row;
-        int row;
-        if (walk_next(ground, &walk, stretch_ends[stretch], &t, &on_row, &row)) {
-            float keep = 1.0f - t, x = s.receiver_x + s.offset_x * keep, y = s.receiver_y + s.offset_y * keep;
-            failed = walk.scale == 1 ? walk_sample(ground, x, y, on_row, row, walk.north, &sample)
-                                     : fine_walk_sample(ground, x, y, on_row, row, walk.north, &sample);
-        } else if (stretch_ends[stretch] < 1.0f) {
-            // A change of lattice is no line of the coarser one: a vertex there, on the finer.
-            t = stretch_ends[stretch];
-            float keep = 1.0f - t;
-            failed = ground_at(ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, &sample);
-            walk_start(ground, stretch_scales[++stretch], sx, sy, s.receiver_x, s.receiver_y, t, &walk);
-        } else {
-            t = 1.0f;
-            last = true;
-            failed = ground_at(ground, s.receiver_x, s.receiver_y, &sample);
-        }
-        if (failed) return failed;
-        TerrainPoint ahead;
-        ahead.x = t * length;
-        ahead.z = ahead.x < platform ? fminf(sample.height_m, stand) : sample.height_m;
-        ahead.g = sample.ground_factor;
-        keep_vertex(s, ahead);
-        // The crossings on the stretch to it, then the vertex (vertices before tops at one distance).
-        while (crossing_x < ahead.x) {
-            failed = take_crossing(s, bands, frame, s.crossings[crossing], crossing_x, behind, ahead, prefix_behind, open_group >= 0);
+        // A chunk of the terrain: each vertex kept with the terrain's moments from the source to it,
+        // its foliage, and the candidates among the vertices (within CREST_ENDS_M of either end each
+        // one, in the middle the highest of each CREST_SPACING_M once its stretch closes; ray::
+        // crests_of) listed in order. A lane's crossings meet its vertices at other places than its
+        // neighbours' do: taken vertex by vertex, they ran on a few of a warp's lanes (4.9 of 32
+        // busy in a dense city square, 2026-10-20), here on every lane that has one.
+        int candidates = 0;
+        int keep_from = min(crossing_ahead - RECENT_VERTICES, open_group >= 0 ? crest : walked);
+        int chunk_end = min(walked + CHUNK_VERTICES, keep_from + VERTEX_RING);
+        if (chunk_end <= walked) return FAILED_CAPACITY;
+        for (; !last && walked < chunk_end; walked++) {
+            float t;
+            bool on_row;
+            int row;
+            if (walk_next(ground, &walk, stretch_ends[stretch], &t, &on_row, &row)) {
+                float keep = 1.0f - t, x = s.receiver_x + s.offset_x * keep, y = s.receiver_y + s.offset_y * keep;
+                failed = walk.scale == 1 ? walk_sample(ground, x, y, on_row, row, walk.north, &sample)
+                                         : fine_walk_sample(ground, x, y, on_row, row, walk.north, &sample);
+            } else if (stretch_ends[stretch] < 1.0f) {
+                // A change of lattice is no line of the coarser one: a vertex there, on the finer.
+                t = stretch_ends[stretch];
+                float keep = 1.0f - t;
+                failed = ground_at(ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, &sample);
+                walk_start(ground, stretch_scales[++stretch], sx, sy, s.receiver_x, s.receiver_y, t, &walk);
+            } else {
+                t = 1.0f;
+                last = true;
+                failed = ground_at(ground, s.receiver_x, s.receiver_y, &sample);
+            }
             if (failed) return failed;
-            if ((failed = next_taken_crossing(s, &crossing, &crossing_x, &last_crossing_x))) return failed;
+            TerrainPoint ahead;
+            ahead.x = t * length;
+            ahead.z = ahead.x < platform ? fminf(sample.height_m, stand) : sample.height_m;
+            ahead.g = sample.ground_factor;
+            add_foliage(source, receiver, rays, crowns, ahead.x, sample);
+            Moments prefix = prefix_behind;
+            add_stretch(prefix, behind.x, ahead.x, behind.z, ahead.z, behind.g, ahead.g, 0.0f, ground_z);
+            keep_vertex(s, ahead, prefix);
+            if (crossing_ahead == walked && !(ahead.x > crossing_x)) crossing_ahead++;
+            bool middle = ahead.x > CREST_ENDS_M && ahead.x < length - CREST_ENDS_M;
+            int group = (int)floorf(ahead.x / CREST_SPACING_M);
+            if (open_group >= 0 && (!middle || group != open_group)) {
+                s.candidates[candidates++] = (u16)crest;
+                open_group = -1;
+            }
+            if (middle) {
+                if (open_group < 0) {
+                    open_from = ahead.x;
+                }
+                if (open_group < 0 || ahead.z > crest_z) {
+                    crest = walked;
+                    crest_z = ahead.z;
+                }
+                open_group = group;
+            } else if (ahead.x > 0.0f && ahead.x < length) {
+                // Streamed at once when nothing waits before it (most rays far from obstacles):
+                // re-read from the ring it cost a town square's rays 8 % (2026-10-20).
+                if (candidates == 0 && !(crossing_x < ahead.x)) {
+                    if ((failed = stream_candidate(s, bands, frame, BandCandidate{ahead.x, ahead.z, ahead.z, ahead.g, prefix}))) return failed;
+                } else {
+                    s.candidates[candidates++] = (u16)walked;
+                }
+            }
+            behind = ahead;
+            prefix_behind = prefix;
         }
-        add_foliage(source, receiver, rays, crowns, ahead.x, sample);
-        Moments prefix = prefix_behind;
-        add_stretch(prefix, behind.x, ahead.x, behind.z, ahead.z, behind.g, ahead.g, 0.0f, ground_z);
-        // A vertex that may diffract (ray::crests_of): within CREST_ENDS_M of either end each one, in
-        // the middle the highest of each CREST_SPACING_M once its stretch closes.
-        bool middle = ahead.x > CREST_ENDS_M && ahead.x < length - CREST_ENDS_M;
-        int group = (int)floorf(ahead.x / CREST_SPACING_M);
-        if (open_group >= 0 && (!middle || group != open_group)) {
-            if ((failed = stream_crest_and_waiting(s, bands, frame, crest))) return failed;
-            open_group = -1;
+        // The chunk's candidates and the crossings before `limit` (a crossing in an open middle
+        // stretch waits for its crest), in order of distance, vertices before tops at one distance
+        // (the CPU's stable sort): every candidate at once to both states' bands, a crossing's wall
+        // as it is taken. A crossing sees the vertices up to the one ending its stretch.
+        float limit = open_group >= 0 ? open_from : behind.x;
+        for (int next = 0;;) {
+            bool vertex_ready = next < candidates, crossing_ready = crossing_x < limit;
+            if (!vertex_ready && !crossing_ready) break;
+            BandCandidate candidate;
+            bool streams = true;
+            if (vertex_ready && !(crossing_ready && crossing_x < recent_vertex(s, s.candidates[next]).x)) {
+                int k = s.candidates[next++];
+                TerrainPoint vertex = recent_vertex(s, k);
+                candidate = BandCandidate{vertex.x, vertex.z, vertex.z, vertex.g, vertex_prefix(s, k)};
+            } else {
+                s.vertices = crossing_ahead + 1;
+                failed = take_crossing(s, s.crossings[crossing], crossing_x, recent_vertex(s, crossing_ahead - 1),
+                                       recent_vertex(s, crossing_ahead), vertex_prefix(s, crossing_ahead - 1), &candidate, &streams);
+                if (!failed) failed = next_taken_crossing(s, &crossing, &crossing_x, &last_crossing_x);
+                s.vertices = walked;
+                if (failed) return failed;
+                if (!(behind.x > crossing_x)) {
+                    crossing_ahead = walked;
+                } else {
+                    while (!(recent_vertex(s, crossing_ahead).x > crossing_x)) crossing_ahead++;
+                }
+            }
+            if (streams && (failed = stream_candidate(s, bands, frame, candidate))) return failed;
         }
-        BandCandidate here = {ahead.x, ahead.z, ahead.z, ahead.g, prefix};
-        if (middle) {
-            if (open_group < 0 || ahead.z > crest.z) crest = here;
-            open_group = group;
-        } else if (ahead.x > 0.0f && ahead.x < length && (failed = stream_candidate(s, bands, frame, here))) {
-            return failed;
-        }
-        behind = ahead;
-        prefix_behind = prefix;
     }
     if (s.closing_count > 0 && (failed = stream_closing_roofs(s))) return failed;
     s.path.whole = path_from_source(s, length, prefix_behind);
