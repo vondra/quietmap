@@ -406,6 +406,9 @@ impl Gpu {
         let band_weights = driver(device.htod_sync_copy(band_weights))?;
         let ray_counts = driver(device.alloc_zeros::<u32>(count))?;
         let failed = driver(device.alloc_zeros::<u32>(count))?;
+        // The pairs' bands, which keep each pair's first rays from its counting to its writing
+        // (kernels/paint.cu PAIR_RAY_SLOTS), zeroed again before the rays fill them.
+        let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
         let kernel = |name: &str| {
             device
                 .get_func("paint", name)
@@ -438,6 +441,7 @@ impl Gpu {
                     none,
                     &ray_counts,
                     &failed,
+                    &pair_bands,
                 ),
             )
         })?;
@@ -450,7 +454,6 @@ impl Gpu {
         if total > 0 {
             let offsets = driver(device.htod_sync_copy(&offsets))?;
             let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
-            let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
             stream.wait_for_default()?;
             driver(unsafe {
                 kernel("pair_rays")?.launch_on_stream(
@@ -466,7 +469,17 @@ impl Gpu {
                         &rays,
                         &ray_counts,
                         &failed,
+                        &pair_bands,
                     ),
+                )
+            })?;
+            // SAFETY: the bands' buffer, on the stream the listing just wrote it on.
+            driver(unsafe {
+                result::memset_d8_async(
+                    *pair_bands.device_ptr(),
+                    0,
+                    pair_bands.num_bytes(),
+                    stream.stream,
                 )
             })?;
             driver(unsafe {

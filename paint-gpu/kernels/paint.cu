@@ -55,12 +55,28 @@ __device__ u32 receiver_at(const SquareScene& square, float x, float y, u64 own_
     return 0;
 }
 
-// What a pair's listing hands each ray to: counted, or written at the pair's offset.
+// A pair's first rays kept by its counting for its writing, in the pair's bands (which the rays fill
+// only later): PAIR_RAY_SLOTS of them, each as its start, its weight (never negative: its sign
+// carries the flag of obstacles on the ray, set for none) and its deck's ground. The listing walked
+// each line piece's masks twice, to count its rays and to write them (a sixth of a dense city
+// square's pair kernels on compute capability 12.0, 2026-10-20).
+#define PAIR_RAY_SLOTS (PERIODS * BANDS / 4)
+
+// What a pair's listing hands each ray to: counted and kept, or written at the pair's offset.
 struct RayLister {
     PairRay* rays;
+    float* slots;
     u32 count;
     __device__ u32 operator()(const PairRay& ray) {
-        if (rays) rays[count] = ray;
+        if (rays) {
+            rays[count] = ray;
+        } else if (count < PAIR_RAY_SLOTS) {
+            float* slot = slots + 4 * count;
+            slot[0] = ray.px;
+            slot[1] = ray.py;
+            slot[2] = ray.obstacles_on_ray ? ray.weight : -ray.weight;
+            slot[3] = ray.source_ground_m;
+        }
         count++;
         return 0;
     }
@@ -68,17 +84,26 @@ struct RayLister {
 
 // Per pair (candidate `candidate_index[i]` at the receiver at (receiver_xy[2i], receiver_xy[2i + 1])
 // standing in building `own_footprint[i]`, 0 outdoors): with `rays` null its rays counted into
-// `ray_counts` and its failure into `failed`; else its rays written from `ray_offsets[i]`.
+// `ray_counts`, its first ones kept in `slots` (PERIODS x BANDS floats a pair) and its failure into
+// `failed`; else its rays written from `ray_offsets[i]`, from its slots when they hold them all.
 extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
                                      const u32* candidate_index, u32 pair_count, const u32* ray_offsets, PairRay* rays,
-                                     u32* ray_counts, u32* failed) {
+                                     u32* ray_counts, u32* failed, float* slots) {
     const SquareScene& square = *square_ptr;
     u32 pair = blockIdx.x * blockDim.x + threadIdx.x;
     if (pair >= pair_count || (rays && failed[pair])) return;
+    float* pair_slots = slots + (u64)pair * (PERIODS * BANDS);
+    if (rays && ray_counts[pair] <= PAIR_RAY_SLOTS) {
+        for (u32 k = 0; k < ray_counts[pair]; k++) {
+            const float* slot = pair_slots + 4 * k;
+            rays[ray_offsets[pair] + k] = PairRay{pair, signbit(slot[2]) ? 0u : 1u, slot[0], slot[1], fabsf(slot[2]), slot[3]};
+        }
+        return;
+    }
     Receiver receiver;
     u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
     const Candidate& candidate = square.candidates[candidate_index[pair]];
-    RayLister lister{rays ? rays + ray_offsets[pair] : 0, 0u};
+    RayLister lister{rays ? rays + ray_offsets[pair] : 0, pair_slots, 0u};
     if (status == 0) status = pair_rays_of(square.obstacles, receiver, candidate, square.attributes[candidate.attribute], pair, lister);
     if (!rays) {
         ray_counts[pair] = status == 0 ? lister.count : 0u;
