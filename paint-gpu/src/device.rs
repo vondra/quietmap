@@ -282,6 +282,10 @@ impl Gpu {
             band_constants(),
             lattice_constants()
         );
+        // Bench only: the source NVRTC compiles, for a profiler's line numbers.
+        if let Some(path) = std::env::var_os("QM_KERNEL_SOURCE") {
+            std::fs::write(&path, &source).map_err(|error| error.to_string())?;
+        }
         let ptx = compile_ptx_with_opts(
             source,
             CompileOptions {
