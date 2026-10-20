@@ -326,7 +326,10 @@ __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obs
     s.length = fmaxf(hypotf(s.offset_x, s.offset_y), 1.0f);
     s.inverse_length = 1.0f / s.length;
     s.platform_half_width_m = ends.platform_half_width_m;
+    s.t0 = clock64();
     u32 failed = list_crossings(obstacles, sx, sy, rx, ry, obstacles_on_ray, ends, s);
-    if (failed) return failed;
-    return walk_ray(ground, sx, sy, ends, s, transfer);
+    s.t1 = clock64();
+    if (!failed) failed = walk_ray(ground, sx, sy, ends, s, transfer);
+    s.t2 = clock64();
+    return failed;
 }

@@ -89,28 +89,60 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float*
 // Per listed ray, a thread each: its pair's sums (PAIR_SUMS a pair) and mixed bands (PERIODS x BANDS
 // a pair) added to, or its failure to the pair's. Sixteen one-warp blocks allow 128 registers per
 // thread; requiring more warps makes the register allowance too small for the walk's live state.
+#define RAY_STATS 13
+__device__ __forceinline__ void warp_stats(unsigned long long* stats, const u32* values) {
+    for (int i = 0; i < RAY_STATS; i++) {
+        u32 sum = values[i], most = values[i];
+        for (int offset = 16; offset > 0; offset /= 2) {
+            sum += __shfl_xor_sync(0xffffffffu, sum, offset);
+            most = max(most, __shfl_xor_sync(0xffffffffu, most, offset));
+        }
+        if ((threadIdx.x & 31) == 0) {
+            atomicAdd(&stats[2 * i], (unsigned long long)sum);
+            atomicAdd(&stats[2 * i + 1], (unsigned long long)most);
+        }
+    }
+}
+
 extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, 16) ray_transfers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
                                          const u32* candidate_index, const PairRay* rays, u32 ray_count, float* sums,
-                                         float* pair_bands, u32* failed) {
+                                         float* pair_bands, u32* failed, unsigned long long* stats) {
     const SquareScene& square = *square_ptr;
     u32 k = blockIdx.x * blockDim.x + threadIdx.x;
     if (k >= ray_count) return;
+    unsigned mask = __activemask();
+    u64 c0 = clock64();
     const PairRay ray = rays[k];
     u32 pair = ray.pair;
     Receiver receiver;
     u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
+    u64 c1 = clock64();
     const Candidate& candidate = square.candidates[candidate_index[pair]];
     RayStream s;
+    s.stat_cells = s.stat_edges = s.stat_found = s.stat_candidates = 0;
+    s.t0 = s.t1 = s.t2 = c1;
+    s.crossing_count = 0;
+    s.vertices = 0;
+    s.roof_count = 0;
+    s.length = 0.0f;
     float out[PAIR_SUMS], ray_bands[PERIODS * BANDS];
     for (int j = 0; j < PAIR_SUMS; j++) out[j] = 0.0f;
     for (int j = 0; j < PERIODS * BANDS; j++) ray_bands[j] = 0.0f;
     if (status == 0) status = ray_received(square.ground, square.obstacles, receiver, square.attributes[candidate.attribute], ray, s, out, ray_bands);
     if (status) {
         atomicOr(&failed[pair], status);
-        return;
+    } else {
+        for (int j = 0; j < PAIR_SUMS; j++) atomicAdd(&sums[(u64)PAIR_SUMS * pair + j], out[j]);
+        for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&pair_bands[(u64)pair * (PERIODS * BANDS) + j], ray_bands[j]);
     }
-    for (int j = 0; j < PAIR_SUMS; j++) atomicAdd(&sums[(u64)PAIR_SUMS * pair + j], out[j]);
-    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&pair_bands[(u64)pair * (PERIODS * BANDS) + j], ray_bands[j]);
+    u64 c2 = clock64();
+    u32 values[RAY_STATS] = {1u, (u32)(c1 - c0), (u32)(s.t1 - s.t0), (u32)(s.t2 - s.t1), (u32)(c2 - c1 - (s.t2 - s.t0)),
+                             s.stat_cells, s.stat_edges, s.stat_found, (u32)s.crossing_count, (u32)s.vertices,
+                             s.stat_candidates, (u32)s.roof_count, (u32)s.length};
+    if (mask == 0xffffffffu) {
+        __syncwarp();
+        warp_stats(stats, values);
+    }
 }
 
 // Per answered pair: its mixed bands added to point `point_index[i]`'s in `bands` (LAYERS x PERIODS

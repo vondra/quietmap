@@ -628,7 +628,9 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
     float endpoint_t = length_m > 0.0f ? ENDPOINT_TOLERANCE_M / length_m : 0.0f;
     float t_enter = 0.0f;
     Crossing found[CELL_CROSSINGS];
+    u32 stat_cells = 0, stat_edges = 0, stat_found = 0;
     while (true) {
+        stat_cells++;
         float t_max[2];
         for (int axis = 0; axis < 2; axis++) {
             if (delta[axis] == 0.0f) {
@@ -676,6 +678,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                         for (u32 next = first + 1; next <= first + edge_count; next++) {
                             int bx, by;
                             tile_vertex_local(scene, *tile, next, &bx, &by);
+                            stat_edges++;
                             bool meets = high[0] >= min(ax, bx) && max(ax, bx) >= low[0] && high[1] >= min(ay, by) && max(ay, by) >= low[1];
                             float t;
                             if (meets && segment_intersection_t(start[0], start[1], delta[0], delta[1],
@@ -683,6 +686,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                                                                 offset[0] + (float)bx, offset[1] + (float)by, &t)
                                 && t >= t_enter - CELL_WINDOW_SLACK && t <= t_exit + CELL_WINDOW_SLACK
                                 && t > endpoint_t && t < 1.0f - endpoint_t) {
+                                stat_found++;
                                 Crossing crossing;
                                 crossing.t = t;
                                 crossing.height_m = outline.height_m;
@@ -730,5 +734,8 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
         if (cell[0] != last[0] && (cell[1] == last[1] || t_max[0] < t_max[1])) cell[0] += step[0];
         else cell[1] += step[1];
     }
+    take.s->stat_cells = stat_cells;
+    take.s->stat_edges = stat_edges;
+    take.s->stat_found = stat_found;
     return 0;
 }

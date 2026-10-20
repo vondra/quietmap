@@ -141,7 +141,9 @@ struct RayStream {
     // Tops taken while a middle stretch is open, before its crest is known.
     BandCandidate waiting[WAITING_TOPS];
     int waiting_count;
-    StateStream states[2];
+    StateStream states[2];    // Bench only: the ray's counts and clocks.
+    u32 stat_cells, stat_edges, stat_found, stat_candidates;
+    u64 t0, t1, t2;
 };
 
 // The tree cover where a ray at `altitude` runs inside the crowns over `ground`, else 0.

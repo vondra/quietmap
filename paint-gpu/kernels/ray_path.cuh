@@ -152,6 +152,7 @@ __device__ __forceinline__ u32 stream_candidate(RayStream& s, BandState* bands, 
     // |SO| and |OR|, taken once for both states when either is unblocked.
     float to_source = -1.0f, to_receiver = 0.0f;
     HullEntry entry = {c.x, c.z, c.terrain_z, c.terrain_g};
+    s.stat_candidates++;
 #pragma unroll
     for (int state = 0; state < 2; state++) {
         StateStream& st = s.states[state];

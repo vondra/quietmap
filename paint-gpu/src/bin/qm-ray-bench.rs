@@ -4,7 +4,7 @@
 //! `qm-ray-bench compare A_DIR B_DIR`
 
 use paint::square::{Files, Square};
-use paint_gpu::device::{DeviceSquare, Gpu, KERNEL_SECONDS, TIME_KERNELS};
+use paint_gpu::device::{DeviceSquare, Gpu, KERNEL_SECONDS, RAY_STATS, TIME_KERNELS};
 use physics::weather::WeatherTable;
 use popup::release::Release;
 use std::path::{Path, PathBuf};
@@ -188,6 +188,15 @@ fn run(arguments: &[String]) -> Result<(), String> {
             best[2],
             best[3]
         );
+    }
+    let stats = *RAY_STATS.lock().unwrap();
+    let names = ["rays", "receiver cycles", "crossings cycles", "walk cycles", "rest cycles", "cells", "edges",
+                 "found", "kept crossings", "vertices", "candidates", "roofs", "length m"];
+    let warps = stats[1] as f64 / 1.0;
+    let _ = warps;
+    for (i, name) in names.iter().enumerate() {
+        let (sum, most) = (stats[2 * i] as f64, stats[2 * i + 1] as f64);
+        println!("stat {name}: per ray {:.2}, lanes busy {:.1} of 32", sum / stats[0] as f64, 32.0 * sum / (32.0 * most).max(1.0));
     }
     println!(
         "total: {pairs_total} pairs ({failed_total} failed), count {:.3} s, list {:.3} s, rays {:.3} s, bands {:.3} s",
