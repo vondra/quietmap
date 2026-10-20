@@ -182,23 +182,6 @@ __device__ __forceinline__ u32 stream_candidate(RayStream& s, BandState* bands, 
     return 0;
 }
 
-// A middle stretch's crest once the stretch closes, and the tops that waited on it, into both states
-// in order of distance (vertices before obstacle tops at one distance, as the CPU's stable sort
-// leaves them); one call site of the candidates' stream.
-__device__ __forceinline__ u32 stream_crest_and_waiting(RayStream& s, BandState* bands, const RayFrame& f, const BandCandidate& crest) {
-    bool crest_streamed = false;
-    for (int w = 0; w < s.waiting_count || !crest_streamed;) {
-        bool crest_next = !crest_streamed && (w == s.waiting_count || !(s.waiting[w].x < crest.x));
-        BandCandidate next = crest_next ? crest : s.waiting[w];
-        if (crest_next) crest_streamed = true;
-        else w++;
-        u32 failed = stream_candidate(s, bands, f, next);
-        if (failed) return failed;
-    }
-    s.waiting_count = 0;
-    return 0;
-}
-
 // A roof from the wall `from` to the wall at x1 (top1), clipped to start where the roofs closed
 // before it end (clip_roofs_in_closing_order: roofs close here in the order the ray leaves them),
 // kept with its rise over the terrain.
