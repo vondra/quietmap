@@ -170,11 +170,14 @@ __device__ u32 pair_rays_of(const ObstacleScene& obstacles, const Receiver& rece
     }
     float start[3] = {candidate.ax - receiver.x, candidate.ay - receiver.y, candidate.ground0 + source.height_m - receiver.altitude_m};
     float end[3] = {candidate.bx - receiver.x, candidate.by - receiver.y, candidate.ground1 + source.height_m - receiver.altitude_m};
-    LinePieceGeometry g;
-    if (!line_piece_geometry(start, end, &g)) return 0;
+    LineBuckets buckets;
+    u32 failed = line_buckets_of(start, end, buckets);
+    if (failed || buckets.count == 0) return failed;
+    mask_wide_buckets(obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), buckets);
+    const LinePieceGeometry& g = buckets.g;
     LineNodes nodes;
     nodes.count = 0;
-    u32 failed = line_quadrature_nodes(g, obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), nodes);
+    failed = line_quadrature_nodes(buckets, nodes);
     if (failed) return failed;
     float divergence = hypotf(g.unit[0], g.unit[1]) / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m);
     for (int node = 0; node < nodes.count; node++) {
