@@ -68,12 +68,14 @@ pub fn write_beside_painting(
             .collect();
         let painted = paint(&sender);
         drop(sender);
-        let written: Vec<Result<(), String>> = (writers.into_iter())
-            .map(|writer| {
-                (writer.join()).unwrap_or_else(|_| Err("a square's writer panicked".into()))
-            })
-            .collect();
-        written.into_iter().collect::<Result<(), String>>()?;
+        // Every writer joined, the first error kept.
+        let mut written = Ok(());
+        for writer in writers {
+            let joined = writer.join();
+            written =
+                written.and(joined.unwrap_or_else(|_| Err("a square's writer panicked".into())));
+        }
+        written?;
         painted
     })
 }
@@ -135,15 +137,18 @@ mod tests {
         });
         assert_eq!(result.unwrap_err(), "painting stopped");
         assert_eq!(read(directory.path(), 12, (1, 0)).unwrap(), cells);
-        // A writer's error refuses the squares a painter goes on handing over.
-        let mut refused = false;
+        // A writer's error refuses the squares a painter goes on handing over: bounded by time, so
+        // any schedule of the writers lets the failing one close the queue first.
+        let (mut refused, started) = (false, std::time::Instant::now());
         let result = write_beside_painting(directory.path(), 12, |sender| {
-            for x in 2..66 {
+            let mut x = 2;
+            while x < 4000 && started.elapsed() < std::time::Duration::from_secs(20) {
                 let cells = if x == 2 { Vec::new() } else { cells.clone() };
                 if sender.send(square(x, cells)).is_err() {
                     refused = true;
                     return Err("a square's writer stopped".into());
                 }
+                x += 1;
             }
             Ok(())
         });
@@ -152,7 +157,7 @@ mod tests {
         // A painter's panic comes out of the writing, not a wait for the writers.
         let unwound = std::panic::catch_unwind(AssertUnwindSafe(|| {
             write_beside_painting(directory.path(), 12, |sender| -> Result<(), String> {
-                sender.send(square(70, cells.clone())).unwrap();
+                sender.send(square(4000, cells.clone())).unwrap();
                 panic!("a painter panicked")
             })
         }));
