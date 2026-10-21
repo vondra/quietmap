@@ -1,17 +1,24 @@
-//! Encode and publish the painted squares one at a time beside painting the next ones.
+//! Encode and publish the painted squares beside painting the next ones, two at a time.
 
 use paint::hm3::write;
 use paint::paint::Cells;
 use std::io::Write;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::mpsc::{SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 use tiles::geo::TileId;
 
-/// Painted squares that may wait for the writer: the painter goes on while a square's encoding
+/// Painted squares that may wait for a writer: the painter goes on while a square's encoding
 /// outlasts the next one's pixels (a square's cells, 7 MB at zoom 13). Light squares 3-7 % faster
 /// than with a rendezvous, the others the same (2026-10-14).
 const SQUARES_WAITING: usize = 2;
+
+/// Squares encoded at once. A square's encoding lasts as long as its slowest tile (one stream on one
+/// core at Brotli quality 11), and a light square has few distinct tiles: one writer, busy all the
+/// time on the light classes, held their painters back while most cores waited.
+const WRITERS: usize = 2;
 
 pub struct PaintedSquareCells {
     pub cells: Cells,
@@ -43,29 +50,55 @@ impl PaintedSquareCells {
     }
 }
 
-/// One writer, as in dev1's surface runner; its queue of [`SQUARES_WAITING`] bounds residency to
-/// its square, the waiting ones and the painters' next cells. Completion is reported only after
-/// the atomic bundle is durable.
+/// [`WRITERS`] writers (dev1's surface runner had one); their queue of [`SQUARES_WAITING`] bounds
+/// residency to the squares being written, the waiting ones and the painters' next cells.
+/// Completion is reported only after the atomic bundle is durable.
 pub fn write_beside_painting(
     out: &Path,
     zoom: u32,
     paint: impl FnOnce(&SyncSender<PaintedSquareCells>) -> Result<(), String>,
 ) -> Result<(), String> {
-    std::thread::scope(|scope| {
-        let (sender, receiver) = sync_channel::<PaintedSquareCells>(SQUARES_WAITING);
-        let writing = scope.spawn(move || -> Result<(), String> {
-            for square in receiver {
-                square.write(out, zoom)?;
-            }
-            Ok(())
-        });
+    let (sender, receiver) = sync_channel::<PaintedSquareCells>(SQUARES_WAITING);
+    let queue = &Mutex::new(Some(receiver));
+    // The scope's closure owns the sender: a panic while painting drops it as it unwinds, so the
+    // writers end and the scope's wait for them returns.
+    std::thread::scope(move |scope| {
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|_| scope.spawn(move || write_queued(queue, out, zoom)))
+            .collect();
         let painted = paint(&sender);
         drop(sender);
-        writing
-            .join()
-            .unwrap_or_else(|_| Err("a square's writer panicked".into()))?;
+        let written: Vec<Result<(), String>> = (writers.into_iter())
+            .map(|writer| {
+                (writer.join()).unwrap_or_else(|_| Err("a square's writer panicked".into()))
+            })
+            .collect();
+        written.into_iter().collect::<Result<(), String>>()?;
         painted
     })
+}
+
+/// One writer: the queue's squares until it closes. Its first error (a panic too) closes the
+/// queue once no other writer waits on it, so the painters' hand-overs fail and the run stops.
+fn write_queued(
+    queue: &Mutex<Option<Receiver<PaintedSquareCells>>>,
+    out: &Path,
+    zoom: u32,
+) -> Result<(), String> {
+    let lock = || queue.lock().unwrap_or_else(PoisonError::into_inner);
+    loop {
+        // One writer waits on the queue at a time; the others write.
+        let received = lock().as_ref().map(Receiver::recv);
+        let Some(Ok(square)) = received else {
+            return Ok(());
+        };
+        let written = catch_unwind(AssertUnwindSafe(|| square.write(out, zoom)))
+            .unwrap_or_else(|_| Err("a square's writer panicked".into()));
+        if written.is_err() {
+            lock().take();
+            return written;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -102,5 +135,27 @@ mod tests {
         });
         assert_eq!(result.unwrap_err(), "painting stopped");
         assert_eq!(read(directory.path(), 12, (1, 0)).unwrap(), cells);
+        // A writer's error refuses the squares a painter goes on handing over.
+        let mut refused = false;
+        let result = write_beside_painting(directory.path(), 12, |sender| {
+            for x in 2..66 {
+                let cells = if x == 2 { Vec::new() } else { cells.clone() };
+                if sender.send(square(x, cells)).is_err() {
+                    refused = true;
+                    return Err("a square's writer stopped".into());
+                }
+            }
+            Ok(())
+        });
+        assert!(result.unwrap_err().contains("not a zoom-12 square's cells"));
+        assert!(refused);
+        // A painter's panic comes out of the writing, not a wait for the writers.
+        let unwound = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            write_beside_painting(directory.path(), 12, |sender| -> Result<(), String> {
+                sender.send(square(70, cells.clone())).unwrap();
+                panic!("a painter panicked")
+            })
+        }));
+        assert!(unwound.is_err());
     }
 }

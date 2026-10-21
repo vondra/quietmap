@@ -160,7 +160,7 @@ loudest source at their pixel.
 `paint/` is the method and `paint-gpu/` (`qm-paint`) runs it by squares of zoom 12 in three stages:
 the cores read the next square's tiles once, to the reach of its farthest pixel (the fine terrain
 when a ray first needs it), and take its corners; two squares paint their pixels at once (a square
-of many sources alone); a writer publishes the squares before. The exact pairs and the aircraft boxes' sums at the block corners'
+of many sources alone); two writers publish the squares before. The exact pairs and the aircraft boxes' sums at the block corners'
 lattices run on the first CUDA card (`paint-gpu/kernels/`, the popup's physics in single
 precision with fast math, each function citing its Rust) or on the cores. Four passes of a square
 share the card.
@@ -184,9 +184,9 @@ The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` res
 every cell, including silence and not assessed, returns exactly.
 
 The painter writes one atomic HM3 square bundle, its directory pointing at these compressed tile
-streams, identical tile grids encoded and stored once. A writer compresses and publishes it while
-the next squares are painted; at most five squares' cell buffers are resident (one written, two
-waiting, two painted), and a square is complete only after its bundle is durable
+streams, identical tile grids encoded and stored once. Two writers compress and publish the bundles
+while the next squares are painted; at most six squares' cell buffers are resident (two written,
+two waiting, two painted), and a square is complete only after its bundle is durable
 (`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies
 independent painters' bundles into one tree atomically, without decoding or replacing completed
 squares. Identical completed copies are skipped on retry; conflicting squares stop the merge.
