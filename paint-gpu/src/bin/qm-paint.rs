@@ -2,7 +2,7 @@
 //! `qm-paint --prepared DIR --year YYYY --zoom 12|13 --out DIR (--squares X,Y[;X,Y...] | --bbox
 //! SOUTH,WEST,NORTH,EAST)`: paints the z12 squares into heatmap tiles at `--zoom`, skipping squares
 //! already painted, the next one prepared on the cores while two paint their pixels (the exact
-//! evaluations on the first CUDA card when there is one) and a writer publishes those before; one
+//! evaluations on the first CUDA card when there is one) and two writers publish those before; one
 //! line per square on stdout.
 //! `qm-paint pack --out DIR --zoom Z --tiles DIR --build bNNN [--regions DIR]`: the map's archives
 //! and manifest, reusing the zoom-8 regions' parts kept in `--regions`.
@@ -161,7 +161,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let preparing_pool = &preparing_pool;
     // Three stages: the preparer reads the next square, uploads it and takes its corners (on its
     // own cores), the painters paint [`SQUARES_ON_THE_CARD`] squares' pixels at once (the card),
-    // the writer encodes and publishes the squares before. The preparer hands a square to the
+    // two writers encode and publish the squares before. The preparer hands a square to the
     // first free painter; preparing two ahead slowed Dobris's busiest squares by 3 % (2026-10-14).
     // A heavy square paints alone: two of those do not fit in memory.
     write_beside_painting(&out, zoom, |sender| {
