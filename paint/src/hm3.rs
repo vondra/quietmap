@@ -13,9 +13,9 @@ pub const TILE_PX: usize = 512;
 pub const HEADER: [u8; 5] = *b"HM3 \x07";
 const SQUARE_HEADER_BYTES: usize = 14;
 // Fixed Paeth at quality 11 meets the measured volume budget; Up and quality 10 do not.
-const BROTLI_QUALITY: u32 = 11;
+const BROTLI_QUALITY: u8 = 11;
 // This is the smallest window that retains every possible within-tile match.
-const BROTLI_WINDOW_LOG2: u32 = 19;
+const BROTLI_WINDOW_LOG2: u8 = 19;
 
 pub fn layer_names() -> [&'static str; LAYERS + 1] {
     std::array::from_fn(|number| {
@@ -80,17 +80,16 @@ pub fn encode_tile(cells: &[u8], layer: usize) -> Result<Vec<u8>, String> {
     for (at, &cell) in cells.iter().enumerate() {
         predicted.push(cell.wrapping_sub(paeth_prediction(cells, at)));
     }
-    let mut encoded = Vec::new();
-    {
-        let mut encoder = brotli::CompressorWriter::new(
-            &mut encoded,
-            1 << 16,
-            BROTLI_QUALITY,
-            BROTLI_WINDOW_LOG2,
-        );
-        encoder.write_all(&predicted).map_err(|e| e.to_string())?;
-    }
-    Ok(encoded)
+    // Google's C encoder: at quality 11 it takes half to three quarters of the Rust port's time on
+    // painted tiles, its streams within 0.1 % of the port's bytes (2026-10-21).
+    let encoder = (brotlic::BrotliEncoderOptions::new())
+        .quality(brotlic::Quality::new(BROTLI_QUALITY).map_err(|e| e.to_string())?)
+        .window_size(brotlic::WindowSize::new(BROTLI_WINDOW_LOG2).map_err(|e| e.to_string())?)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut encoded = brotlic::CompressorWriter::with_encoder(encoder, Vec::new());
+    encoded.write_all(&predicted).map_err(|e| e.to_string())?;
+    encoded.into_inner().map_err(|e| e.to_string())
 }
 
 pub fn decode_tile(encoded: &[u8], layer: usize) -> Result<Vec<u8>, String> {
