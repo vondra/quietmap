@@ -45,26 +45,6 @@ pub fn ring_cell(values: &BinaryArray, row: usize) -> Z30Ring {
     }
 }
 
-/// A square ring of `side_m` around `centre` (latitude, longitude), its corners snapped to z30
-/// (dev4's ship cell footprint).
-pub fn square_ring(centre: (f64, f64), side_m: f64) -> Z30Ring {
-    let (lat, lon) = centre;
-    let half_m = side_m / 2.0;
-    let lat_step = half_m / M_PER_DEG_LAT;
-    let lon_step = half_m / (M_PER_DEG_LON_EQ * lat.to_radians().cos().max(0.01));
-    let wrap = |lon: f64| {
-        if (-180.0..180.0).contains(&lon) {
-            lon
-        } else {
-            (lon + 180.0).rem_euclid(360.0) - 180.0
-        }
-    };
-    [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
-        .iter()
-        .map(|(east, north)| degrees_to_z30(lat + north * lat_step, wrap(lon + east * lon_step)))
-        .collect()
-}
-
 /// `value` moved by whole periods to lie within half a period of `reference`.
 fn nearest_copy(value: f64, reference: f64, period: f64) -> f64 {
     reference + (value - reference + period / 2.0).rem_euclid(period) - period / 2.0

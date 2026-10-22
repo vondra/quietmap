@@ -135,6 +135,26 @@ fn points_belong_to_the_tile_holding_them() {
     assert_eq!((east, ends[0][0]), (TileId { x: 2213, y: 1387 }, -16_384));
 }
 
+/// A square ring of `side_m` around `centre` (latitude, longitude), its corners snapped to z30
+/// (a 1 km cell of dev4's ships).
+fn square_ring(centre: (f64, f64), side_m: f64) -> Z30Ring {
+    let (lat, lon) = centre;
+    let half_m = side_m / 2.0;
+    let lat_step = half_m / M_PER_DEG_LAT;
+    let lon_step = half_m / (M_PER_DEG_LON_EQ * lat.to_radians().cos().max(0.01));
+    let wrap = |lon: f64| {
+        if (-180.0..180.0).contains(&lon) {
+            lon
+        } else {
+            (lon + 180.0).rem_euclid(360.0) - 180.0
+        }
+    };
+    [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+        .iter()
+        .map(|(east, north)| degrees_to_z30(lat + north * lat_step, wrap(lon + east * lon_step)))
+        .collect()
+}
+
 /// A 1 km cell on the antimeridian stays 1 km wide: its cells hug 180 degrees on both sides.
 #[test]
 fn sites_across_the_antimeridian_stay_where_they_are() {

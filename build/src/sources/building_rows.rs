@@ -61,7 +61,7 @@ pub fn place_outside(
         let host = cell(ordinals, row)
             .and_then(|ordinal| hospitality.get(&footprint_id(square, ordinal)).copied());
         for part in decode_parts(outlines.value(row)).unwrap_or_default() {
-            placer.offer(&part, host);
+            placer.offer(part, host);
         }
     }
     Ok(())

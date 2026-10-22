@@ -131,19 +131,15 @@ impl OutsidePlacer {
     /// A footprint's part (its exterior, then its holes): the points mapped inside it belong to
     /// `host`, the group key of the source its building is, if it is one; it is kept for
     /// [`OutsidePlacer::positions`].
-    pub fn offer(&mut self, part: &[Ring], host: Option<u64>) {
-        let Some(exterior) = part.first().filter(|ring| ring.len() >= 3) else {
+    pub fn offer(&mut self, rings: Vec<Ring>, host: Option<u64>) {
+        let Some(exterior) = rings.first().filter(|ring| ring.len() >= 3) else {
             return;
         };
         let (min, max) = exterior.iter().fold(
             ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN)),
             |(min, max), &(x, y)| ((min.0.min(x), min.1.min(y)), (max.0.max(x), max.1.max(y))),
         );
-        let part = Part {
-            rings: part.to_vec(),
-            min,
-            max,
-        };
+        let part = Part { rings, min, max };
         let (low, high) = (cell(min), cell(max));
         for cx in low.0..=high.0 {
             for cy in low.1..=high.1 {
@@ -171,8 +167,9 @@ impl OutsidePlacer {
         (self.part_grid.get(&key).into_iter().flatten()).any(|&part| self.parts[part].covers(point))
     }
 
-    /// Where a point covered by footprints goes: in front of the nearest wall of theirs whose front
-    /// no footprint covers, else (a point walled in on every side) in front of the nearest wall.
+    /// Where a point covered by footprints goes: in front of the nearest wall of theirs whose front,
+    /// as stored (a whole z30 step, tested at its centre as the points are), no footprint covers,
+    /// else (a point walled in on every side) in front of the nearest wall.
     fn outside(&self, at: (f64, f64), covering: &[usize]) -> (i32, i32) {
         let mut candidates: Vec<Wall> = covering
             .iter()
@@ -188,12 +185,12 @@ impl OutsidePlacer {
             }
             let normal = (wall.direction.1 / length, -wall.direction.0 / length);
             for side in [1.0, -1.0] {
-                let front = (
+                let front = round((
                     wall.at.0 + side * normal.0 * step,
                     wall.at.1 + side * normal.1 * step,
-                );
-                if !self.covered(front) {
-                    return round(front);
+                ));
+                if !self.covered((f64::from(front.0) + 0.5, f64::from(front.1) + 0.5)) {
+                    return front;
                 }
             }
         }
@@ -248,7 +245,7 @@ mod tests {
         let mut placer =
             OutsidePlacer::new(vec![at(10.0, 3.0), at(10.0, 5.0), at(10.0, -4.0)], 0.0);
         assert!(placer.near(at(10.0, 5.0)));
-        placer.offer(&[outline, courtyard], Some(7));
+        placer.offer(vec![outline, courtyard], Some(7));
         let positions = placer.positions();
         // The bar belongs to its building; the courtyard café and the terrace to none.
         assert_eq!(placer.hosts(), &[Some(7), None, None]);
@@ -273,7 +270,7 @@ mod tests {
         let pavilion = |y: f64| vec![at(0.0, y), at(15.0, y), at(15.0, y + 8.0), at(0.0, y + 8.0)];
         let mut placer = OutsidePlacer::new(vec![at(4.0, 9.0)], 0.0);
         for y in [0.0, 8.0, 16.0] {
-            placer.offer(&[pavilion(y)], None);
+            placer.offer(vec![pavilion(y)], None);
         }
         let metres = |p: (i32, i32)| (f64::from(p.0) / m, f64::from(p.1) / m);
         let restaurant = metres(placer.positions()[0]);
@@ -292,7 +289,7 @@ mod tests {
         };
         let mut enclosed = OutsidePlacer::new(vec![at(4.0, 1.0)], 0.0);
         for (x, y) in [(0.0, 0.0), (-8.0, 0.0), (8.0, 0.0), (0.0, -8.0), (0.0, 8.0)] {
-            enclosed.offer(&[square(x, y)], None);
+            enclosed.offer(vec![square(x, y)], None);
         }
         let walled_in = metres(enclosed.positions()[0]);
         assert!(
