@@ -9,8 +9,8 @@ use tiles::geo::{GlobalSteps, Mercator, TileId};
 use tiles::sources::Attribute;
 
 /// dev4's flat-earth metres per degree of latitude and of longitude at the equator (`grid::geo`).
-const M_PER_DEG_LAT: f64 = 110_540.0;
-const M_PER_DEG_LON_EQ: f64 = 111_320.0;
+pub(super) const M_PER_DEG_LAT: f64 = 110_540.0;
+pub(super) const M_PER_DEG_LON_EQ: f64 = 111_320.0;
 const SAMPLES_PER_CELL_SIDE: usize = 5;
 /// The Web Mercator world's width in metres.
 const WORLD_WIDTH_M: f64 = 2.0 * std::f64::consts::PI * tiles::geo::WGS84_A_M;

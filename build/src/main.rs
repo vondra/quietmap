@@ -6,11 +6,11 @@
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
 //! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--climate DIR] [--tent FILE]
-//! [--turbines FILE] [--barriers FILE] [--road-traffic DIR] [--bus FILE] [--worship FILE]
-//! [--venues FILE] [--national-dem FILE,..]` (obstacles need the noise screens of
+//! [--turbines FILE] [--water DIR] [--barriers FILE] [--road-traffic DIR] [--bus FILE]
+//! [--worship FILE] [--venues FILE] [--national-dem FILE,..]` (obstacles need the noise screens of
 //! `fetch/barriers.sh`; sources need the airport traffic, the climate grids of
-//! `fetch/worldclim.sh`, the TEN-T freight lines of `fetch/tent.sh` and the standing wind turbines
-//! of `fetch/turbines.sh`, and take the roads' building traffic of `qm-build traffic`,
+//! `fetch/worldclim.sh`, the TEN-T freight lines of `fetch/tent.sh`, the standing wind turbines
+//! of `fetch/turbines.sh` and the water of `fetch/water.py`, and take the roads' building traffic of `qm-build traffic`,
 //! the bus routes of `fetch/bus.sh`, the places of worship of `fetch/worship.sh` and the bars,
 //! restaurants and cafés of `fetch/venues.sh` when given; terrain lays the national models over
 //! dev4's heights);
@@ -268,6 +268,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             &sources::turbines::Turbines::load(Path::new(
                                 options.get("turbines")?,
                             ))?,
+                            &sources::water::Water::open(Path::new(options.get("water")?))?,
                         ),
                         (
                             Path::new(options.get("airport-traffic")?),
