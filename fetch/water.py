@@ -3,7 +3,8 @@ each 3 arc-second cell's share of permanent water (class 80, the sea along the c
 file a 3 x 3 degree tile named as WorldCover names it by its south-west corner (`N39W003.water`):
 3,600 x 3,600 bytes of percent from the north-west corner, row by row, zstd-compressed
 (`qm-build dev4 --kinds sources --water OUT_DIR`), beside WorldCover's grid of its tiles: it has no
-tile where it has no land, the open sea, all water. usage: water.py OUT_DIR [TILES_AT_ONCE]"""
+tile where it has no land, the open sea, all water. A tile at once takes about 3 GB of memory (its
+classes and their mask). usage: water.py OUT_DIR [TILES_AT_ONCE]"""
 
 from concurrent.futures import ProcessPoolExecutor
 import json

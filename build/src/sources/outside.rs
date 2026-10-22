@@ -1,10 +1,10 @@
-//! Points mapped inside a building moved just outside its nearest free wall: the people of a bar or
-//! a café sit and stand in front of it, where the building screens them from its other side, not
-//! inside it, where its own walls would screen them from every receiver. A wall another building
-//! stands against is not free: a row's party wall would put them in the neighbour (beach
-//! pavilions: four restaurants 24 dB screened from the promenade before their
-//! terraces). Footprints are dev4's screening outlines (OpenStreetMap's and Overture's), a point in
-//! a courtyard is outside.
+//! Points mapped inside a building moved just outside its nearest free wall, a courtyard's as a
+//! street's: the people of a bar or a café sit and stand in front of it, where the building screens
+//! them from its other side, not inside it, where its own walls would screen them from every
+//! receiver. A wall another building stands against is not free: a row's party wall would put them
+//! in the neighbour (beach pavilions: four restaurants 24 dB screened from
+//! the promenade before their terraces). Footprints are dev4's screening outlines (OpenStreetMap's
+//! and Overture's), a point in a courtyard is outside.
 
 use crate::dev4::Z30_QUANTUM_M;
 use std::collections::HashMap;
@@ -74,7 +74,7 @@ fn inside(point: (f64, f64), ring: &[(i32, i32)]) -> bool {
     within
 }
 
-/// Each edge of `ring` as its point nearest `point`, that distance and the edge's direction.
+/// Each edge of `ring` as its point nearest `point` and that distance.
 fn walls(point: (f64, f64), ring: &[(i32, i32)]) -> impl Iterator<Item = Wall> + '_ {
     let previous = std::iter::once(ring[ring.len() - 1]).chain(ring.iter().copied());
     previous.zip(ring.iter().copied()).map(move |(a, b)| {
@@ -93,7 +93,6 @@ fn walls(point: (f64, f64), ring: &[(i32, i32)]) -> impl Iterator<Item = Wall> +
         Wall {
             at,
             distance: (at.0 - point.0).hypot(at.1 - point.1),
-            direction: (dx, dy),
         }
     })
 }
@@ -101,7 +100,6 @@ fn walls(point: (f64, f64), ring: &[(i32, i32)]) -> impl Iterator<Item = Wall> +
 struct Wall {
     at: (f64, f64),
     distance: f64,
-    direction: (f64, f64),
 }
 
 impl OutsidePlacer {
@@ -130,7 +128,8 @@ impl OutsidePlacer {
 
     /// A footprint's part (its exterior, then its holes): the points mapped inside it belong to
     /// `host`, the group key of the source its building is, if it is one; it is kept for
-    /// [`OutsidePlacer::positions`].
+    /// [`OutsidePlacer::positions`]. A part spanning half the world's longitudes crosses the
+    /// antimeridian the short way and is left out, as the industrial sites' index leaves it.
     pub fn offer(&mut self, rings: Vec<Ring>, host: Option<u64>) {
         let Some(exterior) = rings.first().filter(|ring| ring.len() >= 3) else {
             return;
@@ -139,6 +138,9 @@ impl OutsidePlacer {
             ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN)),
             |(min, max), &(x, y)| ((min.0.min(x), min.1.min(y)), (max.0.max(x), max.1.max(y))),
         );
+        if i64::from(max.0) - i64::from(min.0) > 1 << 29 {
+            return;
+        }
         let part = Part { rings, min, max };
         let (low, high) = (cell(min), cell(max));
         for cx in low.0..=high.0 {
@@ -167,40 +169,32 @@ impl OutsidePlacer {
         (self.part_grid.get(&key).into_iter().flatten()).any(|&part| self.parts[part].covers(point))
     }
 
-    /// Where a point covered by footprints goes: in front of the nearest wall of theirs whose front,
-    /// as stored (a whole z30 step, tested at its centre as the points are), no footprint covers,
-    /// else (a point walled in on every side) in front of the nearest wall.
+    /// Where a point covered by footprints goes: through the nearest wall of theirs (an exterior's
+    /// or a courtyard's), on from the point, to a front that, as stored (a whole z30 step, tested
+    /// at its centre as the points are), no footprint covers; else (a point walled in on every side)
+    /// in front of the nearest wall.
     fn outside(&self, at: (f64, f64), covering: &[usize]) -> (i32, i32) {
         let mut candidates: Vec<Wall> = covering
             .iter()
-            .flat_map(|&part| walls(at, &self.parts[part].rings[0]))
+            .flat_map(|&part| self.parts[part].rings.iter())
+            .filter(|ring| ring.len() >= 3)
+            .flat_map(|ring| walls(at, ring))
+            .filter(|wall| wall.distance > 0.0)
             .collect();
         candidates.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         let step = OUT_FROM_WALL_M * self.units_per_m;
-        let round = |point: (f64, f64)| (point.0.round() as i32, point.1.round() as i32);
-        for wall in &candidates {
-            let length = wall.direction.0.hypot(wall.direction.1);
-            if length == 0.0 {
-                continue;
-            }
-            let normal = (wall.direction.1 / length, -wall.direction.0 / length);
-            for side in [1.0, -1.0] {
-                let front = round((
-                    wall.at.0 + side * normal.0 * step,
-                    wall.at.1 + side * normal.1 * step,
-                ));
-                if !self.covered((f64::from(front.0) + 0.5, f64::from(front.1) + 0.5)) {
-                    return front;
-                }
-            }
-        }
-        let wall = &candidates[0];
-        let (dx, dy) = (wall.at.0 - at.0, wall.at.1 - at.1);
-        let length = dx.hypot(dy).max(1e-9);
-        round((
-            wall.at.0 + dx * step / length,
-            wall.at.1 + dy * step / length,
-        ))
+        let front = |wall: &Wall| {
+            let scale = 1.0 + step / wall.distance;
+            (
+                (at.0 + (wall.at.0 - at.0) * scale).round() as i32,
+                (at.1 + (wall.at.1 - at.1) * scale).round() as i32,
+            )
+        };
+        candidates
+            .iter()
+            .map(front)
+            .find(|front| !self.covered((f64::from(front.0) + 0.5, f64::from(front.1) + 0.5)))
+            .unwrap_or_else(|| front(&candidates[0]))
     }
 
     /// Each point's position: in front of the footprints it fell in, else where it was.
@@ -232,31 +226,40 @@ impl OutsidePlacer {
 mod tests {
     use super::*;
 
-    /// A bar mapped 3 m inside the street wall of a 20 x 10 m building goes 1.5 m in front of that
-    /// wall; a café in the courtyard stays; a terrace on the street stays.
+    /// A bar mapped 2 m inside the street wall of a 20 x 12 m building (4 m from its courtyard)
+    /// goes 1.5 m in front of that wall; a café in the courtyard stays; a terrace on the street
+    /// stays; a pub 1 m from the courtyard's wall and 3 m from the back street's goes into the
+    /// courtyard.
     #[test]
     fn points_inside_a_building_go_outside_its_nearest_wall() {
         let m = 1.0 / Z30_QUANTUM_M; // at the equator
         let at = |x: f64, y: f64| ((x * m) as i32, (y * m) as i32);
         let outline: Vec<(i32, i32)> =
-            vec![at(0.0, 0.0), at(20.0, 0.0), at(20.0, 10.0), at(0.0, 10.0)];
+            vec![at(0.0, 0.0), at(20.0, 0.0), at(20.0, 12.0), at(0.0, 12.0)];
         let courtyard: Vec<(i32, i32)> =
-            vec![at(8.0, 4.0), at(12.0, 4.0), at(12.0, 6.0), at(8.0, 6.0)];
-        let mut placer =
-            OutsidePlacer::new(vec![at(10.0, 3.0), at(10.0, 5.0), at(10.0, -4.0)], 0.0);
-        assert!(placer.near(at(10.0, 5.0)));
+            vec![at(8.0, 6.0), at(12.0, 6.0), at(12.0, 8.0), at(8.0, 8.0)];
+        let mut placer = OutsidePlacer::new(
+            vec![at(10.0, 2.0), at(10.0, 7.0), at(10.0, -4.0), at(10.0, 9.0)],
+            0.0,
+        );
+        assert!(placer.near(at(10.0, 7.0)));
         placer.offer(vec![outline, courtyard], Some(7));
         let positions = placer.positions();
-        // The bar belongs to its building; the courtyard café and the terrace to none.
-        assert_eq!(placer.hosts(), &[Some(7), None, None]);
+        // The bar and the pub belong to their building; the courtyard café and the terrace to none.
+        assert_eq!(placer.hosts(), &[Some(7), None, None, Some(7)]);
         let metres = |p: (i32, i32)| (f64::from(p.0) / m, f64::from(p.1) / m);
         let bar = metres(positions[0]);
         assert!(
             (bar.0 - 10.0).abs() < 0.1 && (bar.1 + 1.5).abs() < 0.1,
             "{bar:?}"
         );
-        assert_eq!(positions[1], at(10.0, 5.0));
+        assert_eq!(positions[1], at(10.0, 7.0));
         assert_eq!(positions[2], at(10.0, -4.0));
+        let pub_ = metres(positions[3]);
+        assert!(
+            (pub_.0 - 10.0).abs() < 0.1 && (pub_.1 - 6.5).abs() < 0.1,
+            "{pub_:?}"
+        );
     }
 
     /// Three pavilions in a row, wall to wall, their fronts on a promenade at x = 0: a restaurant

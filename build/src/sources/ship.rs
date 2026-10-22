@@ -24,12 +24,13 @@ const WATER_SAMPLES: usize = 5;
 
 /// Where a cell's ships sail: its square of `side_m` around `centre` (latitude, longitude) cut into
 /// equal sub-cells of about 250 m, each with the area of its water (`share` of each sample) at its
-/// wet sample nearest its water's centre (a centre between two piers is on land); the dry ones out.
+/// wet sample nearest its water's centre (a centre between two piers is on land), and the area its
+/// wet samples span (m2), its extent near it; the dry ones out.
 fn water_points(
     centre: (f64, f64),
     side_m: f64,
     mut share: impl FnMut(f64, f64) -> Result<f64, String>,
-) -> Result<Vec<SitePoint>, String> {
+) -> Result<Vec<(SitePoint, f64)>, String> {
     let sub_cells = (side_m / SUB_CELL_M).round().max(1.0) as usize;
     let samples = sub_cells * WATER_SAMPLES;
     let step_m = side_m / samples as f64;
@@ -66,11 +67,12 @@ fn water_points(
                 .iter()
                 .min_by(|a, b| distance(a).total_cmp(&distance(b)))
                 .expect("a wet sub-cell has a wet sample");
-            points.push(SitePoint {
+            let point = SitePoint {
                 lat: nearest.2,
                 lon: (nearest.3 + 180.0).rem_euclid(360.0) - 180.0,
                 area_m2: total * step_m * step_m,
-            });
+            };
+            points.push((point, wet.len() as f64 * step_m * step_m));
         }
     }
     Ok(points)
@@ -131,11 +133,19 @@ pub fn convert(
                     sources.value(row)
                 ])),
             };
-            let on_water =
-                water_points(centroid, area_m2.sqrt(), |lat, lon| water.share(lat, lon))?;
+            let (on_water, extents): (Vec<SitePoint>, Vec<f64>) =
+                water_points(centroid, area_m2.sqrt(), |lat, lon| water.share(lat, lon))?
+                    .into_iter()
+                    .unzip();
             let water_m2: f64 = on_water.iter().map(|point| point.area_m2).sum();
             if water_m2 > 0.0 {
+                let first = out.len();
                 push_site_points(&on_water, water_m2, &attribute, out);
+                // A point is as near as its wet samples' extent, not a disk of its water: a speck of
+                // water carrying a cell's ships is heard from a sample's distance, not 3 m.
+                for (item, extent_m2) in out[first..].iter_mut().zip(extents) {
+                    item.attribute.exclusion_radius_m = (extent_m2 / std::f64::consts::PI).sqrt();
+                }
                 emitting += 1;
             }
         }
@@ -156,14 +166,13 @@ mod tests {
         let east_of = |lon: f64| move |_: f64, at: f64| Ok(if at > lon { 1.0 } else { 0.0 });
         let sea = water_points(centre, 1_000.0, |_, _| Ok(1.0)).unwrap();
         assert_eq!(sea.len(), 16);
-        assert!(
-            sea.iter()
-                .all(|point| (point.area_m2 - 62_500.0).abs() < 1e-6)
-        );
+        assert!(sea.iter().all(|(point, extent_m2)| {
+            (point.area_m2 - 62_500.0).abs() < 1e-6 && (extent_m2 - 62_500.0).abs() < 1e-6
+        }));
         let coast = water_points(centre, 1_000.0, east_of(centre.1)).unwrap();
         assert_eq!(coast.len(), 8);
-        assert!(coast.iter().all(|point| point.lon > centre.1));
-        let total: f64 = coast.iter().map(|point| point.area_m2).sum();
+        assert!(coast.iter().all(|(point, _)| point.lon > centre.1));
+        let total: f64 = coast.iter().map(|(point, _)| point.area_m2).sum();
         assert!((total - 500_000.0).abs() < 1e-6, "{total}");
         assert!(
             water_points(centre, 1_000.0, |_, _| Ok(0.0))
@@ -171,15 +180,26 @@ mod tests {
                 .is_empty()
         );
         // Water only in the first and last sample column of every sub-cell: its water's centre is
-        // its middle column, dry; the point goes to a wet sample.
+        // its middle column, dry; the point goes to a wet sample. Ten of its 25 samples are wet.
         let step_lon = 50.0 / (M_PER_DEG_LON_EQ * 54f64.to_radians().cos());
         let west_edge = centre.1 - 500.0 / (M_PER_DEG_LON_EQ * 54f64.to_radians().cos());
         let piers = |_: f64, lon: f64| {
             let column = ((lon - west_edge) / step_lon).floor() as i64 % 5;
             Ok(if column == 0 || column == 4 { 1.0 } else { 0.0 })
         };
-        for point in water_points(centre, 1_000.0, piers).unwrap() {
+        for (point, extent_m2) in water_points(centre, 1_000.0, piers).unwrap() {
             assert_eq!(piers(point.lat, point.lon).unwrap(), 1.0, "{point:?}");
+            assert!((extent_m2 - 25_000.0).abs() < 1e-6 && (point.area_m2 - 25_000.0).abs() < 1e-6);
         }
+        // One wet sample at 1 % (the sample north-east of the centre): 25 m2 of water heard as near
+        // as its 50 m sample, not as a 25 m2 disk.
+        let speck = water_points(centre, 1_000.0, |lat, lon| {
+            let near =
+                lat > centre.0 && lat - centre.0 < 3e-4 && lon > centre.1 && lon - centre.1 < 6e-4;
+            Ok(if near { 0.01 } else { 0.0 })
+        })
+        .unwrap();
+        assert_eq!(speck.len(), 1);
+        assert!((speck[0].0.area_m2 - 25.0).abs() < 1e-6 && (speck[0].1 - 2_500.0).abs() < 1e-6);
     }
 }
