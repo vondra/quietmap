@@ -35,6 +35,7 @@ pub mod thai_highways;
 pub mod turbines;
 pub mod us_trucks;
 pub mod venues;
+pub mod water;
 pub mod worship;
 
 use crate::climate::Climate;
@@ -218,7 +219,13 @@ pub struct Places<'a> {
 /// square also converts its neighbours and keeps the sources its own tiles own (industry reads the
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
-    (dev4, climate, network, turbines): (&Dev4, &Climate, &FreightNetwork, &turbines::Turbines),
+    (dev4, climate, network, turbines, water): (
+        &Dev4,
+        &Climate,
+        &FreightNetwork,
+        &turbines::Turbines,
+        &water::Water,
+    ),
     (airport_traffic, road_traffic, bus, places): (
         &Path,
         Option<&Path>,
@@ -238,7 +245,7 @@ pub fn build(
         .par_iter()
         .map(|&square| {
             build_square(
-                (dev4, climate, network, turbines),
+                (dev4, climate, network, turbines, water),
                 (airport_traffic, road_traffic, bus, places),
                 square,
                 out,
@@ -264,7 +271,13 @@ pub fn build(
 /// The sources of one square as its file (the squares build in parallel, each within its own
 /// memory): the tiles written and the count of its decks.
 fn build_square(
-    (dev4, climate, network, turbines): (&Dev4, &Climate, &FreightNetwork, &turbines::Turbines),
+    (dev4, climate, network, turbines, water): (
+        &Dev4,
+        &Climate,
+        &FreightNetwork,
+        &turbines::Turbines,
+        &water::Water,
+    ),
     (airport_traffic, road_traffic, bus, places): (
         &Path,
         Option<&Path>,
@@ -285,6 +298,7 @@ fn build_square(
     let industrial_sites = industry::site_outlines(dev4, &around)?;
     let reach = Reach::of_square(square);
     let decks = decks::Decks::of_square(dev4, square, out)?;
+    let mut water_tiles = water.tiles();
     for neighbour in square.with_neighbours() {
         let road_reach = (neighbour != square).then_some(reach);
         let buildings_mapped = road::convert(
@@ -307,7 +321,7 @@ fn build_square(
             (neighbour, &industrial_sites),
             &mut converted,
         )?;
-        ship::convert(dev4, neighbour, &mut converted)?;
+        ship::convert(dev4, neighbour, &mut water_tiles, &mut converted)?;
         airport::convert(airport_traffic, neighbour, &mut converted)?;
         converted.retain(owned);
     }

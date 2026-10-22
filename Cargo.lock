@@ -234,6 +234,7 @@ dependencies = [
  "tiff",
  "tiles",
  "tzf-rs",
+ "zstd",
 ]
 
 [[package]]
