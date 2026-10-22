@@ -23,6 +23,28 @@ use tiles::obstacles::Obstacles;
 use tiles::sources::GROUND_FROM_TERRAIN;
 use tiles::terrain::{NODES_PER_DEGREE, Terrain, Window};
 
+/// Bench only (`qm-ray-bench`): each pair kernel's seconds, its stream synchronized around it:
+/// counting rays, writing them, the rays' transfers, the bands into points.
+pub static TIME_KERNELS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static KERNEL_SECONDS: Mutex<[f64; 4]> = Mutex::new([0.0; 4]);
+
+fn timed_launch(
+    stream: &CudaStream,
+    slot: usize,
+    launch: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if !TIME_KERNELS.load(std::sync::atomic::Ordering::Relaxed) {
+        return launch();
+    }
+    // SAFETY: a stream the caller holds.
+    driver(unsafe { result::stream::synchronize(stream.stream) })?;
+    let started = std::time::Instant::now();
+    launch()?;
+    driver(unsafe { result::stream::synchronize(stream.stream) })?;
+    KERNEL_SECONDS.lock().unwrap()[slot] += started.elapsed().as_secs_f64();
+    Ok(())
+}
+
 /// A launch of one thread, for the kernels that write one result (cudarc's `for_num_elems(1)` is
 /// a whole block of 1,024 writers).
 const ONE_THREAD: LaunchConfig = LaunchConfig {
@@ -261,6 +283,10 @@ impl Gpu {
             band_constants(),
             lattice_constants()
         );
+        // Bench only: the source NVRTC compiles, for a profiler's line numbers.
+        if let Some(path) = std::env::var_os("QM_KERNEL_SOURCE") {
+            std::fs::write(&path, &source).map_err(|error| error.to_string())?;
+        }
         let ptx = compile_ptx_with_opts(
             source,
             CompileOptions {
@@ -429,7 +455,7 @@ impl Gpu {
         // SAFETY (each launch): every buffer holds what the kernel indexes: 2 receiver coordinates,
         // an owner, a candidate and a point (within `bands`, checked) per pair; a count, an offset,
         // PAIR_SUMS sums, PERIODS x BANDS bands and a failure per pair; a PairRay (24 bytes) per ray.
-        driver(unsafe {
+        timed_launch(&stream, 0, || driver(unsafe {
             kernel("pair_rays")?.launch_on_stream(
                 &stream,
                 threads(count),
@@ -446,7 +472,7 @@ impl Gpu {
                     &pair_bands,
                 ),
             )
-        })?;
+        }).map(|_| ()))?;
         let mut offsets = read_back(&stream, &ray_counts)?;
         let mut total = 0u32;
         for offset in &mut offsets {
@@ -456,7 +482,7 @@ impl Gpu {
             let offsets = driver(device.htod_sync_copy(&offsets))?;
             let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
             stream.wait_for_default()?;
-            driver(unsafe {
+            timed_launch(&stream, 1, || driver(unsafe {
                 kernel("pair_rays")?.launch_on_stream(
                     &stream,
                     threads(count),
@@ -473,7 +499,7 @@ impl Gpu {
                         &pair_bands,
                     ),
                 )
-            })?;
+            }).map(|_| ()))?;
             // SAFETY: the bands' buffer, on the stream the listing just wrote it on.
             driver(unsafe {
                 result::memset_d8_async(
@@ -483,7 +509,7 @@ impl Gpu {
                     stream.stream,
                 )
             })?;
-            driver(unsafe {
+            timed_launch(&stream, 2, || driver(unsafe {
                 kernel("ray_transfers")?.launch_on_stream(
                     &stream,
                     threads(total as usize),
@@ -499,8 +525,8 @@ impl Gpu {
                         &failed,
                     ),
                 )
-            })?;
-            driver(unsafe {
+            }).map(|_| ()))?;
+            timed_launch(&stream, 3, || driver(unsafe {
                 kernel("pair_bands_to_points")?.launch_on_stream(
                     &stream,
                     threads(count),
@@ -515,7 +541,7 @@ impl Gpu {
                         &mut *bands,
                     ),
                 )
-            })?;
+            }).map(|_| ()))?;
             // The rays' buffers are freed on the default stream as this block ends: their kernels
             // finish first.
             // SAFETY: a stream this function created and still holds.

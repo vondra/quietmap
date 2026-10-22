@@ -20,6 +20,41 @@ use std::sync::OnceLock;
 /// Pairs one launch takes: 172 bytes per pair, 24 per ray and 576 per reached point.
 const PAIRS_PER_LAUNCH: usize = 2_000_000;
 
+/// Bench only: every `QM_DUMP_EVERY`-th launch's pairs (default each) written into the directory
+/// `QM_DUMP_LAUNCHES` for `qm-ray-bench`: count, reached points, receivers, owners, candidates,
+/// point slots, band weights.
+fn dump_launch(
+    receivers: &[[f64; 2]],
+    own: &[u64],
+    candidates: &[u32],
+    at: &[u32],
+    weights: &[f32],
+    reached: usize,
+) -> Result<(), String> {
+    static LAUNCHES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let Some(directory) = std::env::var_os("QM_DUMP_LAUNCHES") else {
+        return Ok(());
+    };
+    let every: usize = std::env::var("QM_DUMP_EVERY")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let number = LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if !number.is_multiple_of(every) {
+        return Ok(());
+    }
+    let mut bytes = b"qmlaunch".to_vec();
+    bytes.extend((receivers.len() as u64).to_le_bytes());
+    bytes.extend((reached as u64).to_le_bytes());
+    receivers.iter().flatten().for_each(|v| bytes.extend(v.to_le_bytes()));
+    own.iter().for_each(|v| bytes.extend(v.to_le_bytes()));
+    candidates.iter().for_each(|v| bytes.extend(v.to_le_bytes()));
+    at.iter().for_each(|v| bytes.extend(v.to_le_bytes()));
+    weights.iter().for_each(|v| bytes.extend(v.to_le_bytes()));
+    let path = std::path::Path::new(&directory).join(format!("launch-{number:05}.bin"));
+    std::fs::write(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))
+}
+
 pub struct GpuBatch<'a> {
     pub gpu: &'a Gpu,
     pub device_square: &'a DeviceSquare,
@@ -72,6 +107,7 @@ impl Batch for GpuBatch<'_> {
                 .iter()
                 .map(|&k| pairs[k as usize].band_weight as f32)
                 .collect();
+            dump_launch(&receivers, &own, &candidates, &at, &weights, reached.len())?;
             let (sums, failed) = self.gpu.evaluate_pairs(
                 self.device_square,
                 (&receivers, &own),
