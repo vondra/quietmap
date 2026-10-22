@@ -316,7 +316,9 @@ deliveries, building sites, garden machinery, music and festivals.
   Melbourne's and Paris's counts; the daytime 30 % is an assumption. The guests are heard while
   they are there, the seats in the terrace season and the opening hours, the door crowd whenever
   the place is open, all year, not as a murmur all year at their mean. A terrace mapped within
-  30 m of a place is that place's seats, unless the place is tagged without outdoor seating.
+  30 m of a place is that place's seats, unless the place is tagged without outdoor seating. The
+  guests sit 1.5 m in front of the nearest wall of the building the place is mapped in that no
+  other building stands against: a party wall leads into the neighbour.
 - **What screens.** A wall without a height stands 4 m. Open car parks, carports, open roofs and
   underground footprints do not screen.
 
