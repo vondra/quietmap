@@ -1,6 +1,7 @@
 //! ESA WorldCover's permanent water (`fetch/water.py`): each 3 arc-second cell's percent of water, a
 //! 3 x 3 degree tile a file named by its south-west corner; a tile the grid lacks has no land: open
-//! sea, all water.
+//! sea, all water. WorldCover maps no land south of 60 S or north of 82.75 N, so there (Antarctica's
+//! coasts) every place reads as water, as before the mask.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -64,8 +65,9 @@ impl Water {
 }
 
 impl WaterTiles<'_> {
-    /// The share of water (0-1) of the cell holding a point.
+    /// The share of water (0-1) of the cell holding a point (its longitude any copy of it).
     pub fn share(&mut self, lat: f64, lon: f64) -> Result<f64, String> {
+        let lon = (lon + 180.0).rem_euclid(360.0) - 180.0;
         let corner = corner_of(lat, lon);
         if !self.read.contains_key(&corner) {
             let name = tile_name(corner);
@@ -131,6 +133,8 @@ mod tests {
         assert_eq!(tiles.share(39.0004, -0.0004).unwrap(), 0.4);
         assert_eq!(tiles.share(40.5, -1.5).unwrap(), 0.0);
         assert_eq!(tiles.share(10.0, -30.0).unwrap(), 1.0);
+        // Across the antimeridian a longitude a world away reads the same cell.
+        assert_eq!(tiles.share(39.0004, 359.9996).unwrap(), 0.4);
         std::fs::remove_dir_all(&directory).unwrap();
     }
 }

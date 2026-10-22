@@ -50,9 +50,9 @@ the European Union and ESA; all rights reserved).
 - Tree cover: [Hansen/UMD Global Forest Change](https://glad.earthengine.app/view/global-forest-change)
   outside Europe; tree height: [GLAD forest height 2020](https://glad.umd.edu/dataset/GLCLUC2020)
   (Potapov et al. 2022, University of Maryland)
-- Hard ground (paved, built over or water) and the water ships sail on:
-  [ESA WorldCover 2021](https://worldcover2021.esa.int/) (CC BY 4.0), its gaps filled from C3S/ESA
-  CCI Land Cover 2022 v2.1.1
+- Hard ground (paved, built over or water): [ESA WorldCover 2021](https://worldcover2021.esa.int/)
+  (CC BY 4.0), its gaps filled from C3S/ESA CCI Land Cover 2022 v2.1.1; the water ships sail on: ESA
+  WorldCover 2021
 - Europe's tree cover and hard ground: on the [Europe](/about/data-sources/europe) page
 - Weather: [ERA5](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5) 1991–2020
   climatology (Copernicus Climate Change Service, CC BY 4.0, via ARCO-ERA5; contains modified
