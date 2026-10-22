@@ -18,6 +18,7 @@ use crate::atmosphere::{
     alpha_db_per_km,
 };
 use crate::bands::{BANDS, energy};
+use std::sync::OnceLock;
 
 /// The 24 one-third-octave bands of the spectral classes, 50 Hz to 10 kHz.
 pub const THIRD_OCTAVES: usize = 24;
@@ -64,7 +65,8 @@ pub fn rates_db_per_m(temperature_c: f64, relative_humidity_pct: f64) -> [f64; T
 
 /// The model's attenuation rates (dB/m) per 1/3-octave band: CNOSSOS-EU's 15 C and 70 %.
 pub fn model_rates_db_per_m() -> [f64; THIRD_OCTAVES] {
-    rates_db_per_m(DEFAULT_TEMPERATURE_C, DEFAULT_RELATIVE_HUMIDITY_PCT)
+    static MODEL: OnceLock<[f64; THIRD_OCTAVES]> = OnceLock::new();
+    *MODEL.get_or_init(|| rates_db_per_m(DEFAULT_TEMPERATURE_C, DEFAULT_RELATIVE_HUMIDITY_PCT))
 }
 
 /// Doc 29 Eqs. 4-6 and 4-7: the acoustic impedance adjustment (dB) of the NPD levels at a
@@ -87,24 +89,33 @@ pub fn receiver_impedance_db(elevation_m: f64) -> f64 {
         - impedance_adjustment_db(DEFAULT_TEMPERATURE_C, REFERENCE_PRESSURE_KPA)
 }
 
-/// The A-weighted level (dB) at `distance_m` of a spectral class `spectrum_db` (at 305 m in the
-/// AIR-1845 atmosphere, Eq. D-1 taking it back to the source) through the atmosphere of
-/// `rates_db_per_m` (Eqs. D-2 to D-4).
-fn a_weighted_db(
-    spectrum_db: &[f64; THIRD_OCTAVES],
-    rates_db_per_m: &[f64; THIRD_OCTAVES],
-    distance_m: f64,
-) -> f64 {
-    let spreading = 20.0 * (distance_m / SPECTRUM_DISTANCE_M).log10();
-    10.0 * (0..THIRD_OCTAVES)
-        .map(|n| {
-            let source = spectrum_db[n] + AIR_1845_DB_PER_100M[n] / 100.0 * SPECTRUM_DISTANCE_M;
-            10f64.powf(
-                (source - spreading - rates_db_per_m[n] * distance_m
-                    + A_WEIGHTING_THIRD_OCTAVES_DB[n])
-                    / 10.0,
-            )
-        })
+/// A spectral class `spectrum_db` (at 305 m in the AIR-1845 atmosphere) taken back to the source
+/// (Eq. D-1) as A-weighted third-octave energies: a place's air enters its level only through what
+/// each third keeps (Eqs. D-2 to D-4), so a level is 24 products with these.
+fn source_energies(spectrum_db: &[f64; THIRD_OCTAVES]) -> [f64; THIRD_OCTAVES] {
+    std::array::from_fn(|n| {
+        energy(
+            spectrum_db[n]
+                + AIR_1845_DB_PER_100M[n] / 100.0 * SPECTRUM_DISTANCE_M
+                + A_WEIGHTING_THIRD_OCTAVES_DB[n],
+        )
+    })
+}
+
+/// The share of each third's energy that `distance_m` of air absorbing `rates_db_per_m` keeps. The
+/// 50 Hz third's share stays above f64's smallest over 16 km unless it absorbs 190 dB/km (any
+/// weather absorbs under 1 there), so a level's sum never vanishes.
+fn kept_energies(rates_db_per_m: &[f64; THIRD_OCTAVES], distance_m: f64) -> [f64; THIRD_OCTAVES] {
+    std::array::from_fn(|n| energy(-rates_db_per_m[n] * distance_m))
+}
+
+/// The level (dB) of a class's `source` energies with each third's `kept` share, before the
+/// spreading.
+fn level_db(source: &[f64; THIRD_OCTAVES], kept: &[f64; THIRD_OCTAVES]) -> f64 {
+    10.0 * source
+        .iter()
+        .zip(kept)
+        .map(|(s, k)| s * k)
         .sum::<f64>()
         .log10()
 }
@@ -116,10 +127,11 @@ pub fn npd_increments_db(
     rates_db_per_m: &[f64; THIRD_OCTAVES],
 ) -> [f64; NPD_DISTANCES] {
     let air_1845: [f64; THIRD_OCTAVES] = AIR_1845_DB_PER_100M.map(|rate| rate / 100.0);
+    let source = source_energies(spectrum_db);
     std::array::from_fn(|k| {
         let distance_m = NPD_DISTANCES_FT[k] * METRES_PER_FOOT;
-        a_weighted_db(spectrum_db, rates_db_per_m, distance_m)
-            - a_weighted_db(spectrum_db, &air_1845, distance_m)
+        level_db(&source, &kept_energies(rates_db_per_m, distance_m))
+            - level_db(&source, &kept_energies(&air_1845, distance_m))
     })
 }
 
@@ -146,6 +158,42 @@ pub fn place_rates_db_per_m(octave_alpha_db_per_km: &[f64; BANDS]) -> [f64; THIR
 /// anchor.
 pub const SHIFT_DISTANCES: usize = NPD_DISTANCES + 1;
 
+fn shift_distance_m(k: usize) -> f64 {
+    if k < NPD_DISTANCES {
+        NPD_DISTANCES_FT[k] * METRES_PER_FOOT
+    } else {
+        TAIL_ANCHOR_M
+    }
+}
+
+/// A class's approach and departure spectra as source energies and their levels through the
+/// model's air at the shift distances: the same at every place, so a place computes only its own
+/// levels, 24 products each.
+struct ModelLevels {
+    source: [[f64; THIRD_OCTAVES]; 2],
+    model_db: [[f64; SHIFT_DISTANCES]; 2],
+}
+
+/// [`ModelLevels`] per class, `None` for the helicopter class without spectra.
+fn model_levels() -> &'static [Option<ModelLevels>] {
+    static LEVELS: OnceLock<Vec<Option<ModelLevels>>> = OnceLock::new();
+    LEVELS.get_or_init(|| {
+        let model = model_rates_db_per_m();
+        let kept: [_; SHIFT_DISTANCES] =
+            std::array::from_fn(|k| kept_energies(&model, shift_distance_m(k)));
+        let levels = |spectra: &ClassSpectra| {
+            let source = [&spectra.approach_db, &spectra.departure_db].map(source_energies);
+            let model_db =
+                source.map(|source| std::array::from_fn(|k| level_db(&source, &kept[k])));
+            ModelLevels { source, model_db }
+        };
+        SPECTRA
+            .iter()
+            .map(|spectra| spectra.as_ref().map(levels))
+            .collect()
+    })
+}
+
 /// How far a place's yearly atmosphere moves every class's curves from the model's (Doc 29
 /// Appendix D between the two atmospheres), per class and operation at the ten NPD distances and
 /// the tail anchor (dB): the place's A-weighted level of the class's spectrum less the model's.
@@ -156,27 +204,18 @@ pub struct PlaceAtmosphere {
 
 impl PlaceAtmosphere {
     pub fn new(octave_alpha_db_per_km: &[f64; BANDS]) -> Self {
-        let (place, model) = (
-            place_rates_db_per_m(octave_alpha_db_per_km),
-            model_rates_db_per_m(),
-        );
-        let distance = |k: usize| {
-            if k < NPD_DISTANCES {
-                NPD_DISTANCES_FT[k] * METRES_PER_FOOT
-            } else {
-                TAIL_ANCHOR_M
-            }
-        };
-        let shifts = SPECTRA
-            .iter()
-            .map(|spectra| {
-                let Some(spectra) = spectra else {
+        let place = place_rates_db_per_m(octave_alpha_db_per_km);
+        let kept: [_; SHIFT_DISTANCES] =
+            std::array::from_fn(|k| kept_energies(&place, shift_distance_m(k)));
+        let shifts = (model_levels().iter())
+            .map(|levels| {
+                let Some(levels) = levels else {
                     return [[0.0; SHIFT_DISTANCES]; 2];
                 };
-                [&spectra.approach_db, &spectra.departure_db].map(|spectrum| {
+                std::array::from_fn(|operation| {
                     std::array::from_fn(|k| {
-                        a_weighted_db(spectrum, &place, distance(k))
-                            - a_weighted_db(spectrum, &model, distance(k))
+                        level_db(&levels.source[operation], &kept[k])
+                            - levels.model_db[operation][k]
                     })
                 })
             })
