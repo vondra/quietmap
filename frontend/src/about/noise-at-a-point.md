@@ -32,7 +32,7 @@ levels exceeded 5 to 90 % of the time.
 </p>
 
 <details>
-<summary><strong>Which rows are listed, and why a share is not a loudness</strong></summary>
+<summary>Which rows are listed, and why a share is not a loudness</summary>
 
 - **The list** shows the three largest shares and every other row of at least 1 %, up to ten rows,
   on a phone too. Everything else folds into Rest, which opens to the folded rows among the 30
@@ -78,7 +78,7 @@ the building's loudest façade, where a noise map's receivers stand; a building 
 façade gets no answer. No indoor attenuation is applied.
 
 <details>
-<summary><strong>How the façade is chosen</strong></summary>
+<summary>How the façade is chosen</summary>
 
 The façade point loudest by Lden from the 100 pieces of ground sources with the highest bound at
 the building (flights do not choose it), among receivers placed as
@@ -91,7 +91,7 @@ façade's own reflection left out.
 ## How it is computed
 
 Sound leaves each source, spreads and fades: the air absorbs it, the ground and the trees take
-from it, hills, walls and roofs block it, and the weather bends it towards the ground or away. The
+from it, hills, walls and roofs block it, and the weather can bend it back down to the ground. The
 popup follows it along rays from every source to the point, over the terrain, the buildings and
 the trees, in eight frequency bands, by day, evening and night, in calm air and downwind, after
 CNOSSOS-EU (aircraft after
@@ -99,7 +99,7 @@ CNOSSOS-EU (aircraft after
 and adds it all up.
 
 <details>
-<summary><strong>The tiles it reads</strong></summary>
+<summary>The tiles it reads</summary>
 
 The popup reads the point's tile and its eight neighbours, computes and sends a first answer. Then
 it reads one more ring of tiles at a time until every ground source within 12 km and every flight
@@ -131,7 +131,7 @@ reads 219 MB in 114 reads, the flight tracks and the weather among them.
 </details>
 
 <details>
-<summary><strong>The pieces it computes</strong></summary>
+<summary>The pieces it computes</summary>
 
 Most pieces in those tiles are too far or too quiet to matter, and the popup proves it without
 computing them. For each piece it takes an upper bound of what could arrive: its sound power over
@@ -146,7 +146,7 @@ the point.
 </details>
 
 <details>
-<summary><strong>A piece and its rays</strong></summary>
+<summary>A piece and its rays</summary>
 
 A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of points: the angle under
 which the receiver sees it is cut into five equal parts, each sending one ray; a piece seen under
@@ -174,7 +174,7 @@ through the gaps between its houses.
 </details>
 
 <details>
-<summary><strong>One ray</strong></summary>
+<summary>One ray</summary>
 
 Along each ray the popup reads the ground wherever the ray crosses a line of the one-arc-second
 terrain grid (31 m north to south, 19 m east to west in London), and within 100 m of either end on
@@ -227,7 +227,7 @@ term and 0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above.
 </details>
 
 <details>
-<summary><strong>From rays to the answer</strong></summary>
+<summary>From rays to the answer</summary>
 
 A piece's rays add up to the piece, the pieces to the source, the sources to their layer and the
 layers to the place, by octave band and by day, evening and night. That gives Lden.
@@ -260,6 +260,56 @@ The popup opens these sums one level at a time:
 | Segments | its pieces, each computed again in full, and how its sound arrives |
 | A segment's rays | one piece's rays, each with the ground and walls it was computed over |
 | Detailed calculation | the receiver, each period's levels and loudness, the layers, the weather |
+
+</details>
+
+## The weather
+
+The level is an average over the year's weather, not one day's. Wind from a road towards the point,
+and the cold air near the ground on a clear night or morning, bend its sound back down over hills
+and walls: at High Beach in Epping Forest the M25, 2 km away behind the terrain, sounds 17 dB
+louder then. Wind the other way bends sound up and away; the model leaves that out, so on such
+evenings a place can be quieter than the popup ever says.
+
+How often the weather bends sound down comes from the climate of 1991–2020, for each direction by
+day, evening and night. At High Beach it bends the M25's sound down 31 % of the day, 37 % of the
+evening and 43 % of the night; the motorway's 22 dB in calm air and 39 dB bent down mix into 35 dB
+Lden. Every ray takes the share of its own direction, so a road west of a point and one east of it
+are carried by different weather.
+
+The detailed calculation shows the place's weather in two tables:
+
+- **Sound from**: how often sound arriving from each of 16 directions is bent down, by day, evening
+  and night. In London sound from the south-west about half the day, as the wind there mostly blows
+  from that side, sound from the east a quarter; every direction more at night.
+- **Air dB/km**: how many decibels a kilometre of air takes from each octave band, from the low
+  63 Hz to the high 8 kHz, at the place's average temperature and humidity: in London 0.11 and
+  103 dB. Over 2 km a road's rumble loses 0.2 dB, its hiss all of it: a distant road sounds low.
+
+<details>
+<summary>How the weather is computed</summary>
+
+- **Two states.** Each ray is computed twice, as CNOSSOS-EU prescribes (section 2.5.9): in
+  homogeneous conditions, on straight lines, and in favourable conditions, on arcs bent towards the
+  ground with a radius of at least 1 km, which the edges on the way screen less. A period's
+  level of the ray is 10 × log₁₀(p × 10^(L<sub>F</sub>/10) + (1 − p) × 10^(L<sub>H</sub>/10)), p
+  the favourable share of the period for the ray's direction, read linearly between the two nearest
+  of 16 directions.
+- **The favourable share.** In every three-hourly state of
+  <abbr title="the fifth reanalysis of the European Centre for Medium-Range Weather Forecasts">ERA5</abbr>
+  from 1991 to 2020, the wind at 10 m, the cloud cover and whether the sun is up give a
+  meteorological class of Nord2000 (Eurasto 2006, VTT-R-02530-06); a direction is favourable when
+  the class's speed of sound rises with height along it. p is the share of a period's states in
+  which it is, stored every half degree and interpolated to the place.
+- **The air** absorbs after ISO 9613-1 at each state's temperature, humidity and pressure,
+  averaged over the periods' hours.
+- **The levels over time.** The moments of a period are spread over ten equally likely states of
+  the place's weather, the same for all its rays, as a night's inversion bends them all at once: a
+  piece with p = 0.3 is bent down in the three most favourable states. The levels exceeded 5 to 90 %
+  of the time and Nden are computed over every hour and these states; the map takes two of them.
+- **Left out.** Sound bent upwards, by wind blowing away from the point or the ground warmed on a
+  sunny afternoon; the weather of a given day; and the traffic of a given weekday: the hourly
+  profiles are the medians of all days.
 
 </details>
 
@@ -313,7 +363,7 @@ each layer's Lden within 0.1 dB of the full computation in 95 % of the layer ans
 all. Each update stays under 100 KB, held by caps on the lines and tracks it carries.
 
 <details>
-<summary><strong>What the popup guarantees</strong></summary>
+<summary>What the popup guarantees</summary>
 
 - The bound stays an upper bound of `ray` and `line`: a source is skipped only by the
   omitted-energy account, never by a per-source threshold.

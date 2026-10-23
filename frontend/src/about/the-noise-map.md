@@ -10,13 +10,32 @@ zones' green, and its hover reads "—"; the popup computes it all the same.
 
 ## Colours
 
-One colour for each doubling of loudness: under 1 sone, about as loud as a quiet room, the map is
-clear; then 2 sone a pale sage green, 4 amber, 8 orange, 16 red and 32 maroon, held flat above.
-Colours blend smoothly in between, and their opacity rises with loudness over the base map. The
-quiet colours stay soft and see-through, so the map under them still shows; the loud ones grow
-saturated, dark and opaque, because lighter colours read as calmer and more saturated ones as more
-urgent. The order is the one air-quality maps taught, and the lightness falls with loudness, so the
-scale still reads in grey and with red-green colour blindness.
+One colour for each doubling of loudness: each sounds twice as loud as the one before it. The places
+are clicked in the popup, October 2026.
+
+| Colour | Sone | A place like it (sone, Lden) |
+|---|---|---|
+| clear | under 1, a quiet room | Haystacks in the Lake District, 1 km above the road (0.9, 34&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#caeeda"></span> sage</span> | 2 | Box Hill in Surrey, the M25 4 km away (2.5, 45&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#fddb8d"></span> amber</span> | 4 | Kenwood's lawn on Hampstead Heath, London (3.6, 47&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#fe994c"></span> orange</span> | 8 | Bibury in the Cotswolds, 17 m from its main road (8.5, 59&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#d84c4c"></span> red</span> | 16 | 70 m from the Westway in London (19, 66&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#85253f"></span> maroon</span> | 32 and more | 70 m from the M25 beside Heathrow (35, 76&nbsp;dB) |
+
+The colours blend smoothly in between. The quiet ones stay pale and see-through over the base map,
+the loud ones dark and opaque; the swatches show them over a white map. What a sone is, and how it
+differs from a decibel, is on [Noise at a point](/about/noise-at-a-point).
+
+<details>
+<summary>Why these colours</summary>
+
+Lighter colours read as calmer and more saturated ones as more urgent, so the quiet colours stay
+soft and the loud ones grow saturated, dark and opaque. The order is the one air-quality maps
+taught, and the lightness falls with loudness, so the scale still reads in grey and with red-green
+colour blindness. The colours are blended in CIELAB by the logarithm of the loudness; their opacity
+rises from 0.5 at 2 sone to 0.92 at 32 sone (`frontend/src/lib/heatmap-palette.ts`).
+
+</details>
 
 ## Layers
 
@@ -26,7 +45,7 @@ from each layer's own. Quiet zones wash green every place where the total stays 
 chosen loudness, from 0.25 to 4 sone.
 
 <details>
-<summary><strong>How two to five layers are combined</strong></summary>
+<summary>How two to five layers are combined</summary>
 
 Loudness does not add like energy, so each layer's loudness is raised to a power that grows with
 the loudest layer's level (1.0 at 22 phon, 1.9 at 62, 3.1 at 87 phon), summed and taken back.
@@ -47,7 +66,7 @@ far is blended between the corners, and the faint hum of far, quiet sources is c
 coarser grid. A pixel inside a building shows the building's loudest façade, as the popup does.
 
 <details>
-<summary><strong>How a tile is painted</strong></summary>
+<summary>How a tile is painted</summary>
 
 The tiles are the web map's of zoom 12, each in blocks of 16 × 16 pixels (95 m in London). A ground
 source counts as loud at a point where its upper bound there reaches 20 dB.
@@ -128,7 +147,7 @@ The map should agree with the popup within 1 phon, 7 % of loudness, at any point
 checked against two references, and the total meets its limits; single layers miss some.
 
 <details>
-<summary><strong>The limits and the last check</strong></summary>
+<summary>The limits and the last check</summary>
 
 The painter is held to two references. The etalon is the same tile with every loud ground source
 and the flights computed exactly at every outdoor pixel, the hum, the flights' spectra and the

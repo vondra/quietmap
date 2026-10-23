@@ -21,7 +21,7 @@ information and orientation — please don't rely on it alone for legal, health,
 property decisions.
 
 <details>
-<summary><strong>Privacy</strong></summary>
+<summary>Privacy</summary>
 
 quietmap.org uses **no cookies, no trackers and no analytics scripts** — which is why there is no consent banner to click away.
 
