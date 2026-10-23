@@ -3,26 +3,27 @@ title: Validation
 intro: How close the map comes to real measurements.
 ---
 
-The map is computed, so we check it where microphones measured. At each microphone of the
+The map is computed, so we check it where microphones measured. For each microphone of the
 monitoring networks and research campaigns below, the map's level at that exact spot is computed
-for the same hours and set beside what the microphone measured. Around three of the four airports
-and along Poland's roads and Germany's railways, half of the microphones are within about 1 to 3 dB
-of the map; in the streets of Paris, Barcelona, Madrid and Dublin within 3 to 6 dB. In Accra, where
-the microphones hear speech, music and animals too, the map reads about 10 dB below them. For
-scale: twice the traffic on a road adds 3 dB.
+for the same hours. It is set beside what the microphone measured.
 
-A gap is first traced to its cause: the input data (traffic nobody counted, a flight no receiver
-heard), a justified difference of method, or a defect of the model; only a defect leads to a fix.
-Each version of the map is checked this way before it goes live. Official strategic noise maps are
-cross-checks, not targets the model is tuned to, with one exception still: industry's levels by
-sector are calibrated on Czechia's strategic maps of 2022, for want of measured sound powers.
+Near three of the four airports, along Poland's roads and Germany's railways, half the microphones
+are within about 1 to 3 dB of the map. In the streets of Paris, Barcelona, Madrid and Dublin, half
+are within 3 to 6 dB. In Accra, where the microphones hear speech, music and animals too, the map
+reads about 10 dB below them. For scale: twice the traffic on a road adds 3 dB.
+
+A gap is first traced to its cause. It can be the input data (traffic nobody counted, a flight no
+receiver heard), a justified difference of method, or a defect of the model. Only a defect leads to
+a fix. Each version of the map is checked this way before it goes live. Official strategic noise
+maps are cross-checks, not targets the model is tuned to. One exception remains: industry's levels
+by sector are calibrated on Czechia's strategic maps of 2022, for want of measured sound powers.
 
 ## Map against microphone
 
 Two numbers for each network. **Model minus measured** is the typical difference: half of the
 microphones lie below it and half above. In Barcelona it is −1.6 dB: at the typical microphone the
 map is 1.6 dB quieter than measured. **Half are within** is how far the map stands from half of the
-microphones, louder or quieter: in Barcelona half are within ±4.2 dB of the map. The values are
+microphones, louder or quieter. In Barcelona half are within ±4.2 dB of the map. The values are
 <abbr title="the day-evening-night level: a year's average, the evening 5 dB and the night 10 dB heavier">Lden</abbr>,
 the averages of the hours given, or the US's
 <abbr title="the day-night level: a year's average, the night 10 dB heavier">DNL</abbr>;

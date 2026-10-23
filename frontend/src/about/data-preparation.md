@@ -3,9 +3,11 @@ title: Data preparation
 intro: How loud each road, railway, flight, ship, factory and building is, and where the numbers come from.
 ---
 
+<!-- SECTIONS -->
+
 Every source of noise on the map has a sound power: how much noise it gives off by day, evening and
 night. Where somebody counted, the count is used. London's Marylebone Road carries the Department for
-Transport's count of 42,783 vehicles a day; where nobody counted, an estimate stands in, and the
+Transport's count of 42,783 vehicles a day. Where nobody counted, an estimate stands in, and the
 [country pages](/about/data-sources) say which is which.
 
 ## Roads
@@ -14,13 +16,15 @@ A road gets louder with more vehicles, more lorries and higher speed: twice the 
 3 dB. Speed is the signed limit, else the country's legal limit for the road's class.
 
 Traffic is where the map is least sure. Of the world's 5.8 million km of motorways, trunk and
-primary roads, 31 % have official traffic figures: counts for 18 %, such as the 148,831 vehicles a
+primary roads, 31 % have official traffic figures. Counts cover 18 %, such as the 148,831 vehicles a
 day the [<abbr title="Highway Performance Monitoring System, the US federal road traffic database">HPMS</abbr>](https://www.fhwa.dot.gov/policyinformation/hpms.cfm)
-gives New York's Brooklyn–Queens Expressway (2022), and national estimates for the rest, in China, India
-and a few other countries. Another 14 % take their traffic from a model trained on the counted
-roads, which predicts it from the trips the buildings within 1, 5 and 15 km make. The
-remaining 54 % have only an average for their road class in their country (October 2026). A side
-street nobody counted carries the trips its own buildings make.
+gives New York's Brooklyn–Queens Expressway (2022). National estimates cover the rest of them, in
+China, India and a few other countries.
+
+Another 14 % take their traffic from a model trained on the counted roads. It predicts a road's
+traffic from the trips the buildings within 1, 5 and 15 km make. The remaining 54 % have only an
+average for their road class in their country (October 2026). A side street nobody counted carries
+the trips its own buildings make.
 
 <details>
 <summary>How a road's sound power is computed</summary>
@@ -182,8 +186,8 @@ flies on its noise tables from the
 [<abbr title="Aircraft Noise and Performance">ANP</abbr> database](https://www.aircraftnoisemodel.org)
 by <abbr title="the European Civil Aviation Conference's method for noise around airports">ECAC</abbr>
 [Doc 29](https://www.ecac-ceac.org/activities/environment/doc-29), 4th edition. Near nine of 59 large
-airports (Beijing, Shanghai Pudong, Cairo, Casablanca, Riyadh, Tehran, Accra, Moscow Sheremetyevo,
-Lagos) the map reads 5 to 23 dB too quiet.
+airports the map reads 5 to 23 dB too quiet. They are Beijing, Shanghai Pudong, Cairo, Casablanca,
+Riyadh, Tehran, Accra, Moscow Sheremetyevo and Lagos.
 
 <details>
 <summary>How a flight's noise is computed</summary>
@@ -214,25 +218,27 @@ and a leisure boat 88 ([Fredianelli et al. 2020](https://doi.org/10.3390/su12051
 [Schiavoni et al. 2022](https://pmc.ncbi.nlm.nih.gov/articles/PMC9518360/)).
 
 Vessel density comes from [EMODnet](https://emodnet.ec.europa.eu/en/human-activities) 2024 in
-European seas (a 1 km grid) and [Global Fishing Watch](https://globalfishingwatch.org) elsewhere;
-leisure boats are counted only in European seas. A cell's ships are spread over its water, as
+European seas (a 1 km grid) and [Global Fishing Watch](https://globalfishingwatch.org) elsewhere.
+Leisure boats are counted only in European seas. A cell's ships are spread over its water, as
 [ESA WorldCover](https://worldcover2021.esa.int/) 2021 maps it in 90 m cells, never over its land.
-Speed is not modelled, so ships under way may be a few decibels louder, and activity is constant
-over the day, which overstates leisure boats at night.
+Speed is not modelled, so ships under way may be a few decibels louder. Activity is constant over
+the day, which overstates leisure boats at night.
 
 ## Industry
 
-A factory, a quarry or a power plant is as loud as its sector and its size: its sound power is
-spread over the site, a point every 75 m. A point that stands inside one of the site's buildings
-emits from that building, which does not screen it, and a building on a site that the data knows
-only as a building or a block of flats is part of the site, not a home. Wind turbines, solar farms and substations each have a model of their own.
+A factory, a quarry or a power plant is as loud as its sector and its size. Its sound power is
+spread over the site, a point every 75 m. A point inside one of the site's buildings emits from
+that building, which does not screen it. A building on the site known to the data only as a building
+or a block of flats is the site's, not a home. Wind turbines, solar farms and substations each
+have a model of their own.
 
-Sites and their kind are [OpenStreetMap](https://www.openstreetmap.org)'s;
+Sites and their kind are [OpenStreetMap](https://www.openstreetmap.org)'s. Four sources add the
+sector:
 [<abbr title="European Pollutant Release and Transfer Register">E-PRTR</abbr>](https://industry.eea.europa.eu)
 in Europe, the [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase),
-[Global Energy Monitor](https://globalenergymonitor.org)'s power, steel, cement and coal trackers
-and national registers add the sector. The levels per sector and area are calibrated on the Czech
-strategic noise maps of 2022.
+[Global Energy Monitor](https://globalenergymonitor.org)'s trackers (power, steel, cement, coal)
+and national registers. The levels per sector and area are calibrated on the Czech strategic noise
+maps of 2022.
 
 <details>
 <summary>Hours, turbines, solar farms and substations</summary>
@@ -252,13 +258,12 @@ strategic noise maps of 2022.
 
 ## Buildings and places
 
-Homes, shops and schools hum too: the outdoor units of heat pumps and air conditioners, a car
-park's cars, the guests on a bar's terrace, church bells. Each is modelled from what its country
-owns and uses, at the hours it runs; a Bangkok home gives off 51 dB(A) by day. These are
-estimates, not measurements.
+Homes, shops and schools hum too: heat pumps and air conditioners, a car park's cars, the guests
+on a bar's terrace, church bells. Each is modelled from what its country owns and uses, at the hours
+it runs; a Bangkok home gives off 51 dB(A) by day. These are estimates, not measurements.
 
 Buildings and noise walls also block sound. Their heights come from measured surveys where they
-exist, then mapped heights and floor counts, then the typical height for the footprint; walls come
+exist, then mapped heights and floor counts, then the typical height for the footprint. Walls come
 from official inventories and OpenStreetMap. The country pages name the surveys and inventories.
 
 Not modelled: roads and railways in tunnels, rail yards, heritage lines, curve squeal, motorsport,
@@ -327,12 +332,16 @@ deliveries, building sites, garden machinery, music and festivals.
 
 ## Terrain, ground and weather
 
-On its way to a point, sound crosses the terrain, the ground, the trees and the air. The terrain's
-height comes from national laser surveys in 17 countries and from a world model elsewhere; the
-ground is hard where it is sealed, built over or water, and soft elsewhere; the trees count by their
-cover and height; the weather is the climate of 1991–2020. The map's Advanced layers show the
-terrain, the trees and the hard ground. What the weather does to a level is told on
-[Noise at a point](/about/noise-at-a-point).
+On its way to a point, sound crosses the terrain, the ground, the trees and the air:
+
+- the terrain's height comes from national laser surveys in 17 countries and from a world model
+  elsewhere;
+- the ground is hard where it is sealed, built over or water, and soft elsewhere;
+- the trees count by their cover and height;
+- the weather is the climate of 1991–2020: what it does to a level is told on
+  [Noise at a point](/about/noise-at-a-point#the-weather).
+
+The map's Advanced layers show the terrain, the trees and the hard ground.
 
 <details>
 <summary>Terrain, ground and weather in detail</summary>
@@ -348,7 +357,7 @@ terrain, the trees and the hard ground. What the weather does to a level is told
   [<abbr title="the fifth reanalysis of the European Centre for Medium-Range Weather Forecasts">ERA5</abbr>](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5)
   every half degree: how often sound bends down to the ground from each of 16 directions by day,
   evening and night, and what the air absorbs in each octave
-  ([how it enters a level](/about/noise-at-a-point)).
+  ([how it enters a level](/about/noise-at-a-point#the-weather)).
 
 The datasets are credited on [Data sources](/about/data-sources).
 
@@ -356,10 +365,15 @@ The datasets are credited on [Data sources](/about/data-sources).
 
 ## The files
 
-Everything the popup and the painter read is one tree of files. The world is cut into squares 49 km
-wide in London (zoom 9 of the web map's tiles), and each square keeps one file for each kind of
-data: the terrain, the buildings and walls, the sound sources and three of flights. The popup reads
-only the tiles around its point, each with one read. The world takes 1.07 TB in 377,082 files.
+Everything the popup and the painter read is one tree of files: 1.07 TB for the world, in 377,082
+files.
+
+<details>
+<summary>The squares and their files</summary>
+
+The world is cut into squares 49 km wide in London (zoom 9 of the web map's tiles). Each square
+keeps one file for each kind of data: the terrain, the buildings and walls, the sound sources and
+three of flights. The popup reads only the tiles around its point, each with one read.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 244" role="img" aria-label="A zoom-9 square of eight by eight tiles with tile 2046/1362 of central London marked, and the square's directory holding its six files, one a kind of data, beside the year's weather table and flight tracks" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -391,6 +405,8 @@ only the tiles around its point, each with one read. The world takes 1.07 TB in 
 </svg>
 <figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">Tile 2046/1362 in central London lies in zoom-9 square 255/170, whose directory keeps the square's 64 tiles of each kind of data in one file, a directory of where each begins first. London has no finer national terrain, so no terrain-fine file. The year's weather table and flight tracks lie beside the squares.</figcaption>
 </figure>
+
+</details>
 
 <details>
 <summary>Each kind of file</summary>
@@ -465,6 +481,9 @@ described under Aircraft.
 
 ## In the code
 
+<details>
+<summary>The builder's code: fetch/, build/, physics/ and tiles/</summary>
+
 - `fetch/` downloads the datasets added to OpenStreetMap's: noise barriers, bus routes, national
   terrain models, wind turbines, venues, WorldClim, places of worship and the
   <abbr title="Trans-European Transport Network">TEN-T</abbr> rail network.
@@ -475,6 +494,8 @@ described under Aircraft.
 - `tiles/` holds each kind's tile format, writer and reader, and the square files that hold the
   tiles (`tiles/src/square.rs`): the only code that knows the bytes, but for the GPU painter's
   kernel, which reads the obstacles tiles as stored (`paint-gpu/kernels/scene.cuh`).
+
+</details>
 
 <details>
 <summary>What the readers rely on</summary>

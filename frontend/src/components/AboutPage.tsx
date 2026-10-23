@@ -1,13 +1,13 @@
 // The About pages as dev4 had them: the product's markdown (src/about) with its front matter, the
-// logo and title on the first page and a breadcrumb on the others, an intro, the pages below a page
-// listed where it marks them, and the contact at the foot.
+// logo and title on the first page and a breadcrumb on the others, an intro, the page's sections and
+// the pages below it listed where it marks them, and the contact at the foot.
 import { useEffect, useState } from 'react'
 import Markdown, { type Components } from 'react-markdown'
-import rehypeRaw from 'rehype-raw'
 import remarkGfm from 'remark-gfm'
 import ABOUT_INDEX from 'virtual:about-index'
 import { splitFrontMatter } from '../lib/about-front-matter'
 import { ABOUT_PAGES } from '../lib/about-pages'
+import { ABOUT_REHYPE_PLUGINS } from '../lib/about-sections'
 import { setDocumentTitle } from '../utils/page-title'
 
 /** Where a page lists the pages below it (the regions, a region's countries); a page without it lists none. */
@@ -29,7 +29,7 @@ const COMPONENTS: Components = {
 }
 
 function Prose({ children }: { children: string }) {
-  return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={COMPONENTS}>{children}</Markdown>
+  return <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={ABOUT_REHYPE_PLUGINS} components={COMPONENTS}>{children}</Markdown>
 }
 
 /** The pages one level below `page`, by title. */
@@ -90,6 +90,12 @@ export default function AboutPage({ page }: { page: string }) {
   }, [page])
   const { meta, body } = splitFrontMatter(markdown ?? '')
   useEffect(() => setDocumentTitle([page ? meta.title || null : 'About']), [page, meta.title])
+  // A link to a section (/about/noise-at-a-point#the-weather) lands on it once the text is there:
+  // the browser looked for the section before the page's markdown had loaded.
+  useEffect(() => {
+    if (markdown === null || window.location.hash.length < 2) return
+    document.getElementById(decodeURIComponent(window.location.hash.slice(1)))?.scrollIntoView()
+  }, [markdown])
   const crumbs = breadcrumb(page)
   const [before, after] = body.includes(SUBPAGES_MARKER) ? body.split(SUBPAGES_MARKER) : [body, null]
   return (

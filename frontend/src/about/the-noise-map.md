@@ -1,12 +1,13 @@
 ---
 title: The noise map
-intro: What the colours mean, and how the map is painted ahead of time for every pixel with the popup's physics.
+intro: What the colours mean, and how close the painted map comes to the popup.
 ---
 
-The colours show how loud each place sounds, in sone, as the popup there would answer: the map is
-painted ahead of time, pixel by pixel, from the same data and physics. For the exact answer at a
-place and what makes it, open the popup there. A place not yet painted is clear, without the quiet
-zones' green, and its hover reads "—"; the popup computes it all the same.
+<!-- SECTIONS -->
+
+The colours show how loud each place sounds, as the popup there would answer. Kenwood's lawn on
+Hampstead Heath in London is straw; 70 m from the Westway the map turns red. For the exact answer at
+a place and what makes it, open the popup there.
 
 ## Colours
 
@@ -24,7 +25,10 @@ are clicked in the popup, October 2026.
 
 The colours blend smoothly in between. The quiet ones stay pale and see-through over the base map,
 the loud ones dark and opaque; the swatches show them over a white map. What a sone is, and how it
-differs from a decibel, is on [Noise at a point](/about/noise-at-a-point).
+differs from a decibel, is on [Noise at a point](/about/noise-at-a-point#what-the-numbers-mean).
+
+A place not yet painted is clear too, without the quiet zones' green, and its hover reads "—". The
+popup computes it all the same.
 
 <details>
 <summary>Why these colours</summary>
@@ -37,7 +41,7 @@ rises from 0.45 at 2 sone to 0.92 at 32 sone (`frontend/src/lib/heatmap-palette.
 
 </details>
 
-## Layers
+## Layers and quiet zones
 
 The map shows any of the noise layers together: roads, railways, industry, buildings, ships and
 aircraft. All six show the painted total, one alone its own loudness, and two to five an estimate
@@ -54,19 +58,59 @@ or more sound, and within 2 phon at 98 %.
 
 </details>
 
-Advanced shows the data the popup computes over: elevation, forest, hard ground, buildings by
-height, road traffic (vehicles a day), trains a day, the other sources (turbines, bells, terraces,
-car parks, airports) and noise barriers; each layer switched on shows its legend.
+Advanced shows the data the popup computes over; each layer switched on shows its legend:
+
+- elevation, forest and hard ground;
+- buildings by height, and noise barriers;
+- road traffic (vehicles a day) and trains a day;
+- the other sources: turbines, bells, terraces, car parks, airports.
+
+## How close it comes to the popup
+
+The map should agree with the popup within 1 phon, 7 % of loudness, at any point. The painter is
+checked against a reference that computes every loud source exactly at every outdoor pixel. In the
+last check, in October 2026, the total missed it by more than 1 phon at 0.07 % of 248,909 pixels.
+Single layers miss more often: the railways at 2.40 % of the pixels, the buildings at 1.21 %.
+
+<details>
+<summary>The limits and the last check</summary>
+
+The painter is held to two references. The etalon is the same tile with every loud ground source
+and the flights computed exactly at every outdoor pixel, the hum, the flights' spectra and the
+loudness grain taken as the painter takes them: over the pixels of 1 sone or more, each layer and
+the total may differ from it by more than 0.5 phon at no more than 20 % of them, by more than 1
+phon (7 % of loudness) at no more than 1 %, by more than 3 phon at 0.01 %
+and by more than 6 phon at 0.001 %, with a bias under 0.5 phon; at most 0.25 % may fall on the
+other side of 1 sone, and a pixel under 1 sone may be off by at most 10 phon. And at any point it
+should agree with the popup within 1 phon.
+
+On one pixel in 16 of four squares in central Bohemia (248,909 of 1 sone or more, October 2026)
+the total meets every limit: 0.07 % over 1 phon, 3 pixels over 3 phon, none over 6 phon or across
+1 sone, a bias of −0.07 phon. Single layers miss some: the railways and the buildings over 1 phon
+(2.40 and 1.21 %), the roads, railways, industry and buildings over 3 phon (0.03 to 0.11 %), the
+roads, industry and buildings over 6 phon (2 to 4 pixels); the railways, aircraft and buildings
+across 1 sone (0.52 to 1.33 %); the railways, industry and buildings under 1 sone (up to 21 phon).
+
+The exact computations run on a graphics card in single precision or on the processor's
+cores in double; a pair the card refuses is computed on the cores. On 2 million random pairs of
+source and pixel in Prague (October 2026) the two agree within 0.006 dB for 99 % of them and
+0.03 dB for 99.9 %. Single precision puts 90 pairs more than 1 dB apart, up to 23 dB, where a ray
+grazes the terrain or crosses a building's edge; all but one of them lie more than 20 dB below the
+loudest source at their pixel.
+
+</details>
 
 ## How it is painted
 
-The map is painted in tiles of 1,024 × 1,024 pixels, 6 m apart in London. Every loud source is
-computed exactly at the corners of blocks 16 pixels wide and at every pixel it is near; what is
-far is blended between the corners, and the faint hum of far, quiet sources is computed on a
-coarser grid. A pixel inside a building shows the building's loudest façade, as the popup does.
+The map is painted ahead of time from the popup's data and physics, at pixels 6 m apart in London.
+A pixel inside a building shows the building's loudest façade, as the popup does.
 
 <details>
 <summary>How a tile is painted</summary>
+
+The map is painted in tiles of 1,024 × 1,024 pixels. Every loud source is computed exactly at the
+corners of blocks 16 pixels wide and at every pixel it is near. What is far is blended between the
+corners, and the faint hum of far, quiet sources is computed on a coarser grid.
 
 The tiles are the web map's of zoom 12, each in blocks of 16 × 16 pixels (95 m in London). A ground
 source counts as loud at a point where its upper bound there reaches 20 dB.
@@ -141,40 +185,10 @@ the mean loudness of the pixels under it.
 
 </details>
 
-## How close it comes to the popup
-
-The map should agree with the popup within 1 phon, 7 % of loudness, at any point. The painter is
-checked against two references, and the total meets its limits; single layers miss some.
+## In the code
 
 <details>
-<summary>The limits and the last check</summary>
-
-The painter is held to two references. The etalon is the same tile with every loud ground source
-and the flights computed exactly at every outdoor pixel, the hum, the flights' spectra and the
-loudness grain taken as the painter takes them: over the pixels of 1 sone or more, each layer and
-the total may differ from it by more than 0.5 phon at no more than 20 % of them, by more than 1
-phon (7 % of loudness) at no more than 1 %, by more than 3 phon at 0.01 %
-and by more than 6 phon at 0.001 %, with a bias under 0.5 phon; at most 0.25 % may fall on the
-other side of 1 sone, and a pixel under 1 sone may be off by at most 10 phon. And at any point it
-should agree with the popup within 1 phon.
-
-On one pixel in 16 of four squares in central Bohemia (248,909 of 1 sone or more, October 2026)
-the total meets every limit: 0.07 % over 1 phon, 3 pixels over 3 phon, none over 6 phon or across
-1 sone, a bias of −0.07 phon. Single layers miss some: the railways and the buildings over 1 phon
-(2.40 and 1.21 %), the roads, railways, industry and buildings over 3 phon (0.03 to 0.11 %), the
-roads, industry and buildings over 6 phon (2 to 4 pixels); the railways, aircraft and buildings
-across 1 sone (0.52 to 1.33 %); the railways, industry and buildings under 1 sone (up to 21 phon).
-
-The exact computations run on a graphics card in single precision or on the processor's
-cores in double; a pair the card refuses is computed on the cores. On 2 million random pairs of
-source and pixel in Prague (October 2026) the two agree within 0.006 dB for 99 % of them and
-0.03 dB for 99.9 %. Single precision puts 90 pairs more than 1 dB apart, up to 23 dB, where a ray
-grazes the terrain or crosses a building's edge; all but one of them lie more than 20 dB below the
-loudest source at their pixel.
-
-</details>
-
-## In the code
+<summary>The painter's code: paint/ and paint-gpu/, the tiles it writes and its checks</summary>
 
 `paint/` is the method and `paint-gpu/` (`qm-paint`) runs it by squares of zoom 12 in three stages:
 the cores read the next square's tiles once, to the reach of its farthest pixel (the fine terrain
@@ -228,3 +242,5 @@ cores on random pairs, `check-loudness` on random pixels' loudness and `check-fl
 aircraft lattices; `etalon` paints the reference,
 `compare` scores a map against it, and `popup` writes the popup's loudness at random pixels as a
 sparse reference.
+
+</details>

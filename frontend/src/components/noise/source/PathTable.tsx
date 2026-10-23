@@ -1,4 +1,5 @@
 // A source's sound path: its spreading, absorption, screening, ground, trees and reflections.
+import { ABOUT_WEATHER } from '../../../lib/about-paths'
 import type { SourcePath } from '../../../types/noise'
 import { HoverText } from '../../ui/info-tip'
 import { DetailTable } from '../shared'
@@ -44,7 +45,7 @@ export function PathTable({ path }: { path: SourcePath }) {
     [<span className="text-foreground">Level</span>, ...path.lden.map(level)],
     // Where the weather moves the level by under 0.05 dB in every period, the shares say nothing.
     ...(path.bent_percent.some(p => p != null)
-      ? [[<HoverText title={SHARE_OF_TIME}>Share of time</HoverText>, shares(false), shares(true)]]
+      ? [[<HoverText title={SHARE_OF_TIME} howToRead={ABOUT_WEATHER}>Share of time</HoverText>, shares(false), shares(true)]]
       : []),
   ]
   return (

@@ -209,11 +209,16 @@ html, body {
    hierarchy, a compact rhythm where the headings carry the section breaks, grey body text with dark
    emphasis, and a borderless table with its header rule (owner 2026-07-10, -16, -17). A link is
    underlined in full and not bold, a word explained on hover underlined dotted like the popup's,
-   without a question mark, and bold kept for what matters (owner 2026-10-17, -23). */
+   without a question mark, and bold kept for what matters (owner 2026-10-17, -23). A long page lists
+   its sections under its intro, quietly, beside a rule (lib/about-sections.ts). */
 @layer components {
   .about-prose { @apply text-sm leading-relaxed text-muted-foreground; }
-  .about-prose h2 { @apply mt-10 mb-2 text-2xl font-bold text-foreground; }
-  .about-prose h3 { @apply mt-6 mb-2 text-lg font-semibold text-foreground; }
+  .about-prose h2 { @apply mt-10 mb-2 scroll-mt-6 text-2xl font-bold text-foreground; }
+  .about-prose h3 { @apply mt-6 mb-2 scroll-mt-6 text-lg font-semibold text-foreground; }
+  .about-prose .about-sections { @apply my-6 border-l-2 border-border pl-4; }
+  .about-prose .about-sections p { @apply mt-0 mb-1 text-xs font-medium uppercase tracking-wide; }
+  .about-prose .about-sections ul { @apply my-0 list-none pl-0 sm:columns-2 sm:gap-8; }
+  .about-prose .about-sections li { @apply my-0 break-inside-avoid py-0.5 pl-0; }
   .about-prose p { @apply my-3; }
   .about-prose a { @apply text-primary underline underline-offset-2 hover:decoration-2; }
   .about-prose ul { @apply my-3 list-disc pl-6; }
