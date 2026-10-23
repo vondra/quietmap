@@ -8,6 +8,7 @@ use crate::blocks::LeftGroup;
 use crate::exact::{LAYERS, PairEnergy, PointBands};
 use crate::flights::FlightSums;
 use crate::square::Square;
+use foldhash::fast::FixedState;
 use physics::bands::{PERIODS, lden_energy};
 use physics::doc29::atmosphere::THIRD_OCTAVES as CLASS_THIRDS;
 use physics::loudness::THIRD_OCTAVES;
@@ -23,7 +24,7 @@ use tiles::sources::Layer;
 
 /// How every source group a square's candidates point at sounds in time, read once from its
 /// display record: where a line's traffic and events come from.
-pub(crate) struct Displays(HashMap<(u16, u32), Passes>);
+pub(crate) struct Displays(HashMap<(u16, u32), Passes, FixedState>);
 
 impl Displays {
     pub fn of(square: &Square) -> Result<Self, String> {
@@ -83,10 +84,11 @@ struct Heard {
     display: (DisplayRef, f64),
 }
 
-/// Source-group storage reused by one parallel pixel job.
+/// Source-group storage reused by one parallel pixel job, hashed by foldhash: SipHash's resistance
+/// to chosen keys buys nothing for a square's own group keys, at every group of every pixel.
 #[derive(Default)]
 pub(crate) struct PixelSoundScratch {
-    groups: HashMap<u64, Heard>,
+    groups: HashMap<u64, Heard, FixedState>,
 }
 
 /// The pixel's Nden per layer and in total (sone, 0 for silence) at `resolution` on the cores: its
@@ -251,31 +253,24 @@ pub(crate) fn pixel_sound(
             steady[layer][p] = (steady[layer][p] - left[p]).max(0.0);
         }
     }
-    // Each layer: its groups and its steady rest, its spectrum the exact bands and the rest's.
+    // Each layer: its steady rest and its groups, its spectrum the exact bands and the rest's.
     let [flights, flights_lambda] = rest.flights;
+    let mut energies = steady;
+    for heard in groups.values() {
+        for (total, value) in energies[heard.layer as usize].iter_mut().zip(heard.energy) {
+            *total += value;
+        }
+    }
+    for (total, value) in energies[Layer::Aircraft as usize].iter_mut().zip(flights) {
+        *total += value;
+    }
     let sounds: Vec<LayerSound> = (0..LAYERS)
-        .map(|layer| {
-            let mut energy = steady[layer];
-            for heard in groups
-                .values()
-                .filter(|heard| heard.layer as usize == layer)
-            {
-                for (total, value) in energy.iter_mut().zip(heard.energy) {
-                    *total += value;
-                }
-            }
-            if layer == Layer::Aircraft as usize {
-                for (total, value) in energy.iter_mut().zip(flights) {
-                    *total += value;
-                }
-            }
-            LayerSound {
-                layer: Layer::ALL[layer],
-                energy,
-                spectrum: std::array::from_fn(|p| {
-                    std::array::from_fn(|b| bands[layer][p][b] + rest.bands[layer][p][b])
-                }),
-            }
+        .map(|layer| LayerSound {
+            layer: Layer::ALL[layer],
+            energy: energies[layer],
+            spectrum: std::array::from_fn(|p| {
+                std::array::from_fn(|b| bands[layer][p][b] + rest.bands[layer][p][b])
+            }),
         })
         .collect();
     let views: Vec<Group> = (groups.iter())

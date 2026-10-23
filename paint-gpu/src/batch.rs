@@ -39,10 +39,29 @@ impl<'a> GpuBatch<'a> {
     }
 }
 
+/// The pairs' indices by candidate, each candidate's by point as [`Batch::evaluate`] takes them: a
+/// counting sort, where sorting the indices by candidate and point read a pass's millions of pairs at
+/// random again and again.
+fn by_candidate(pairs: &[Pair], candidates: usize) -> Vec<u32> {
+    let mut starts = vec![0u32; candidates + 1];
+    for pair in pairs {
+        starts[pair.candidate as usize + 1] += 1;
+    }
+    for at in 0..candidates {
+        starts[at + 1] += starts[at];
+    }
+    let mut order = vec![0u32; pairs.len()];
+    for (k, pair) in pairs.iter().enumerate() {
+        let slot = &mut starts[pair.candidate as usize];
+        order[*slot as usize] = k as u32;
+        *slot += 1;
+    }
+    order
+}
+
 impl Batch for GpuBatch<'_> {
     fn evaluate(&self, points: &[Point], pairs: &[Pair]) -> Result<Evaluated, String> {
-        let mut order: Vec<u32> = (0..pairs.len() as u32).collect();
-        order.par_sort_unstable_by_key(|&k| (pairs[k as usize].candidate, pairs[k as usize].point));
+        let order = by_candidate(pairs, self.square.candidates.len());
         let mut energies = vec![PairEnergy::default(); pairs.len()];
         let mut on_cpu = Vec::new();
         // The card sums bands for the points the pairs reach alone, each at its slot: a pass of a
