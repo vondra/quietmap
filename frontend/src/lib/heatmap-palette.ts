@@ -4,19 +4,21 @@
 
 import { HM3_SILENCE, HM3_BYTE_SONE } from './hm3-decoder.ts'
 
-// One colour a doubling of loudness — 1 sone transparent (a quiet room), 2 a sage mist, 4 amber,
-// 8 orange, 16 red, 32 maroon, flat above — in the order air-quality maps taught. The quiet half
-// stays pale, low in chroma and half transparent, so its green turns amber through straw, never
-// through lime; the loud half grows saturated, dark and opaque. Pleasure rises with lightness,
-// arousal with saturation, and yellow-green is the least pleasant hue (Valdez & Mehrabian 1994,
-// J. Exp. Psychol. Gen. 123:394); scale B before it (2026-10-11) had a vivid green fading into
-// lemon yellow, read as toxic over the countryside. The lightness falls with loudness, so the ramp
-// still reads in grey and to deuteranope and protanope eyes. Interpolated in CIELAB by log2(sone).
-// Opacity rises with loudness over the basemap.
+// One colour a doubling of loudness — 1 sone transparent (a quiet room), 2 a pale grey-sage mist,
+// 4 straw, 8 orange, 16 red, 32 maroon, flat above — in the order air-quality maps taught. The
+// quiet half stays pale, nearly grey and see-through, so the countryside reads calm and its green
+// turns straw without passing a lime; the loud half grows saturated, dark and opaque. Pleasure rises
+// with lightness, arousal with saturation, and yellow-green is the least pleasant hue (Valdez &
+// Mehrabian 1994, J. Exp. Psychol. Gen. 123:394). Scale B (2026-10-11) faded a vivid green into
+// lemon yellow; the sage of 2026-10-16 (2 sone chroma 34 at 0.5, 4 sone amber 66 at 0.64) still read
+// sharp over countries painted whole (owner 2026-10-23); this quiet half has a
+// third to two thirds of its chroma. The lightness falls with loudness, so the ramp still reads in
+// grey and to deuteranope and protanope eyes. Interpolated in CIELAB by log2(sone). Opacity rises
+// with loudness over the basemap.
 const STOPS: { sone: number; lab: Lab; op: number }[] = [
-  { sone: 1, lab: lch(88, 24, 162), op: 0 },
-  { sone: 2, lab: lch(83, 34, 158), op: 0.5 },
-  { sone: 4, lab: lch(83, 66, 84), op: 0.64 },
+  { sone: 1, lab: lch(88, 8, 158), op: 0 },
+  { sone: 2, lab: lch(86, 14, 155), op: 0.45 },
+  { sone: 4, lab: lch(84, 46, 80), op: 0.6 },
   { sone: 8, lab: lch(67, 80, 58), op: 0.8 },
   { sone: 16, lab: lch(47, 74, 33), op: 0.86 },
   { sone: 32, lab: lch(26, 46, 15), op: 0.92 },
