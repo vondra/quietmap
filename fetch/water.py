@@ -1,5 +1,6 @@
 """The water of ESA WorldCover 2021 v200 (10 m; Zanaga et al. 2022, CC BY 4.0) for the ship converter:
-each 3 arc-second cell's share of permanent water (class 80, the sea along the coasts with it), one
+each 3 arc-second cell's share of permanent water (class 80, the sea along the coasts with it, and the
+open sea a coastal tile leaves without data), one
 file a 3 x 3 degree tile named as WorldCover names it by its south-west corner (`N39W003.water`):
 3,600 x 3,600 bytes of percent from the north-west corner, row by row, zstd-compressed
 (`qm-build dev4 --kinds sources --water OUT_DIR`), beside WorldCover's grid of its tiles: it has no
@@ -22,6 +23,10 @@ BUCKET = "https://esa-worldcover.s3.eu-central-1.amazonaws.com"
 URL = BUCKET + "/v200/2021/map/ESA_WorldCover_10m_2021_v200_{tile}_Map.tif"
 GRID = "esa_worldcover_grid.geojson"
 WATER = 80
+# A tile with land maps the sea along its coast as water and leaves the open sea beyond it without
+# data: off Florida's Gulf coast (N24W084) 62 % of the pixels, against 24 % water and none inland
+# (N48E012); read as land, it dropped every ship of 5,501 blocks of sea (r081, 2026-10-23).
+NO_DATA = 0
 # A tile's side in WorldCover pixels (1/12,000 degree) and in our cells (1/1,200 degree).
 PIXELS = 36_000
 CELLS = 3_600
@@ -29,7 +34,7 @@ CELLS = 3_600
 
 def water_percent(classes):
     """Each 10 x 10 block's share of water pixels, in percent (exact: a hundred pixels a cell)."""
-    water = (classes == WATER).reshape(CELLS, PIXELS // CELLS, CELLS, PIXELS // CELLS)
+    water = ((classes == WATER) | (classes == NO_DATA)).reshape(CELLS, PIXELS // CELLS, CELLS, PIXELS // CELLS)
     return water.sum(axis=(1, 3), dtype=np.uint8)
 
 

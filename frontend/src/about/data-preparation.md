@@ -220,9 +220,9 @@ and a leisure boat 88 ([Fredianelli et al. 2020](https://doi.org/10.3390/su12051
 Vessel density comes from [EMODnet](https://emodnet.ec.europa.eu/en/human-activities) 2024 in
 European seas (a 1 km grid) and [Global Fishing Watch](https://globalfishingwatch.org) elsewhere.
 Leisure boats are counted only in European seas. A cell's ships are spread over its water, as
-[ESA WorldCover](https://worldcover2021.esa.int/) 2021 maps it in 90 m cells, never over its land.
-Speed is not modelled, so ships under way may be a few decibels louder. Activity is constant over
-the day, which overstates leisure boats at night.
+[ESA WorldCover](https://worldcover2021.esa.int/) 2021 maps it in 90 m cells (the open sea where it
+maps no land), never over its land. Speed is not modelled, so ships under way may be a few decibels
+louder. Activity is constant over the day, which overstates leisure boats at night.
 
 ## Industry
 
