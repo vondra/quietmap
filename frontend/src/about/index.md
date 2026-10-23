@@ -17,7 +17,7 @@ What gets measured gets managed. Mapping noise is the first step toward a quiete
 
 Human-made noise is not the same as natural sound. A forest at 50 dB with birdsong feels quiet. A road at 50 dB with traffic feels loud. quietmap.org models environmental noise from human sources — transport, industry, and urban activity — not nature.
 
-→ **[What's new](/about/news)** — recent improvements and what we are working on.
+→ [What's new](/about/news) — recent improvements and what we are working on.
 
 ## How the map works
 
@@ -25,7 +25,7 @@ Three steps:
 
 1. **Sources emit noise.** Roads, trains, planes, ships, factories, wind turbines and buildings — each modelled from real data: traffic counts, timetables, a year of flight tracks, ship positions, registries.
 2. **Sound travels and fades.** Hills and buildings block it, noise barriers screen it, soft ground, trees and the air absorb it — computed with the EU method CNOSSOS-EU (trees with ISO 9613-2), and for aircraft with ECAC Doc 29.
-3. **You see the result.** Click any point and the level there is computed on the spot from every source around it; the map shows how loud each place sounds, in colour: clear under 1 sone (a quiet room), then sage green, amber, orange, red and maroon, a colour for each doubling of loudness, maroon from 32 sone.
+3. **You see the result.** Click any point and the level there is computed on the spot from every source around it; the map shows how loud each place sounds, in colour: clear under 1 sone (a quiet room), then [a colour for each doubling of loudness](/about/the-noise-map), maroon from 32 sone.
 
 Each source layer — roads, railways, aircraft, ships, industrial, buildings — is modelled independently; the map shows any of them together.
 
@@ -39,7 +39,8 @@ Five pages, each from the simple to the exact, down to the code:
   estimated in your country.
 - [Data preparation](/about/data-preparation): how a road, a railway, a flight or a factory gets
   its sound power.
-- [Noise at a point](/about/noise-at-a-point): what the popup shows, and how it is computed.
+- [Noise at a point](/about/noise-at-a-point): what the popup shows, how it is computed, and what
+  the weather does to it.
 - [The noise map](/about/the-noise-map): what the colours mean, and how they are painted.
 - [Validation](/about/validation): how close the model comes to real measurements.
 
@@ -53,6 +54,9 @@ It's an engineering estimate, not a certificate. A gap against a measurement or 
 
 **Why is my quiet street orange?**
 Open the popup there: it lists what makes the noise, the largest share first. Most surprises have a visible cause: a road nobody counted carries the trips the buildings around it make or its class's average, a nearby factory is as loud as its sector, or the loudest source is one you no longer notice. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
+
+**Does the weather count?**
+As an average of 30 years. Wind blowing from a road towards you and the cold air of a clear night or morning bend its sound down over hills and walls, and the popup counts how often that happens from each direction: at High Beach in Epping Forest the M25, 2 km away, sounds 17 dB louder then, as it does 31 % of the day and 43 % of the night. One particular morning cannot be shown. [How the weather enters a level](/about/noise-at-a-point).
 
 **Why are there no low-flying aircraft where I live?**
 The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, flights aren't received and the layer reads too quiet or empty: near Lagos and Cairo airports 5–20 dB low, over parts of Siberia and the Amazon with no aircraft at all — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
@@ -90,7 +94,7 @@ The [product code is open source](https://github.com/vondra/quietmap/tree/main) 
 
 ## Credits & terms
 
-→ **[Data sources and credits](/about/data-sources)** · **[Terms of use and privacy](/about/terms)**
+→ [Data sources and credits](/about/data-sources) · [Terms of use and privacy](/about/terms)
 
 ## Contact & status
 

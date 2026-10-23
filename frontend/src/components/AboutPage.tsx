@@ -14,8 +14,8 @@ import { setDocumentTitle } from '../utils/page-title'
 const SUBPAGES_MARKER = '<!-- SUBPAGES -->'
 
 /** An image named without a path is one of the About pages' own (public/about/images). An
- *  abbreviation (`<abbr title="…">`) shows a small question mark and its meaning on hover, focus or
- *  tap, as phones show no title (owner 2026-10-17). */
+ *  abbreviation (`<abbr title="…">`) is underlined dotted, as the popup's explained words are, and
+ *  shows its meaning on hover, focus or tap, as phones show no title (owner 2026-10-17, -23). */
 const COMPONENTS: Components = {
   img: ({ src, alt, ...props }) => (
     <img src={typeof src === 'string' && !/^(https?:)?\//.test(src) ? `/about/images/${src}` : src} alt={alt} {...props} />

@@ -23,7 +23,7 @@ remaining 54 % have only an average for their road class in their country (Octob
 street nobody counted carries the trips its own buildings make.
 
 <details>
-<summary><strong>How a road's sound power is computed</strong></summary>
+<summary>How a road's sound power is computed</summary>
 
 The emission follows <abbr title="Common Noise Assessment Methods in Europe, the EU's method for road, railway and industrial noise">CNOSSOS-EU</abbr>
 from the traffic, the vehicle mix, the speed, the surface and the gradient, with acceleration at
@@ -67,7 +67,7 @@ junctions and the place's yearly air temperature.
 </details>
 
 <details>
-<summary><strong>Default traffic by road class</strong></summary>
+<summary>Default traffic by road class</summary>
 
 Defaults are length-weighted medians of counted public roads, fitted in September 2026 by class,
 direction and surroundings; local counts, the models above and national tables come first.
@@ -120,7 +120,7 @@ Kingdom 2019). At public level crossings in the United States and Canada, locomo
 horns.
 
 <details>
-<summary><strong>How a train's sound power is computed</strong></summary>
+<summary>How a train's sound power is computed</summary>
 
 - **The train.** Each kind of train (passenger, freight, tram, light rail) has one sound power
   spectrum, its rolling noise growing with speed, set to a typical train by CNOSSOS-EU's
@@ -147,7 +147,7 @@ horns.
 </details>
 
 <details>
-<summary><strong>Default trains a day</strong></summary>
+<summary>Default trains a day</summary>
 
 Where no count or national estimate exists; six countries have main-line freight defaults of their
 own (Germany 24.5 trains a day, Switzerland 31.4). The country factors above then scale them: a
@@ -186,7 +186,7 @@ airports (Beijing, Shanghai Pudong, Cairo, Casablanca, Riyadh, Tehran, Accra, Mo
 Lagos) the map reads 5 to 23 dB too quiet.
 
 <details>
-<summary><strong>How a flight's noise is computed</strong></summary>
+<summary>How a flight's noise is computed</summary>
 
 - **The flight.** Height above the geoid, thrust from the observed climb and acceleration, flaps
   and gear on approach; a type the database lacks flies as a similar aircraft. Helicopters take
@@ -235,7 +235,7 @@ and national registers add the sector. The levels per sector and area are calibr
 strategic noise maps of 2022.
 
 <details>
-<summary><strong>Hours, turbines, solar farms and substations</strong></summary>
+<summary>Hours, turbines, solar farms and substations</summary>
 
 - **Hours.** Coal and lignite mines run day and night; other mines, quarries and offices run 5 to
   8 dB quieter in the evening and 20 dB at night, warehouses 3 and 8 dB; inactive sites are silent.
@@ -265,7 +265,7 @@ Not modelled: roads and railways in tunnels, rail yards, heritage lines, curve s
 deliveries, building sites, garden machinery, music and festivals.
 
 <details>
-<summary><strong>Each kind of building and place</strong></summary>
+<summary>Each kind of building and place</summary>
 
 - **Homes** emit the outdoor units of the heat pumps and air conditioners their country's
   households own (surveys in 35 countries, the United States, Canada and the Gulf), for the hours
@@ -327,14 +327,15 @@ deliveries, building sites, garden machinery, music and festivals.
 
 ## Terrain, ground and weather
 
-Hills, buildings and walls block sound; soft ground, trees and the air absorb it; the weather bends
-it towards the ground or away from it. The ground's height comes from national laser surveys in 17
-countries and a world model elsewhere, its hardness from what covers it, and the weather from a
-30-year average. The map's Advanced layers show the terrain, the trees, the hard ground, the
-buildings and walls, and every source but the buildings' own sound and the aircraft in flight.
+On its way to a point, sound crosses the terrain, the ground, the trees and the air. The terrain's
+height comes from national laser surveys in 17 countries and from a world model elsewhere; the
+ground is hard where it is sealed, built over or water, and soft elsewhere; the trees count by their
+cover and height; the weather is the climate of 1991–2020. The map's Advanced layers show the
+terrain, the trees and the hard ground. What the weather does to a level is told on
+[Noise at a point](/about/noise-at-a-point).
 
 <details>
-<summary><strong>Terrain, ground and weather in detail</strong></summary>
+<summary>Terrain, ground and weather in detail</summary>
 
 - **Terrain** is the bare earth of the national models, most from laser surveys, and elsewhere of
   the [GEDTM30](https://zenodo.org/records/18887460) world model, which keeps part of the forest
@@ -343,12 +344,11 @@ buildings and walls, and every source but the buildings' own sound and the aircr
   national model, such as São Paulo, keep that bias.
 - **Near a ray's two ends**, a national model of 5 m or finer adds what the one-arc-second grid
   misses: in Czechia, Germany, Switzerland, the Netherlands, Belgium and part of Portugal.
-- **Ground** is hard where it is sealed, built over or water, and soft elsewhere; trees absorb by
-  their cover and height.
 - **Weather** is the 1991–2020 climatology of
   [<abbr title="the fifth reanalysis of the European Centre for Medium-Range Weather Forecasts">ERA5</abbr>](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5)
   every half degree: how often sound bends down to the ground from each of 16 directions by day,
-  evening and night, and what the air absorbs in each octave.
+  evening and night, and what the air absorbs in each octave
+  ([how it enters a level](/about/noise-at-a-point)).
 
 The datasets are credited on [Data sources](/about/data-sources).
 
@@ -393,7 +393,7 @@ only the tiles around its point, each with one read. The world takes 1.07 TB in 
 </figure>
 
 <details>
-<summary><strong>Each kind of file</strong></summary>
+<summary>Each kind of file</summary>
 
 A square with nothing of a kind has no file of it, and a tile with nothing takes no bytes: the open
 sea has no terrain. A tile holds its kind's records, most numbers in the fewest bytes their meaning
@@ -418,7 +418,7 @@ every year.
 </details>
 
 <details>
-<summary><strong>A tile's sources</strong></summary>
+<summary>A tile's sources</summary>
 
 A tile's sources are pieces and the records they share. A piece is a point or a straight line —
 its two ends, to 19 cm in London — and the number of its record. A record holds what the pieces of
@@ -477,7 +477,7 @@ described under Aircraft.
   kernel, which reads the obstacles tiles as stored (`paint-gpu/kernels/scene.cuh`).
 
 <details>
-<summary><strong>What the readers rely on</strong></summary>
+<summary>What the readers rely on</summary>
 
 | kind | module | contract |
 |---|---|---|
@@ -516,7 +516,7 @@ described under Aircraft.
 </details>
 
 <details>
-<summary><strong>The aircraft chain</strong></summary>
+<summary>The aircraft chain</summary>
 
 The first step turns a year of ADS-B traces into flight segments per day (`build/src/aircraft`):
 altitudes above EGM2008, each segment's Doc 29 phase and operation (A.3.2), and each flight's class,
