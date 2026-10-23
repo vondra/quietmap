@@ -138,7 +138,7 @@ impl Pair {
 }
 
 /// Exact evaluations of many pairs at once (a card): what candidate `c` delivers at point `p`, for
-/// every `(p, c)` of `pairs`.
+/// every `(p, c)` of `pairs`, which come point by point.
 pub trait Batch: Sync {
     fn evaluate(&self, points: &[Point], pairs: &[Pair]) -> Result<Evaluated, String>;
     /// One chunk's Nden per layer and in total (sone), at most [`PIXELS_PER_LOUDNESS_BATCH`] points,
