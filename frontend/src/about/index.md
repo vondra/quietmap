@@ -39,8 +39,8 @@ Five pages, each from the simple to the exact, down to the code:
   estimated in your country.
 - [Data preparation](/about/data-preparation): how a road, a railway, a flight or a factory gets
   its sound power.
-- [Noise at a point](/about/noise-at-a-point): what the popup shows, how it is computed, and what
-  the weather does to it.
+- [Noise at a point](/about/noise-at-a-point): what the popup shows, how it is computed, and
+  [what the weather does to it](/about/noise-at-a-point#the-weather).
 - [The noise map](/about/the-noise-map): what the colours mean, and how they are painted.
 - [Validation](/about/validation): how close the model comes to real measurements.
 
@@ -50,13 +50,13 @@ Five pages, each from the simple to the exact, down to the code:
 Computed — a physics model (CNOSSOS-EU for ground sources, ECAC Doc 29 for aircraft) over public data. The model is continuously checked against real monitoring stations; see [Validation](/about/validation).
 
 **How accurate is it?**
-It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the number as approximate, and open the popup there to see exactly what it is built from. The [validation](/about/validation) page shows the gaps network by network.
+It's an engineering estimate, not a measurement, a legal noise map or a certificate. Near three of the four airports, along Poland's roads and Germany's railways, half the microphones are within about 1 to 3 dB of the map. In the streets of Paris, Barcelona, Madrid and Dublin, half are within 3 to 6 dB. The [validation](/about/validation#map-against-microphone) page shows each network. For a single address, open the popup there to see exactly what the number is built from.
 
 **Why is my quiet street orange?**
 Open the popup there: it lists what makes the noise, the largest share first. Most surprises have a visible cause: a road nobody counted carries the trips the buildings around it make or its class's average, a nearby factory is as loud as its sector, or the loudest source is one you no longer notice. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
 
 **Does the weather count?**
-As an average of 30 years. Wind blowing from a road towards you and the cold air of a clear night or morning bend its sound down over hills and walls, and the popup counts how often that happens from each direction: at High Beach in Epping Forest the M25, 2 km away, sounds 17 dB louder then, as it does 31 % of the day and 43 % of the night. One particular morning cannot be shown. [How the weather enters a level](/about/noise-at-a-point).
+As an average of 30 years. Wind towards you and the cold air of clear nights and mornings bend a road's sound down over hills; the popup counts how often. One particular morning cannot be shown. [How the weather enters a level](/about/noise-at-a-point#the-weather).
 
 **Why are there no low-flying aircraft where I live?**
 The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, flights aren't received and the layer reads too quiet or empty: near Lagos and Cairo airports 5–20 dB low, over parts of Siberia and the Amazon with no aircraft at all — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.

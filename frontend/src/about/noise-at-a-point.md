@@ -1,34 +1,42 @@
 ---
 title: Noise at a point
-intro: What the popup shows, and how the noise at a point is computed from every source around it.
+intro: How loud a place is, what makes its noise, and how the popup computes it.
 ---
 
-Pick any point on the map and the popup tells how loud it is there and what makes the noise. The
-level is computed on the spot from every road, railway, factory, wind turbine, building, ship and
-airport within 12 km and every flight within 16 km. A first answer comes from the tiles around the
-point and is refined, ring of tiles by ring, until everything in reach is heard. The same point
-always gives the same answer.
+<!-- SECTIONS -->
+
+Click any point on the map and the popup tells how loud it is there and what makes the noise. On
+Stockwell Street in Greenwich, London, it reads 19 [sone](#what-the-numbers-mean), and two main
+roads 28 m away make most of it.
+
+The popup computes the point on the spot from every source within 12 km: roads, railways,
+factories, wind turbines, buildings, ships and airports. Flights count within 16 km. A first answer
+shows at once and is refined until every source in reach is heard. The same point always gives the
+same answer.
 
 ## What the popup shows
 
-It leads with how loud the place sounds over the day, in sone, then the level in decibels (Lden).
-Below are the sources heard there, the largest share first: a road as one row, a factory, the
-aircraft. Each row tells how often the source passes (vehicles an hour by day, trains a day,
-flights a day above 50 dB, how many times a day bells ring, a call sounds or a car parks or
-leaves; nothing for a steady source), how far it is, and its share of what is heard there. The
-shares add up to 100 %.
+The popup leads with how loud the place sounds, then lists the sources heard there, the largest
+share first. A row opens to the source's data and how its sound arrives. At Greenwich, October 2026:
 
-Open a row for the source's data (vehicles a day and their mix, speed, a surface other than
-asphalt; trains a day; the flights and their types), what distance, air, buildings, terrain, ground
-and trees take from its sound and what the buildings around the point add, in calm air and
-downwind, and how loud it would sound alone. Its segments show the rays they were computed along,
-drawn on the map; the aircraft row lists the ten loudest flights. The detailed calculation is the
-whole place: each period and layer, the weather, the façade the point is answered at, and the
-levels exceeded 5 to 90 % of the time.
+| In the popup | What it tells |
+|---|---|
+| 19 sone Nden | How loud the place sounds over the day |
+| 66.5 dB Lden | The level in decibels, the year's average |
+| Greenwich Church Street | A source heard there: a road as one row, a factory, the aircraft |
+| 590 veh/h | How often it passes: vehicles an hour by day, trains a day, flights a day above 50 dB, how many times a day bells ring, a call sounds or a car parks or leaves; nothing for a steady source |
+| 28 m | How far it is |
+| 39 % | Its share of what is heard there; the shares add up to 100 % |
+| Speed 48 km/h, Traffic 8.8k/day | The source's data: vehicles a day and their mix, speed, a surface other than asphalt; trains a day; the flights and their types |
+| Sound path: Level 62.2 | What distance, air, buildings and terrain, ground and trees take from its sound, and what the buildings around the point add, in calm air and downwind |
+| Alone: 14 sone | How loud it would sound alone |
+| Segments | Its pieces, with the rays they were computed along drawn on the map; a ray opens to its terrain profile |
+| Flights a day, Loudest flights | In the aircraft row: the flights of an average day whose loudest moment here reaches 50, 60 and 70 dB, and the ten loudest flights |
+| Detailed calculation | The whole place: each period and layer, the weather, the façade the point is answered at, and the levels exceeded 5 to 90 % of the time |
 
 <p>
-<img src="click.jpg" alt="The popup at Greenwich in London: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
-<img src="calculation.jpg" alt="The same point's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
+<img src="click.jpg" width="1500" height="880" alt="The popup at Greenwich in London: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
+<img src="calculation.jpg" width="1500" height="1390" alt="The same point's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
 </p>
 
 <details>
@@ -53,28 +61,117 @@ levels exceeded 5 to 90 % of the time.
 ## What the numbers mean
 
 Nden is how loud the place sounds over the day, in sone: 2 sone sound twice as loud as 1, about a
-quiet room. A sound counts by how loud it is and how long it lasts — a car every few hours adds
-little, a constant hum all of its loudness — and the evening counts 5 dB and the night 10 dB
-louder, as in Lden.
+quiet room. A sound counts by how loud it is and how long it lasts. A car every few hours adds
+little, a constant hum all of its loudness. As in Lden, the evening counts 5 dB and the night 10 dB
+louder.
 
 Lden is the day-evening-night level of the EU's noise directive
 ([<abbr title="the Environmental Noise Directive">END</abbr> 2002/49/EC](https://eur-lex.europa.eu/eli/dir/2002/49/oj/eng)),
-the main indicator of the EU's strategic noise maps: the year's average in decibels, the evening
-counted 5 dB and the night 10 dB louder. Day is 07–19 h, evening 19–23 h, night 23–07 h. The
+the main indicator of the EU's strategic noise maps. It is the year's average in decibels, the
+evening counted 5 dB and the night 10 dB louder. Day is 07–19 h, evening 19–23 h, night 23–07 h. The
 [WHO's 2018 guidelines](https://www.who.int/europe/publications/i/item/9789289053563) recommend
 road traffic below 53 dB, railways below 54 dB and aircraft below 45 dB.
+
+<details>
+<summary>The Lden formula</summary>
 
 ```
 Lden = 10 × log₁₀((12 × 10^(Ld/10) + 4 × 10^((Le+5)/10) + 8 × 10^((Ln+10)/10)) / 24)
 ```
 
+</details>
+
 Natural sound — wind, water, birds — is not included: where human-made sound is faint, a place
 sounds louder than the map says.
+
+## The weather
+
+Wind blowing from a road towards you bends its sound back down over hills and walls. Cold air lying
+near the ground on a clear night or morning does the same. At High Beach in Epping Forest the M25,
+2 km away, sounds 17 dB louder then.
+
+The level is the year's average. The popup counts how often the weather bends sound down, from the
+climate of 1991–2020, for each direction by day, evening and night. One particular day cannot be
+shown, nor the day of the week: each hour's traffic is the median of all days.
+
+Wind blowing the other way, or ground warmed on a sunny afternoon, bends sound up and away. The
+model leaves that out, so a place can then be quieter than the popup ever says.
+
+### How to read it in the popup
+
+A source's row opens to its sound path, computed twice: in calm air (Calm) and with its sound bent
+down (Downwind). The last row, Share of time, tells how often each holds, by day · evening · night.
+The M25 at High Beach, October 2026:
+
+| Sound path, dB Lden | Calm | Downwind |
+|---|---:|---:|
+| Distance only | 61.8 | 61.8 |
+| Air absorption | −12.0 | −12.0 |
+| Buildings and terrain | −18.0 | −1.1 |
+| Ground effect | −2.9 | +0.7 |
+| Trees | −6.6 | −10.1 |
+| Level | 22.3 | 39.2 |
+| Share of time | 69&nbsp;·&nbsp;63&nbsp;·&nbsp;57&nbsp;% | 31&nbsp;·&nbsp;37&nbsp;·&nbsp;43&nbsp;% |
+
+Bent down, the sound passes over the buildings and the terrain in its way: they take 1.1 dB instead
+of 18.0. The M25's sound is bent down 31 % of the day, 37 % of the evening and 43 % of the night.
+Mixed in these shares, the two levels give the 35.2 dB Lden its row shows.
+
+The shares come from the detailed calculation's Weather, the place's weather for every source
+around it. Its table Sound from tells, for sound arriving from each of 16 directions, how often it is
+bent down. The M25's loudest pieces lie from north-north-west to north-north-east of High Beach:
+
+| Sound from | Day % | Evening % | Night % |
+|---|---:|---:|---:|
+| NNW | 32 | 38 | 46 |
+| N | 29 | 35 | 40 |
+| NNE | 27 | 35 | 37 |
+
+Each piece takes the share of its own direction, and together they make the M25's 31 · 37 · 43 %.
+A road on another side is carried by other weather. Sound from the south-west, the side the wind
+mostly blows from, is bent down 52 % of the day, sound from the east 23 %. Every direction is bent
+down more often at night than by day.
+
+The second table, Air dB/km, is what a kilometre of air takes from each octave band, at the place's
+average temperature and humidity. High notes fade fast, low ones carry:
+
+| Hz | Heard as | Air dB/km at High Beach |
+|---|---|---:|
+| 63 | a rumble | 0.11 |
+| 1k | a voice | 3.90 |
+| 8k | a hiss | 103 |
+
+Over the 2 km from the M25 its rumble loses 0.2 dB and its hiss all of it: a distant road sounds
+low.
+
+<details>
+<summary>How the weather is computed</summary>
+
+- **Two states.** Each ray is computed twice, as CNOSSOS-EU prescribes (section 2.5.9): in
+  homogeneous conditions, on straight lines, and in favourable conditions, on arcs bent towards the
+  ground with a radius of at least 1 km, which the edges on the way screen less. A period's
+  level of the ray is 10 × log₁₀(p × 10^(L<sub>F</sub>/10) + (1 − p) × 10^(L<sub>H</sub>/10)), p
+  the favourable share of the period for the ray's direction, read linearly between the two nearest
+  of 16 directions.
+- **The favourable share.** In every three-hourly state of
+  <abbr title="the fifth reanalysis of the European Centre for Medium-Range Weather Forecasts">ERA5</abbr>
+  from 1991 to 2020, the wind at 10 m, the cloud cover and whether the sun is up give a
+  meteorological class of Nord2000 (Eurasto 2006, VTT-R-02530-06); a direction is favourable when
+  the class's speed of sound rises with height along it. p is the share of a period's states in
+  which it is, stored every half degree and interpolated to the place.
+- **The air** absorbs after ISO 9613-1 at each state's temperature, humidity and pressure,
+  averaged over the periods' hours.
+- **The levels over time.** The moments of a period are spread over ten equally likely states of
+  the place's weather, the same for all its rays, as a night's inversion bends them all at once: a
+  piece with p = 0.3 is bent down in the three most favourable states. The levels exceeded 5 to 90 %
+  of the time and Nden are computed over every hour and these states; the map takes two of them.
+
+</details>
 
 ## Where the point is
 
 The point is 4 m above the ground, as the END prescribes. Inside a building the popup answers at
-the building's loudest façade, where a noise map's receivers stand; a building with no exposed
+the building's loudest façade, where a noise map's receivers stand. A building with no exposed
 façade gets no answer. No indoor attenuation is applied.
 
 <details>
@@ -90,13 +187,16 @@ façade's own reflection left out.
 
 ## How it is computed
 
-Sound leaves each source, spreads and fades: the air absorbs it, the ground and the trees take
-from it, hills, walls and roofs block it, and the weather can bend it back down to the ground. The
-popup follows it along rays from every source to the point, over the terrain, the buildings and
-the trees, in eight frequency bands, by day, evening and night, in calm air and downwind, after
-CNOSSOS-EU (aircraft after
-<abbr title="the European Civil Aviation Conference's method for noise around airports">ECAC Doc 29</abbr>),
-and adds it all up.
+Sound leaves each source, spreads and fades. The air absorbs it, the ground and the trees take from
+it, and hills, walls and roofs block it. The weather can [bend it back down](#the-weather) over
+them.
+
+The popup follows the sound along rays from every source to the point, over the terrain, the
+buildings and the trees. It computes each ray in eight frequency bands, by day, evening and night,
+in calm air and downwind, and adds it all up. Ground sources follow
+<abbr title="Common Noise Assessment Methods in Europe, the EU's method for road, railway and industrial noise">CNOSSOS-EU</abbr>,
+aircraft
+<abbr title="the European Civil Aviation Conference's method for noise around airports">ECAC Doc 29</abbr>.
 
 <details>
 <summary>The tiles it reads</summary>
@@ -263,56 +363,6 @@ The popup opens these sums one level at a time:
 
 </details>
 
-## The weather
-
-The level is an average over the year's weather, not one day's. Wind from a road towards the point,
-and the cold air near the ground on a clear night or morning, bend its sound back down over hills
-and walls: at High Beach in Epping Forest the M25, 2 km away behind the terrain, sounds 17 dB
-louder then. Wind the other way bends sound up and away; the model leaves that out, so on such
-evenings a place can be quieter than the popup ever says.
-
-How often the weather bends sound down comes from the climate of 1991–2020, for each direction by
-day, evening and night. At High Beach it bends the M25's sound down 31 % of the day, 37 % of the
-evening and 43 % of the night; the motorway's 22 dB in calm air and 39 dB bent down mix into 35 dB
-Lden. Every ray takes the share of its own direction, so a road west of a point and one east of it
-are carried by different weather.
-
-The detailed calculation shows the place's weather in two tables:
-
-- **Sound from**: how often sound arriving from each of 16 directions is bent down, by day, evening
-  and night. In London sound from the south-west about half the day, as the wind there mostly blows
-  from that side, sound from the east a quarter; every direction more at night.
-- **Air dB/km**: how many decibels a kilometre of air takes from each octave band, from the low
-  63 Hz to the high 8 kHz, at the place's average temperature and humidity: in London 0.11 and
-  103 dB. Over 2 km a road's rumble loses 0.2 dB, its hiss all of it: a distant road sounds low.
-
-<details>
-<summary>How the weather is computed</summary>
-
-- **Two states.** Each ray is computed twice, as CNOSSOS-EU prescribes (section 2.5.9): in
-  homogeneous conditions, on straight lines, and in favourable conditions, on arcs bent towards the
-  ground with a radius of at least 1 km, which the edges on the way screen less. A period's
-  level of the ray is 10 × log₁₀(p × 10^(L<sub>F</sub>/10) + (1 − p) × 10^(L<sub>H</sub>/10)), p
-  the favourable share of the period for the ray's direction, read linearly between the two nearest
-  of 16 directions.
-- **The favourable share.** In every three-hourly state of
-  <abbr title="the fifth reanalysis of the European Centre for Medium-Range Weather Forecasts">ERA5</abbr>
-  from 1991 to 2020, the wind at 10 m, the cloud cover and whether the sun is up give a
-  meteorological class of Nord2000 (Eurasto 2006, VTT-R-02530-06); a direction is favourable when
-  the class's speed of sound rises with height along it. p is the share of a period's states in
-  which it is, stored every half degree and interpolated to the place.
-- **The air** absorbs after ISO 9613-1 at each state's temperature, humidity and pressure,
-  averaged over the periods' hours.
-- **The levels over time.** The moments of a period are spread over ten equally likely states of
-  the place's weather, the same for all its rays, as a night's inversion bends them all at once: a
-  piece with p = 0.3 is bent down in the three most favourable states. The levels exceeded 5 to 90 %
-  of the time and Nden are computed over every hour and these states; the map takes two of them.
-- **Left out.** Sound bent upwards, by wind blowing away from the point or the ground warmed on a
-  sunny afternoon; the weather of a given day; and the traffic of a given weekday: the hourly
-  profiles are the medians of all days.
-
-</details>
-
 ## Standards
 
 - [CNOSSOS-EU](https://eur-lex.europa.eu/eli/dir_del/2021/1226): road emission and the typical
@@ -328,10 +378,13 @@ The detailed calculation shows the place's weather in two tables:
   height.
 
 The model follows these standards with the simplifications described here and is not certified
-against them: an engineering estimate for comparison and exploration, not a measurement, a legal
-noise map or a property certificate.
+against them. It is an engineering estimate for comparison and exploration, not a measurement, a
+legal noise map or a property certificate.
 
 ## In the code
+
+<details>
+<summary>The popup's code: popup/, server/ and frontend/, and its targets</summary>
 
 `popup/` (`qm-popup`) answers a point:
 
@@ -357,10 +410,13 @@ noise map or a property certificate.
 after 30 s or when the visitor leaves) and forwards its lines as they come; `frontend/` redraws the
 panel on every line.
 
-The targets, measured with `bench/cold.py` and `bench/report.py` from a cold disk: the first answer
-within 0.2 s and the full answer within 0.5 s from an NVMe disk (0.5 s and 1.5 s from a hard disk);
-each layer's Lden within 0.1 dB of the full computation in 95 % of the layer answers and 0.3 dB in
-all. Each update stays under 100 KB, held by caps on the lines and tracks it carries.
+The targets are measured with `bench/cold.py` and `bench/report.py` from a cold disk. The first
+answer comes within 0.2 s and the full answer within 0.5 s from an NVMe disk, 0.5 s and 1.5 s from a
+hard disk. Each layer's Lden is within 0.1 dB of the full computation in 95 % of the layer answers,
+and within 0.3 dB in all. Each update stays under 100 KB, held by caps on the lines and tracks it
+carries.
+
+</details>
 
 <details>
 <summary>What the popup guarantees</summary>

@@ -1,5 +1,6 @@
 // The click's detailed calculation: its receiver, periods, layers, loudness, percentiles and weather.
 import type { ReactNode } from 'react'
+import { ABOUT_WEATHER } from '../../lib/about-paths'
 import type { BuildingAnswer, PopupUpdate } from '../../types/noise'
 import { fmtDbValue as level, fmtInt, fmtSone, wholePercents } from '../../utils/formatters'
 import { SOURCE_LABELS } from '../noise/labels'
@@ -28,15 +29,17 @@ const COMPUTED_EXPLAINED = 'Each layer\'s segments within reach (flight boxes fo
   + 'or estimated from a sample, at most 0.1 dB'
 
 const WEATHER_EXPLAINED = 'How often the wind or an inversion bends sound down to the ground and\n'
-  + 'carries it further (CNOSSOS-EU\'s favorable conditions), for sound\n'
+  + 'carries it further (CNOSSOS-EU\'s favourable conditions), for sound\n'
   + 'from each direction (ERA5 1991–2020); and what the air absorbs\n'
   + 'in each octave (ISO 9613-1, the place\'s climate)'
 
-function Section({ title, hint, children }: { title: string, hint: string, children: ReactNode }) {
+function Section({ title, hint, howToRead, children }: {
+  title: string, hint: string, howToRead?: string, children: ReactNode,
+}) {
   return (
     <section className="mt-4">
       <h3 className={`${CAPTION} mb-1`}>
-        <HoverText title={hint}>{title}</HoverText>
+        <HoverText title={hint} howToRead={howToRead}>{title}</HoverText>
       </h3>
       {children}
     </section>
@@ -130,7 +133,7 @@ export default function CalculationDetails({ data }: { data: PopupUpdate }) {
       </Section>
 
       {data.weather && (
-        <Section title="Weather" hint={WEATHER_EXPLAINED}>
+        <Section title="Weather" hint={WEATHER_EXPLAINED} howToRead={ABOUT_WEATHER}>
           <div className="space-y-2">
             <DetailTable
               head={['Sound from', 'Day %', 'Evening %', 'Night %']}

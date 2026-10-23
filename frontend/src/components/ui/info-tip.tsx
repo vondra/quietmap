@@ -16,17 +16,23 @@ import { createPortal } from "react-dom"
  *
  * Touch: tap to toggle, tap outside to dismiss. Desktop: hover to open,
  * mouse-leave with small delay to close. ESC also dismisses.
+ *
+ * `howToRead` names the About section that explains the label: the tooltip
+ * ends with a link "How to read it" to it, opened in a new tab so the noise
+ * popup stays as it is, and then takes the pointer, staying open while hovered.
  */
 export function HoverText({
   title,
   children,
   className,
   focusable = false,
+  howToRead,
 }: {
   title: string
   children: ReactNode
   className?: string
   focusable?: boolean
+  howToRead?: string
 }) {
   const triggerRef = useRef<HTMLSpanElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -35,15 +41,19 @@ export function HoverText({
   const [pos, setPos] = useState<{ left: number; top: number; ready: boolean } | null>(null)
   const closeTimer = useRef<number | null>(null)
 
-  const show = useCallback(() => {
+  const cancelHide = useCallback(() => {
     if (closeTimer.current !== null) {
       window.clearTimeout(closeTimer.current)
       closeTimer.current = null
     }
+  }, [])
+
+  const show = useCallback(() => {
+    cancelHide()
     // Render off-screen first; useLayoutEffect will measure and place it.
     setPos({ left: -9999, top: -9999, ready: false })
     setOpen(true)
-  }, [])
+  }, [cancelHide])
 
   const scheduleHide = useCallback(() => {
     if (closeTimer.current !== null) window.clearTimeout(closeTimer.current)
@@ -172,12 +182,14 @@ export function HoverText({
         <div
           ref={tooltipRef}
           role="tooltip"
+          onMouseEnter={howToRead ? cancelHide : undefined}
+          onMouseLeave={howToRead ? scheduleHide : undefined}
           style={{
             position: "fixed",
             left: pos.left,
             top: pos.top,
             zIndex: 9999,
-            pointerEvents: "none",
+            pointerEvents: howToRead ? "auto" : "none",
             opacity: pos.ready ? 1 : 0,
             // 34 rem (~544 px) comfortably fits long provenance lines like
             // "Polish Trains unified GTFS (Kuranowski/PKP PLK) (2025) · CC-BY-4.0"
@@ -189,6 +201,12 @@ export function HoverText({
           className="rounded-md bg-zinc-900/95 text-zinc-50 border border-zinc-700/60 shadow-xl px-3 py-2"
         >
           <pre className="font-mono text-[11px] leading-snug m-0" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>{title}</pre>
+          {howToRead && (
+            <a href={howToRead} target="_blank" rel="noopener"
+              className="mt-1 inline-block font-mono text-[11px] text-sky-300 underline underline-offset-2">
+              How to read it
+            </a>
+          )}
         </div>,
         document.body,
       )}

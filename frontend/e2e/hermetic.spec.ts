@@ -154,8 +154,9 @@ test('desktop: an error line replaces the partial answer, a new click aborts the
 
 // Inside a building the popup shows the level at the building's loudest façade receiver; where
 // that receiver is reads in the detailed calculation, not above the sources, with the levels
-// exceeded in each period.
-test('desktop: the detailed calculation tells the façade receiver and the percentile levels', async ({ page }) => {
+// exceeded in each period. The weather's hover leads to the About section that tells how to read
+// its tables, opened on that section.
+test('desktop: the detailed calculation tells the façade receiver, the percentile levels and how to read the weather', async ({ page }) => {
   await installHermeticMap(page, POINT)
   await page.goto(mapUrl(POINT))
   const { x, y } = await canvasCenter(page)
@@ -168,7 +169,11 @@ test('desktop: the detailed calculation tells the façade receiver and the perce
     facade_receivers: 12,
     storeys: 8,
   }
-  await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building))
+  const weather = {
+    favourable_percent: [0, 1, 2].map(period => Array.from({ length: 16 }, (_, sector) => 20 + 10 * period + sector)),
+    alpha_db_per_km: [0.11, 0.37, 1.01, 2.06, 3.9, 9.42, 30, 103.48],
+  }
+  await sendPopupLine(page, { ...popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building), weather })
   await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
   await expect(page.locator('[data-testid="building-exposure"]')).toHaveCount(0)
   await page.locator('[data-testid="calculation-toggle"]:visible').click()
@@ -179,6 +184,11 @@ test('desktop: the detailed calculation tells the façade receiver and the perce
   await expect(percentiles.locator('tbody tr').nth(2).locator('td')).toHaveText(['Night', '60.0', '59.0', '54.0', '48.0'])
   // The calculation computes nothing again.
   expect(await popupRequests(page)).toHaveLength(1)
+  await calculation.getByText('Weather', { exact: true }).hover()
+  const howToRead = page.getByRole('tooltip').getByRole('link', { name: 'How to read it' })
+  await expect(howToRead).toHaveAttribute('href', '/about/noise-at-a-point#the-weather')
+  const [about] = await Promise.all([page.context().waitForEvent('page'), howToRead.click()])
+  await expect(about.getByRole('heading', { name: 'The weather', level: 2 })).toBeInViewport()
 })
 
 // An opened row computes its segments when asked: the same click again with the row's parts, whose
