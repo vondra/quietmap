@@ -10,7 +10,7 @@ use crate::blocks::{Block, Corner, admission_counts, admit, meets};
 use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Pair, Point, evaluate_all};
 use crate::flights::blend_flights;
 use crate::paint::{Corners, Grid, Painted, corner_weights, rectangle_at};
-use crate::passes::paint_passes;
+use crate::passes::{CardTurns, paint_passes};
 use crate::sone::{PixelSoundScratch, Rest, pixel_sound};
 use crate::square::Square;
 use physics::bands::{BANDS, PERIODS, lden_energy};
@@ -34,13 +34,14 @@ pub(crate) struct PointPainter<'a> {
     pub corners: Corners,
     /// The exact pairs of the points painted so far.
     pub pairs: AtomicUsize,
+    pub card_turns: CardTurns,
 }
 
 impl PointPainter<'_> {
     /// `pass` over every run of `runs`, each run with its result: with a card
-    /// [`crate::passes::PASSES_AT_ONCE`]
-    /// at once, each taking the next run from a shared queue (one's lists and loudness on the
-    /// cores while the others' pairs are on the card); without one in order.
+    /// [`crate::passes::PASSES_AT_ONCE`] at once, each taking the next run from a shared queue, at
+    /// most [`crate::passes::PASSES_ON_THE_CARD`] with their pairs on the card while the others'
+    /// lists and loudness are on the cores; without one in order.
     pub fn in_passes<T: Send>(
         &self,
         runs: Vec<Range<usize>>,
@@ -116,7 +117,8 @@ impl PointPainter<'_> {
             .flat_map(|(k, list)| list.iter().map(move |&index| Pair::new(k as u32, index)))
             .collect();
         self.pairs.fetch_add(pairs.len(), Ordering::Relaxed);
-        let evaluated = evaluate_all(square, points, &pairs, self.batch)?;
+        let evaluated =
+            (self.card_turns).in_turn(|| evaluate_all(square, points, &pairs, self.batch))?;
         let mut offset = 0;
         let starts: Vec<usize> = (lists.iter())
             .map(|list| {
