@@ -306,7 +306,9 @@ export default function App() {
   const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange }
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden">
+    // The app is the box the fixed controls stand in: a phone browser's 100vh reaches under its
+    // toolbar, which put the map's own corner controls (the credits' ⓘ) below the control row.
+    <div className="fixed inset-0 overflow-hidden">
       <SearchBar onSelect={setSelectedLocation} getMapView={getMapView} />
 
       {/* UI overlays */}
