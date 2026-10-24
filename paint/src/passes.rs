@@ -2,9 +2,46 @@
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex, PoisonError};
 
 /// Passes at once with a card.
 pub(crate) const PASSES_AT_ONCE: usize = 4;
+
+/// Of those, the most whose pairs are on the card at once, so that the others sound their pixels
+/// on the cores beside them: all four let on the card together kept in step, all on the card and
+/// then all on the cores, the card waiting while the cores sounded them.
+pub(crate) const PASSES_ON_THE_CARD: usize = 2;
+
+/// The card's turns among a square's passes, [`PASSES_ON_THE_CARD`] at once.
+#[derive(Default)]
+pub(crate) struct CardTurns {
+    taken: Mutex<usize>,
+    changed: Condvar,
+}
+
+impl CardTurns {
+    /// `work` in a turn, once one is free.
+    pub(crate) fn in_turn<T>(&self, work: impl FnOnce() -> T) -> T {
+        let taken = self.taken.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut taken = (self.changed)
+            .wait_while(taken, |taken| *taken == PASSES_ON_THE_CARD)
+            .unwrap_or_else(PoisonError::into_inner);
+        *taken += 1;
+        drop(taken);
+        let _given_back = TurnGivenBack(self);
+        work()
+    }
+}
+
+/// A turn given back as its work ends, by a panic too: the square's other passes wait for it.
+struct TurnGivenBack<'a>(&'a CardTurns);
+
+impl Drop for TurnGivenBack<'_> {
+    fn drop(&mut self) {
+        *(self.0.taken.lock()).unwrap_or_else(PoisonError::into_inner) -= 1;
+        self.0.changed.notify_one();
+    }
+}
 
 pub(crate) fn paint_passes<T: Send>(
     runs: &[Range<usize>],
@@ -37,6 +74,7 @@ pub(crate) fn paint_passes<T: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Barrier, Condvar, Mutex};
 
     #[test]
@@ -70,5 +108,34 @@ mod tests {
                 .map(|run| (run.clone(), run.start))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn card_turns_admit_their_count_and_come_back_from_a_panic() {
+        let turns = CardTurns::default();
+        let failed = std::panic::catch_unwind(|| turns.in_turn(|| panic!("a pass panicked")));
+        assert!(failed.is_err());
+        assert_eq!(*turns.taken.lock().unwrap(), 0);
+        // Every turn held at once: one more pass enters only once a holder has left.
+        let (held, release) = (
+            Barrier::new(PASSES_ON_THE_CARD + 1),
+            Barrier::new(PASSES_ON_THE_CARD + 1),
+        );
+        let holding = AtomicBool::new(true);
+        std::thread::scope(|scope| {
+            for _ in 0..PASSES_ON_THE_CARD {
+                scope.spawn(|| {
+                    turns.in_turn(|| {
+                        held.wait();
+                        release.wait();
+                    })
+                });
+            }
+            held.wait();
+            scope.spawn(|| turns.in_turn(|| assert!(!holding.load(Ordering::SeqCst))));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            holding.store(false, Ordering::SeqCst);
+            release.wait();
+        });
     }
 }

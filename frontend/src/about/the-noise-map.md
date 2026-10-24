@@ -196,7 +196,8 @@ when a ray first needs it), and take its corners; two squares paint their pixels
 of many sources alone); two writers publish the squares before. The exact pairs and the aircraft boxes' sums at the block corners'
 lattices run on the first CUDA card (`paint-gpu/kernels/`, the popup's physics in single
 precision with fast math, each function citing its Rust) or on the cores. Four passes of a square
-share the card.
+run at once, at most two with their pairs on the card, so that the others sound their pixels on the
+cores beside them.
 The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
 while the card computes the current chunk's loudness.
 The passes return in spatial order, so equal façade energies keep the same first candidate.
