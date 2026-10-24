@@ -82,7 +82,7 @@ fn lattice_constants() -> String {
 }
 
 /// Floats a pair's sums take (kernels/evaluate.cuh PAIR_SUMS): mixed, calm and downwind per period.
-const PAIR_SUMS: usize = 3 * PERIODS;
+pub(crate) const PAIR_SUMS: usize = 3 * PERIODS;
 /// Floats a point's bands take: per layer, period and octave band.
 pub const POINT_BANDS: usize = LAYERS * PERIODS * BANDS;
 

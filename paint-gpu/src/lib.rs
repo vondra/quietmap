@@ -5,7 +5,8 @@
 //!
 //! Map: [`device`] (the card, the kernels, a square's buffers and the pair evaluation), [`loudness`]
 //! (the pixels' loudness), [`aircraft`] (the aircraft boxes at the corners' lattices), [`batch`]
-//! (the card as the painter's batch), `stream` (the card's side streams, forked and joined whole).
+//! (the card as the painter's batch), `turns` (the card's turns among a square's evaluations),
+//! `stream` (the card's side streams, forked and joined whole).
 //!
 //! For visitors, down to this code: the About page The noise map
 //! (`frontend/src/about/the-noise-map.md`).
@@ -16,3 +17,4 @@ pub mod device;
 pub mod loudness;
 pub mod square_writer;
 mod stream;
+mod turns;

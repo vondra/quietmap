@@ -315,7 +315,6 @@ pub fn paint_pixels(
         batch,
         corners,
         pairs: AtomicUsize::new(0),
-        card_turns: Default::default(),
     };
     let blocks = n / grid.block;
     let area = grid.block * grid.block;
