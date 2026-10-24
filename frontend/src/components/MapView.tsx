@@ -1,7 +1,7 @@
 // The map: basemap, noise heatmap, quiet zones, places to stay, hover readout, search flight, the
 // click popup and the track of the loudest flight highlighted in it.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import Map, { NavigationControl, GeolocateControl } from 'react-map-gl/maplibre'
+import Map, { NavigationControl, GeolocateControl, useMap, type MapRef, type ViewStateChangeEvent } from 'react-map-gl/maplibre'
 import type { StyleSpecification, GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
 import FlyToLocation from './FlyToLocation'
 import DetailPopup from './DetailPopup'
@@ -28,6 +28,40 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 // open from the control row's ⓘ and lead with the way to the About pages (`.attrib-about`).
 const NOISE_DATA_CREDITS = '<a class="attrib-about" href="/about">About quietmap.org</a>'
   + 'Noise model: &copy; OpenStreetMap contributors and <a href="/about/data-sources">others</a>'
+
+// OpenStreetMap's attribution guidelines let credits shown as a map opens fold away at the first
+// touch of the map or after five seconds (osmfoundation.org/wiki/Licence/Attribution_Guidelines).
+const CREDITS_SHOWN_MS = 5000
+
+// A geolocate move ends with the position at the map's centre (its accuracy's box is centred in
+// Mercator, a fraction of a pixel off); a move cut short leaves it farther.
+const ARRIVED_PX = 2
+
+/** The credits open with the map and fold into their ⓘ at the first touch of the map or after
+ *  `CREDITS_SHOWN_MS`, once; a visitor's own tap on the ⓘ ends that, and the ⓘ opens them again. */
+function CreditsFoldAtFirstTouch() {
+  const { current: map } = useMap()
+  useEffect(() => {
+    if (!map) return
+    const credits = map.getContainer().querySelector('.maplibregl-ctrl-attrib')
+    const canvas = map.getCanvasContainer()
+    const listening = new AbortController()
+    const fold = () => {
+      credits?.classList.remove('maplibregl-compact-show')
+      stop()
+    }
+    const timer = setTimeout(fold, CREDITS_SHOWN_MS)
+    const stop = () => {
+      clearTimeout(timer)
+      listening.abort()
+    }
+    canvas.addEventListener('pointerdown', fold, { signal: listening.signal })
+    canvas.addEventListener('wheel', fold, { passive: true, signal: listening.signal })
+    credits?.querySelector('.maplibregl-ctrl-attrib-button')?.addEventListener('click', stop, { signal: listening.signal })
+    return stop
+  }, [map])
+  return null
+}
 
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
@@ -77,6 +111,28 @@ export default function MapView({
     setFlyToPos(pos)
   }, [])
 
+  // A press of the locate button opens the popup where the visitor stands, once the map has arrived
+  // there: the control moves the camera for the press, to the position it finds or back to the last
+  // one found, and tells the press and the position around that move (without an animation, as with
+  // reduced motion, the move ends before either), so the arrival is judged once they have all run;
+  // a move cut short (a finger, a newer position) leaves the map elsewhere and waits for the next.
+  const mapRef = useRef<MapRef>(null)
+  const located = useRef<{ lat: number; lng: number } | null>(null)
+  const popupAtLocationDue = useRef(false)
+  const openPopupAtLocationOnArrival = useCallback(() => queueMicrotask(() => {
+    const map = mapRef.current
+    const at = located.current
+    if (!popupAtLocationDue.current || !at || !map || map.isMoving()) return
+    const there = map.project([at.lng, at.lat])
+    const centre = map.project(map.getCenter())
+    if (Math.hypot(there.x - centre.x, there.y - centre.y) > ARRIVED_PX) return
+    popupAtLocationDue.current = false
+    setFlyToPos({ ...at })
+  }), [])
+  const handleMoveEnd = useCallback((e: ViewStateChangeEvent & { geolocateSource?: boolean }) => {
+    if (e.geolocateSource) openPopupAtLocationOnArrival()
+  }, [openPopupAtLocationOnArrival])
+
   const geolocateRef = useRef<GeolocateControlInstance | null>(null)
   useEffect(() => {
     registerGeolocateTrigger?.(() => geolocateRef.current?.trigger())
@@ -116,6 +172,7 @@ export default function MapView({
 
   return (
     <Map
+      ref={mapRef}
       initialViewState={{
         latitude: center[0],
         longitude: center[1],
@@ -123,12 +180,7 @@ export default function MapView({
       }}
       style={{ width: '100%', height: '100%' }}
       mapStyle={mapStyle}
-      // maplibre mounts the compact attribution EXPANDED (covering the mobile
-      // control row) and only collapses it on its own toggle click — collapse
-      // immediately; the corner ⓘ is the resting state, tap to read credits.
-      onLoad={(e) => {
-        e.target.getContainer().querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show')
-      }}
+      onMoveEnd={handleMoveEnd}
       fadeDuration={0}
       maxZoom={16}
       // Compact ⓘ: expands to the basemap sources' own credits (OSM/Carto —
@@ -142,6 +194,7 @@ export default function MapView({
     >
       <NavigationControl position="bottom-left" showCompass={false} />
       <AboutControl />
+      <CreditsFoldAtFirstTouch />
       {/* Precise location is user-triggered (Google pattern): the initial view
           only approximates from browser language (utils/initial-view.ts); GPS
           fires on this button's click, when the permission prompt is expected. */}
@@ -154,12 +207,22 @@ export default function MapView({
         trackUserLocation
         showUserLocation
         fitBoundsOptions={{ maxZoom: 14 }}
-        onTrackUserLocationStart={() => onGeolocateActiveChange?.(true)}
+        onGeolocate={(e) => {
+          located.current = { lat: e.coords.latitude, lng: e.coords.longitude }
+          openPopupAtLocationOnArrival()
+        }}
+        onTrackUserLocationStart={() => {
+          popupAtLocationDue.current = true
+          onGeolocateActiveChange?.(true)
+        }}
         // Fires for BACKGROUND (user panned away while tracking) as well as
         // OFF. The row's icon deliberately shows blue only while actively
         // FOLLOWING — distinguishing the two would need maplibre's private
         // _watchState, and the location dot stays visible either way.
-        onTrackUserLocationEnd={() => onGeolocateActiveChange?.(false)}
+        onTrackUserLocationEnd={() => {
+          popupAtLocationDue.current = false
+          onGeolocateActiveChange?.(false)
+        }}
         // PERMISSION_DENIED goes straight to OFF without a
         // trackuserlocationend — without this the row's icon stays blue.
         onError={() => onGeolocateActiveChange?.(false)}

@@ -15,7 +15,7 @@ const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
 const SHEET_CHROME_PX = 66
 
 /** How far from the viewport's top the opened sheet reaches at most: its body is at most half the
- *  viewport less 16 px (`max-h-[calc(50vh-16px)]` below), the handle and the tabs over it. */
+ *  viewport less 16 px (`max-h-[calc(50dvh-16px)]` below), the handle and the tabs over it. */
 export function sheetTop(viewportHeight: number): number {
   return viewportHeight / 2 + 16 - SHEET_CHROME_PX
 }
@@ -138,7 +138,7 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
         {recentPlaces && <div className="px-2.5 pb-1">{recentPlaces}</div>}
         {stay && <StayHeader stay={stay} />}
-        <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50vh-16px)]' : 'overflow-hidden max-h-24'}`}>
+        <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px)]' : 'overflow-hidden max-h-24'}`}>
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

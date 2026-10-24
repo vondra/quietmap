@@ -1,6 +1,6 @@
 // The visitor's path in a real browser, without a backend: heatmap hover, the streamed popup (its
 // refinement, errors and aborts, the loudest flights, an opened row's segments), the detailed
-// calculation, layer switches, search, and the phone sheet.
+// calculation, layer switches, search and the locate button; a phone's way in `phone.spec.ts`.
 import { expect, test } from '@playwright/test'
 import { combineLayerCells } from '../src/lib/hm3-combine'
 import { HM3_BYTE_SONE } from '../src/lib/hm3-decoder'
@@ -8,7 +8,6 @@ import { fmtSone } from '../src/utils/formatters'
 import { computedPiece, FIXTURE_FLIGHTS, pieceRun, popupUpdate, roadContributor, withAircraft } from './answers'
 import {
   FIXTURE_DB,
-  PHONE,
   POINT,
   RAILWAY_SONE,
   ROAD_SONE,
@@ -270,71 +269,21 @@ test('search: picking a result flies the map there and opens its popup', async (
   await expect.poll(() => popupRequests(page)).toEqual([{ lat: target.lat, lng: target.lon }])
 })
 
-test.describe('mobile', () => {
-  test.use(PHONE)
-
-  test('map tap opens the real mobile sheet and layer controls', async ({ page }) => {
-    await installHermeticMap(page, POINT)
-    const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
-    const tileLoaded = page.waitForResponse(response =>
-      new URL(response.url()).pathname === tilePath && response.status() === 200,
-    )
-    await page.goto(mapUrl(POINT))
-    await tileLoaded
-    const { x, y } = await canvasCenter(page)
-    await page.touchscreen.tap(x, y)
-    await expect.poll(() => popupRequests(page)).toHaveLength(1)
-    const sheet = page.getByTestId('mobile-detail-sheet')
-    await expect(sheet).toBeVisible()
-    await expect(sheet.getByTestId('detail-popup-skeleton')).toBeVisible()
-
-    await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
-    await expect(sheet.getByTestId('lden')).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
-    // The sheet would cover the tapped point (the map's centre): the map moves it up, the view's
-    // centre south of it. A finger leaves no hover readout beside the popup.
-    const viewLat = () => page.evaluate(() => Number(new URLSearchParams(location.hash.slice(1)).get('lat')))
-    await expect.poll(viewLat).toBeLessThan(POINT.lat)
-    await expect(page.getByTestId('heatmap-hover')).toHaveCount(0)
-    // The loudest flights fit the phone: the whole table is on screen, nothing clipped or scrolled.
-    await sheet.getByRole('button', { name: /^Aircraft/ }).tap()
-    const flights = sheet.getByRole('table', { name: 'Loudest flights' })
-    await expect(flights.locator('tbody tr')).toHaveCount(2)
-    await expect(flights).toBeInViewport({ ratio: 1 })
-    // The sheet closes from its corner as well as by a swipe.
-    await sheet.getByRole('button', { name: 'Close' }).tap()
-    await expect(sheet).toHaveCount(0)
-
-    // A detail sheet deliberately covers the layers button. Start a clean map
-    // view instead of force-clicking through it (which no user can do). A
-    // changed, ignored query string forces a new document; a hash-only goto
-    // would keep the existing React instance and its open sheet.
-    await page.goto(`/?e2e=layers${mapUrl(POINT).slice(1)}`)
-    await canvasCenter(page)
-    // The credits' ⓘ in the control row opens them with the way to the About pages first.
-    await page.locator('.maplibregl-ctrl-attrib-button').tap()
-    await expect(page.locator('.attrib-about')).toBeVisible()
-    await expect(page.locator('.attrib-about')).toHaveAttribute('href', '/about')
-    await page.locator('.maplibregl-ctrl-attrib-button').tap()
-    await page.getByRole('button', { name: 'Toggle layers panel' }).tap()
-    const panel = page.locator('[data-testid="layers-panel"]:visible')
-    await expect(panel).toBeVisible()
-    // Each switch turns its own layer over.
-    const road = panel.getByTestId('layer-road')
-    const rail = panel.getByTestId('layer-railway')
-    await expect(road).toHaveAttribute('aria-pressed', 'true')
-    await expect(rail).toHaveAttribute('aria-pressed', 'false')
-    await rail.tap()
-    await expect(rail).toHaveAttribute('aria-pressed', 'true')
-    await expect(road).toHaveAttribute('aria-pressed', 'true')
-    await road.tap()
-    await expect(road).toHaveAttribute('aria-pressed', 'false')
-    await expect(rail).toHaveAttribute('aria-pressed', 'true')
-    // A data layer on shows its legend: the renderer's colours and what they stand for.
-    await page.route('**/api/raster/**', route => route.fulfill({ status: 204 }))
-    await page.getByRole('button', { name: 'Advanced' }).filter({ visible: true }).tap()
-    await page.getByTestId('data-layer-traffic').filter({ visible: true }).tap()
-    const legend = page.getByTestId('legend-traffic').filter({ visible: true })
-    await expect(legend).toContainText('15,000 a day')
-    await expect(legend).toContainText('estimated by class')
-  })
+test('desktop: a press of the locate button after the visitor has moved opens the popup at the new place', async ({ page, context }) => {
+  await context.grantPermissions(['geolocation'])
+  await context.setGeolocation({ latitude: POINT.lat, longitude: POINT.lng, accuracy: 10 })
+  await installHermeticMap(page, POINT)
+  await page.goto(mapUrl(POINT, 'road', TILE_Z - 2))
+  await canvasCenter(page)
+  const locate = page.locator('button.maplibregl-ctrl-geolocate')
+  await locate.click()
+  const first = { lat: POINT.lat, lng: POINT.lng }
+  await expect.poll(() => popupRequests(page)).toEqual([first])
+  // Off while following, then on again where the visitor has walked to: the popup opens at the
+  // new position, not at the last one before the control finds it.
+  await locate.click()
+  const walked = { lat: POINT.lat + 0.01, lng: POINT.lng + 0.01 }
+  await context.setGeolocation({ latitude: walked.lat, longitude: walked.lng, accuracy: 10 })
+  await locate.click()
+  await expect.poll(() => popupRequests(page)).toEqual([first, walked])
 })

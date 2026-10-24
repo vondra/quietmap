@@ -40,12 +40,12 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
   if (!position) return null
   const showSkeleton = !noiseData
 
-  // max-h-[50vh] keeps half the viewport for the map; with the calculation open the card takes
+  // max-h-[50dvh] keeps half the viewport for the map; with the calculation open the card takes
   // the rest of its column. The column's flex shrink (min-h-0) squeezes the card further on
   // short viewports. overflow-x-clip: nothing inside may pan sideways — a child wider than
   // the card used to drag the whole popup left on vertical scroll.
   return (
-    <FloatingCard className={`relative p-0 pointer-events-auto min-h-0 overflow-y-auto overflow-x-clip ${calculationOpen ? '' : 'max-h-[50vh]'}`} ref={scrollRef}>
+    <FloatingCard className={`relative p-0 pointer-events-auto min-h-0 overflow-y-auto overflow-x-clip ${calculationOpen ? '' : 'max-h-[50dvh]'}`} ref={scrollRef}>
       <button
         onClick={onNoiseClose}
         className="absolute top-1 right-1.5 z-10 p-1 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground"
