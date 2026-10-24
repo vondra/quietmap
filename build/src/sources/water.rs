@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn tiles_are_named_by_their_south_west_corner_as_worldcover_names_them() {
-        assert_eq!(tile_name(corner_of(39.4655, -0.3228)), "N39W003");
+        assert_eq!(tile_name(corner_of(39.5, -0.5)), "N39W003");
         assert_eq!(tile_name(corner_of(-53.2, 169.5)), "S54E168");
         assert_eq!(tile_name(corner_of(0.5, -180.0)), "N00W180");
     }

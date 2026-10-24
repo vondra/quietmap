@@ -2,7 +2,7 @@
 //! street's: the people of a bar or a café sit and stand in front of it, where the building screens
 //! them from its other side, not inside it, where its own walls would screen them from every
 //! receiver. A wall another building stands against is not free: a row's party wall would put them
-//! in the neighbour (Valencia's beach pavilions, 2026-10-22: four restaurants 24 dB screened from
+//! in the neighbour (beach pavilions: four restaurants 24 dB screened from
 //! the promenade before their terraces). Footprints are dev4's screening outlines (OpenStreetMap's
 //! and Overture's), a point in a courtyard is outside.
 

@@ -2,7 +2,7 @@
 //! the water of its square footprint in sub-cells of about 250 m (a quay sees the nearest water at
 //! its distance, not the whole 1 km cell at its centre), each a share of the cell by its water, at
 //! a wet sample (ESA WorldCover's water, `water`): a cell over a coast spread over its land put
-//! ships in the streets (Valencia's beach, 2026-10-22: the marina's cell 185 m from the promenade on
+//! ships in the streets (a beach: the marina's cell 185 m from the promenade on
 //! its houses, 40 % of the place's loudness). A cell all on land has none. At the height of the
 //! class carrying most of the energy.
 

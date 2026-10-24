@@ -11,7 +11,7 @@ import { HM3_SILENCE, HM3_BYTE_SONE } from './hm3-decoder.ts'
 // with lightness, arousal with saturation, and yellow-green is the least pleasant hue (Valdez &
 // Mehrabian 1994, J. Exp. Psychol. Gen. 123:394). Scale B (2026-10-11) faded a vivid green into
 // lemon yellow; the sage of 2026-10-16 (2 sone chroma 34 at 0.5, 4 sone amber 66 at 0.64) still read
-// sharp over countries painted whole (owner 2026-10-23: "ostrá, jedovatá"); this quiet half has a
+// sharp over countries painted whole (owner 2026-10-23); this quiet half has a
 // third to two thirds of its chroma. The lightness falls with loudness, so the ramp still reads in
 // grey and to deuteranope and protanope eyes. Interpolated in CIELAB by log2(sone). Opacity rises
 // with loudness over the basemap.
