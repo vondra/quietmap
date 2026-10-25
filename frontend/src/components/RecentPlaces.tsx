@@ -7,7 +7,7 @@ import { fmtSone } from '../utils/formatters'
 
 /** The name the visitor gave the place, else its geocoded name up to its first comma, else its
  *  coordinates. */
-export function placeName(place: RecentPlace, titles: PlaceTitle[]): string {
+function placeName(place: RecentPlace, titles: PlaceTitle[]): string {
   return titleAt(titles, place) ?? placeLabel(place.place) ?? `${place.lat.toFixed(3)}, ${place.lng.toFixed(3)}`
 }
 

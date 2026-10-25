@@ -25,10 +25,15 @@ const STORAGE_KEY = 'quietmap.recent-places'
 const SAME_PLACE_M = 30
 const METRES_PER_DEGREE = 111_320
 
-export function samePlace(a: { lat: number, lng: number }, b: { lat: number, lng: number }): boolean {
+/** The distance between two points (m), flat over a place. */
+function metresBetween(a: { lat: number, lng: number }, b: { lat: number, lng: number }): number {
   const north = (b.lat - a.lat) * METRES_PER_DEGREE
   const east = (b.lng - a.lng) * METRES_PER_DEGREE * Math.cos((a.lat * Math.PI) / 180)
-  return Math.hypot(north, east) < SAME_PLACE_M
+  return Math.hypot(north, east)
+}
+
+export function samePlace(a: { lat: number, lng: number }, b: { lat: number, lng: number }): boolean {
+  return metresBetween(a, b) < SAME_PLACE_M
 }
 
 /** `list` with `place` first, in place of the same place's older entry (whose name it keeps until
@@ -90,24 +95,48 @@ export interface PlaceTitle {
 
 /** The most names kept, the newest first. */
 export const PLACE_TITLES_MAX = 200
-const TITLES_KEY = 'quietmap.place-titles'
+/** The names' storage key: another tab's change of it reaches this one as a `storage` event. */
+export const PLACE_TITLES_KEY = 'quietmap.place-titles'
+
+/** Which of `titles` names the place at `at`: the nearest within one place's 30 m, or -1. Two
+ *  named spots a house apart stay two, and naming a point again keeps the name where it was given. */
+function titleIndex(titles: PlaceTitle[], at: { lat: number, lng: number }): number {
+  let nearest = -1
+  for (let k = 0; k < titles.length; k++) {
+    if (samePlace(titles[k], at) && (nearest < 0 || metresBetween(titles[k], at) < metresBetween(titles[nearest], at))) {
+      nearest = k
+    }
+  }
+  return nearest
+}
 
 /** The name the visitor gave the place at `at`, if any. */
 export function titleAt(titles: PlaceTitle[], at: { lat: number, lng: number }): string | null {
-  return titles.find(other => samePlace(other, at))?.title ?? null
+  const k = titleIndex(titles, at)
+  return k < 0 ? null : titles[k].title
 }
 
-/** `titles` with the place at `at` named `title` (first, in place of its older name), or without
- *  its name when `title` is null, at most the most kept. */
+/** `titles` with the place at `at` named `title` (first, at the point its name was first given),
+ *  or without its name when `title` is null, at most the most kept. */
 export function withTitle(titles: PlaceTitle[], at: { lat: number, lng: number }, title: string | null): PlaceTitle[] {
-  const others = titles.filter(other => !samePlace(other, at))
-  return (title == null ? others : [{ lat: at.lat, lng: at.lng, title }, ...others]).slice(0, PLACE_TITLES_MAX)
+  const k = titleIndex(titles, at)
+  const others = titles.filter((_, j) => j !== k)
+  if (title == null) return others
+  const point = k < 0 ? at : titles[k]
+  return [{ lat: point.lat, lng: point.lng, title }, ...others].slice(0, PLACE_TITLES_MAX)
 }
 
-/** The stored names; none when the browser keeps no storage or holds something else. */
-export function loadPlaceTitles(): PlaceTitle[] {
+/** The stored names (none when storage holds something else), or null when the browser keeps no
+ *  storage. */
+export function loadPlaceTitles(): PlaceTitle[] | null {
+  let stored: string | null
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(TITLES_KEY) ?? '[]')
+    stored = localStorage.getItem(PLACE_TITLES_KEY)
+  } catch {
+    return null
+  }
+  try {
+    const parsed: unknown = JSON.parse(stored ?? '[]')
     if (!Array.isArray(parsed)) return []
     return parsed.flatMap((entry: Record<string, unknown>) => {
       const [lat, lng] = [numberOrNull(entry?.lat), numberOrNull(entry?.lng)]
@@ -121,7 +150,7 @@ export function loadPlaceTitles(): PlaceTitle[] {
 
 export function savePlaceTitles(titles: PlaceTitle[]): void {
   try {
-    localStorage.setItem(TITLES_KEY, JSON.stringify(titles))
+    localStorage.setItem(PLACE_TITLES_KEY, JSON.stringify(titles))
   } catch {
     // A private window or blocked storage keeps the names for this visit only.
   }

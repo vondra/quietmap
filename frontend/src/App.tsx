@@ -17,7 +17,8 @@ import { setDocumentTitle } from './utils/page-title'
 import PlaceTitle from './components/PlaceTitle'
 import RecentPlaces from './components/RecentPlaces'
 import {
-  loadPlaceTitles, loadRecentPlaces, placeLabel, savePlaceTitles, saveRecentPlaces, titleAt, withName, withPlace,
+  PLACE_TITLES_KEY, loadPlaceTitles, loadRecentPlaces, placeLabel, savePlaceTitles, saveRecentPlaces, titleAt, withName,
+  withPlace,
   withTitle, withoutPlace, type RecentPlace,
 } from './lib/recent-places'
 import { useIsDesktop } from './hooks/useIsDesktop'
@@ -53,7 +54,15 @@ export default function App() {
   const desktop = useIsDesktop()
   // The last places opened, newest first, kept in this browser.
   const [recentPlaces, setRecentPlaces] = useState<RecentPlace[]>(loadRecentPlaces)
-  const [placeTitles, setPlaceTitles] = useState(loadPlaceTitles)
+  const [placeTitles, setPlaceTitles] = useState(() => loadPlaceTitles() ?? [])
+  // Names given in another tab show here too.
+  useEffect(() => {
+    const reload = (event: StorageEvent) => {
+      if (event.key === PLACE_TITLES_KEY) setPlaceTitles(loadPlaceTitles() ?? [])
+    }
+    window.addEventListener('storage', reload)
+    return () => window.removeEventListener('storage', reload)
+  }, [])
   const highlightedSource = highlighted?.startsWith('source:')
     ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)
     : undefined
@@ -102,12 +111,12 @@ export default function App() {
   // Tab/share title tracks the open popup: reverse-geocode the position
   // (place-level, server-cached) and compose "Camden, London - 62 dB -
   // quietmap.org" — place first, never the number. The lookup is not cancelled
-  // by the next click: a name that comes back late still names its recent tab.
-  const [detailPlaceName, setDetailPlaceName] = useState<string | null>(null)
+  // by the next click: a name that comes back late still names its recent tab. The name is kept
+  // with the point it is for, so a moved popup never shows the previous place, not for a frame.
+  const [geocoded, setGeocoded] = useState<{ lat: number, lng: number, place: string } | null>(null)
+  const detailPlaceName = geocoded && detailPosition
+    && geocoded.lat === detailPosition.lat && geocoded.lng === detailPosition.lng ? geocoded.place : null
   useEffect(() => {
-    // Clear synchronously so a moved popup never shows the previous place
-    // next to the new position's dB while the new lookup is in flight.
-    setDetailPlaceName(null)
     if (!detailPosition) return
     const position = detailPosition
     let open = true
@@ -115,16 +124,15 @@ export default function App() {
       .then(res => (res.ok ? res.json() : null))
       .then(json => {
         const place = typeof json?.place === 'string' && json.place ? json.place : null
-        if (open) setDetailPlaceName(place)
-        if (place) {
-          setRecentPlaces(places => {
-            const next = withName(places, position, place)
-            if (next !== places) saveRecentPlaces(next)
-            return next
-          })
-        }
+        if (!place) return
+        if (open) setGeocoded({ lat: position.lat, lng: position.lng, place })
+        setRecentPlaces(places => {
+          const next = withName(places, position, place)
+          if (next !== places) saveRecentPlaces(next)
+          return next
+        })
       })
-      .catch(() => { if (open) setDetailPlaceName(null) })
+      .catch(() => {})
     return () => { open = false }
   }, [detailPosition])
 
@@ -159,13 +167,11 @@ export default function App() {
   const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition) : null
   const renamePlace = useCallback((title: string | null) => {
     if (!detailPosition) return
-    const at = detailPosition
-    setPlaceTitles(titles => {
-      const next = withTitle(titles, at, title)
-      savePlaceTitles(next)
-      return next
-    })
-  }, [detailPosition])
+    // From what storage holds now: another tab may have named places since this one read them.
+    const next = withTitle(loadPlaceTitles() ?? placeTitles, detailPosition, title)
+    savePlaceTitles(next)
+    setPlaceTitles(next)
+  }, [detailPosition, placeTitles])
   const placeTitle = detailPosition && (
     <PlaceTitle
       key={`${detailPosition.lat},${detailPosition.lng}`}

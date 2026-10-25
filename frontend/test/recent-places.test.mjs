@@ -4,7 +4,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  PLACE_TITLES_MAX, RECENT_PLACES_MAX, placeLabel, samePlace, titleAt, withName, withPlace, withTitle, withoutPlace,
+  PLACE_TITLES_MAX, RECENT_PLACES_MAX, loadPlaceTitles, placeLabel, samePlace, titleAt, withName, withPlace, withTitle,
+  withoutPlace,
 } from '../src/lib/recent-places.ts'
 
 const place = (lat, lng, sone = 4) => ({ lat, lng, place: null, sone, lden: 43 })
@@ -39,18 +40,29 @@ test('a removed place leaves the others in their order', () => {
   assert.deepEqual(withoutPlace(list, { lat: 2, lng: 2 }).map(p => p.lat), [1, 3])
 })
 
-test('a place keeps the name the visitor gave it, within 30 m, until renamed or emptied', () => {
-  let titles = withTitle([], { lat: 28.6969, lng: -17.9308 }, 'Above the house')
-  titles = withTitle(titles, { lat: 28.6937, lng: -17.9304 }, 'The fold')
-  assert.equal(titleAt(titles, { lat: 28.6969, lng: -17.93081 }), 'Above the house')
-  assert.equal(titleAt(titles, { lat: 28.6975, lng: -17.9308 }), null)
-  titles = withTitle(titles, { lat: 28.69691, lng: -17.9308 }, 'The ruin')
-  assert.deepEqual(titles.map(t => t.title), ['The ruin', 'The fold'])
-  assert.deepEqual(withTitle(titles, { lat: 28.6937, lng: -17.9304 }, null).map(t => t.title), ['The ruin'])
+test('a name stays where it was given: the nearest within 30 m answers, two spots 40 m apart keep two', () => {
+  const door = { lat: 50, lng: 14 }
+  const gate = { lat: 50.00036, lng: 14 }
+  let titles = withTitle(withTitle([], door, 'Door'), gate, 'Gate')
+  // Between them, 20 m from each: the nearest is renamed, the other kept.
+  titles = withTitle(titles, { lat: 50.00017, lng: 14 }, 'Front door')
+  assert.deepEqual(titles.map(t => t.title).sort(), ['Front door', 'Gate'])
+  assert.equal(titleAt(titles, door), 'Front door')
+  // Renamed again and again from 20 m north, it stays at the door.
+  for (let k = 0; k < 3; k++) titles = withTitle(titles, { lat: 50.00018, lng: 14 }, `Door ${k}`)
+  assert.equal(titleAt(titles, door), 'Door 2')
+  assert.deepEqual(titles.find(t => t.title === 'Door 2'), { lat: 50, lng: 14, title: 'Door 2' })
+  // Emptied, only its own name goes.
+  assert.deepEqual(withTitle(titles, door, null).map(t => t.title), ['Gate'])
+  assert.equal(titleAt(titles, { lat: 50.001, lng: 14 }), null)
   let many = []
   for (let k = 0; k <= PLACE_TITLES_MAX; k++) many = withTitle(many, { lat: k, lng: 0 }, `place ${k}`)
   assert.equal(many.length, PLACE_TITLES_MAX)
   assert.equal(titleAt(many, { lat: 0, lng: 0 }), null)
+})
+
+test('without the browser storage the names are none to read, not an empty list', () => {
+  assert.equal(loadPlaceTitles(), null)
 })
 
 test('a geocoded name is proposed by its first part', () => {
