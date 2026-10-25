@@ -4,21 +4,21 @@
 
 import { HM3_SILENCE, HM3_BYTE_SONE } from './hm3-decoder.ts'
 
-// One colour a doubling of loudness — 1 sone transparent (a quiet room), 2 a sage mist, 4 amber,
-// 8 orange, 16 red, 32 purple, flat above — in the air-quality index's order (US EPA: orange, red,
-// purple; 32 sone is its purple, RGB 143/63/151). The quiet half stays pale, low in chroma and half
-// transparent, so its green turns amber through straw, never through lime; the loud half grows
-// saturated and opaque. Pleasure rises with lightness, arousal with saturation, and yellow-green is
-// the least pleasant hue (Valdez & Mehrabian 1994, J. Exp. Psychol. Gen. 123:394). The lightness
-// falls with loudness, so the ramp still reads in grey and to deuteranope and protanope eyes.
-// Interpolated in CIELAB by log2(sone). Opacity rises with loudness over the basemap.
+// The air-quality index's colours in its order, one a doubling of loudness: clear under 1 sone (a
+// quiet room), then yellow from 3 sone, orange 6, red 12, purple 24, and dark purple from 48 (US EPA's
+// AQI, its yellow darkened to read on a white map, its top colour a darker purple). Quiet stays clear
+// on every basemap, satellite and terrain too: the index's green is the map itself. The darkest marks
+// the loudest: in the preview of 2026-10-25, 48 sone and more is 0.27 % of Prague's painted cells
+// (the trunk road's lanes) and purple from 24 sone its loudest 3.6 % (main roads, the D1, Heathrow's
+// runway ends). The lightness falls with loudness, so the ramp still reads in grey and to deuteranope
+// and protanope eyes. Interpolated in CIELAB by log2(sone); opacity rises with loudness.
 const STOPS: { sone: number; lab: Lab; op: number }[] = [
-  { sone: 1, lab: lch(88, 24, 162), op: 0 },
-  { sone: 2, lab: lch(83, 34, 158), op: 0.5 },
-  { sone: 4, lab: lch(83, 66, 84), op: 0.64 },
-  { sone: 8, lab: lch(67, 80, 58), op: 0.8 },
-  { sone: 16, lab: lch(47, 74, 33), op: 0.86 },
-  { sone: 32, lab: lch(41, 57, 325), op: 0.92 },
+  { sone: 1, lab: lch(88, 72, 90), op: 0 },
+  { sone: 3, lab: lch(88, 72, 90), op: 0.45 },
+  { sone: 6, lab: lch(67, 82, 58), op: 0.65 },
+  { sone: 12, lab: lch(50, 82, 36), op: 0.8 },
+  { sone: 24, lab: lch(41, 57, 325), op: 0.88 },
+  { sone: 48, lab: lch(22, 45, 318), op: 0.94 },
 ]
 
 type Lab = readonly [number, number, number]
