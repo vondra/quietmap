@@ -6,7 +6,7 @@ intro: What the colours mean, and how close the painted map comes to the popup.
 <!-- SECTIONS -->
 
 The colours show how loud each place sounds, as the popup there would answer. Kenwood's lawn on
-Hampstead Heath in London is yellow; Wenceslas Square in Prague is red. For the exact answer at a
+Hampstead Heath in London is yellow; Soho Square is red. For the exact answer at a
 place and what makes it, open the popup there.
 
 ## Colours
@@ -18,10 +18,10 @@ are clicked in the popup, October 2026.
 |---|---|---|
 | clear | under 1, a quiet room | Haystacks in the Lake District, 1 km above the road (0.9, 34&nbsp;dB) |
 | <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#ffeeae"></span> yellow</span> | 3 | Kenwood's lawn on Hampstead Heath, London (3.6, 47&nbsp;dB) |
-| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#ffac6a"></span> orange</span> | 6 | Riegrovy sady, a park in Prague (5.4, 47&nbsp;dB) |
-| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#e85953"></span> red</span> | 12 | Wenceslas Square in Prague (12.7, 64&nbsp;dB) |
-| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#9e57a3"></span> purple</span> | 24 | The end of Heathrow's runway 27L (26.7, 79&nbsp;dB) |
-| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#592d6b"></span> dark purple</span> | 48 and more | The trunk road at the National Museum in Prague (50.5, 83&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#ffac6a"></span> orange</span> | 6 | Hyde Park by the Serpentine, London (6.3, 50&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#e85953"></span> red</span> | 12 | Soho Square, London (10.8, 60&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#9e57a3"></span> purple</span> | 24 | The end of Heathrow's runway 27L, London (26.7, 79&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#592d6b"></span> dark purple</span> | 48 and more | The Hanger Lane gyratory on the A40, London (62.9, 85&nbsp;dB) |
 
 The colours blend smoothly in between. A quiet place stays clear on every base map, satellite and
 terrain too; the loud ones grow dark and opaque. The swatches show them over a white map. What a sone is, and how it
@@ -35,8 +35,8 @@ popup computes it all the same.
 
 The colours are the air-quality index's, in its order: yellow, orange, red and purple, and a darker
 purple for the loudest, where the index has maroon; its green is the clear map. The darkest marks
-the loudest places: 48 sone and more is a quarter of a percent of Prague, the lanes of its trunk
-road. Lighter colours read as calmer and more saturated ones as more urgent, and the lightness falls
+the loudest places: 48 sone and more is 0.3 % of London's painted map, the lanes of its busiest
+roads and junctions. Lighter colours read as calmer and more saturated ones as more urgent, and the lightness falls
 with loudness, so the scale still reads in grey and with red-green colour blindness. The colours are
 blended in CIELAB by the logarithm of the loudness; their opacity rises from 0.45 at 3 sone to 0.94
 at 48 sone (`frontend/src/lib/heatmap-palette.ts`).

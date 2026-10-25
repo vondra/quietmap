@@ -8,10 +8,10 @@ import { HM3_SILENCE, HM3_BYTE_SONE } from './hm3-decoder.ts'
 // quiet room), then yellow from 3 sone, orange 6, red 12, purple 24, and dark purple from 48 (US EPA's
 // AQI, its yellow darkened to read on a white map, its top colour a darker purple). Quiet stays clear
 // on every basemap, satellite and terrain too: the index's green is the map itself. The darkest marks
-// the loudest: in the preview of 2026-10-25, 48 sone and more is 0.27 % of Prague's painted cells
-// (the trunk road's lanes) and purple from 24 sone its loudest 3.6 % (main roads, the D1, Heathrow's
-// runway ends). The lightness falls with loudness, so the ramp still reads in grey and to deuteranope
-// and protanope eyes. Interpolated in CIELAB by log2(sone); opacity rises with loudness.
+// the loudest: in the painted map of 2026-10-25, 48 sone and more is 0.29 % of London's cells (the
+// busiest roads' lanes and junctions) and purple from 24 sone its loudest 6.7 % (main roads,
+// Heathrow's runway ends). The lightness falls with loudness, so the ramp still reads in grey and to
+// deuteranope and protanope eyes. Interpolated in CIELAB by log2(sone); opacity rises with loudness.
 const STOPS: { sone: number; lab: Lab; op: number }[] = [
   { sone: 1, lab: lch(88, 72, 90), op: 0 },
   { sone: 3, lab: lch(88, 72, 90), op: 0.45 },
