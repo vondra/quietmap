@@ -14,8 +14,12 @@ import type { PopupUpdate, SegmentFan } from './types/noise'
 import { contributorHighlight, highlightGeoJson, topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
+import PlaceTitle from './components/PlaceTitle'
 import RecentPlaces from './components/RecentPlaces'
-import { loadRecentPlaces, saveRecentPlaces, withName, withPlace, withoutPlace, type RecentPlace } from './lib/recent-places'
+import {
+  loadPlaceTitles, loadRecentPlaces, placeLabel, savePlaceTitles, saveRecentPlaces, titleAt, withName, withPlace,
+  withTitle, withoutPlace, type RecentPlace,
+} from './lib/recent-places'
 import { useIsDesktop } from './hooks/useIsDesktop'
 import type { DataLayerId } from './lib/data-layers'
 import { defaultStaySearch, freshSearch, type Stay, type StaySearch } from './lib/stays'
@@ -49,6 +53,7 @@ export default function App() {
   const desktop = useIsDesktop()
   // The last places opened, newest first, kept in this browser.
   const [recentPlaces, setRecentPlaces] = useState<RecentPlace[]>(loadRecentPlaces)
+  const [placeTitles, setPlaceTitles] = useState(loadPlaceTitles)
   const highlightedSource = highlighted?.startsWith('source:')
     ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)
     : undefined
@@ -150,13 +155,32 @@ export default function App() {
   const openPlace = useCallback((place: RecentPlace) => {
     setSelectedLocation({ display_name: place.place ?? '', lat: place.lat, lon: place.lng })
   }, [])
+  // The open place's own name, given or taken back over its popup.
+  const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition) : null
+  const renamePlace = useCallback((title: string | null) => {
+    if (!detailPosition) return
+    const at = detailPosition
+    setPlaceTitles(titles => {
+      const next = withTitle(titles, at, title)
+      savePlaceTitles(next)
+      return next
+    })
+  }, [detailPosition])
+  const placeTitle = detailPosition && (
+    <PlaceTitle
+      key={`${detailPosition.lat},${detailPosition.lng}`}
+      title={detailTitle}
+      proposal={placeLabel(detailPlaceName)}
+      onRename={renamePlace}
+    />
+  )
 
   const detailTotalLden = noiseDetailData?.total_lden ?? null
   useEffect(() => {
     setDocumentTitle(detailPosition
-      ? [detailPlaceName, detailTotalLden != null ? `${Math.round(detailTotalLden)} dB` : null]
+      ? [detailTitle ?? detailPlaceName, detailTotalLden != null ? `${Math.round(detailTotalLden)} dB` : null]
       : [])
-  }, [detailPosition, detailPlaceName, detailTotalLden])
+  }, [detailPosition, detailTitle, detailPlaceName, detailTotalLden])
 
   const syncUrl = useCallback((overrides?: Partial<Omit<UrlState, 'hasExplicitView'>>) => {
     // Refs are the post-event truth; an override carries a value the state
@@ -329,7 +353,7 @@ export default function App() {
             {...stayControls}
           />
           {detailPosition && (
-            <RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />
+            <RecentPlaces places={recentPlaces} titles={placeTitles} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />
           )}
           <DetailCard
             noiseData={noiseDetailData}
@@ -341,6 +365,7 @@ export default function App() {
             onCalculationToggle={toggleCalculation}
             onFan={showFan}
             stay={selectedStay}
+            placeTitle={placeTitle}
           />
         </div>
 
@@ -422,8 +447,9 @@ export default function App() {
         calculationOpen={calculationOpen && !desktop}
         onCalculationToggle={toggleCalculation}
         onFan={showFan}
-        recentPlaces={<RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />}
+        recentPlaces={<RecentPlaces places={recentPlaces} titles={placeTitles} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />}
         stay={selectedStay}
+        placeTitle={placeTitle}
       />
 
     </div>

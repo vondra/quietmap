@@ -1,6 +1,7 @@
 // The visitor's recent places: the last points opened, newest first, each with its place name and
 // its numbers, kept in this browser only, so that a few known places stay at hand to compare and
-// to reopen.
+// to reopen; and the names the visitor gave places, kept apart so a place keeps its name after it
+// leaves the recent few.
 
 export interface RecentPlace {
   lat: number
@@ -10,6 +11,11 @@ export interface RecentPlace {
   /** The whole day's loudness (sone) and Lden (dB), when answered. */
   sone: number | null
   lden: number | null
+}
+
+/** A geocoded name's first part (the place before its region and country). */
+export function placeLabel(name: string | null): string | null {
+  return name?.split(',')[0]?.trim() || null
 }
 
 /** The most places kept: one row of tabs on a phone. */
@@ -72,5 +78,51 @@ export function saveRecentPlaces(list: RecentPlace[]): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
   } catch {
     // A private window or blocked storage keeps the places for this visit only.
+  }
+}
+
+/** A place's name as the visitor wrote it. */
+export interface PlaceTitle {
+  lat: number
+  lng: number
+  title: string
+}
+
+/** The most names kept, the newest first. */
+export const PLACE_TITLES_MAX = 200
+const TITLES_KEY = 'quietmap.place-titles'
+
+/** The name the visitor gave the place at `at`, if any. */
+export function titleAt(titles: PlaceTitle[], at: { lat: number, lng: number }): string | null {
+  return titles.find(other => samePlace(other, at))?.title ?? null
+}
+
+/** `titles` with the place at `at` named `title` (first, in place of its older name), or without
+ *  its name when `title` is null, at most the most kept. */
+export function withTitle(titles: PlaceTitle[], at: { lat: number, lng: number }, title: string | null): PlaceTitle[] {
+  const others = titles.filter(other => !samePlace(other, at))
+  return (title == null ? others : [{ lat: at.lat, lng: at.lng, title }, ...others]).slice(0, PLACE_TITLES_MAX)
+}
+
+/** The stored names; none when the browser keeps no storage or holds something else. */
+export function loadPlaceTitles(): PlaceTitle[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(TITLES_KEY) ?? '[]')
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((entry: Record<string, unknown>) => {
+      const [lat, lng] = [numberOrNull(entry?.lat), numberOrNull(entry?.lng)]
+      const title = typeof entry?.title === 'string' ? entry.title.trim() : ''
+      return lat == null || lng == null || !title ? [] : [{ lat, lng, title }]
+    }).slice(0, PLACE_TITLES_MAX)
+  } catch {
+    return []
+  }
+}
+
+export function savePlaceTitles(titles: PlaceTitle[]): void {
+  try {
+    localStorage.setItem(TITLES_KEY, JSON.stringify(titles))
+  } catch {
+    // A private window or blocked storage keeps the names for this visit only.
   }
 }

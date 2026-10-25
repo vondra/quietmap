@@ -1,6 +1,6 @@
 // The desktop popup card: a skeleton from the click on, then the streamed answer, or the error; under
 // the place to stay whose pin opened it.
-import { lazy, Suspense, useEffect, useRef } from 'react'
+import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import DetailSkeleton from './DetailSkeleton'
@@ -25,9 +25,11 @@ interface DetailCardProps {
   onFan: (source: string, fan: SegmentFan | null) => void
   /** The place to stay at the point, when its pin opened the popup. */
   stay: Stay | null
+  /** The place's name over the answer. */
+  placeTitle?: ReactNode
 }
 
-export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: DetailCardProps) {
+export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, placeTitle }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
@@ -54,6 +56,7 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
         <X className="size-3.5" />
       </button>
       {stay && <StayHeader stay={stay} />}
+      {placeTitle}
       {showSkeleton
         ? <DetailSkeleton position={position} error={error} />
         : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

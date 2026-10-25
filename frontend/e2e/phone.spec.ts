@@ -1,5 +1,5 @@
 // A phone's way through the map in a real browser, without a backend: the popup's sheet, the
-// control row with the credits' ⓘ and the layers panel, and the locate button.
+// control row with the credits' ⓘ and the layers panel, the locate button, and a place's name.
 import { expect, test } from '@playwright/test'
 import { FIXTURE_FLIGHTS, popupUpdate, withAircraft } from './answers'
 import {
@@ -116,4 +116,40 @@ test('the locate button opens the popup where the visitor stands, again from a m
   await page.getByRole('button', { name: 'Show my location' }).tap()
   await expect.poll(() => popupRequests(page)).toEqual([here, here])
   await expect(sheet).toBeVisible()
+})
+
+test('a place takes the name the visitor gives it in the sheet, and keeps it on the next visit', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const openAtPoint = async (url: string) => {
+    const tileLoaded = page.waitForResponse(response =>
+      new URL(response.url()).pathname === tilePath && response.status() === 200,
+    )
+    await page.goto(url)
+    await tileLoaded
+    const { x, y } = await canvasCenter(page)
+    await page.touchscreen.tap(x, y)
+    return page.getByTestId('mobile-detail-sheet')
+  }
+  let sheet = await openAtPoint(mapUrl(POINT))
+  // The geocoded name is proposed; a tap renames the place, Escape leaves it as it was.
+  const title = sheet.getByTestId('place-title')
+  await expect(title).toHaveText('E2E fixture')
+  await title.tap()
+  const field = sheet.getByRole('textbox', { name: 'Place name' })
+  await field.fill('Discarded')
+  await field.press('Escape')
+  await expect(title).toHaveText('E2E fixture')
+  await title.tap()
+  await field.fill('Above the house')
+  await field.press('Enter')
+  await expect(title).toHaveText('Above the house')
+  // A new document (a changed, ignored query string) and the same point: the name is kept.
+  sheet = await openAtPoint(`/?e2e=title${mapUrl(POINT).slice(1)}`)
+  await expect(sheet.getByTestId('place-title')).toHaveText('Above the house')
+  // Emptied, the name gives the proposal back.
+  await sheet.getByTestId('place-title').tap()
+  await sheet.getByRole('textbox', { name: 'Place name' }).fill('')
+  await sheet.getByRole('textbox', { name: 'Place name' }).press('Enter')
+  await expect(sheet.getByTestId('place-title')).toHaveText('E2E fixture')
 })

@@ -35,9 +35,11 @@ interface MobileDetailSheetProps {
   recentPlaces?: ReactNode
   /** The place to stay at the point, when its pin opened the popup: above the answer, in the peek. */
   stay: Stay | null
+  /** The place's name, at the top of the answer, in the peek. */
+  placeTitle?: ReactNode
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, recentPlaces, stay }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, recentPlaces, stay, placeTitle }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -139,6 +141,7 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
         {recentPlaces && <div className="px-2.5 pb-1">{recentPlaces}</div>}
         {stay && <StayHeader stay={stay} />}
         <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px)]' : 'overflow-hidden max-h-24'}`}>
+          {placeTitle}
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

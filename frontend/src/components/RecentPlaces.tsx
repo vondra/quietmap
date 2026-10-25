@@ -2,16 +2,19 @@
 // whole-day loudness, the open one marked and forgotten by its cross; a tab reopens its place. Kept
 // in this browser only.
 import { X } from 'lucide-react'
-import { samePlace, type RecentPlace } from '../lib/recent-places'
+import { placeLabel, samePlace, titleAt, type PlaceTitle, type RecentPlace } from '../lib/recent-places'
 import { fmtSone } from '../utils/formatters'
 
-/** The place's name up to its first comma, else its coordinates. */
-export function placeName(place: RecentPlace): string {
-  return place.place?.split(',')[0]?.trim() || `${place.lat.toFixed(3)}, ${place.lng.toFixed(3)}`
+/** The name the visitor gave the place, else its geocoded name up to its first comma, else its
+ *  coordinates. */
+export function placeName(place: RecentPlace, titles: PlaceTitle[]): string {
+  return titleAt(titles, place) ?? placeLabel(place.place) ?? `${place.lat.toFixed(3)}, ${place.lng.toFixed(3)}`
 }
 
-export default function RecentPlaces({ places, current, onOpen, onRemove }: {
+export default function RecentPlaces({ places, titles, current, onOpen, onRemove }: {
   places: RecentPlace[]
+  /** The names the visitor gave places. */
+  titles: PlaceTitle[]
   /** The open popup's point. */
   current: { lat: number, lng: number } | null
   onOpen: (place: RecentPlace) => void
@@ -23,7 +26,7 @@ export default function RecentPlaces({ places, current, onOpen, onRemove }: {
     <nav aria-label="Recent places" data-testid="recent-places" className="pointer-events-auto flex shrink-0 gap-1">
       {places.map(place => {
         const isCurrent = current != null && samePlace(place, current)
-        const name = placeName(place)
+        const name = placeName(place, titles)
         return (
           <div
             key={`${place.lat},${place.lng}`}
