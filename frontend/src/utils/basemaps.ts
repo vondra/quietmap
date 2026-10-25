@@ -70,7 +70,7 @@ const BLANK_STYLE: StyleSpecification = {
 
 type Paint = Record<string, unknown>
 
-function adaptPaint(paint: Paint, basemapId: BasemapId): Paint {
+function adaptPaint(paint: Paint, basemapId: Exclude<BasemapId, 'terrain'>): Paint {
   const p = { ...paint }
   if (basemapId === 'standard') {
     // Dark text + white halo — bolder than default Positron grey-blue
@@ -82,17 +82,14 @@ function adaptPaint(paint: Paint, basemapId: BasemapId): Paint {
     if (p['icon-color']) p['icon-color'] = '#1a1a1a'
     return p
   }
-  if (basemapId === 'satellite') {
-    // White text + dark halo for readability over dark imagery
-    if (p['text-color'] && typeof p['text-color'] === 'string' && !p['text-color'].includes('fff')) {
-      p['text-color'] = '#ffffff'
-    }
-    p['text-halo-color'] = 'rgba(0,0,0,0.75)'
-    p['text-halo-width'] = 2
-    p['text-halo-blur'] = 0
-    if (p['icon-color']) p['icon-color'] = '#ffffff'
-    return p
+  // White text + dark halo for readability over dark imagery
+  if (p['text-color'] && typeof p['text-color'] === 'string' && !p['text-color'].includes('fff')) {
+    p['text-color'] = '#ffffff'
   }
+  p['text-halo-color'] = 'rgba(0,0,0,0.75)'
+  p['text-halo-width'] = 2
+  p['text-halo-blur'] = 0
+  if (p['icon-color']) p['icon-color'] = '#ffffff'
   return p
 }
 

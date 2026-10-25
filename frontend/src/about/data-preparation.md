@@ -41,7 +41,7 @@ junctions and the place's yearly air temperature.
 - **A count beside its road.** A count that a dataset put on a service road, side lane, street or
   ramp beside the counted road, within 10 % of that road's own and within 30 m of it, or on a side
   lane of the road's name with its very count, belongs to the road: the way takes the model of its
-  class (a ramp the major roads'), and where its square has none it carries no traffic of its own.
+  class (a ramp the major roads'), and where none gives it a count it carries only its mapped buses.
   At London's Baker Street the service road beside Marylebone Road carried the road's 43,031
   vehicles a day a second time. A tunnel, which emits nothing and keeps no traffic in the data,
   counts as its road at its portals: in Brno, Kohoutova over the Husovice tunnel carried the
@@ -219,10 +219,11 @@ and a leisure boat 88 ([Fredianelli et al. 2020](https://doi.org/10.3390/su12051
 
 Vessel density comes from [EMODnet](https://emodnet.ec.europa.eu/en/human-activities) 2024 in
 European seas (a 1 km grid) and [Global Fishing Watch](https://globalfishingwatch.org) elsewhere.
-Leisure boats are counted only in European seas. A cell's ships are spread over its water, as
-[ESA WorldCover](https://worldcover2021.esa.int/) 2021 maps it in 90 m cells (the open sea where it
-maps no land), never over its land. Speed is not modelled, so ships under way may be a few decibels
-louder. Activity is constant over the day, which overstates leisure boats at night.
+Leisure boats are counted only in European seas. A cell's ships are spread over the 90 m cells of
+[ESA WorldCover](https://worldcover2021.esa.int/) 2021 that hold water, by their share of it (the
+open sea where it maps no land), never over a dry one; south of 60° S and north of 82.75° N it maps
+no land at all, so there the land reads as water. Speed is not modelled, so ships under way may be a
+few decibels louder. Activity is constant over the day, which overstates leisure boats at night.
 
 ## Industry
 
@@ -299,14 +300,14 @@ deliveries, building sites, garden machinery, music and festivals.
 - **Car parks** follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
   (LfU 2007): 63 dB(A) for one movement an hour, 0.4 movements a space an hour from 06 to 22 h and
   0.05 at night at most; where the buildings are mapped, a car park carries no more cars than
-  the trip ends of the buildings around it, street parking only those of the cars that park on
-  the street, the lots those of the cars of flats and visitors that park off it (a house's cars
-  park on its plot): each trip end parks once; elsewhere every space carries the study's rate. A
-  movement
-  sounds as 4 seconds at the peak of a car pulling away (the study's 67 dB(A) at 7.5 m; SEL 71 dB
-  against LAmax 65 dB at 10 m in [Hepworth Acoustics](https://www.hepworth-acoustics.co.uk)'s
-  measured car parks); a lot's search for a space makes it longer. A shooting range's shots sound
-  a second each at their energy; a real shot is shorter, so a range reads somewhat loud.
+  the trip ends of the buildings around it: street parking those of the cars that park on the
+  street, 15 % of a house's (up to four dwellings) and 55 % of a block of flats' and of the
+  visitors', the lots the other 45 %, a house's other cars on its plot; each trip end parks once;
+  elsewhere every space carries the study's rate. A movement sounds as 4 seconds at the peak of a
+  car pulling away (the study's 67 dB(A) at 7.5 m; SEL 71 dB against LAmax 65 dB at 10 m in
+  [Hepworth Acoustics](https://www.hepworth-acoustics.co.uk)'s measured car parks); a lot's search
+  for a space makes it longer. A shooting range's shots sound a second each at their energy; a real
+  shot is shorter, so a range reads somewhat loud.
 - **Church bells** ring in Europe and Cyprus: prayer bells three times a day and a Sunday peal;
   Orthodox churches, and in 11 Orthodox countries every church of unmapped denomination, ring only
   before Saturday's vespers and Sunday's liturgy. German and Swiss church clocks strike the hours
@@ -321,10 +322,12 @@ deliveries, building sites, garden machinery, music and festivals.
   and nights three quarters of the seats are taken (ÖNORM's design value), on weekdays fewer by
   Melbourne's and Paris's counts; the daytime 30 % is an assumption. The guests are heard while
   they are there, the seats in the terrace season and the opening hours, the door crowd whenever
-  the place is open, all year, not as a murmur all year at their mean. A terrace mapped within
-  30 m of a place is that place's seats, unless the place is tagged without outdoor seating. The
-  guests sit 1.5 m in front of the nearest wall of the building the place is mapped in that no
-  other building stands against: a party wall leads into the neighbour.
+  the place is open, all year, not as a murmur all year at their mean; a bar's, pub's,
+  nightclub's or beer garden's last hour is heard again 5 dB down in the night hour after it
+  closes, as its guests leave. A terrace mapped within 30 m of a place is that place's seats,
+  unless the place is tagged without outdoor seating. The guests sit 1.5 m in front of the nearest
+  wall of the building the place is mapped in where that spot lies in no building (in front of a
+  party wall it lies in the neighbour); walled in on every side, in front of the nearest wall.
 - **What screens.** A wall without a height stands 4 m. Open car parks, carports, open roofs and
   underground footprints do not screen.
 

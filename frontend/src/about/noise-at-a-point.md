@@ -132,8 +132,8 @@ A road on another side is carried by other weather. Sound from the south-west, t
 mostly blows from, is bent down 52 % of the day, sound from the east 23 %. Every direction is bent
 down more often at night than by day.
 
-The second table, Air dB/km, is what a kilometre of air takes from each octave band, at the place's
-average temperature and humidity. High notes fade fast, low ones carry:
+The second table, Air dB/km, is what a kilometre of air takes from each octave band, averaged over 30
+years of the place's weather. High notes fade fast, low ones carry:
 
 | Hz | Heard as | Air dB/km at High Beach |
 |---|---|---:|

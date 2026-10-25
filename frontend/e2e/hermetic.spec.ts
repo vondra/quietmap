@@ -190,6 +190,19 @@ test('desktop: the detailed calculation tells the façade receiver, the percenti
   await expect(about.getByRole('heading', { name: 'The weather', level: 2 })).toBeInViewport()
 })
 
+// A section link's fragment is the visitor's text: one that no escape decodes names no section.
+test('an About page opened at a broken section link shows', async ({ page }) => {
+  const errors: Error[] = []
+  page.on('pageerror', error => errors.push(error))
+  await page.goto('/about/noise-at-a-point#%')
+  const weather = page.getByRole('heading', { name: 'The weather', level: 2 })
+  await expect(weather).toBeVisible()
+  // The page seeks the section once it shows: the throw there blanked it a moment later.
+  await afterPaint(page)
+  await expect(weather).toBeVisible()
+  expect(errors).toEqual([])
+})
+
 // An opened row computes its segments when asked: the same click again with the row's parts, whose
 // answer never replaces the click's own. How all of its sound arrives in calm air, its loudest
 // segments, and an opened one's sound path, rays and terrain profile.

@@ -94,7 +94,11 @@ export default function AboutPage({ page }: { page: string }) {
   // the browser looked for the section before the page's markdown had loaded.
   useEffect(() => {
     if (markdown === null || window.location.hash.length < 2) return
-    document.getElementById(decodeURIComponent(window.location.hash.slice(1)))?.scrollIntoView()
+    try {
+      document.getElementById(decodeURIComponent(window.location.hash.slice(1)))?.scrollIntoView()
+    } catch {
+      // A fragment no escape decodes (#%) names no section; thrown, it blanked the page.
+    }
   }, [markdown])
   const crumbs = breadcrumb(page)
   const [before, after] = body.includes(SUBPAGES_MARKER) ? body.split(SUBPAGES_MARKER) : [body, null]
