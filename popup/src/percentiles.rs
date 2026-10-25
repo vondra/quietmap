@@ -120,15 +120,6 @@ impl Weather {
             bin[2][period] += energy[period];
         }
     }
-
-    /// Each bin's favourable share and its energy of `period` in either state: a draw's weather u
-    /// in [0, 1) takes the favourable energy of the bins whose share is above it.
-    fn states(&self, period: usize) -> [(f64, f64, f64); 2 * SHARE_BINS] {
-        self.0.map(|[homogeneous, favourable, mix]| {
-            let share = favourable_share(mix[period], homogeneous[period], favourable[period]);
-            (share, homogeneous[period], favourable[period])
-        })
-    }
 }
 
 /// The share of the time a source is heard in its favourable state, from its mean being the mix
@@ -477,22 +468,21 @@ fn railway_traffic(fields: &serde_json::Value) -> Option<([f64; PERIODS], f64, O
 /// wholly under its share and in part in the state its share falls in: one pass over the bins.
 fn weather_means(weather: &Weather, energy: [f64; PERIODS]) -> [[f64; WEATHER_STATES]; PERIODS] {
     std::array::from_fn(|period| {
-        let states = weather.states(period);
-        if states
-            .iter()
-            .all(|&(_, homogeneous, favourable)| homogeneous + favourable <= 0.0)
-        {
-            return [energy[period]; WEATHER_STATES];
-        }
         // Per state the excess of the bins whose share falls in it, whole and its part in it.
         let (mut whole, mut part) = ([0.0; WEATHER_STATES + 1], [0.0; WEATHER_STATES + 1]);
-        let mut calm = 0.0;
-        for (share, homogeneous, favourable) in states {
+        let (mut calm, mut silent) = (0.0, true);
+        for [homogeneous, favourable, mix] in &weather.0 {
+            let (homogeneous, favourable) = (homogeneous[period], favourable[period]);
+            silent &= homogeneous + favourable <= 0.0;
+            let share = favourable_share(mix[period], homogeneous, favourable);
             let position = share * WEATHER_STATES as f64;
             let state = (position as usize).min(WEATHER_STATES);
             whole[state] += favourable - homogeneous;
             part[state] += (position - state as f64) * (favourable - homogeneous);
             calm += homogeneous;
+        }
+        if silent {
+            return [energy[period]; WEATHER_STATES];
         }
         let mut means = [0.0; WEATHER_STATES];
         let mut above = 0.0;
@@ -530,7 +520,7 @@ pub fn heard(
 }
 
 /// Equally likely weather states of the place, one for every ray of it (a night's inversion bends
-/// them alike): in state k a piece is favourable when its share exceeds (k + 0.5) / WEATHER_STATES.
+/// them alike).
 pub(crate) const WEATHER_STATES: usize = 10;
 /// A line at least this dense (Kurze's lambda) holds its mean: its level stays within about 0.5 dB.
 pub const HOLDS_MEAN_LAMBDA: f64 = 10.0;
