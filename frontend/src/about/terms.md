@@ -23,7 +23,7 @@ property decisions.
 <details>
 <summary>Privacy</summary>
 
-quietmap.org uses **no cookies, no trackers and no analytics scripts** — which is why there is no consent banner to click away.
+quietmap.org uses **no trackers and no analytics scripts**, and sets one cookie only when you sign in, to keep you signed in. That is why there is no consent banner to click away.
 
 Like almost every website, our server keeps a standard technical **access log** — IP
 address, browser, and requested URLs, including the map coordinates you click — for
@@ -38,7 +38,17 @@ server asks Stay22 for rooms in that area for your dates and number of guests, w
 address; the places' photos load from other sites, and an offer's link is an affiliate link.
 
 Your precise location is used only if you tap the locate button and grant your browser's
-permission prompt. The last five places you opened stay in your browser.
+permission prompt. While you are signed out, the last five places you opened and the names you give
+places stay in your browser.
+
+**Signing in** is optional: it keeps your named places on every device you sign in on, and your last
+five places as the device you used last saved them. Our server then keeps your e-mail address, those
+names and those places, until you delete the account under Layers, which deletes them at once (GDPR
+art. 6(1)(b), the service you asked for). The places your browser kept before you signed in stay in
+it, and are added to the account only if you say so.
+The sign-in link is mailed by [Resend](https://resend.com), a mail service in the United States, which keeps the mail and
+its delivery log for 30 days. An address that asked for a link is kept for an hour, to limit how
+many links it gets, and is never used for anything else.
 
 Questions: [info@quietmap.org](mailto:info@quietmap.org).
 

@@ -1,4 +1,5 @@
-// The built frontend, served statically, its About pages, and real 404s for everything else.
+// The built frontend, served statically, its About pages and sign-in page, and real 404s for
+// everything else.
 // Unknown paths must remain 404s: returning index.html for scanner paths hides mistakes and makes
 // sensitive-looking URLs appear to exist. Browsers get the friendly HTML page, API and scanner
 // clients get JSON.
@@ -28,12 +29,18 @@ export async function registerWeb(app: FastifyInstance, frontendDist: string): P
     } catch {
       return reply.status(404).send({ error: 'Not found' })
     }
+    const reading = request.method === 'GET' || request.method === 'HEAD'
     const about = pathname.match(ABOUT_PATH)
-    if ((request.method === 'GET' || request.method === 'HEAD') && about && aboutPages.has(about[1] ?? '')) {
+    if (reading && about && aboutPages.has(about[1] ?? '')) {
       return reply.sendFile('index.html')
     }
+    // The page that signs in at a press (frontend/src/components/SignInPage.tsx) is never shown in
+    // another site's frame, where the press could be stolen.
+    if (reading && pathname === '/signin') {
+      return reply.header('X-Frame-Options', 'DENY').header('Content-Security-Policy', "frame-ancestors 'none'").sendFile('index.html')
+    }
     const wantsHtml =
-      (request.method === 'GET' || request.method === 'HEAD') &&
+      reading &&
       !pathname.startsWith('/api/') &&
       (request.headers.accept ?? '').includes('text/html')
     if (wantsHtml) {

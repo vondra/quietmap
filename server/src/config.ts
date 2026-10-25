@@ -25,6 +25,10 @@ export interface Config {
   /** The Stay22 account the places to stay are searched with: its affiliate id and API key; without
    *  one `/api/stay` answers 503, and the noise map stays up. */
   stay22: { aid: string; apiKey: string } | null
+  /** The optional sign-in: the accounts' SQLite file, the map's own origin (`https://quietmap.org`:
+   *  the links point there and only its pages change an account), and the mail the links go by (the
+   *  file holding the mail API's key, and the sender); without them the sign-in answers 503. */
+  accounts: { database: string; origin: string; mailKeyFile: string; mailFrom: string } | null
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -72,6 +76,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
     noIndex: env.QM_NOINDEX === '1',
     photonUrl: env.QM_PHOTON_URL || 'https://photon.komoot.io',
     stay22: stay22Account(env),
+    accounts: accounts(env),
   }
 }
 
@@ -79,4 +84,16 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
 function stay22Account(env: NodeJS.ProcessEnv): Config['stay22'] {
   if (!env.STAY22_AID && !env.STAY22_API_KEY) return null
   return { aid: required(env, 'STAY22_AID'), apiKey: required(env, 'STAY22_API_KEY') }
+}
+
+/** The sign-in's four values, all or none: some alone are a typo, and stop the start. */
+function accounts(env: NodeJS.ProcessEnv): Config['accounts'] {
+  const names = ['QM_ACCOUNTS_DB', 'QM_PUBLIC_ORIGIN', 'QM_MAIL_KEY_FILE', 'QM_MAIL_FROM']
+  if (names.every(name => !env[name])) return null
+  const [database, origin, mailKeyFile, mailFrom] = names.map(name => required(env, name))
+  if (URL.parse(origin)?.origin !== origin || !origin.startsWith('https://')) {
+    throw new Error(`QM_PUBLIC_ORIGIN must be an https origin without a path, not ${JSON.stringify(origin)}`)
+  }
+  accessSync(mailKeyFile, constants.R_OK)
+  return { database, origin, mailKeyFile, mailFrom }
 }

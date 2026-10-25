@@ -23,6 +23,7 @@ async function app(t: test.TestContext) {
     noIndex: false,
     photonUrl: 'http://127.0.0.1:9',
     stay22: { aid: 'test-aid', apiKey: 'test-key' },
+    accounts: null,
   })
   t.after(() => built.close())
   return built

@@ -14,13 +14,11 @@ import type { PopupUpdate, SegmentFan } from './types/noise'
 import { contributorHighlight, highlightGeoJson, topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
+import PlaceNote from './components/PlaceNote'
 import PlaceTitle from './components/PlaceTitle'
 import RecentPlaces from './components/RecentPlaces'
-import {
-  PLACE_TITLES_KEY, loadPlaceTitles, loadRecentPlaces, placeLabel, savePlaceTitles, saveRecentPlaces, titleAt, withName,
-  withPlace,
-  withTitle, withoutPlace, type RecentPlace,
-} from './lib/recent-places'
+import { placeLabel, titleAt, type RecentPlace } from './lib/place-rules'
+import { usePlaces } from './hooks/usePlaces'
 import { useIsDesktop } from './hooks/useIsDesktop'
 import type { DataLayerId } from './lib/data-layers'
 import { defaultStaySearch, freshSearch, type Stay, type StaySearch } from './lib/stays'
@@ -52,17 +50,11 @@ export default function App() {
   const [calculationOpen, setCalculationOpen] = useState(false)
   const toggleCalculation = useCallback(() => setCalculationOpen(open => !open), [])
   const desktop = useIsDesktop()
-  // The last places opened, newest first, kept in this browser.
-  const [recentPlaces, setRecentPlaces] = useState<RecentPlace[]>(loadRecentPlaces)
-  const [placeTitles, setPlaceTitles] = useState(() => loadPlaceTitles() ?? [])
-  // Names given in another tab show here too.
-  useEffect(() => {
-    const reload = (event: StorageEvent) => {
-      if (event.key === PLACE_TITLES_KEY) setPlaceTitles(loadPlaceTitles() ?? [])
-    }
-    window.addEventListener('storage', reload)
-    return () => window.removeEventListener('storage', reload)
-  }, [])
+  // The last places opened, newest first, and the names given places: this browser's, or the
+  // signed-in visitor's account's.
+  const {
+    account, recent: recentPlaces, titles: placeTitles, notSaved, visit, nameLate, forget: forgetPlace, rename, signOut, deleteAccount,
+  } = usePlaces()
   const highlightedSource = highlighted?.startsWith('source:')
     ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)
     : undefined
@@ -126,15 +118,11 @@ export default function App() {
         const place = typeof json?.place === 'string' && json.place ? json.place : null
         if (!place) return
         if (open) setGeocoded({ lat: position.lat, lng: position.lng, place })
-        setRecentPlaces(places => {
-          const next = withName(places, position, place)
-          if (next !== places) saveRecentPlaces(next)
-          return next
-        })
+        nameLate(position, place)
       })
       .catch(() => {})
     return () => { open = false }
-  }, [detailPosition])
+  }, [detailPosition, nameLate])
 
   // An answered point joins the recent places (again first), with its name once it is known.
   useEffect(() => {
@@ -146,19 +134,8 @@ export default function App() {
       sone: noiseDetailData.loudness?.nden_sone ?? null,
       lden: noiseDetailData.total_lden,
     }
-    setRecentPlaces(places => {
-      const next = withPlace(places, entry)
-      saveRecentPlaces(next)
-      return next
-    })
-  }, [detailPosition, noiseDetailData, detailPlaceName])
-  const forgetPlace = useCallback((place: RecentPlace) => {
-    setRecentPlaces(places => {
-      const next = withoutPlace(places, place)
-      saveRecentPlaces(next)
-      return next
-    })
-  }, [])
+    visit(entry)
+  }, [detailPosition, noiseDetailData, detailPlaceName, visit])
   // A tab flies to its place and opens its popup, as a search result does.
   const openPlace = useCallback((place: RecentPlace) => {
     setSelectedLocation({ display_name: place.place ?? '', lat: place.lat, lon: place.lng })
@@ -166,19 +143,18 @@ export default function App() {
   // The open place's own name, given or taken back over its popup.
   const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition) : null
   const renamePlace = useCallback((title: string | null) => {
-    if (!detailPosition) return
-    // From what storage holds now: another tab may have named places since this one read them.
-    const next = withTitle(loadPlaceTitles() ?? placeTitles, detailPosition, title)
-    savePlaceTitles(next)
-    setPlaceTitles(next)
-  }, [detailPosition, placeTitles])
+    if (detailPosition) rename(detailPosition, title)
+  }, [detailPosition, rename])
   const placeTitle = detailPosition && (
-    <PlaceTitle
-      key={`${detailPosition.lat},${detailPosition.lng}`}
-      title={detailTitle}
-      proposal={placeLabel(detailPlaceName)}
-      onRename={renamePlace}
-    />
+    <>
+      <PlaceTitle
+        key={`${detailPosition.lat},${detailPosition.lng}`}
+        title={detailTitle}
+        proposal={placeLabel(detailPlaceName)}
+        onRename={renamePlace}
+      />
+      <PlaceNote account={account} named={detailTitle != null} notSaved={notSaved} />
+    </>
   )
 
   const detailTotalLden = noiseDetailData?.total_lden ?? null
@@ -334,6 +310,7 @@ export default function App() {
     handleDetailPositionChange(next.detailPosition)
   }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleStaysChange, handleDetailPositionChange])
   const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange }
+  const accountControls = { account, onSignOut: signOut, onDeleteAccount: deleteAccount }
 
   return (
     // The app is the box the fixed controls stand in: a phone browser's 100vh reaches under its
@@ -357,6 +334,7 @@ export default function App() {
             dataLayers={dataLayers}
             onDataLayersChange={handleDataLayersChange}
             {...stayControls}
+            {...accountControls}
           />
           {detailPosition && (
             <RecentPlaces places={recentPlaces} titles={placeTitles} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />
@@ -440,6 +418,7 @@ export default function App() {
           dataLayers={dataLayers}
           onDataLayersChange={handleDataLayersChange}
           {...stayControls}
+          {...accountControls}
         />
       </div>
 

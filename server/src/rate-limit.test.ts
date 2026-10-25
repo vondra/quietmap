@@ -19,6 +19,7 @@ const CONFIG: AppConfig = {
   noIndex: false,
   photonUrl: 'http://127.0.0.1:9',
   stay22: { aid: 'test-aid', apiKey: 'test-key' },
+  accounts: null,
 }
 
 async function app(t: test.TestContext) {

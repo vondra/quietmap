@@ -1,5 +1,5 @@
-// Entry: the About pages under /about, else the map application with the published heatmap
-// tile build.
+// Entry: the About pages under /about, the page a sign-in link opens (/signin), else the map
+// application with the published heatmap tile build.
 import { StrictMode, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
@@ -8,15 +8,18 @@ import { initTileBuild } from './lib/tile-urls'
 import { aboutPageOf } from './lib/about-paths'
 
 const AboutPage = lazy(() => import('./components/AboutPage'))
+const SignInPage = lazy(() => import('./components/SignInPage'))
 // The server answers only the pages the build lists (server/src/web.ts).
 const about = aboutPageOf(window.location.pathname)
+const signIn = window.location.pathname === '/signin'
 
 // Resolve the published tile build in parallel with the React mount — the
 // heatmap layers stay unmounted until the manifest lands.
-if (about === null) void initTileBuild()
+if (about === null && !signIn) void initTileBuild()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {about !== null ? <Suspense fallback={null}><AboutPage page={about} /></Suspense> : <App />}
+    {about !== null ? <Suspense fallback={null}><AboutPage page={about} /></Suspense>
+      : signIn ? <Suspense fallback={null}><SignInPage /></Suspense> : <App />}
   </StrictMode>,
 )

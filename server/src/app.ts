@@ -1,6 +1,6 @@
-// The HTTP API: the streamed popup, the geocoder proxies, the heatmap tiles, the data layers and the
-// places to stay, behind per-client rate limits on the expensive routes. The static frontend is
-// added by server.ts (web.ts).
+// The HTTP API: the streamed popup, the geocoder proxies, the heatmap tiles, the data layers, the
+// places to stay and the optional sign-in, behind per-client rate limits on the expensive routes. The
+// static frontend is added by server.ts (web.ts).
 import Fastify from 'fastify'
 import type { FastifyError, FastifyInstance } from 'fastify'
 import compress from '@fastify/compress'
@@ -14,13 +14,16 @@ import { heatmapPmtilesRoutes } from './routes/heatmap-pmtiles.ts'
 import { heatmapManifestRoutes } from './routes/heatmap-manifest.ts'
 import { rasterRoutes } from './routes/raster.ts'
 import { stayRoutes } from './routes/stay.ts'
+import { accountRoutes } from './routes/account.ts'
+import { AccountStore } from './accounts/store.ts'
+import { resendSender } from './accounts/mail.ts'
 
 /** Clicks waiting per computing slot: beyond that a visitor waits longer than a retry takes. */
 const POPUP_QUEUE_PER_SLOT = 2
 /** A click still computing after this is killed and answered with an error. */
 const POPUP_TIMEOUT_MS = 30_000
 
-export type AppConfig = Pick<Config, 'popupBin' | 'rasterBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex' | 'photonUrl' | 'stay22'>
+export type AppConfig = Pick<Config, 'popupBin' | 'rasterBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex' | 'photonUrl' | 'stay22' | 'accounts'>
 
 export async function buildApp(
   config: AppConfig,
@@ -67,7 +70,7 @@ export async function buildApp(
     errorResponseBuilder: (_request, context) => ({
       statusCode: 429,
       error: 'Too Many Requests',
-      message: `Rate limit exceeded (${context.max} requests per second). Retry shortly.`,
+      message: `Rate limit exceeded, retry in ${context.after}`,
     }),
   })
 
@@ -84,5 +87,12 @@ export async function buildApp(
   await app.register(heatmapManifestRoutes, { tilesDir: config.tilesDir })
   await app.register(rasterRoutes, { rasterBin: config.rasterBin, preparedDir: config.preparedDir, year: config.years[0] })
   await app.register(stayRoutes, { stay22: config.stay22 })
+  const accounts = config.accounts && {
+    store: new AccountStore(config.accounts.database),
+    sendLink: resendSender(config.accounts.mailKeyFile, config.accounts.mailFrom),
+    origin: config.accounts.origin,
+  }
+  if (accounts) app.addHook('onClose', async () => accounts.store.close())
+  await app.register(accountRoutes, { accounts })
   return app
 }

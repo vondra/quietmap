@@ -1,8 +1,8 @@
 // The recent places as one row of tabs above the popup, newest first: each the place's name over its
 // whole-day loudness, the open one marked and forgotten by its cross; a tab reopens its place. Kept
-// in this browser only.
+// in this browser or with the account (`hooks/usePlaces.ts`).
 import { X } from 'lucide-react'
-import { placeLabel, samePlace, titleAt, type PlaceTitle, type RecentPlace } from '../lib/recent-places'
+import { placeLabel, samePlace, titleAt, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
 import { fmtSone } from '../utils/formatters'
 
 /** The name the visitor gave the place, else its geocoded name up to its first comma, else its

@@ -1,12 +1,10 @@
 // The open place's name over its answer, a field of its own: the name the visitor gave it, else its
 // geocoded name proposed in grey; typing names it, leaving the field (Enter, a tap elsewhere) keeps
 // the name, Escape leaves it as it was, and an emptied field gives the proposal back. Kept in this
-// browser (`lib/recent-places.ts`).
+// browser or with the account (`hooks/usePlaces.ts`).
 import { Pencil } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-
-/** The longest name kept. */
-const TITLE_MAX = 80
+import { TITLE_MAX } from '../lib/place-rules'
 
 export default function PlaceTitle({ title, proposal, onRename }: {
   /** The name the visitor gave the place. */

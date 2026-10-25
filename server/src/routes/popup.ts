@@ -21,6 +21,13 @@ export function coordinate(text: unknown): number | null {
   return Number.isFinite(value) ? value : null
 }
 
+/** A longitude within [-180, 180): a click on a repeated world copy of the map leaves it outside.
+ *  Only a longitude outside it moves: the arithmetic moves an in-range one by 1e-14, enough to change
+ *  the click's sampling seed against the same point asked of the popup directly. */
+export function wrappedLongitude(lon: number): number {
+  return lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180
+}
+
 /** An opened row's parts: one to 32 group ids of 16 hex digits. */
 const SOURCE = /^[0-9a-f]{16}(,[0-9a-f]{16}){0,31}$/
 /** A listed piece's rank: the popup lists 24. */
@@ -46,9 +53,7 @@ export function parsePopupQuery(
   return {
     year,
     lat,
-    // Only a longitude outside it wraps: the arithmetic moves an in-range one by 1e-14, enough to
-    // change the click's sampling seed against the same point asked of the popup directly.
-    lon: lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180,
+    lon: wrappedLongitude(lon),
     ...(typeof query.source === 'string' ? { source: query.source.split(',') } : {}),
     ...(typeof query.piece === 'string' ? { piece: Number(query.piece) } : {}),
   }

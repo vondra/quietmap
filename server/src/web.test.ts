@@ -24,10 +24,15 @@ test('the map, its files and its About pages are served; nothing else pretends t
     assert.match(response.body, /quiet-map-test/)
   }
   assert.equal((await app.inject('/known.js')).statusCode, 200)
+  const signIn = await app.inject('/signin')
+  assert.equal(signIn.statusCode, 200)
+  assert.match(signIn.body, /quiet-map-test/)
+  assert.equal(signIn.headers['x-frame-options'], 'DENY')
 
   for (const url of [
     '/.env', '/.git/config', '/.ssh/id_rsa', '/aboutness', '/about/data-sources/europe/de', '/about//news', '/about//', '/about/news//', '/about/.env',
     '/%2eenv', '/assets/missing.js', '/api/missing', '/about/%6eews', '/%61bout/news', '/about%2fnews',
+    '/signin/', '/signin/x',
   ]) {
     const response = await app.inject(url)
     assert.equal(response.statusCode, 404, url)
