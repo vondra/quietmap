@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- Added to a phone's home screen, the map opens as an app of its own: full screen, with its own
+         icon, and with storage Safari does not clear (it clears a site's after seven days of use
+         without a visit). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="Quiet Map" />
+    <meta name="theme-color" content="#ffffff" />
     <link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin />
     <link rel="preconnect" href="https://a.tile.opentopomap.org" crossorigin />
     <link rel="preconnect" href="https://services.arcgisonline.com" crossorigin />
