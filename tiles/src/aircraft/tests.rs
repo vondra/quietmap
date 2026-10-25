@@ -8,13 +8,22 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         std::array::from_fn(|distance| 120.0 - 3.0 * distance as f64 - period as f64)
     });
     AircraftBox {
-        zoom: 19,
-        cell: [127, 3],
-        group: Group::Helicopter,
-        ground_m: 301.0,
-        clearance_m: 49.0,
-        height_m: 49.0,
-        centroid: [16_200, -15_500],
+        place: BoxPlace {
+            zoom: 19,
+            cell: [127, 3],
+            group: Group::Helicopter,
+            ground_m: 301.0,
+            clearance_m: 49.0,
+            height_m: 49.0,
+            centroid: [16_200, -15_500],
+            first_piece,
+            piece_count,
+            loudest_lamax_db: if piece_count > 0 {
+                91.26
+            } else {
+                f64::NEG_INFINITY
+            },
+        },
         centroid_altitude_m: 371.0,
         axis_rad: 2.5,
         gradient: -0.052,
@@ -32,13 +41,6 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
             [[1.0, 0.0, 0.0], [0.9, 0.1, 0.0]],
             [[0.0, 0.0, 1.0], [0.05, 0.05, 0.9]],
         ],
-        first_piece,
-        piece_count,
-        loudest_lamax_db: if piece_count > 0 {
-            91.26
-        } else {
-            f64::NEG_INFINITY
-        },
     }
 }
 
@@ -93,19 +95,23 @@ fn boxes_flights_and_pieces_round_trip_within_their_steps() {
     let read = parsed.aircraft_box(0);
     let written = &boxes[0];
     assert_eq!(
-        (read.zoom, read.cell, read.group),
+        (read.place.zoom, read.place.cell, read.place.group),
         (19, [127, 3], Group::Helicopter)
     );
     assert_eq!(
-        (read.ground_m, read.clearance_m, read.height_m),
+        (
+            read.place.ground_m,
+            read.place.clearance_m,
+            read.place.height_m
+        ),
         (301.0, 49.0, 49.0)
     );
     // Zoom 19: a cell of 256 steps keeps every step of its centroid.
     assert_eq!(
-        (read.centroid, read.centroid_altitude_m),
+        (read.place.centroid, read.centroid_altitude_m),
         ([16_200, -15_500], 371.0)
     );
-    assert_eq!(parsed.box_centroid(0), read.centroid);
+    assert_eq!(parsed.box_centroid(0), read.place.centroid);
     assert!((read.axis_rad - 2.5).abs() < 1e-4);
     assert!((read.gradient - -0.052).abs() < 1e-4);
     assert_eq!(read.piece_length_m, [44.0, 51.0, 38.0]);
@@ -137,12 +143,12 @@ fn boxes_flights_and_pieces_round_trip_within_their_steps() {
             assert!(close(*r, *w, 1.0 / 255.0), "{r} vs {w}");
         }
     }
-    assert_eq!((read.first_piece, read.piece_count), (0, 2));
+    assert_eq!((read.place.first_piece, read.place.piece_count), (0, 2));
     // Rounded up, so a bound stays a bound.
-    assert_eq!(read.loudest_lamax_db, 91.5);
+    assert_eq!(read.place.loudest_lamax_db, 91.5);
     assert_eq!(parsed.flight(0), flights[0]);
     assert_eq!(parsed.flight(1), flights[1]);
-    let piece = parsed.piece(&read, 0);
+    let piece = parsed.piece(&read.place, 0);
     assert_eq!(piece.flight, 1);
     // The finest scale: within a step.
     for (r, w) in piece
@@ -185,7 +191,7 @@ fn a_silent_period_is_left_out_and_reads_back_silent() {
     assert_eq!(read.installation_shares[1], [[0.0, 0.0, 1.0]; 2]);
     // The next box finds its own periods and pieces after the left-out evening.
     let next = parsed.aircraft_box(1);
-    assert_eq!((next.first_piece, next.piece_count), (1, 1));
+    assert_eq!((next.place.first_piece, next.place.piece_count), (1, 1));
     assert!(close(
         next.flights_per_day[1],
         loud.flights_per_day[1],
@@ -211,8 +217,8 @@ fn boxes_beyond_a_block_find_their_periods_and_pieces() {
             record
         })
         .scan(0u32, |first, mut record| {
-            record.first_piece = *first;
-            *first += u32::from(record.piece_count);
+            record.place.first_piece = *first;
+            *first += u32::from(record.place.piece_count);
             Some(record)
         })
         .collect();
@@ -223,8 +229,8 @@ fn boxes_beyond_a_block_find_their_periods_and_pieces() {
         let read = parsed.aircraft_box(index);
         assert_eq!(read.flights_per_day[0], index as f64, "whole rates exact");
         assert_eq!(
-            (read.first_piece, read.piece_count),
-            (written.first_piece, written.piece_count)
+            (read.place.first_piece, read.place.piece_count),
+            (written.place.first_piece, written.place.piece_count)
         );
         for period in 0..PERIODS {
             assert_eq!(read.heard(period), written.heard(period));
@@ -295,7 +301,7 @@ fn a_wide_piece_keeps_its_ends_exact() {
     let bytes = encode(&boxes, &[a_flight(1)], &pieces);
     let parsed = Aircraft::parse(&bytes).unwrap();
     let first = parsed.aircraft_box(0);
-    assert_eq!(parsed.piece(&first, 1).ends, far.ends);
+    assert_eq!(parsed.piece(&first.place, 1).ends, far.ends);
     assert!(parsed.box_reaches_past(0) && parsed.box_reaches_past(1));
     // a_piece ends 36 steps east of its cell and 56 m above its slab; one within both does not.
     let past = encode(&[a_box(0, 1)], &[a_flight(1)], &[a_piece(0)]);
@@ -305,8 +311,8 @@ fn a_wide_piece_keeps_its_ends_exact() {
     inside.altitudes_m = [345.0, 404.0];
     let near = encode(&[a_box(0, 1)], &[a_flight(1)], &[inside]);
     assert!(!Aircraft::parse(&near).unwrap().box_reaches_past(0));
-    assert_eq!(parsed.piece(&parsed.aircraft_box(1), 0).ends, far.ends);
-    assert_ne!(parsed.piece(&first, 0).ends, far.ends);
+    assert_eq!(parsed.piece(&parsed.box_place(1), 0).ends, far.ends);
+    assert_ne!(parsed.piece(&first.place, 0).ends, far.ends);
     let mut lost = bytes.clone();
     lost[32] = 1;
     assert!(

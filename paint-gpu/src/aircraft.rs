@@ -160,7 +160,7 @@ impl DeviceFlightBoxes {
             .flat_map_iter(|(tile, boxes, indices)| {
                 indices.iter().map(move |&index| {
                     let record = boxes.aircraft_box(index);
-                    let global = tile.global(record.centroid);
+                    let global = tile.global(record.place.centroid);
                     let [east_m, north_m] = square
                         .frame
                         .metres_of_steps([global.x as f64, global.y as f64]);
@@ -191,10 +191,10 @@ impl DeviceFlightBoxes {
                                 / FLIGHT_SPEED_M_S) as f32
                         }),
                         screened: u32::from(
-                            record.centroid_altitude_m - record.ground_m
+                            record.centroid_altitude_m - record.place.ground_m
                                 < SCREENING_CEILING_ABOVE_GROUND_M,
                         ),
-                        helicopter: u32::from(record.group == Group::Helicopter),
+                        helicopter: u32::from(record.place.group == Group::Helicopter),
                         silent: record.energy_db.map(|levels| {
                             u32::from(levels.iter().all(|&l| l == f64::NEG_INFINITY))
                         }),

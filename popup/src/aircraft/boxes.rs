@@ -13,7 +13,7 @@ use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
 use physics::doc29::npd::lamax_rise_bound_db;
 use physics::doc29::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M};
 use rayon::prelude::*;
-use tiles::aircraft::{Aircraft, AircraftBox, Group};
+use tiles::aircraft::{Aircraft, AircraftBox, BoxPlace, Group};
 use tiles::geo::{LocalFrame, Mercator, TileId};
 
 /// Aircraft within this horizontal distance of the receiver are heard (dev4's airborne reach;
@@ -90,12 +90,7 @@ impl ReceiverArea {
 /// The nearest a box's model, and its pieces where none reaches past it by more than an eighth of
 /// its edge, can come to a receiver of `area` (m): its cell and slab widened by a quarter edge,
 /// the first band down to any depth.
-fn nearest_slant_m(
-    record: &AircraftBox,
-    tile: TileId,
-    frame: &LocalFrame,
-    area: ReceiverArea,
-) -> f64 {
+fn nearest_slant_m(record: &BoxPlace, tile: TileId, frame: &LocalFrame, area: ReceiverArea) -> f64 {
     let cells = f64::from(1u32 << (record.zoom - 12));
     let corner = |offset: f64| {
         frame.to_metres(Mercator {
@@ -131,7 +126,7 @@ pub fn minimum_box_slant_m(
         position: std::array::from_fn(|axis| 0.5 * (area.low[axis] + area.high[axis])),
         altitude_m: 0.5 * (area.altitudes_m[0] + area.altitudes_m[1]),
     };
-    let [east, north] = centroid_offset_m(record.centroid, tile, frame, midpoint);
+    let [east, north] = centroid_offset_m(record.place.centroid, tile, frame, midpoint);
     let centroid = [
         east,
         north,
@@ -142,7 +137,7 @@ pub fn minimum_box_slant_m(
         0.5 * (area.high[1] - area.low[1]),
         0.5 * (area.altitudes_m[1] - area.altitudes_m[0]),
     ];
-    if record.centroid_altitude_m - record.ground_m < SCREENING_CEILING_ABOVE_GROUND_M
+    if record.centroid_altitude_m - record.place.ground_m < SCREENING_CEILING_ABOVE_GROUND_M
         || (east.abs() + half_extent[0]).hypot(north.abs() + half_extent[1]) > AIRCRAFT_REACH_M
     {
         return 0.0;
@@ -154,7 +149,7 @@ pub fn minimum_box_slant_m(
     ]
     .into_iter()
     .map(|gradient| minimum_line_slant_m(centroid, record.axis_rad, gradient, half_extent))
-    .fold(nearest_slant_m(record, tile, frame, area), f64::min)
+    .fold(nearest_slant_m(&record.place, tile, frame, area), f64::min)
 }
 
 /// A box centroid's horizontal offset from the receiver, east and north (m).
@@ -187,10 +182,10 @@ fn box_at(
         tail_levels_db: &record.tail_energy_db,
         lg_scaled_distance: &record.lg_scaled_distance,
         installation_shares: record.installation_shares,
-        ground_m: record.ground_m - altitude_m,
+        ground_m: record.place.ground_m - altitude_m,
     };
     let sel = box_sel_at_receiver(&at_receiver, horizons);
-    let impedance_gain = match record.group {
+    let impedance_gain = match record.place.group {
         Group::FixedWing => impedance_gain,
         Group::Helicopter => 1.0,
     };
@@ -262,7 +257,7 @@ pub fn tile_flight_sums(
 /// it (r064: up to two edges from the centroid), so its own ends bound it, not the box.
 fn nearest_piece_slant_m(
     aircraft: &Aircraft<'_>,
-    record: &AircraftBox,
+    record: &BoxPlace,
     tile: TileId,
     frame: &LocalFrame,
     area: ReceiverArea,
@@ -296,7 +291,7 @@ fn nearest_piece_slant_m(
 fn lamax_bound(
     aircraft: &Aircraft<'_>,
     (tile, index): (TileId, usize),
-    record: &AircraftBox,
+    record: &BoxPlace,
     frame: &LocalFrame,
     area: ReceiverArea,
     impedance_db: f64,
@@ -335,7 +330,7 @@ pub fn box_lamax_bound(
     lamax_bound(
         aircraft,
         (tile, index),
-        &aircraft.aircraft_box(index),
+        &aircraft.box_place(index),
         frame,
         area,
         impedance_db,
@@ -354,7 +349,7 @@ pub fn box_lamax_bound_over(
     lamax_bound(
         aircraft,
         (tile, index),
-        &aircraft.aircraft_box(index),
+        &aircraft.box_place(index),
         frame,
         area,
         impedance_db,
@@ -377,7 +372,8 @@ pub fn tile_energy(
         .with_min_len(1_024)
         .map(|index| {
             let record = aircraft.aircraft_box(index);
-            let horizontal_offset_m = centroid_offset_m(record.centroid, tile, frame, receiver);
+            let horizontal_offset_m =
+                centroid_offset_m(record.place.centroid, tile, frame, receiver);
             let within_reach =
                 horizontal_offset_m[0].hypot(horizontal_offset_m[1]) <= AIRCRAFT_REACH_M;
             if !within_reach {
@@ -394,7 +390,7 @@ pub fn tile_energy(
             let bound = lamax_bound(
                 aircraft,
                 (tile, index),
-                &record,
+                &record.place,
                 frame,
                 ReceiverArea::of(receiver),
                 impedance_db,
@@ -405,7 +401,7 @@ pub fn tile_energy(
                     .map(|period| {
                         let mut alone = [0.0; PERIODS];
                         alone[period] = energy[period];
-                        let share = match (record.group, kind) {
+                        let share = match (record.place.group, kind) {
                             (Group::FixedWing, 0..=2) => sel.installation_fractions[period][kind],
                             (Group::Helicopter, 3) => 1.0,
                             _ => 0.0,

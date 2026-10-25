@@ -147,6 +147,7 @@ pub fn read_loudest_in_order(
             flights.add_boxes(boxes, *tile, &[index], frame, receiver, horizons);
         }
     }
+    flights.sum_listed(receiver.altitude_m);
 }
 
 #[cfg(test)]

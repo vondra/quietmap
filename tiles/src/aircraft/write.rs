@@ -40,9 +40,9 @@ fn u24(bytes: &mut Vec<u8>, value: u32, what: &str) {
 /// A box's slab as its band table row: zoom, clearance and height.
 fn band_of(record: &AircraftBox) -> (u8, u16, u16) {
     (
-        record.zoom,
-        metres_u16(record.clearance_m),
-        metres_u16(record.height_m),
+        record.place.zoom,
+        metres_u16(record.place.clearance_m),
+        metres_u16(record.place.height_m),
     )
 }
 
@@ -66,11 +66,11 @@ fn mix_of(shares: &[[f64; INSTALLATIONS]; 2]) -> [u8; MIX_BYTES] {
 /// Whether a piece of a box reaches past its cell or its slab by more than an eighth of the edge
 /// (the slab as stored, to the metre): a reader bounds the others by their box alone.
 fn reaches_past(record: &AircraftBox, pieces: &[FlightPiece]) -> bool {
-    let edge = cell_steps(record.zoom);
+    let edge = cell_steps(record.place.zoom);
     let (ground, clearance, height) = (
-        f64::from(metres_i16(record.ground_m)),
-        f64::from(metres_u16(record.clearance_m)),
-        f64::from(metres_u16(record.height_m)),
+        f64::from(metres_i16(record.place.ground_m)),
+        f64::from(metres_u16(record.place.clearance_m)),
+        f64::from(metres_u16(record.place.height_m)),
     );
     let floor = if clearance == 0.0 {
         f64::NEG_INFINITY
@@ -81,7 +81,7 @@ fn reaches_past(record: &AircraftBox, pieces: &[FlightPiece]) -> bool {
     pieces.iter().any(|piece| {
         let outside_cell = piece.ends.iter().any(|end| {
             (0..2).any(|axis| {
-                let west = -16_384 + i32::from(record.cell[axis]) * edge;
+                let west = -16_384 + i32::from(record.place.cell[axis]) * edge;
                 let coordinate = i32::from(end[axis]);
                 coordinate < west - edge / 8 || coordinate > west + edge + edge / 8
             })
@@ -95,18 +95,22 @@ fn reaches_past(record: &AircraftBox, pieces: &[FlightPiece]) -> bool {
 }
 
 fn head_of(record: &AircraftBox, reaching: bool) -> u8 {
-    assert!(record.piece_count <= 3, "{} pieces", record.piece_count);
+    assert!(
+        record.place.piece_count <= 3,
+        "{} pieces",
+        record.place.piece_count
+    );
     let heard = (0..PERIODS)
         .filter(|&period| record.heard(period))
         .fold(0, |head, period| head | 1 << period);
     assert!(heard != 0, "a box heard in no period");
-    let helicopter = match record.group {
+    let helicopter = match record.place.group {
         Group::FixedWing => 0,
         Group::Helicopter => HEAD_HELICOPTER,
     };
     heard
         | helicopter
-        | record.piece_count << HEAD_PIECES_SHIFT
+        | record.place.piece_count << HEAD_PIECES_SHIFT
         | if reaching { HEAD_REACHING } else { 0 }
 }
 
@@ -114,19 +118,19 @@ fn head_of(record: &AircraftBox, reaching: bool) -> u8 {
 /// stored from).
 fn place_of(record: &AircraftBox) -> ([u8; 2], [u8; 2], [i16; 2]) {
     assert!(
-        (12..=MAXIMUM_ZOOM).contains(&record.zoom),
+        (12..=MAXIMUM_ZOOM).contains(&record.place.zoom),
         "box zoom {}",
-        record.zoom
+        record.place.zoom
     );
-    let edge = cell_steps(record.zoom);
-    let cells: [u8; 2] = record.cell.map(|c| {
+    let edge = cell_steps(record.place.zoom);
+    let cells: [u8; 2] = record.place.cell.map(|c| {
         u8::try_from(c)
             .ok()
             .filter(|&c| i32::from(c) * edge < 32_768)
             .expect("a box cell inside the tile")
     });
     let places: [u8; 2] =
-        std::array::from_fn(|axis| in_cell_code(record.centroid[axis], cells[axis], edge));
+        std::array::from_fn(|axis| in_cell_code(record.place.centroid[axis], cells[axis], edge));
     let centroid = std::array::from_fn(|axis| in_cell(places[axis], cells[axis], edge));
     (cells, places, centroid)
 }
@@ -136,7 +140,7 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox, band: u8) {
     let (cells, places, _) = place_of(record);
     bytes.push(band);
     bytes.extend_from_slice(&cells);
-    bytes.extend_from_slice(&metres_i16(record.ground_m).to_le_bytes());
+    bytes.extend_from_slice(&metres_i16(record.place.ground_m).to_le_bytes());
     bytes.extend_from_slice(&places);
     bytes.extend_from_slice(&metres_i16(record.centroid_altitude_m).to_le_bytes());
     let axis = record.axis_rad.rem_euclid(std::f64::consts::PI) / std::f64::consts::PI;
@@ -158,7 +162,7 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox, band: u8) {
     let (first, steps) = lg_distance_codes(&record.lg_scaled_distance);
     bytes.extend_from_slice(&first.to_le_bytes());
     bytes.extend_from_slice(&steps);
-    bytes.push(lamax_code(record.loudest_lamax_db));
+    bytes.push(lamax_code(record.place.loudest_lamax_db));
     assert_eq!(bytes.len() - start, BOX_BYTES);
 }
 
@@ -243,11 +247,14 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
     let (mut scales, mut wide) = (Vec::with_capacity(pieces.len()), Vec::new());
     for record in boxes {
         assert_eq!(
-            record.first_piece as usize,
+            record.place.first_piece as usize,
             scales.len(),
             "a box's pieces must follow the boxes before it"
         );
-        let (first, count) = (record.first_piece as usize, usize::from(record.piece_count));
+        let (first, count) = (
+            record.place.first_piece as usize,
+            usize::from(record.place.piece_count),
+        );
         assert!(first + count <= pieces.len(), "a box names a missing piece");
         let (_, _, centroid) = place_of(record);
         for (piece, index) in pieces[first..first + count].iter().zip(first..) {
@@ -262,8 +269,8 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
     let heads: Vec<u8> = boxes
         .iter()
         .map(|record| {
-            let first = record.first_piece as usize;
-            let mine = &pieces[first..first + usize::from(record.piece_count)];
+            let first = record.place.first_piece as usize;
+            let mine = &pieces[first..first + usize::from(record.place.piece_count)];
             head_of(record, reaches_past(record, mine))
         })
         .collect();
@@ -306,7 +313,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             bytes.extend_from_slice(&pieces_before.to_le_bytes());
         }
         periods_before += (head & 7).count_ones();
-        pieces_before += u32::from(record.piece_count);
+        pieces_before += u32::from(record.place.piece_count);
     }
     bytes.extend_from_slice(&heads);
     for record in boxes {
@@ -323,8 +330,8 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
         bytes.extend_from_slice(&flight.start_unix.to_le_bytes());
     }
     for record in boxes {
-        let (first, (_, _, centroid)) = (record.first_piece as usize, place_of(record));
-        for (piece, &scale) in pieces[first..first + usize::from(record.piece_count)]
+        let (first, (_, _, centroid)) = (record.place.first_piece as usize, place_of(record));
+        for (piece, &scale) in pieces[first..first + usize::from(record.place.piece_count)]
             .iter()
             .zip(&scales[first..])
         {

@@ -296,6 +296,39 @@ pub fn segment_sel_at_receiver(
     horizons: &impl ReceiverHorizons,
 ) -> SegmentSel {
     let closest = closest_points(geometry.start_m, geometry.end_m);
+    let screening = segment_screening_db(geometry, &closest, horizons);
+    screened_segment_sel(emission, closest, screening)
+}
+
+/// The terrain's and the buildings' losses toward a segment (dB; [`segment_sel_at_receiver`]):
+/// the terrain horizon's at the closest point of its line, the buildings' at the closest point of
+/// the segment, none above [`SCREENING_CEILING_ABOVE_GROUND_M`].
+pub fn segment_screening_db(
+    geometry: &SegmentGeometry,
+    closest: &ClosestPoints,
+    horizons: &impl ReceiverHorizons,
+) -> [f64; 2] {
+    let height_above_ground_m = 0.5
+        * (geometry.start_m[2] - geometry.ground_under_start_m + geometry.end_m[2]
+            - geometry.ground_under_end_m);
+    if height_above_ground_m < SCREENING_CEILING_ABOVE_GROUND_M {
+        [
+            horizons.terrain_loss_db(closest.on_line_m),
+            horizons.building_loss_db(closest.on_segment_m),
+        ]
+    } else {
+        [0.0, 0.0]
+    }
+}
+
+/// [`segment_sel_at_receiver`] of a segment with its `closest` points and its losses `screening`
+/// ([`segment_screening_db`]) found before: a click's loudest flights find them as each piece is
+/// read, with that ring's horizons, and the rest only for the flights listed.
+pub fn screened_segment_sel(
+    emission: &SegmentEmission,
+    closest: ClosestPoints,
+    [terrain_loss_db, building_loss_db]: [f64; 2],
+) -> SegmentSel {
     let [east_m, north_m, up_m] = closest.on_line_m;
     let slant_m = east_m.hypot(north_m).hypot(up_m);
     let npd = emission.read_npd(slant_m);
@@ -311,18 +344,6 @@ pub fn segment_sel_at_receiver(
         10.0 * installation_energy_gain(emission.installation, closest.height_m, slant_m).log10();
     let free_sel_db =
         npd.sel_db + emission.speed_correction_db + installation - lateral_attenuation + finite;
-    let height_above_ground_m = 0.5
-        * (geometry.start_m[2] - geometry.ground_under_start_m + geometry.end_m[2]
-            - geometry.ground_under_end_m);
-    let (terrain_loss_db, building_loss_db) =
-        if height_above_ground_m < SCREENING_CEILING_ABOVE_GROUND_M {
-            (
-                horizons.terrain_loss_db(closest.on_line_m),
-                horizons.building_loss_db(closest.on_segment_m),
-            )
-        } else {
-            (0.0, 0.0)
-        };
     SegmentSel {
         sel_db: screened_sel_db(
             free_sel_db,

@@ -14,7 +14,7 @@ use popup::answer::{Options, answer};
 use popup::release::Release;
 use std::path::PathBuf;
 use tiles::Kind;
-use tiles::aircraft::{AircraftBox, Group, encode};
+use tiles::aircraft::{AircraftBox, BoxPlace, Group, encode};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::sources::Layer;
 use tiles::square::write_tiles;
@@ -78,13 +78,18 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
     // The zoom-18 cell (512 steps) holding the centroid.
     let cell = centroid.map(|c| ((i32::from(c) + 16_384) / 512) as u16);
     AircraftBox {
-        zoom: 18,
-        cell,
-        group: Group::FixedWing,
-        ground_m: 0.0,
-        clearance_m: 588.0,
-        height_m: 98.0,
-        centroid,
+        place: BoxPlace {
+            zoom: 18,
+            cell,
+            group: Group::FixedWing,
+            ground_m: 0.0,
+            clearance_m: 588.0,
+            height_m: 98.0,
+            centroid,
+            first_piece: 0,
+            piece_count: 0,
+            loudest_lamax_db: f64::NEG_INFINITY,
+        },
         centroid_altitude_m: values.centroid_m[2],
         axis_rad: values.axis_rad,
         gradient: values.gradient,
@@ -95,9 +100,6 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
         tail_energy_db: values.tail_levels_db,
         lg_scaled_distance: values.scaled_distance_m.map(f64::log10),
         installation_shares: values.installation_shares,
-        first_piece: 0,
-        piece_count: 0,
-        loudest_lamax_db: f64::NEG_INFINITY,
     }
 }
 

@@ -85,7 +85,7 @@ fn box_energy<'a>(
     for (tile, aircraft) in tiles {
         for index in 0..aircraft.box_count() {
             let record = aircraft.aircraft_box(index);
-            let global = tile.global(record.centroid);
+            let global = tile.global(record.place.centroid);
             let [east, north] = receiver
                 .frame
                 .metres_of_steps([global.x as f64, global.y as f64]);
@@ -106,10 +106,10 @@ fn box_energy<'a>(
                 tail_levels_db: &record.tail_energy_db,
                 lg_scaled_distance: &record.lg_scaled_distance,
                 installation_shares: record.installation_shares,
-                ground_m: record.ground_m - receiver.altitude_m,
+                ground_m: record.place.ground_m - receiver.altitude_m,
             };
             let sel = box_sel_at_receiver(&at_receiver, &Unscreened);
-            let band = usize::from(record.clearance_m > 0.0);
+            let band = usize::from(record.place.clearance_m > 0.0);
             let distance = distance_band(east.hypot(north));
             for (period, &value) in sel.sel_energy.iter().enumerate() {
                 energy.bands[band][period] += value;
@@ -297,7 +297,7 @@ fn diagnose(
         let bands = tile_bands(*tile, level_step_db);
         for index in 0..aircraft.box_count() {
             let record = aircraft.aircraft_box(index);
-            let global = tile.global(record.centroid);
+            let global = tile.global(record.place.centroid);
             let [east, north] = receiver
                 .frame
                 .metres_of_steps([global.x as f64, global.y as f64]);
@@ -305,19 +305,20 @@ fn diagnose(
                 continue;
             }
             let Some(band) = bands.iter().position(|band| {
-                band.zoom == record.zoom && (band.clearance_m - record.clearance_m).abs() < 1.0
+                band.zoom == record.place.zoom
+                    && (band.clearance_m - record.place.clearance_m).abs() < 1.0
             }) else {
                 continue;
             };
-            let per_tile = 1u32 << (record.zoom - 12);
+            let per_tile = 1u32 << (record.place.zoom - 12);
             let key = BoxKey {
                 tile: *tile,
                 band: band as u8,
                 cell: [
-                    tile.x * per_tile + u32::from(record.cell[0]),
-                    tile.y * per_tile + u32::from(record.cell[1]),
+                    tile.x * per_tile + u32::from(record.place.cell[0]),
+                    tile.y * per_tile + u32::from(record.place.cell[1]),
                 ],
-                helicopter: record.group == tiles::aircraft::Group::Helicopter,
+                helicopter: record.place.group == tiles::aircraft::Group::Helicopter,
             };
             let at_receiver = AircraftBoxAtReceiver {
                 centroid_m: [
@@ -333,7 +334,7 @@ fn diagnose(
                 tail_levels_db: &record.tail_energy_db,
                 lg_scaled_distance: &record.lg_scaled_distance,
                 installation_shares: record.installation_shares,
-                ground_m: record.ground_m - receiver.altitude_m,
+                ground_m: record.place.ground_m - receiver.altitude_m,
             };
             let energy: [f64; PERIODS] = box_sel_at_receiver(&at_receiver, &Unscreened).sel_energy;
             let (lat, lon) = tiles::geo::Mercator {
@@ -347,8 +348,8 @@ fn diagnose(
                     BoxDiagnosis {
                         centroid: [lat, lon, record.centroid_altitude_m],
                         distance_m: east.hypot(north),
-                        zoom: record.zoom,
-                        clearance_m: record.clearance_m,
+                        zoom: record.place.zoom,
+                        clearance_m: record.place.clearance_m,
                         flights_per_day: 0.0,
                         axis_deg: record.axis_rad.to_degrees(),
                         gradient: record.gradient,

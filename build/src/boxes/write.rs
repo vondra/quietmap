@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
 use tiles::Kind;
-use tiles::aircraft::{AircraftBox, Flight, FlightPiece, Group, encode};
+use tiles::aircraft::{AircraftBox, BoxPlace, Flight, FlightPiece, Group, encode};
 use tiles::geo::{LocalFrame, Mercator, TileId};
 use tiles::square::SquareWriter;
 
@@ -110,20 +110,28 @@ fn encode_tile(tile: TileId, boxes: &TileBoxes, placement: &Placement) -> Option
         }
         let cells_per_side = 1u32 << (band.zoom - 12);
         records.push(AircraftBox {
-            zoom: band.zoom,
-            cell: [
-                (key.cell[0] - tile.x * cells_per_side) as u16,
-                (key.cell[1] - tile.y * cells_per_side) as u16,
-            ],
-            group: if key.helicopter {
-                Group::Helicopter
-            } else {
-                Group::FixedWing
+            place: BoxPlace {
+                zoom: band.zoom,
+                cell: [
+                    (key.cell[0] - tile.x * cells_per_side) as u16,
+                    (key.cell[1] - tile.y * cells_per_side) as u16,
+                ],
+                group: if key.helicopter {
+                    Group::Helicopter
+                } else {
+                    Group::FixedWing
+                },
+                ground_m: entry.ground_m,
+                clearance_m: band.clearance_m,
+                height_m: band.edge_m,
+                centroid: local_steps(tile, &frame, [values.centroid_m[0], values.centroid_m[1]]),
+                first_piece,
+                piece_count: kept.len() as u8,
+                loudest_lamax_db: kept
+                    .iter()
+                    .map(|kept| kept.lamax_reference_db)
+                    .fold(f64::NEG_INFINITY, f64::max),
             },
-            ground_m: entry.ground_m,
-            clearance_m: band.clearance_m,
-            height_m: band.edge_m,
-            centroid: local_steps(tile, &frame, [values.centroid_m[0], values.centroid_m[1]]),
             centroid_altitude_m: values.centroid_m[2],
             axis_rad: values.axis_rad,
             gradient: values.gradient.clamp(-3.0, 3.0),
@@ -134,12 +142,6 @@ fn encode_tile(tile: TileId, boxes: &TileBoxes, placement: &Placement) -> Option
             tail_energy_db: values.tail_levels_db,
             lg_scaled_distance: values.scaled_distance_m.map(f64::log10),
             installation_shares: values.installation_shares,
-            first_piece,
-            piece_count: kept.len() as u8,
-            loudest_lamax_db: kept
-                .iter()
-                .map(|kept| kept.lamax_reference_db)
-                .fold(f64::NEG_INFINITY, f64::max),
         });
     }
     (!records.is_empty()).then(|| encode(&records, &flights, &pieces))

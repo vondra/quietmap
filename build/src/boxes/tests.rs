@@ -86,7 +86,7 @@ fn boxed_db(files: &[(TileId, Vec<u8>)], receiver: [f64; 2]) -> f64 {
         let aircraft = Aircraft::parse(bytes).unwrap();
         for index in 0..aircraft.box_count() {
             let record = aircraft.aircraft_box(index);
-            let global = tile.global(record.centroid);
+            let global = tile.global(record.place.centroid);
             let [east, north] = frame.metres_of_steps([global.x as f64, global.y as f64]);
             let at_receiver = AircraftBoxAtReceiver {
                 centroid_m: [
@@ -102,7 +102,7 @@ fn boxed_db(files: &[(TileId, Vec<u8>)], receiver: [f64; 2]) -> f64 {
                 tail_levels_db: &record.tail_energy_db,
                 lg_scaled_distance: &record.lg_scaled_distance,
                 installation_shares: record.installation_shares,
-                ground_m: record.ground_m - 4.0,
+                ground_m: record.place.ground_m - 4.0,
             };
             energy += box_sel_at_receiver(&at_receiver, &Unscreened).sel_energy[0];
         }

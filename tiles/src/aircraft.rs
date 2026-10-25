@@ -79,21 +79,12 @@ pub enum Group {
     Helicopter = 1,
 }
 
-/// One box: a web-map cell of `zoom` (`cell` counted from the tile's north-west corner, so
-/// `0..2^(zoom - 12)` on each axis) and a slab of altitudes, for one group.
+/// One box: a web-map cell and a slab of altitudes for one group ([`BoxPlace`], its kept pieces
+/// too), and what its flights' sound sums to there.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AircraftBox {
-    pub zoom: u8,
-    pub cell: [u16; 2],
-    pub group: Group,
-    /// The terrain the clearance counts from: the highest within one edge of the cell (m above
-    /// sea level), and the slab from `ground_m + clearance_m` up by `height_m` (1 m steps).
-    pub ground_m: f64,
-    pub clearance_m: f64,
-    pub height_m: f64,
-    /// Emission-weighted centroid: tile-local steps (as every kind), in its cell to 1/256 of the
-    /// cell's edge (the step's centre; every step at zooms 19 and 20), and altitude (1 m steps).
-    pub centroid: [i16; 2],
+    pub place: BoxPlace,
+    /// Emission-weighted centroid's altitude (1 m steps).
     pub centroid_altitude_m: f64,
     /// Mean horizontal axis in [0, pi) (there and back are one axis), radians anticlockwise from
     /// east, and the climb gradient (rise over run) along it, and the spread of the pieces'
@@ -117,14 +108,6 @@ pub struct AircraftBox {
     /// Per period, the energy shares of the installations at 1,000 ft and at the tail anchor
     /// (1/255 steps; the last is what the first two leave; all propeller silent).
     pub installation_shares: [[[f64; INSTALLATIONS]; 2]; PERIODS],
-    /// The box's loudest pieces: `first_piece .. first_piece + piece_count` in the piece table,
-    /// which holds the boxes' pieces in box order (`first_piece` is the count before the box, at
-    /// most three a box), and the loudest LAmax among them at 1,000 ft (dB, rounded up to 0.5 dB;
-    /// -inf without pieces): with the most an LAmax curve can rise from there, a bound on what
-    /// they reach.
-    pub first_piece: u32,
-    pub piece_count: u8,
-    pub loudest_lamax_db: f64,
 }
 
 impl AircraftBox {
@@ -134,6 +117,33 @@ impl AircraftBox {
             .iter()
             .any(|level| *level != f64::NEG_INFINITY)
     }
+}
+
+/// Where a box is and the pieces it keeps, decoded from its record alone ([`Aircraft::box_place`],
+/// its periods' records unread): what the loudest flights' search reads of a box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxPlace {
+    /// A web-map cell of `zoom` (`cell` counted from the tile's north-west corner, so
+    /// `0..2^(zoom - 12)` on each axis).
+    pub zoom: u8,
+    pub cell: [u16; 2],
+    pub group: Group,
+    /// The terrain the clearance counts from: the highest within one edge of the cell (m above
+    /// sea level), and the slab from `ground_m + clearance_m` up by `height_m` (1 m steps).
+    pub ground_m: f64,
+    pub clearance_m: f64,
+    pub height_m: f64,
+    /// Emission-weighted centroid: tile-local steps (as every kind), in its cell to 1/256 of the
+    /// cell's edge (the step's centre; every step at zooms 19 and 20).
+    pub centroid: [i16; 2],
+    /// The box's loudest pieces: `first_piece .. first_piece + piece_count` in the piece table,
+    /// which holds the boxes' pieces in box order (`first_piece` is the count before the box, at
+    /// most three a box), and the loudest LAmax among them at 1,000 ft (dB, rounded up to 0.5 dB;
+    /// -inf without pieces): with the most an LAmax curve can rise from there, a bound on what
+    /// they reach.
+    pub first_piece: u32,
+    pub piece_count: u8,
+    pub loudest_lamax_db: f64,
 }
 
 /// One flight of the tile's table.

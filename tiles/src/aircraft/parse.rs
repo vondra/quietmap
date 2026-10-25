@@ -4,8 +4,8 @@ use super::codes::{
     WIDE_SCALE, cell_steps, curve_levels, in_cell, lamax_db, lg_distances, offset, tail_db,
 };
 use super::{
-    AircraftBox, BAND_BYTES, BLOCK_BYTES, BOX_BYTES, BOXES_PER_BLOCK, FLIGHT_BYTES, Flight,
-    FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEAD_REACHING, HEADER_BYTES,
+    AircraftBox, BAND_BYTES, BLOCK_BYTES, BOX_BYTES, BOXES_PER_BLOCK, BoxPlace, FLIGHT_BYTES,
+    Flight, FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEAD_REACHING, HEADER_BYTES,
     INSTALLATIONS, KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM,
     MIX_BYTES, NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
 };
@@ -249,9 +249,35 @@ impl<'a> Aircraft<'a> {
         ]
     }
 
-    pub fn aircraft_box(&self, index: usize) -> AircraftBox {
+    /// Box `index`'s place and kept pieces ([`BoxPlace`]), its periods' records unread.
+    pub fn box_place(&self, index: usize) -> BoxPlace {
+        self.place_of(index, self.firsts(index).1)
+    }
+
+    /// Box `index`'s place, its first piece `first_piece` (from [`Self::firsts`]).
+    fn place_of(&self, index: usize, first_piece: u32) -> BoxPlace {
         let (head, record) = (self.heads[index], self.box_record(index));
         let band = &self.bands[BAND_BYTES * usize::from(record[0])..];
+        BoxPlace {
+            zoom: band[0],
+            cell: [u16::from(record[1]), u16::from(record[2])],
+            group: if head & HEAD_HELICOPTER == 0 {
+                Group::FixedWing
+            } else {
+                Group::Helicopter
+            },
+            ground_m: f64::from(i16_at(record, 3)),
+            clearance_m: f64::from(u16_at(band, 1)),
+            height_m: f64::from(u16_at(band, 3)),
+            centroid: self.box_centroid(index),
+            first_piece,
+            piece_count: (head >> HEAD_PIECES_SHIFT) & 3,
+            loudest_lamax_db: lamax_db(record[26]),
+        }
+    }
+
+    pub fn aircraft_box(&self, index: usize) -> AircraftBox {
+        let (head, record) = (self.heads[index], self.box_record(index));
         let (mut next_period, first_piece) = self.firsts(index);
         let mut energy_db = [[f64::NEG_INFINITY; NPD_DISTANCES]; PERIODS];
         let mut tail_energy_db = [f64::NEG_INFINITY; PERIODS];
@@ -275,17 +301,7 @@ impl<'a> Aircraft<'a> {
             });
         }
         AircraftBox {
-            zoom: band[0],
-            cell: [u16::from(record[1]), u16::from(record[2])],
-            group: if head & HEAD_HELICOPTER == 0 {
-                Group::FixedWing
-            } else {
-                Group::Helicopter
-            },
-            ground_m: f64::from(i16_at(record, 3)),
-            clearance_m: f64::from(u16_at(band, 1)),
-            height_m: f64::from(u16_at(band, 3)),
-            centroid: self.box_centroid(index),
+            place: self.place_of(index, first_piece),
             centroid_altitude_m: f64::from(i16_at(record, 7)),
             axis_rad: f64::from(u16_at(record, 9)) / 65_536.0 * std::f64::consts::PI,
             gradient: f64::from(i16_at(record, 11)) / 10_000.0,
@@ -296,9 +312,6 @@ impl<'a> Aircraft<'a> {
             lg_scaled_distance: lg_distances(u16_at(record, 15), &record[17..26]),
             tail_energy_db,
             installation_shares,
-            first_piece,
-            piece_count: (head >> HEAD_PIECES_SHIFT) & 3,
-            loudest_lamax_db: lamax_db(record[26]),
         }
     }
 
@@ -312,9 +325,9 @@ impl<'a> Aircraft<'a> {
         }
     }
 
-    /// The `k`th of `owner`'s pieces (`owner` as [`Self::aircraft_box`] read it): its ends are
-    /// stored from the box's centroid.
-    pub fn piece(&self, owner: &AircraftBox, k: usize) -> FlightPiece {
+    /// The `k`th of `owner`'s pieces (`owner` as [`Self::box_place`] read it): its ends are stored
+    /// from the box's centroid.
+    pub fn piece(&self, owner: &BoxPlace, k: usize) -> FlightPiece {
         assert!(k < usize::from(owner.piece_count), "box piece {k}");
         let index = owner.first_piece as usize + k;
         let record = self.piece_record(index);
