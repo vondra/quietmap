@@ -48,11 +48,14 @@ export default function ControlCard({ tab, onTabChange, account, onSignOut, onDe
   )
   return (
     <FloatingCard className="pointer-events-auto flex min-h-0 flex-col">
-      <div role="tablist" aria-label="Map controls" className="flex shrink-0 items-center gap-1 p-1">
-        {tabButton('layers', 'Layers', <Layers3 className="size-4 shrink-0" />)}
-        {withAccount && tabButton('account', isSignedIn(account) ? 'Account' : 'Sign in', isSignedIn(account)
-          ? <span className="grid size-5 place-items-center rounded-full bg-foreground text-[11px] text-background">{account.email[0]?.toUpperCase()}</span>
-          : <UserRound className="size-4 shrink-0" />)}
+      <div className="flex shrink-0 items-center p-1">
+        {/* The tabs alone in their list; the fold beside it. */}
+        <div role="tablist" aria-label="Map controls" className="flex items-center gap-1">
+          {tabButton('layers', 'Layers', <Layers3 className="size-4 shrink-0" />)}
+          {withAccount && tabButton('account', isSignedIn(account) ? 'Account' : 'Sign in', isSignedIn(account)
+            ? <span className="grid size-5 place-items-center rounded-full bg-foreground text-[11px] text-background">{account.email[0]?.toUpperCase()}</span>
+            : <UserRound className="size-4 shrink-0" />)}
+        </div>
         <button
           type="button"
           aria-expanded={open != null}

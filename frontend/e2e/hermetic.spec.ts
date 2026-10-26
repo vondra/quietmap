@@ -336,13 +336,13 @@ test('desktop: the layers and the sign-in are two tabs of the corner card, its f
   await expect(signIn).toBeVisible()
 })
 
-test("desktop: the reachable area is drawn from the open place by the button at the search field's end; a new one drops the one on its way", async ({ page }) => {
+test("desktop: the reachable area is drawn from the open place by the button at the search field's end; folded, its panel keeps its request; another place's drops it", async ({ page }) => {
   await installHermeticMap(page, POINT)
   const asked: string[] = []
   await page.route('**/api/isochron?**', async route => {
     asked.push(new URL(route.request().url()).search)
     // The first answer comes late, after the second was asked.
-    if (asked.length === 1) await new Promise(resolve => setTimeout(resolve, 1500))
+    if (asked.length === 1) await new Promise(resolve => setTimeout(resolve, 3000))
     const ring = [[POINT.lng - 0.01, POINT.lat - 0.01], [POINT.lng + 0.01, POINT.lat - 0.01], [POINT.lng, POINT.lat + 0.01], [POINT.lng - 0.01, POINT.lat - 0.01]]
     const modes = new URL(route.request().url()).searchParams.get('modes')!.split(',')
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
@@ -355,20 +355,26 @@ test("desktop: the reachable area is drawn from the open place by the button at 
   await page.mouse.click(x, y)
   const button = page.getByRole('button', { name: 'Reachable area' })
   const panel = page.getByTestId('open-place').getByTestId('isochron-panel')
+  const minutes = panel.getByRole('spinbutton', { name: 'Minutes' })
   await button.click()
   await panel.getByRole('button', { name: 'Car' }).click()
+  await minutes.fill('5')
   await panel.getByRole('button', { name: 'Show area' }).click()
   await expect.poll(() => asked).toHaveLength(1)
   const query = new URLSearchParams(asked[0])
-  expect([query.get('minutes'), query.get('modes')]).toEqual(['60', 'walk'])
+  expect([query.get('minutes'), query.get('modes')]).toEqual(['5', 'walk'])
   expect(Number(query.get('lat'))).toBeCloseTo(POINT.lat, 6)
-  // Folded and opened again while the first is on its way, the panel asks anew.
+  // Folded and opened again while it draws, the panel keeps its minutes and its request.
   await button.click()
+  await expect(panel).toBeHidden()
   await button.click()
-  await panel.getByRole('spinbutton', { name: 'Minutes' }).fill('5')
+  await expect(minutes).toHaveValue('5')
+  await expect(panel.getByRole('button', { name: 'Drawing…' })).toBeDisabled()
+  // Another place's area asked meanwhile drops the first, whose answer would land after it.
+  await page.mouse.click(x + 60, y + 60)
   await panel.getByRole('button', { name: 'Show area' }).click()
   expect((await dropped).failure()?.errorText).toContain('ABORTED')
-  expect(new URLSearchParams(asked[1]).get('minutes')).toBe('5')
+  await expect.poll(() => asked).toHaveLength(2)
   await expect(panel.getByRole('button', { name: 'Show area' })).toBeEnabled()
   await expect(panel.getByRole('alert')).toHaveCount(0)
 })

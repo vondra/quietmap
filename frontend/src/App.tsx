@@ -161,8 +161,8 @@ export default function App() {
   const [cardTab, setCardTab] = useState<CardTab | null>(popupOpen ? null : 'layers')
   useEffect(() => setCardTab(popupOpen ? null : 'layers'), [popupOpen])
   // The area reachable from the open place: whether its panel is open, and the area drawn for a point,
-  // shown while that point is open. A new request drops the one before, whose answer would otherwise
-  // land after it.
+  // shown while that point is open. A new request (another place's) drops the one before, whose answer
+  // would otherwise land after it.
   const [isochronOpen, setIsochronOpen] = useState(false)
   const [isochron, setIsochron] = useState<{ at: { lat: number; lng: number }; area: GeoJSON.FeatureCollection } | null>(null)
   const isochronRequest = useRef<AbortController | null>(null)
@@ -360,7 +360,8 @@ export default function App() {
       </svg>
     </button>
   )
-  const isochronPanel = isochronOpen && detailPosition && <IsochronPanel at={detailPosition} onShow={showIsochron} />
+  // Folded, the panel keeps what it holds: its minutes, a request on its way, what went wrong.
+  const isochronPanel = detailPosition && <div hidden={!isochronOpen}><IsochronPanel at={detailPosition} onShow={showIsochron} /></div>
   const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange }
 
   return (

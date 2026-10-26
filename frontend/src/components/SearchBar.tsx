@@ -320,9 +320,10 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
                 onRename={onRename}
                 action={openAction}
               />
-              {/* Scrolled within what is left above a phone's sheet (MobileDetailSheet's sheetTop), the
-                  map's credits under it too, and never shut on a short screen; a desktop has no sheet. */}
-              <div className="max-h-[max(6rem,calc(50dvh-11rem))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
+              {/* Scrolled within what is left above a phone's sheet (MobileDetailSheet's sheetTop) under a
+                  notch too, the map's credits under it, and never shut on a short screen; a desktop has no
+                  sheet. */}
+              <div className="max-h-[max(6rem,calc(50dvh-11rem-env(safe-area-inset-top,0px)))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
             </div>
           </>
         )}

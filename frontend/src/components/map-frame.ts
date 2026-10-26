@@ -6,17 +6,18 @@ import { sheetTop } from './MobileDetailSheet'
 /** The desktop popup's column on the right: its width and two gutters (index.css's
  *  --map-card-column and --map-gutter). */
 const CARD_COLUMN_PX = 360 + 2 * 12
-/** The least height a phone's frame is fitted into below the search bar. */
+/** The least height a frame is fitted into below the search bar. */
 const MIN_BAND_PX = 120
 
-/** Clear of the search bar, and of the popup's card column on a desktop or of its sheet on a phone,
- *  where the search bar also carries the open place's row. */
+/** Clear of the search bar with what stands under its field (the open place's row, its panels), and
+ *  of the popup's card column on a desktop or of its sheet on a phone. */
 export function framePadding(container: HTMLElement) {
-  if (window.matchMedia(DESKTOP_QUERY).matches) return { top: 72, bottom: 48, left: 48, right: CARD_COLUMN_PX + 24 }
+  const desktop = window.matchMedia(DESKTOP_QUERY).matches
   const height = container.clientHeight
   const bar = document.querySelector('.map-top-bar')?.getBoundingClientRect().bottom ?? 60
-  const bottom = height - sheetTop(height) + 12
-  // A short phone under a tall card leaves too little between them (MapLibre fits nothing into
+  const bottom = desktop ? 48 : height - sheetTop(height) + 12
+  // A short screen under a tall card leaves too little between them (MapLibre fits nothing into
   // none): the frame then reaches up behind the card.
-  return { top: height - bottom - bar - 12 >= MIN_BAND_PX ? bar + 12 : 12, bottom, left: 24, right: 24 }
+  const top = height - bottom - bar - 12 >= MIN_BAND_PX ? bar + 12 : 12
+  return desktop ? { top, bottom, left: 48, right: CARD_COLUMN_PX + 24 } : { top, bottom, left: 24, right: 24 }
 }
