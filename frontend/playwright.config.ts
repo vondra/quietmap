@@ -26,7 +26,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     video: 'off',
-    launchOptions: systemChrome ? { executablePath: systemChrome } : undefined,
+    // A fake microphone answers getUserMedia without a prompt (e2e/media.spec.ts).
+    launchOptions: { executablePath: systemChrome, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] },
   },
   webServer: {
     command: 'npx vite preview --outDir dist.check --host 127.0.0.1 --port 4173 --strictPort',

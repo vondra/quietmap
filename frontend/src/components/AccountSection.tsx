@@ -34,7 +34,7 @@ export default function AccountSection({ account, onSignOut, onDeleteAccount, di
               <button
                 className={LINK}
                 onClick={() => {
-                  if (window.confirm('Delete your account and the places kept with it? Places this browser kept while signed out stay in it.')) void act(onDeleteAccount)
+                  if (window.confirm('Delete your account and the places, recordings and photos kept with it? Places this browser kept while signed out stay in it.')) void act(onDeleteAccount)
                 }}
               >
                 Delete account

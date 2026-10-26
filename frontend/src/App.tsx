@@ -14,11 +14,15 @@ import type { PopupUpdate, SegmentFan } from './types/noise'
 import { contributorHighlight, highlightGeoJson, topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
+import PlaceMedia, { MediaButtons } from './components/PlaceMedia'
 import PlaceNote from './components/PlaceNote'
 import PlaceTitle from './components/PlaceTitle'
 import RecentPlaces from './components/RecentPlaces'
 import { placeLabel, titleAt, type RecentPlace } from './lib/place-rules'
 import { usePlaces } from './hooks/usePlaces'
+import { createMediaKeeper } from './lib/media-keeper'
+import { isSignedIn } from './lib/places-keeper'
+import { startRecording } from './lib/recorder'
 import { useIsDesktop } from './hooks/useIsDesktop'
 import type { DataLayerId } from './lib/data-layers'
 import { defaultStaySearch, freshSearch, type Stay, type StaySearch } from './lib/stays'
@@ -145,6 +149,9 @@ export default function App() {
   const renamePlace = useCallback((title: string | null) => {
     if (detailPosition) rename(detailPosition, title)
   }, [detailPosition, rename])
+  // The signed-in visitor's recordings and photos of the open place.
+  const [media] = useState(() => createMediaKeeper(startRecording))
+  useEffect(() => media.open(isSignedIn(account) ? account.email : null, detailPosition), [media, account, detailPosition])
   const placeTitle = detailPosition && (
     <>
       <PlaceTitle
@@ -152,7 +159,10 @@ export default function App() {
         title={detailTitle}
         proposal={placeLabel(detailPlaceName)}
         onRename={renamePlace}
-      />
+      >
+        <MediaButtons media={media} />
+      </PlaceTitle>
+      <PlaceMedia key={`${detailPosition.lat},${detailPosition.lng}`} media={media} />
       <PlaceNote account={account} named={detailTitle != null} notSaved={notSaved} />
     </>
   )

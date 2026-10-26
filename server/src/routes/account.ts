@@ -50,6 +50,30 @@ const sessionCookie = (value: string, maxAgeMs: number) =>
 const body = (request: FastifyRequest) =>
   (typeof request.body === 'object' && request.body !== null ? request.body : {}) as Record<string, unknown>
 
+/** The accounts, once configured and, for a change, asked from the map's own pages; null after
+ *  answering. */
+function checked(accounts: Accounts | null, request: FastifyRequest, reply: FastifyReply, needs: { change?: boolean }): Accounts | null {
+  if (!accounts) return void reply.status(503).send({ error: 'Sign-in is not available here' }), null
+  if (needs.change && request.headers.origin !== accounts.origin) return void reply.status(403).send({ error: 'Not from the map' }), null
+  reply.header('Cache-Control', 'no-store')
+  return accounts
+}
+
+/** As `checked`, and the signed-in visitor (a session renewed sends its cookie anew), who for a
+ *  change must be the account the page names. */
+export function signedIn(accounts: Accounts | null, request: FastifyRequest, reply: FastifyReply, needs: { change?: boolean }): [Accounts, SessionUser] | null {
+  const ready = checked(accounts, request, reply, needs)
+  if (!ready) return null
+  const session = cookie(request.headers.cookie, COOKIE)
+  const user = session ? ready.store.sessionUser(session, Date.now()) : null
+  if (!user) return void reply.status(401).send({ error: 'Not signed in' }), null
+  if (user.renewed) reply.header('Set-Cookie', sessionCookie(session!, SESSION_MS))
+  if (needs.change && request.headers[ACCOUNT_HEADER] !== user.email) {
+    return void reply.status(409).send({ error: 'Signed in as another account' }), null
+  }
+  return [ready, user]
+}
+
 export async function accountRoutes(app: FastifyInstance, { accounts }: { accounts: Accounts | null }) {
   // The sign-in mails sent this day: [the day's start, how many].
   let mailed = [0, 0]
@@ -59,33 +83,10 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
     app.addHook('onClose', async () => clearInterval(forget))
   }
 
-  /** The accounts, once configured and, for a change, asked from the map's own pages; null after
-   *  answering. */
-  function checked(request: FastifyRequest, reply: FastifyReply, needs: { change?: boolean }): Accounts | null {
-    if (!accounts) return void reply.status(503).send({ error: 'Sign-in is not available here' }), null
-    if (needs.change && request.headers.origin !== accounts.origin) return void reply.status(403).send({ error: 'Not from the map' }), null
-    reply.header('Cache-Control', 'no-store')
-    return accounts
-  }
-  /** As `checked`, and the signed-in visitor (a session renewed sends its cookie anew), who for a
-   *  change must be the account the page names. */
-  function signedIn(request: FastifyRequest, reply: FastifyReply, needs: { change?: boolean }): [Accounts, SessionUser] | null {
-    const ready = checked(request, reply, needs)
-    if (!ready) return null
-    const session = cookie(request.headers.cookie, COOKIE)
-    const user = session ? ready.store.sessionUser(session, Date.now()) : null
-    if (!user) return void reply.status(401).send({ error: 'Not signed in' }), null
-    if (user.renewed) reply.header('Set-Cookie', sessionCookie(session!, SESSION_MS))
-    if (needs.change && request.headers[ACCOUNT_HEADER] !== user.email) {
-      return void reply.status(409).send({ error: 'Signed in as another account' }), null
-    }
-    return [ready, user]
-  }
-
   // The same answer whether the address has an account or not, and whether its three links of the
   // hour ran out (../accounts/store.ts).
   app.post('/api/auth/email', LINKS_A_CLIENT_AN_HOUR, async (request, reply) => {
-    const ready = checked(request, reply, { change: true })
+    const ready = checked(accounts, request, reply, { change: true })
     if (!ready) return
     const email = String(body(request).email ?? '').trim().toLowerCase()
     if (email.length > EMAIL_MAX || !EMAIL.test(email)) return reply.status(400).send({ error: 'That is not an e-mail address' })
@@ -110,14 +111,14 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
   })
 
   app.post('/api/auth/link', LINK_USES_A_CLIENT_AN_HOUR, async (request, reply) => {
-    const ready = checked(request, reply, { change: true })
+    const ready = checked(accounts, request, reply, { change: true })
     if (!ready) return
     const email = ready.store.linkEmail(String(body(request).token ?? ''), Date.now())
     return email ? { email } : reply.status(404).send({ error: 'This link has expired or was used' })
   })
 
   app.post('/api/auth/link/use', LINK_USES_A_CLIENT_AN_HOUR, async (request, reply) => {
-    const ready = checked(request, reply, { change: true })
+    const ready = checked(accounts, request, reply, { change: true })
     if (!ready) return
     const session = ready.store.useLink(String(body(request).token ?? ''), Date.now())
     if (!session) return reply.status(404).send({ error: 'This link has expired or was used' })
@@ -125,14 +126,14 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
   })
 
   app.get('/api/me', async (request, reply) => {
-    const ready = signedIn(request, reply, {})
+    const ready = signedIn(accounts, request, reply, {})
     if (!ready) return
     const [{ store }, user] = ready
     return { email: user.email, ...store.places(user.id) }
   })
 
   app.post('/api/auth/signout', async (request, reply) => {
-    const ready = checked(request, reply, { change: true })
+    const ready = checked(accounts, request, reply, { change: true })
     if (!ready) return
     const session = cookie(request.headers.cookie, COOKIE)
     if (session) ready.store.signOut(session)
@@ -140,7 +141,7 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
   })
 
   app.delete('/api/me', async (request, reply) => {
-    const ready = signedIn(request, reply, { change: true })
+    const ready = signedIn(accounts, request, reply, { change: true })
     if (!ready) return
     const [{ store }, user] = ready
     store.deleteUser(user.id)
@@ -148,7 +149,7 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
   })
 
   app.put('/api/places/title', async (request, reply) => {
-    const ready = signedIn(request, reply, { change: true })
+    const ready = signedIn(accounts, request, reply, { change: true })
     if (!ready) return
     const [{ store }, user] = ready
     const parsed = parseTitle(request.body, Date.now())
@@ -157,7 +158,7 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
   })
 
   app.put('/api/places/recent', async (request, reply) => {
-    const ready = signedIn(request, reply, { change: true })
+    const ready = signedIn(accounts, request, reply, { change: true })
     if (!ready) return
     const [{ store }, user] = ready
     const recent = parseRecent(body(request).recent)
@@ -167,7 +168,7 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
   })
 
   app.post('/api/places/import', async (request, reply) => {
-    const ready = signedIn(request, reply, { change: true })
+    const ready = signedIn(accounts, request, reply, { change: true })
     if (!ready) return
     const [{ store }, user] = ready
     const titles = parseTitles(body(request).titles, Date.now())

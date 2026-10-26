@@ -19,7 +19,10 @@ streamed popup:
 | `PUT /api/places/title` `{lat, lng, title, updatedAt}` | names a place (`title` null removes its name) under the 30 m rule, a name given later kept: `{titles}` |
 | `PUT /api/places/recent` `{recent}` | replaces the five recent places, one a place: 204 |
 | `POST /api/places/import` `{titles, recent}` | adds a browser's places at the visitor's word: names merged, recent places only where the account has none: `{titles, recent}` |
-| `POST /api/auth/signout`, `DELETE /api/me` | signs out; deletes the account, its places, its sessions and its links not yet used |
+| `POST /api/auth/signout`, `DELETE /api/me` | signs out; deletes the account, its recordings and photos, its places, its sessions and its links not yet used |
+| `PUT /api/media/:id` | keeps a recording (`audio/wav`: 16-bit PCM, one channel, 8-96 kHz, at most 28.8 M samples, ten minutes at 48 kHz) or a photo (`image/jpeg`, at most 16 MiB, kept without its EXIF, XMP, IPTC and comments) at a place, under `:id`, 32 hex digits the page chose; `X-Quietmap-Media` is URI-encoded JSON `{lat, lng, takenAt, details}` (`details` an object of at most 4,096 characters): the item `{id, kind, lat, lng, takenAt, bytes, durationS}`; the same bytes again answer the item kept, other bytes under its id 409; 400 for a wrong body or header, 413 too large, 507 when the account keeps 200 items or 2 GiB or the disk has less than 100 GiB free; checked before the body is read; sixty a client an hour |
+| `GET /api/media?lat=&lng=` | the account's items within 30 m of a point, the latest first: `{items}` |
+| `GET /api/media/:id`, `DELETE /api/media/:id` | the item's file to its account alone (ranges, uncompressed, `nosniff`); deletes it with its file: 204; else 404 |
 | `GET /signin` | the map's page a link opens (`../frontend/src/components/SignInPage.tsx`), never in another site's frame |
 | everything else | the built frontend (`../frontend/dist`), or a 404 |
 
@@ -29,7 +32,8 @@ refused with 409 when this browser has signed in as another since. A longitude f
 world copy of the map is wrapped. An address that asked for a link is forgotten an hour later and a
 session when it ends (checked every ten minutes). Every account answer is `no-store`, and every
 sign-in route answers 503 without the four `QM_ACCOUNTS_DB`, `QM_PUBLIC_ORIGIN`, `QM_MAIL_KEY_FILE`
-and `QM_MAIL_FROM`.
+and `QM_MAIL_FROM`. The recordings and photos lie beside the database, in
+`<QM_ACCOUNTS_DB>-media/<account id>/`.
 
 ## The popup stream
 

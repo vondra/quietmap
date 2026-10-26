@@ -3,7 +3,7 @@
 // at the visitor's word, keeping them in the browser too; a signed-in visitor's names come from the
 // account and go to it, the browser's own left as they were until signing out.
 import { expect, test, type Page, type Route } from '@playwright/test'
-import { PHONE, POINT, TILE_Z, canvasCenter, installHermeticMap, mapUrl } from './support'
+import { PHONE, POINT, installHermeticMap, openPoint } from './support'
 
 test.use(PHONE)
 
@@ -19,19 +19,6 @@ async function seedBrowserPlaces(page: Page, titles: object[], recent: object[] 
     localStorage.setItem('quietmap.recent-places', JSON.stringify(recent))
     sessionStorage.setItem('seeded', '1')
   }, [titles, recent])
-}
-
-let documents = 0
-/** The sheet's name field after a tap on the map at POINT, in a new document each time (a query the
- *  map ignores). */
-async function openPoint(page: Page) {
-  const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
-  const tileLoaded = page.waitForResponse(response => new URL(response.url()).pathname === tilePath && response.status() === 200)
-  await page.goto(`/?e2e=${++documents}${mapUrl(POINT).slice(1)}`)
-  await tileLoaded
-  const { x, y } = await canvasCenter(page)
-  await page.touchscreen.tap(x, y)
-  return page.getByTestId('mobile-detail-sheet').getByTestId('place-title')
 }
 
 const storedTitles = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('quietmap.place-titles') ?? '[]'))

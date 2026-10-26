@@ -1,6 +1,6 @@
 // The HTTP API: the streamed popup, the geocoder proxies, the heatmap tiles, the data layers, the
-// places to stay and the optional sign-in, behind per-client rate limits on the expensive routes. The
-// static frontend is added by server.ts (web.ts).
+// places to stay and the optional sign-in with a signed-in visitor's recordings and photos, behind
+// per-client rate limits on the expensive routes. The static frontend is added by server.ts (web.ts).
 import Fastify from 'fastify'
 import type { FastifyError, FastifyInstance } from 'fastify'
 import compress from '@fastify/compress'
@@ -15,6 +15,7 @@ import { heatmapManifestRoutes } from './routes/heatmap-manifest.ts'
 import { rasterRoutes } from './routes/raster.ts'
 import { stayRoutes } from './routes/stay.ts'
 import { accountRoutes } from './routes/account.ts'
+import { mediaRoutes } from './routes/media.ts'
 import { AccountStore } from './accounts/store.ts'
 import { resendSender } from './accounts/mail.ts'
 
@@ -94,5 +95,6 @@ export async function buildApp(
   }
   if (accounts) app.addHook('onClose', async () => accounts.store.close())
   await app.register(accountRoutes, { accounts })
+  await app.register(mediaRoutes, { accounts })
   return app
 }

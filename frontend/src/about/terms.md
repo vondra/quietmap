@@ -50,6 +50,12 @@ The sign-in link is mailed by [Resend](https://resend.com), a mail service in th
 its delivery log for 30 days. An address that asked for a link is kept for an hour, to limit how
 many links it gets, and is never used for anything else.
 
+**Recordings and photos** you make at a place while signed in are kept on our server with your account,
+and only you can open them, until you delete them or the account, which deletes them at once. A
+recording keeps everything it heard, voices nearby too, with the browser, screen size, microphone name
+and sound processing the browser reports, to compute its levels later. A photo is kept without its
+camera metadata, the position among it: your phone redraws it, and our server removes any left.
+
 Questions: [info@quietmap.org](mailto:info@quietmap.org).
 
 </details>

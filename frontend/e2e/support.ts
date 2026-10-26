@@ -201,6 +201,19 @@ export async function installHermeticMap(page: Page, point: PixelCenter): Promis
   }))
 }
 
+let documents = 0
+/** The phone sheet's name field after a tap on the map at POINT, in a new document each time (a query
+ *  the map ignores). */
+export async function openPoint(page: Page) {
+  const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const tileLoaded = page.waitForResponse(response => new URL(response.url()).pathname === tilePath && response.status() === 200)
+  await page.goto(`/?e2e=${++documents}${mapUrl(POINT).slice(1)}`)
+  await tileLoaded
+  const { x, y } = await canvasCenter(page)
+  await page.touchscreen.tap(x, y)
+  return page.getByTestId('mobile-detail-sheet').getByTestId('place-title')
+}
+
 export async function canvasCenter(page: Page): Promise<{
   canvas: ReturnType<Page['locator']>
   x: number

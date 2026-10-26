@@ -13,7 +13,7 @@ const finite = (value: unknown): value is number => typeof value === 'number' &&
 const entry = (value: unknown) => (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>
 
 /** A point as sent, or null. */
-function point({ lat, lng }: Record<string, unknown>): { lat: number, lng: number } | null {
+export function point({ lat, lng }: Record<string, unknown>): { lat: number, lng: number } | null {
   return finite(lat) && Math.abs(lat) <= 90 && finite(lng) ? { lat, lng: wrappedLongitude(lng) } : null
 }
 
