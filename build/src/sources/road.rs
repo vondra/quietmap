@@ -1,7 +1,7 @@
 //! Road pieces of the dev4 prepared tree as sources: the speed cascade, CNOSSOS-EU emission per
 //! period computed here once, and the display record of the road group.
 
-use super::bus::BusRoutes;
+use super::bus::{BUS_PERIOD_SHARES, BusRoutes};
 use super::country_speeds::COUNTRY_SPEEDS;
 use super::decks::Decks;
 use super::motorcycles::{LocalMotorcycles, country_share};
@@ -441,6 +441,15 @@ fn heavy_speed(speed_kmh: f64, country_iso: u16) -> f64 {
 
 /// A road's day, evening and night shares of its daily vehicles, all categories together (the
 /// popup's passes per hour), to three decimals.
+/// The day, evening and night shares of a category's `vehicles` a day of which `buses` are a row's
+/// buses: they run on their timetables' shares, the rest (lorries) on `lorry_shares`.
+fn with_buses(lorry_shares: [f64; PERIODS], vehicles: f64, buses: f64) -> [f64; PERIODS] {
+    std::array::from_fn(|period| {
+        ((vehicles - buses) * lorry_shares[period] + buses * BUS_PERIOD_SHARES[period])
+            / vehicles.max(f64::MIN_POSITIVE)
+    })
+}
+
 fn road_period_shares(daily: [f64; 4], shares: &[[f64; PERIODS]; 4]) -> [f64; PERIODS] {
     let total: f64 = daily.iter().sum();
     std::array::from_fn(|p| {
@@ -831,14 +840,16 @@ pub fn convert(
                 daily = with_motorcycles(daily, share);
             }
             // Buses on an uncounted row: two-axle city buses medium, a third articulated heavy.
+            let mut scheduled = [0.0; 2];
             if let Some(bus) = bus.filter(|_| row_guessed && highway.is_none()) {
                 let service = building_traffic.as_ref().map_or(
                     BUS_SERVICE_BY_BUILT_UP[usize::from(built_up.value(row).min(2))],
                     |traffic| traffic.bus_service(middle_z30),
                 );
                 let (buses, coaches) = bus.daily(osm_id.value(row), service);
-                daily[1] += buses * 2.0 / 3.0;
-                daily[2] += buses / 3.0 + coaches;
+                scheduled = [buses * 2.0 / 3.0, buses / 3.0 + coaches];
+                daily[1] += scheduled[0];
+                daily[2] += scheduled[1];
             }
             let scale =
                 daily.iter().sum::<f64>() / prior.iter().sum::<f64>().max(f64::MIN_POSITIVE);
@@ -895,7 +906,12 @@ pub fn convert(
             // their day at night).
             let [light_shares, heavy_shares] =
                 [false, true].map(|heavy| period_shares(country.value(row), class_index, heavy));
-            let shares = [light_shares, heavy_shares, heavy_shares, light_shares];
+            let shares = [
+                light_shares,
+                with_buses(heavy_shares, daily[1], scheduled[0]),
+                with_buses(heavy_shares, daily[2], scheduled[1]),
+                light_shares,
+            ];
             let categories = [
                 VehicleCategory::Light,
                 VehicleCategory::Medium,
@@ -1005,6 +1021,20 @@ pub fn convert(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rows_buses_keep_their_timetables_shares_beside_its_lorries() {
+        let lorries = [0.793, 0.064, 0.143];
+        let close = |a: [f64; PERIODS], b: [f64; PERIODS]| {
+            (0..PERIODS).all(|p| (a[p] - b[p]).abs() < 1e-12)
+        };
+        assert!(close(with_buses(lorries, 300.0, 0.0), lorries));
+        assert!(close(with_buses(lorries, 300.0, 300.0), BUS_PERIOD_SHARES));
+        let half: [f64; PERIODS] =
+            std::array::from_fn(|p| 0.5 * (lorries[p] + BUS_PERIOD_SHARES[p]));
+        assert!(close(with_buses(lorries, 300.0, 150.0), half));
+        assert_eq!(with_buses(lorries, 0.0, 0.0), [0.0; PERIODS]);
+    }
 
     /// A prior secondary or tertiary row in a country with representative counts takes its
     /// country's cell and split; counted rows, other classes, rows a dataset filled and other

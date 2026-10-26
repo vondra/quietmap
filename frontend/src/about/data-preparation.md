@@ -65,8 +65,16 @@ junctions and the place's yearly air temperature.
   than a motorway, at its country's open-road limit of 80 km/h or more, cars drive at 0.845 of it,
   the free-flow share measured in Great Britain. Lorries and buses drive at most 80 km/h, 90 to 105
   in thirteen countries.
-- **Buses and bridges.** Uncounted roads also carry the buses of mapped bus routes. A road on a
-  bridge emits from its deck, straight between the ground at the bridge's two ends.
+- **Buses and bridges.** Uncounted roads also carry the buses of the lines mapped on them, a line at
+  most twice, for its two directions, however many of its variants are mapped. One line direction
+  carries 30 buses a day where 100,000 trips a day begin or end within 2 km; a street's buses grow
+  with the 0.67 power of its line directions and the 0.47 power of those trips up to 600,000, and
+  never fall below 12.5 % of that. A trolleybus line counts as 2.75 bus lines. The law is fitted on
+  the <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
+  timetables of 35 cities and rural areas in 14 countries, where it reads the buses 0.4 dB high in
+  the median place; in eight German cities left out of the fit, 2.2 dB high. Buses keep the
+  timetables' shares of their stop calls: 73 % by day, 16 % in the evening and 11 % at night. A road
+  on a bridge emits from its deck, straight between the ground at the bridge's two ends.
 
 </details>
 

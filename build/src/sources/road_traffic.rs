@@ -397,25 +397,35 @@ impl BuildingTraffic {
     }
 }
 
-/// The trip ends within 2 km at which a bus line runs a city's service, the exponent and the
-/// least share: a village among 4,000 trip ends runs 28 % of it (17 departures a direction).
+/// The trip ends within 2 km at which a street's lines run the buses of [`super::bus`], how their
+/// buses grow with the trip ends around, the trip ends beyond which they run no more and the least
+/// share, fitted with that law on the same timetables: a village among 4,000 trip ends runs 22 % of
+/// them, a city centre among 400,000 193 %, 234 % at most (above 800,000 the law without that bound
+/// read 0.8 dB over the timetables); below about 1,250 trip ends the timetables run a flat 12.5 %.
 const CITY_TRIP_ENDS: f64 = 100_000.0;
-const SERVICE_EXPONENT: f64 = 0.4;
-const LEAST_SERVICE: f64 = 0.15;
+const SERVICE_EXPONENT: f64 = 0.474;
+const MOST_TRIP_ENDS: f64 = 600_000.0;
+const LEAST_SERVICE: f64 = 0.125;
 
 impl BuildingTraffic {
-    /// The share of a city bus line's service a line runs at `middle` (z30).
+    /// The share of [`super::bus`]'s buses a street's lines run at `middle` (z30).
     pub fn bus_service(&self, middle: (i32, i32)) -> f64 {
-        let around = self.surroundings.around(middle, 2_000.0);
-        (around / CITY_TRIP_ENDS)
-            .powf(SERVICE_EXPONENT)
-            .clamp(LEAST_SERVICE, 1.0)
+        bus_service_share(self.surroundings.around(middle, 2_000.0))
     }
 }
 
-/// The share of a city bus line's service where the buildings are not known: by the row's
-/// built-up flag (unknown, rural, urban).
-pub const BUS_SERVICE_BY_BUILT_UP: [f64; 3] = [0.5, 0.2, 1.0];
+/// The share of [`super::bus`]'s buses a street's lines run among `trip_ends` within 2 km.
+fn bus_service_share(trip_ends: f64) -> f64 {
+    (trip_ends.min(MOST_TRIP_ENDS) / CITY_TRIP_ENDS)
+        .powf(SERVICE_EXPONENT)
+        .max(LEAST_SERVICE)
+}
+
+/// The share of [`super::bus`]'s buses where the buildings are not known: by the row's built-up
+/// flag (unknown, rural, urban), the share [`BuildingTraffic::bus_service`] gives the rows of that
+/// flag with bus lines where the buildings are known (the places of its fit, rows by length), unknown
+/// their mean.
+pub const BUS_SERVICE_BY_BUILT_UP: [f64; 3] = [0.91, 0.43, 1.40];
 
 /// The length of a square's open local streets (km), for [`BuildingTraffic::load`].
 pub fn local_km(lengths: impl Iterator<Item = (u8, f64)>) -> f64 {
@@ -429,6 +439,15 @@ pub fn local_km(lengths: impl Iterator<Item = (u8, f64)>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_streets_bus_service_grows_with_its_trip_ends_between_its_floor_and_its_bound() {
+        assert_eq!(bus_service_share(100_000.0), 1.0);
+        assert!((bus_service_share(4_000.0) - 0.217).abs() < 0.001);
+        assert_eq!(bus_service_share(0.0), LEAST_SERVICE);
+        assert!((bus_service_share(600_000.0) - 2.338).abs() < 0.001);
+        assert_eq!(bus_service_share(5e6), bus_service_share(600_000.0));
+    }
 
     #[test]
     fn major_roads_grow_with_the_buildings_and_lanes_around() {
