@@ -9,7 +9,7 @@
 // account; what is sent checked; a server without accounts that answers 503, and the four values
 // configured all or none.
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -168,8 +168,8 @@ test("a browser's places join the account at the visitor's word: names merged, r
   assert.deepEqual(second.recent, browser.recent)
 })
 
-test('deleting the account deletes its sessions, its places and its links not yet used', async (t) => {
-  const { mails, send, signIn } = await server(t)
+test('deleting the account deletes its sessions, its places and its links not yet used, overwritten in the file', async (t) => {
+  const { mails, send, signIn, database } = await server(t)
   const headers = await signIn('owner@example.org')
   await send('PUT', '/api/places/title', { lat: 50, lng: 14, title: 'Home', updatedAt: 5 }, headers)
   await send('POST', '/api/auth/email', { email: 'owner@example.org' })
@@ -180,6 +180,9 @@ test('deleting the account deletes its sessions, its places and its links not ye
   assert.match(String(deleted.headers['set-cookie']), /Max-Age=0$/)
   assert.equal((await send('GET', '/api/me', undefined, headers)).statusCode, 401)
   assert.equal((await send('POST', '/api/auth/link/use', { token: pending })).statusCode, 404)
+  for (const file of [database, `${database}-wal`, `${database}-journal`]) {
+    assert.equal((await readFile(file).catch(() => Buffer.alloc(0))).includes('owner@example.org'), false, file)
+  }
   assert.deepEqual((await send('GET', '/api/me', undefined, await signIn('owner@example.org'))).json().titles, [])
 })
 

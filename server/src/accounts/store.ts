@@ -72,7 +72,10 @@ export class AccountStore {
     this.#diskFreeMinBytes = diskFreeMinBytes
     mkdirSync(this.#media, { recursive: true, mode: 0o700 })
     this.#db = new DatabaseSync(path)
-    this.#db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;')
+    // What is deleted is gone from the file at its commit (the terms delete an account and its items at
+    // once): secure_delete overwrites it, where node's SQLite would leave it in free space, and a rollback
+    // journal, unlike a write-ahead log, keeps no older page in the files after the commit.
+    this.#db.exec('PRAGMA journal_mode = DELETE; PRAGMA secure_delete = ON; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;')
     this.#db.exec(SCHEMA)
   }
 
