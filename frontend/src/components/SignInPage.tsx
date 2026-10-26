@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import { importPlaces, linkEmail, signInWithLink } from '../lib/account'
 import { loadPlaceTitles, loadRecentPlaces } from '../lib/browser-places'
 import { setDocumentTitle } from '../utils/page-title'
+import { BUTTON, PRIMARY_BUTTON } from './ui/button'
 
 /** The link's token, read once as the page opens, before it leaves the address bar. */
 const TOKEN = window.location.hash.slice(1)
@@ -19,10 +20,6 @@ type Step =
   | { kind: 'expired' }
   | { kind: 'unreachable' }
 
-// The quiet zones' green (QUIET_RGB, #16a34a) a step darker, as the mail's button: white on it is
-// 5.0:1, WCAG AA; a hover darkens it further.
-const BUTTON = 'rounded-md bg-[#15803d] px-4 py-2 text-sm font-medium text-white hover:brightness-90'
-const QUIET_BUTTON = 'rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-accent'
 
 const openMap = () => window.location.replace('/')
 const browserPlaces = () => ({ titles: loadPlaceTitles() ?? [], recent: loadRecentPlaces() })
@@ -78,7 +75,7 @@ export default function SignInPage() {
           <>
             <h1 className="text-xl font-semibold text-foreground">Sign in as {step.email}?</h1>
             <p className="text-muted-foreground">Your named places and the places you opened then follow you to every device you sign in on.</p>
-            <div><button className={BUTTON} onClick={() => signIn(step.email)}>Sign in</button></div>
+            <div><button className={PRIMARY_BUTTON} onClick={() => signIn(step.email)}>Sign in</button></div>
           </>
         ) : step.kind === 'add' ? (
           <>
@@ -88,14 +85,14 @@ export default function SignInPage() {
               Add them to your account?
             </p>
             <div className="flex gap-2">
-              <button className={BUTTON} onClick={() => add(step.email)}>Add them</button>
-              <button className={QUIET_BUTTON} onClick={openMap}>Keep them apart</button>
+              <button className={PRIMARY_BUTTON} onClick={() => add(step.email)}>Add them</button>
+              <button className={BUTTON} onClick={openMap}>Keep them apart</button>
             </div>
           </>
         ) : step.kind === 'not-added' ? (
           <>
             <p className="text-muted-foreground">The places could not be added; they stay in this browser.</p>
-            <div><button className={BUTTON} onClick={openMap}>Open the map</button></div>
+            <div><button className={PRIMARY_BUTTON} onClick={openMap}>Open the map</button></div>
           </>
         ) : step.kind === 'unreachable' ? (
           <>
@@ -106,7 +103,7 @@ export default function SignInPage() {
           <>
             <h1 className="text-xl font-semibold text-foreground">This link has expired or was used already.</h1>
             <p className="text-muted-foreground">Ask for a new one on the map, from the sign-in at its top right.</p>
-            <div><button className={BUTTON} onClick={openMap}>Open the map</button></div>
+            <div><button className={PRIMARY_BUTTON} onClick={openMap}>Open the map</button></div>
           </>
         )}
       </div>
