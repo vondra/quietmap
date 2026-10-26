@@ -1,45 +1,12 @@
-// The desktop layer card, collapsible to a single button; it folds away while a popup is open, so
-// the popup and the recent places have the column, and comes back when the popup closes.
-import { useEffect, useState } from 'react'
-import { ChevronUp, Layers3 } from 'lucide-react'
+// The desktop layer card, under its button beside the account (App), which folds it while a popup is
+// open, so the popup has the column, and opens it again when the popup closes.
 import FloatingCard from './FloatingCard'
 import LayerControlsBody, { type LayerControlsBodyProps } from './LayerControlsBody'
 
-type ControlCardProps = LayerControlsBodyProps & {
-  popupOpen: boolean
-}
-
-export default function ControlCard({ popupOpen, ...props }: ControlCardProps) {
-  const [collapsed, setCollapsed] = useState(popupOpen)
-  useEffect(() => setCollapsed(popupOpen), [popupOpen])
-
-  if (collapsed) {
-    return (
-      <div className="flex justify-end pointer-events-auto">
-        <button
-          onClick={() => setCollapsed(false)}
-          title="Show layers"
-          className="flex items-center justify-center w-[29px] h-[29px] rounded border border-[rgba(0,0,0,0.2)] bg-white text-muted-foreground hover:bg-[#f4f4f4] cursor-pointer"
-        >
-          <Layers3 className="size-[18px]" strokeWidth={2} />
-        </button>
-      </div>
-    )
-  }
-
+export default function ControlCard(props: LayerControlsBodyProps) {
   return (
+    // Only the body scrolls when the column squeezes the card (short viewports).
     <FloatingCard className="py-2.5 pointer-events-auto min-h-0 flex flex-col">
-      <button
-        onClick={() => setCollapsed(true)}
-        title="Hide layers"
-        className="flex items-center justify-between shrink-0 mx-2.5 px-1 py-0.5 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground"
-      >
-        <span className="text-[11px] font-medium uppercase tracking-[0.08em]">Layers</span>
-        <ChevronUp className="size-3.5" />
-      </button>
-
-      {/* Only the body scrolls, so the collapse header stays reachable when
-          the column squeezes the card (short viewports). */}
       <div className="min-h-0 overflow-y-auto px-2.5 [scrollbar-gutter:stable] scroll-py-1.5">
         <LayerControlsBody {...props} dividerSpacing="compact" />
       </div>

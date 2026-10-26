@@ -6,7 +6,7 @@
 // not yet sent applied over it. hooks/usePlaces.ts reads it again whenever the map comes back.
 import { deleteAccount, fetchAccount, saveRecent, saveTitle, signOut } from './account.ts'
 import { loadPlaceTitles, loadRecentPlaces, savePlaceTitles, saveRecentPlaces } from './browser-places.ts'
-import { withName, withPlace, withTitle, withoutPlace, type PlaceTitle, type RecentPlace } from './place-rules.ts'
+import { withAnswer, withName, withOpened, withTitle, withoutPlace, type PlaceTitle, type RecentPlace } from './place-rules.ts'
 
 /** Who keeps the places: 'unknown' until the server answers, null when signed out, 'unavailable' on
  *  a server without the sign-in, else the signed-in account. */
@@ -102,7 +102,13 @@ export function createPlacesKeeper() {
         const { titles } = await response.json() as { titles: PlaceTitle[] }
         show({ titles: unsent.reduce(applied, { recent: [], titles }).titles })
       }
-      if (!failed && sending.some(change => 'recent' in change)) failed = !(await saveRecent(account.email, shown.recent))?.ok
+      if (!failed && sending.some(change => 'recent' in change)) {
+        // The list sent carries every change of it made so far, sent or not: once kept, none of them
+        // is played again over the account's list.
+        const carried = new Set<Change>(unsent.filter(change => 'recent' in change))
+        failed = !(await saveRecent(account.email, shown.recent))?.ok
+        if (!failed) unsent = unsent.filter(change => !carried.has(change))
+      }
       if (shown.notSaved !== failed) show({ notSaved: failed })
       // What the server holds now, the changes since applied over it.
       if (failed) void refresh()
@@ -152,8 +158,15 @@ export function createPlacesKeeper() {
     titlesStored() {
       if (shown.account !== 'unknown' && !isSignedIn(shown.account)) show({ titles: loadPlaceTitles() ?? [] })
     },
-    /** An answered point joins the recent places: first, or in its tab when it is one already. */
-    visit: (place: RecentPlace) => change({ recent: recent => withPlace(recent, place) }),
+    /** A place opened, by a click, a search, the history or a link: counted once more, the last
+     *  opened, named `place` (a search's result) until its own name comes. Its time is taken now, so a
+     *  replay over the account's places keeps it. */
+    open: (at: { lat: number, lng: number }, place: string | null = null) => {
+      const openedAt = Date.now()
+      change({ recent: recent => withOpened(recent, at, openedAt, place) })
+    },
+    /** An answered point's numbers, and its name when its place has none. */
+    answered: (answer: Parameters<typeof withAnswer>[1]) => change({ recent: recent => withAnswer(recent, answer) }),
     /** A place's geocoded name, which came back after the click. */
     nameLate: (at: { lat: number, lng: number }, name: string) => change({ recent: recent => withName(recent, at, name) }),
     forget: (place: RecentPlace) => change({ recent: recent => withoutPlace(recent, place) }),

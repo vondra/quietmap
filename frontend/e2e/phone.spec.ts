@@ -1,6 +1,6 @@
 // A phone's way through the map in a real browser, without a backend: the popup's sheet, the base
 // map's credits, the control row with the ⓘ to the About pages and the layers panel, the locate
-// button, and the places' tabs with their names.
+// button, the open place under the search field and the history of places opened in its list.
 import { expect, test } from '@playwright/test'
 import { FIXTURE_FLIGHTS, popupUpdate, withAircraft } from './answers'
 import {
@@ -14,7 +14,6 @@ import {
   mapUrl,
   popupRequests,
   openPoint,
-  openTab,
   sendPopupLine,
 } from './support'
 
@@ -117,12 +116,12 @@ test('the locate button opens the popup where the visitor stands, again from a m
   await expect(sheet).toBeVisible()
 })
 
-test('places are tabs: a new one first, an old one opened where it stands, each named in its tab and kept', async ({ page }) => {
+test('the open place stands under the search field, renamed there; the search lists the places opened, the last first, then by how often', async ({ page }) => {
   await installHermeticMap(page, POINT)
   const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
-  const sheet = page.getByTestId('mobile-detail-sheet')
-  const tabs = sheet.getByTestId('place-tab')
-  const field = sheet.getByTestId('place-title')
+  const row = page.getByTestId('open-place')
+  const field = row.getByTestId('place-title')
+  const options = page.getByRole('option')
   const tapAt = async (dx: number, dy: number) => {
     const { x, y } = await canvasCenter(page)
     await page.touchscreen.tap(x + dx, y + dy)
@@ -135,49 +134,88 @@ test('places are tabs: a new one first, an old one opened where it stands, each 
     await tileLoaded
     await tapAt(0, 0)
   }
+  const rename = async (name: string) => {
+    await row.getByRole('button', { name: /^Rename/ }).tap()
+    await field.fill(name)
+    await page.keyboard.press('Enter')
+    await expect(row).toContainText(name)
+  }
   await openAtPoint(mapUrl(POINT))
-  // The tab shows the geocoded name; a tap on it writes a name, in a field a phone does not zoom into.
-  await expect(tabs).toHaveCount(1)
-  await expect(openTab(page)).toContainText('E2E fixture')
-  await openTab(page).getByTitle('Rename this place').tap()
+  // The geocoded name stands under the search field; its pencil writes a name there, in a field a phone
+  // does not zoom into. Escape leaves it as it was, Enter keeps what was typed.
+  await expect(row).toContainText('E2E fixture')
+  await row.getByRole('button', { name: /^Rename/ }).tap()
   await expect(field).toBeFocused()
   await expect(field).toHaveValue('E2E fixture')
   expect(await field.evaluate(input => getComputedStyle(input).fontSize)).toBe('16px')
-  // Escape leaves it as it was, Enter keeps what was typed.
   await page.keyboard.type('Discarded')
   await page.keyboard.press('Escape')
   await expect(field).toHaveCount(0)
-  await expect(openTab(page)).toContainText('E2E fixture')
-  await openTab(page).getByTitle('Rename this place').tap()
-  await page.keyboard.type('Above the house')
-  await page.keyboard.press('Enter')
-  await expect(field).toHaveCount(0)
-  await expect(openTab(page)).toContainText('Above the house')
+  await expect(row).toContainText('E2E fixture')
+  await rename('Above the house')
 
-  // Answered, a place stays a tab; a place opened next comes first, one tab and one name each.
-  await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB))
-  await tapAt(0, -120)
+  // A second place, named too, then the first again from the list (at once, by the keys), then a third
+  // by a tap: the third first (opened last), the first (opened twice), the second.
+  await tapAt(0, -200)
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
-  const next = (await popupRequests(page))[1]
-  await sendPopupLine(page, popupUpdate(1, false, next.lat, next.lng, SOURCE_DB))
-  await expect(tabs).toHaveCount(2)
-  await expect(tabs.nth(0).locator('[aria-current="page"]')).toHaveCount(1)
-  await expect(tabs.nth(1)).toContainText('Above the house')
-  await expect(sheet.getByTitle('Rename this place')).toHaveCount(1)
-  // The named place's tab opens it again at once, where its tab stands.
-  await tabs.nth(1).getByRole('button', { name: /Above the house/ }).tap()
-  await expect(tabs.nth(1).locator('[aria-current="page"]')).toHaveCount(1)
+  await rename('Bus stop')
+  await page.getByRole('combobox').tap()
+  await expect(options).toHaveCount(2)
+  await expect(options.nth(0)).toContainText('Bus stop')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
   await expect.poll(() => popupRequests(page)).toHaveLength(3)
-  await expect(tabs).toHaveCount(2)
+  await expect(options).toHaveCount(0)
+  await expect(row).toContainText('Above the house')
+  await tapAt(-60, -220)
+  await expect.poll(() => popupRequests(page)).toHaveLength(4)
+  const search = page.getByRole('combobox')
+  await search.tap()
+  await expect(options).toHaveCount(3)
+  await expect(options.nth(0)).toContainText('E2E fixture')
+  await expect(options.nth(1)).toContainText('Above the house')
+  await expect(options.nth(2)).toContainText('Bus stop')
+  // A tap on the map (between the list and the sheet) while the list is open only closes it.
+  await tapAt(0, -100)
+  await expect(options).toHaveCount(0)
+  expect(await popupRequests(page)).toHaveLength(4)
+  // Typed, the list names the places of the history it matches, from one letter.
+  await search.fill('b')
+  await expect(options).toHaveCount(2)
+  await search.fill('bus')
+  await expect(options.nth(0)).toContainText('Bus stop')
+  // Escape closes the list and brings the open place's row back.
+  await page.keyboard.press('Escape')
+  await expect(options).toHaveCount(0)
+  await expect(row).toContainText('E2E fixture')
+  // From the field the keys rename a place (F2) and forget one (Shift+Delete), and give the field back.
+  await search.fill('')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('F2')
+  await expect(options.nth(1).getByTestId('place-title')).toBeFocused()
+  await page.keyboard.type('Home')
+  await page.keyboard.press('Enter')
+  await expect(options.nth(1)).toContainText('Home')
+  await expect(search).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Shift+Delete')
+  await expect(options).toHaveCount(2)
+  await expect(options.nth(1)).toContainText('Home')
+  // A tap on a row opens its place.
+  await options.nth(1).getByRole('button', { name: /^Home/ }).tap()
+  await expect.poll(() => popupRequests(page)).toHaveLength(5)
+  await expect(row).toContainText('Home')
 
-  // A new document (a changed, ignored query string) and the same point: the name is kept.
+  // A new document (a changed, ignored query string) and the same point: the name is kept; emptied, it
+  // gives the geocoded one back.
   await openAtPoint(`/?e2e=title${mapUrl(POINT).slice(1)}`)
-  await expect(openTab(page)).toContainText('Above the house')
-  // Emptied, the name gives the geocoded one back.
-  await openTab(page).getByTitle('Rename this place').tap()
+  await expect(row).toContainText('Home')
+  await row.getByRole('button', { name: /^Rename/ }).tap()
   await field.fill('')
   await page.keyboard.press('Enter')
-  await expect(openTab(page)).toContainText('E2E fixture')
+  await expect(row).toContainText('E2E fixture')
 })
 
 test('a name left as it was is not kept, though the geocoded name came while it was being written', async ({ page }) => {
@@ -188,13 +226,13 @@ test('a name left as it was is not kept, though the geocoded name came while it 
     await late
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ place: 'Late name' }) })
   })
-  await openPoint(page)
-  await openTab(page).getByTitle('Rename this place').tap()
-  const field = page.getByTestId('mobile-detail-sheet').getByTestId('place-title')
+  const row = await openPoint(page)
+  await row.getByRole('button', { name: /^Rename/ }).tap()
+  const field = row.getByTestId('place-title')
   await expect(field).toHaveValue(/^[\d.]+, [\d.]+$/)
   release()
   await expect(field).toHaveAttribute('placeholder', 'Late name')
   await page.keyboard.press('Enter')
-  await expect(openTab(page)).toContainText('Late name')
+  await expect(row).toContainText('Late name')
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('quietmap.place-titles') ?? '[]'))).toEqual([])
 })

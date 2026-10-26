@@ -202,8 +202,8 @@ export async function installHermeticMap(page: Page, point: PixelCenter): Promis
 }
 
 let documents = 0
-/** The phone sheet's tab of the place opened by a tap on the map at POINT, in a new document each
- *  time (a query the map ignores). */
+/** The row under the search field of the place opened by a tap on the map at POINT, in a new
+ *  document each time (a query the map ignores). */
 export async function openPoint(page: Page) {
   const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
   const tileLoaded = page.waitForResponse(response => new URL(response.url()).pathname === tilePath && response.status() === 200)
@@ -211,18 +211,13 @@ export async function openPoint(page: Page) {
   await tileLoaded
   const { x, y } = await canvasCenter(page)
   await page.touchscreen.tap(x, y)
-  return openTab(page)
+  return page.getByTestId('open-place')
 }
 
-/** The open place's tab in the phone sheet. */
-export function openTab(page: Page) {
-  return page.getByTestId('mobile-detail-sheet').getByTestId('place-tab').filter({ has: page.locator('[aria-current="page"]') })
-}
-
-/** Names the open place in its tab on a phone: a tap on its name, the name written, Enter. */
+/** Names the open place in its row under the search field on a phone: its pencil, the name, Enter. */
 export async function renameOpenPlace(page: Page, name: string) {
-  await openTab(page).getByTitle('Rename this place').tap()
-  await page.getByTestId('mobile-detail-sheet').getByTestId('place-title').fill(name)
+  await page.getByTestId('open-place').getByRole('button', { name: /^Rename/ }).tap()
+  await page.getByTestId('open-place').getByTestId('place-title').fill(name)
   await page.keyboard.press('Enter')
 }
 

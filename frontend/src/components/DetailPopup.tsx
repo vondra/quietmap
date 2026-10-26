@@ -10,10 +10,10 @@ import { sheetTop } from './MobileDetailSheet'
 import { stayAt } from './StayLayer'
 import type { Stay } from '../lib/stays'
 
-/** The popup's point in sight. Off the map (a tab of a place elsewhere), the map moves to it at the
- *  same zoom. On a phone the popup's sheet rises over the lower half of the map: a point it would cover
- *  (or one brought from off the map) goes to the middle of the map left between the search bar and
- *  the sheet, where the opened rows draw their roads, segments and rays. */
+/** The popup's point in sight. Off the map (a place of the history elsewhere), the map moves to it at
+ *  the same zoom. On a phone the search bar with the open place's row covers the top of the map and the
+ *  popup's sheet its lower half: a point either would cover (or one brought from off the map) goes to
+ *  the middle of the map left between them, where the opened rows draw their roads, segments and rays. */
 function keepInSight(map: MaplibreMap, at: { lat: number; lng: number }) {
   const { x, y } = map.project([at.lng, at.lat])
   const { clientWidth: width, clientHeight: height } = map.getContainer()
@@ -22,7 +22,7 @@ function keepInSight(map: MaplibreMap, at: { lat: number; lng: number }) {
   const bottom = phone ? sheetTop(height) : height
   if (x < 0 || x > width || y < 0 || y > height) {
     map.easeTo({ center: [at.lng, at.lat], offset: [0, (top + bottom - height) / 2], duration: 400 })
-  } else if (phone && y >= bottom - 24) {
+  } else if (phone && (y < top || y >= bottom - 24)) {
     map.panBy([0, y - (top + bottom) / 2], { duration: 400 })
   }
 }
@@ -76,7 +76,7 @@ export default function DetailPopup({ isCurrentDetailPosition, detailPosition, t
     if (triggerPosition) onDetailPositionChange?.(triggerPosition)
   }, [triggerPosition, onDetailPositionChange])
 
-  // Whatever opened the popup (a tap, a link's `d=`, a place's tab), its point stays in sight.
+  // Whatever opened the popup (a tap, a link's `d=`, a place of the history), its point stays in sight.
   useEffect(() => {
     if (detailPosition && map) keepInSight(map.getMap(), detailPosition)
   }, [detailPosition, map])

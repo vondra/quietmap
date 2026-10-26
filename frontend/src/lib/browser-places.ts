@@ -33,13 +33,17 @@ function store(key: string, list: unknown[]): void {
   }
 }
 
-/** The stored places; none when the browser keeps no storage or holds something else. */
+/** The stored places; none when the browser keeps no storage or holds something else. A place kept
+ *  before the history counted was opened once, at no known time. */
 export function loadRecentPlaces(): RecentPlace[] {
   return (storedList(RECENT_PLACES_KEY) ?? []).flatMap(entry => {
     const [lat, lng] = [numberOrNull(entry.lat), numberOrNull(entry.lng)]
     if (lat == null || lng == null) return []
     const place = typeof entry.place === 'string' ? entry.place : null
-    return [{ lat, lng, place, sone: numberOrNull(entry.sone), lden: numberOrNull(entry.lden) }]
+    return [{
+      lat, lng, place, sone: numberOrNull(entry.sone), lden: numberOrNull(entry.lden),
+      count: Math.max(1, Math.round(numberOrNull(entry.count) ?? 1)), openedAt: numberOrNull(entry.openedAt) ?? 0,
+    }]
   }).slice(0, RECENT_PLACES_MAX)
 }
 

@@ -1,54 +1,83 @@
-// The places' rules: the recent places newest first, a place opened again in its tab, one entry per
-// place, at most five, names that come back late; the names the visitor gives places, the later of
-// two kept; what storage held read defensively.
+// The places' rules: the history of the places opened, the one opened last first and the others by
+// how often they were opened, one entry per place, at most fifty, names that come back late; the names
+// the visitor gives places, the later of two kept; what storage held read defensively.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { loadPlaceTitles } from '../src/lib/browser-places.ts'
+import { loadPlaceTitles, loadRecentPlaces } from '../src/lib/browser-places.ts'
 import {
-  PLACE_TITLES_MAX, RECENT_PLACES_MAX, mergedTitles, placeLabel, samePlace, titleAt, withName, withPlace, withTitle,
-  withoutPlace,
+  PLACE_TITLES_MAX, RECENT_PLACES_MAX, historyOrder, mergedTitles, placeLabel, samePlace, titleAt, withAnswer, withName,
+  withOpened, withTitle, withoutPlace,
 } from '../src/lib/place-rules.ts'
 
-const place = (lat, lng, sone = 4) => ({ lat, lng, place: null, sone, lden: 43 })
+const answer = (lat, lng, sone = 4) => ({ lat, lng, place: null, sone, lden: 43 })
+/** The places of `list`, by latitude, in their order. */
+const lats = list => list.map(p => p.lat)
 
-test('a place opened again keeps its tab with its new numbers, a silent answer too, not a second time', () => {
-  const list = withPlace(withPlace([], place(50, 14, 3)), place(49, 15))
-  const again = withPlace(list, place(50.0001, 14.0001, 5))
-  assert.equal(again.length, 2)
-  assert.equal(again[0].lat, 49)
-  assert.deepEqual(again[1], place(50.0001, 14.0001, 5))
-  assert.equal(withPlace(again, { lat: 50, lng: 14, place: null, sone: null, lden: null })[1].sone, null)
+test('the history: the place opened last first, then by how often, of equals the later first', () => {
+  let list = []
+  // A opened three times, B twice, C and D once, D after C, B last.
+  for (const [lat, at] of [[1, 1], [1, 2], [2, 3], [3, 4], [1, 5], [4, 6], [2, 7]]) list = withOpened(list, { lat, lng: 0 }, at)
+  assert.deepEqual(lats(list), [2, 1, 4, 3])
+  assert.deepEqual(list.map(p => p.count), [2, 3, 1, 1])
+  // Opening C again puts it first; B, opened last before, falls behind A by its count.
+  assert.deepEqual(lats(withOpened(list, { lat: 3.0000001, lng: 0 }, 8)), [3, 1, 2, 4])
+  // Places kept from before the history counted (once, at no known time) keep their order.
+  const old = [1, 2, 3].map(lat => ({ ...answer(lat, 0), count: 1, openedAt: 0 }))
+  assert.deepEqual(lats(historyOrder(old)), [1, 2, 3])
 })
 
-test('a place opened between two kept 40 m apart takes the first one\'s tab and leaves no second', () => {
-  const list = withPlace(withPlace([], place(50, 14)), place(50.00036, 14))
-  const between = withPlace(list, place(50.00018, 14))
-  assert.deepEqual(between.map(p => p.lat), [50.00018])
-  assert.deepEqual(withPlace(between, place(50, 14)).map(p => p.lat), [50])
+test("an answer fills its place's numbers, and a name it has none, where it stands; a place forgotten stays so", () => {
+  const list = withOpened(withOpened([], { lat: 50, lng: 14 }, 1), { lat: 49, lng: 15 }, 2)
+  const answered = withAnswer(list, { ...answer(50.0001, 14.0001, 5), place: 'Kytín' })
+  assert.deepEqual(lats(answered), [49, 50])
+  assert.deepEqual(answered[1], { lat: 50, lng: 14, place: 'Kytín', sone: 5, lden: 43, count: 1, openedAt: 1 })
+  // A silent answer replaces the numbers; the name known stays, a search's or the geocoder's.
+  const silent = withAnswer(answered, { lat: 50, lng: 14, place: 'Elsewhere', sone: null, lden: null })
+  assert.deepEqual([silent[1].place, silent[1].sone], ['Kytín', null])
+  assert.equal(withAnswer(answered, { ...answer(50, 14, 5), place: 'Kytín' }), answered)
+  assert.equal(withAnswer(answered, answer(48, 16)), answered)
+  // Opened from a search, a place keeps the result's name over the geocoder's.
+  const searched = withOpened([], { lat: 48, lng: 16 }, 3, 'Baker Street 221B, London')
+  assert.equal(withAnswer(searched, { ...answer(48, 16), place: 'Marylebone' })[0].place, 'Baker Street 221B, London')
+  // Places kept from before the history counted keep their order through an answer.
+  const old = [1, 2, 3].map(lat => ({ ...answer(lat, 0), count: 1, openedAt: 0 }))
+  assert.deepEqual(lats(withAnswer(old, answer(3, 0, 9))), [1, 2, 3])
 })
 
-test('points 30 m apart are separate places; at most five are kept, the oldest go', () => {
+test('points 30 m apart are separate places, one entry a place; at most fifty, the one ranked last goes', () => {
   assert.equal(samePlace({ lat: 50, lng: 14 }, { lat: 50.0003, lng: 14 }), false)
   assert.equal(samePlace({ lat: 50, lng: 14 }, { lat: 50.0002, lng: 14 }), true)
-  let list = []
-  for (let k = 0; k < 10; k++) list = withPlace(list, place(40 + k, 10))
+  // Opened between two kept 40 m apart, two places, a point counts on the first in the history.
+  const two = withOpened(withOpened([], { lat: 50, lng: 14 }, 1), { lat: 50.00036, lng: 14 }, 2)
+  const between = withOpened(two, { lat: 50.00018, lng: 14 }, 3)
+  assert.deepEqual(between.map(p => [p.lat, p.count]), [[50.00036, 2], [50, 1]])
+  let list = withOpened(withOpened([], { lat: 0, lng: 0 }, 1), { lat: 0, lng: 0 }, 2)
+  for (let k = 1; k <= 60; k++) list = withOpened(list, { lat: k, lng: 0 }, 2 + k)
   assert.equal(list.length, RECENT_PLACES_MAX)
-  assert.equal(list[0].lat, 49)
-  assert.equal(list.at(-1).lat, 45)
+  // Kept: the last opened, the one opened twice, and the later of those opened once.
+  assert.deepEqual(lats(list).slice(0, 3), [60, 0, 59])
+  assert.equal(lats(list).at(-1), 12)
 })
 
 test('a name that comes back after the next click fills its own place only, and is kept on reopening', () => {
-  const list = withPlace(withPlace([], place(50, 14)), place(49, 15))
+  const list = withOpened(withOpened([], { lat: 50, lng: 14 }, 1), { lat: 49, lng: 15 }, 2)
   const named = withName(list, { lat: 50.0001, lng: 14 }, 'Bedřichov')
   assert.deepEqual(named.map(p => p.place), [null, 'Bedřichov'])
   assert.deepEqual(withName(named, { lat: 50, lng: 14 }, 'Elsewhere').map(p => p.place), [null, 'Bedřichov'])
-  assert.equal(withPlace(named, place(50, 14, 6))[1].place, 'Bedřichov')
+  assert.equal(withOpened(named, { lat: 50, lng: 14 }, 3)[0].place, 'Bedřichov')
 })
 
-test('a removed place leaves the others in their order', () => {
-  const list = [place(1, 1), place(2, 2), place(3, 3)]
-  assert.deepEqual(withoutPlace(list, { lat: 2, lng: 2 }).map(p => p.lat), [1, 3])
+test('places a browser kept before the history counted read as opened once, at no known time', (t) => {
+  const items = new Map([['quietmap.recent-places', JSON.stringify([{ lat: 50, lng: 14, place: 'Kytín', sone: 0.4, lden: 33 }])]])
+  globalThis.localStorage = { getItem: key => items.get(key) ?? null }
+  t.after(() => delete globalThis.localStorage)
+  assert.deepEqual(loadRecentPlaces(), [{ lat: 50, lng: 14, place: 'Kytín', sone: 0.4, lden: 33, count: 1, openedAt: 0 }])
+})
+
+test("a forgotten place leaves the others in the history's order: the one opened last first again", () => {
+  const list = [{ ...answer(1, 0), count: 1, openedAt: 300 }, { ...answer(2, 0), count: 10, openedAt: 100 }, { ...answer(3, 0), count: 1, openedAt: 200 }]
+  assert.deepEqual(lats(withoutPlace(list, { lat: 1, lng: 0 })), [3, 2])
 })
 
 test('a name stays where it was given: the nearest within 30 m answers, two spots 40 m apart keep two', () => {

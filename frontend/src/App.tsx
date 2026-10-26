@@ -1,6 +1,7 @@
 // The map application: search, layer controls, the map, and the popup card or sheet, with every
 // piece of state mirrored into the shareable URL hash.
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { Layers3 } from 'lucide-react'
 import MapView from './components/MapView'
 import SearchBar from './components/SearchBar'
 import ControlCard from './components/ControlCard'
@@ -16,8 +17,7 @@ import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import AccountButton from './components/AccountButton'
 import PlaceMedia from './components/PlaceMedia'
-import PlaceTabs from './components/PlaceTabs'
-import { samePlace, titleAt, withPlace, type RecentPlace } from './lib/place-rules'
+import { samePlace, titleAt } from './lib/place-rules'
 import { usePlaces } from './hooks/usePlaces'
 import { createMediaKeeper } from './lib/media-keeper'
 import { isSignedIn } from './lib/places-keeper'
@@ -31,6 +31,8 @@ export default function App() {
   const { initial, updateUrl } = useUrlState()
 
   const [selectedLocation, setSelectedLocation] = useState<SelectedLocation | null>(null)
+  // A search's result on its way: its name, for the history when its popup opens there.
+  const searchedName = useRef<{ at: { lat: number; lng: number }; name: string } | null>(null)
   const [layersOpen, setLayersOpen] = useState(false)
   const [detailPosition, setDetailPosition] = useState<{ lat: number; lng: number } | null>(initial.detailPosition)
   const activeDetailPosition = useRef(detailPosition)
@@ -53,10 +55,11 @@ export default function App() {
   const [calculationOpen, setCalculationOpen] = useState(false)
   const toggleCalculation = useCallback(() => setCalculationOpen(open => !open), [])
   const desktop = useIsDesktop()
-  // The last places opened, newest first, and the names given places: this browser's, or the
+  // The history of places opened, in its order, and the names given places: this browser's, or the
   // signed-in visitor's account's.
   const {
-    account, recent: recentPlaces, titles: placeTitles, notSaved, visit, nameLate, forget: forgetPlace, rename, signOut, deleteAccount,
+    account, recent: recentPlaces, titles: placeTitles, notSaved, open: countOpening, answered, nameLate, forget: forgetPlace,
+    rename, signOut, deleteAccount,
   } = usePlaces()
   const highlightedSource = highlighted?.startsWith('source:')
     ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)
@@ -127,22 +130,35 @@ export default function App() {
     return () => { open = false }
   }, [detailPosition, nameLate])
 
-  // An answered point joins the recent places (first, or in its tab), with its name once it is known.
+  // An answered point's numbers join its place in the history, with its name once it is known.
   useEffect(() => {
     if (!detailPosition || !noiseDetailData || noiseDetailData.partial) return
-    const entry: RecentPlace = {
+    answered({
       lat: detailPosition.lat,
       lng: detailPosition.lng,
       place: detailPlaceName,
       sone: noiseDetailData.loudness?.nden_sone ?? null,
       lden: noiseDetailData.total_lden,
-    }
-    visit(entry)
-  }, [detailPosition, noiseDetailData, detailPlaceName, visit])
-  // The open place's own name, given or taken back in its tab.
+    })
+  }, [detailPosition, noiseDetailData, detailPlaceName, answered])
+  // The open place's own name, given or taken back under the search field, and its entry of the history,
+  // which knows its name before the geocoder answers (a search's result, a place opened before).
   const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition) : null
-  // The account's form at the top right, opened there or from the tabs.
+  const openEntry = detailPosition && recentPlaces.find(place => samePlace(place, detailPosition))
+  // A popup a link opened counts as an opening, once.
+  const linkCounted = useRef(false)
+  useEffect(() => {
+    if (linkCounted.current || !initial.detailPosition) return
+    linkCounted.current = true
+    countOpening(initial.detailPosition)
+  }, [initial.detailPosition, countOpening])
+  // The account's form at the top right, opened there or from the history.
   const [accountOpen, setAccountOpen] = useState(false)
+  // The desktop layers card: open while no popup is, folded while one is (the popup has the column),
+  // its button beside the account turning it over.
+  const popupOpen = detailPosition != null
+  const [layersCardOpen, setLayersCardOpen] = useState(!popupOpen)
+  useEffect(() => setLayersCardOpen(!popupOpen), [popupOpen])
   // The signed-in visitor's recordings and photos of the open place.
   const [media] = useState(() => createMediaKeeper(startRecording))
   useEffect(() => media.open(isSignedIn(account) ? account.email : null, detailPosition), [media, account, detailPosition])
@@ -253,7 +269,11 @@ export default function App() {
     closeNoiseDetail()
     setSelectedStay(null)
     syncUrl({ detailPosition: pos })
-  }, [syncUrl, closeNoiseDetail])
+    // Each opening counts in the history; a search's result keeps its name there.
+    const searched = searchedName.current
+    searchedName.current = null
+    if (pos) countOpening(pos, searched && samePlace(searched.at, pos) ? searched.name : null)
+  }, [syncUrl, closeNoiseDetail, countOpening])
 
   // A place to stay opens the popup at its point, with the place above it: one card, not two.
   const handleStaySelect = useCallback((stay: Stay) => {
@@ -299,25 +319,6 @@ export default function App() {
     if (sameDetailPosition(detailPositionRef.current, next.detailPosition)) return
     handleDetailPositionChange(next.detailPosition)
   }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleStaysChange, handleDetailPositionChange])
-  // The open place is a tab from the click on, with its last numbers until its answer comes; the recent
-  // places keep it once it is answered. A tab opens its place at once, the map moving only to keep it
-  // in sight (DetailPopup).
-  const opened = detailPosition && recentPlaces.find(place => samePlace(place, detailPosition))
-  const tabs = detailPosition && (
-    <PlaceTabs
-      places={withPlace(recentPlaces, { ...detailPosition, place: detailPlaceName, sone: opened?.sone ?? null, lden: opened?.lden ?? null })}
-      titles={placeTitles}
-      current={detailPosition}
-      notSaved={notSaved}
-      onOpen={place => handleDetailPositionChange({ lat: place.lat, lng: place.lng })}
-      onForget={place => {
-        forgetPlace(place)
-        if (samePlace(place, detailPosition)) handleNoiseClose()
-      }}
-      onRename={rename}
-      onSignIn={account === null ? () => setAccountOpen(true) : undefined}
-    />
-  )
   // Made anew for each place under its key: siblings under one key once left a name field behind at
   // every new place.
   const placeMedia = detailPosition && <PlaceMedia key={`${detailPosition.lat},${detailPosition.lng}`} media={media} />
@@ -327,18 +328,52 @@ export default function App() {
     // The app is the box the fixed controls stand in: a phone browser's 100vh reaches under its
     // toolbar, which put the map's own corner controls (the ⓘ) below the control row.
     <div className="fixed inset-0 overflow-hidden">
-      <SearchBar onSelect={setSelectedLocation} getMapView={getMapView} />
-      <AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={accountOpen} onOpenChange={setAccountOpen} />
+      <SearchBar
+        onSelect={result => {
+          searchedName.current = {
+            at: { lat: result.lat, lng: result.lon },
+            name: result.secondary ? `${result.display_name}, ${result.secondary}` : result.display_name,
+          }
+          setSelectedLocation(result)
+        }}
+        getMapView={getMapView}
+        history={recentPlaces}
+        titles={placeTitles}
+        open={detailPosition && {
+          at: detailPosition,
+          place: openEntry?.place ?? detailPlaceName,
+          sone: noiseDetailData?.loudness?.nden_sone ?? openEntry?.sone ?? null,
+        }}
+        notSaved={notSaved}
+        // A place of the history opens at once, the map moving only to keep it in sight (DetailPopup).
+        onOpenPlace={place => handleDetailPositionChange({ lat: place.lat, lng: place.lng })}
+        onRename={rename}
+        onForget={forgetPlace}
+        onSignIn={account === null ? () => setAccountOpen(true) : undefined}
+      />
+      {/* The layers and the account side by side at the top right (the layers' button from md up: a
+          phone has its own in the control row); the card column starts under them. */}
+      <div className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] right-(--map-gutter) z-[2004] flex items-start gap-2">
+        <button
+          type="button"
+          aria-expanded={layersCardOpen}
+          onClick={() => setLayersCardOpen(open => !open)}
+          className="hidden h-9 items-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium text-foreground shadow-lg hover:bg-muted aria-expanded:bg-muted md:flex"
+        >
+          <Layers3 className="size-4 shrink-0" />
+          Layers
+        </button>
+        <AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={accountOpen} onOpenChange={setAccountOpen} />
+      </div>
 
       {/* UI overlays */}
       <div className="absolute inset-0 z-[1002] pointer-events-none">
         {/* The layers card and the detail card are shrinkable flex items (min-h-0)
             that scroll their own content, so on a short viewport both stay reachable. The column
-            starts under the account (36 px from 12 px) and ends over the map's corner, whose credits
-            and ⓘ stay in sight with every card open. */}
+            starts under the layers and the account (36 px from 12 px) and ends over the map's corner,
+            whose credits and ⓘ stay in sight with every card open. */}
         <div className="hidden md:flex absolute top-14 right-(--map-gutter) bottom-11 flex-col gap-2 w-(--map-card-column) overflow-hidden">
-          <ControlCard
-            popupOpen={detailPosition != null}
+          {layersCardOpen && <ControlCard
             quietClustersEnabled={quietClustersEnabled}
             onQuietClustersChange={handleQuietClustersChange}
             quietThreshold={quietThreshold}
@@ -348,7 +383,7 @@ export default function App() {
             dataLayers={dataLayers}
             onDataLayersChange={handleDataLayersChange}
             {...stayControls}
-          />
+          />}
           <DetailCard
             noiseData={noiseDetailData}
             position={detailPosition}
@@ -359,7 +394,6 @@ export default function App() {
             onCalculationToggle={toggleCalculation}
             onFan={showFan}
             stay={selectedStay}
-            tabs={tabs}
             placeMedia={placeMedia}
           />
         </div>
@@ -442,7 +476,6 @@ export default function App() {
         calculationOpen={calculationOpen && !desktop}
         onCalculationToggle={toggleCalculation}
         onFan={showFan}
-        tabs={tabs}
         stay={selectedStay}
         placeMedia={placeMedia}
       />

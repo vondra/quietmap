@@ -1,7 +1,7 @@
-// A signed-in visitor's recordings and photos of the open place (lib/media-keeper.ts), under its tab: a
-// microphone, a camera and how to hold the phone; under them the recording while it runs, what was not
-// kept, and the place's items, each opened by a tap. The desktop card and the phone sheet both draw
-// them, from the one keeper. Nothing while signed out.
+// A signed-in visitor's recordings and photos of the open place (lib/media-keeper.ts), at the popup's
+// head: a microphone, a camera and how to hold the phone; under them the recording while it runs, what
+// was not kept, and the place's items, each opened by a tap. The desktop card and the phone sheet both
+// draw them, from the one keeper. Nothing while signed out.
 import { useRef, useState, useSyncExternalStore } from 'react'
 import { Camera, CircleStop, Image as ImageIcon, Info, LoaderCircle, Mic, Play } from 'lucide-react'
 import { mediaUrl } from '../lib/media'

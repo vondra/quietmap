@@ -161,7 +161,7 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
     const ready = signedIn(accounts, request, reply, { change: true })
     if (!ready) return
     const [{ store }, user] = ready
-    const recent = parseRecent(body(request).recent)
+    const recent = parseRecent(body(request).recent, Date.now())
     if (typeof recent === 'string') return reply.status(400).send({ error: recent })
     store.setRecent(user.id, recent)
     return reply.status(204).send()
@@ -171,8 +171,9 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
     const ready = signedIn(accounts, request, reply, { change: true })
     if (!ready) return
     const [{ store }, user] = ready
-    const titles = parseTitles(body(request).titles, Date.now())
-    const recent = parseRecent(body(request).recent)
+    const now = Date.now()
+    const titles = parseTitles(body(request).titles, now)
+    const recent = parseRecent(body(request).recent, now)
     if (typeof titles === 'string' || typeof recent === 'string') {
       return reply.status(400).send({ error: typeof titles === 'string' ? titles : recent })
     }

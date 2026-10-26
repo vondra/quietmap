@@ -95,6 +95,10 @@ html, body {
     max-width: calc(100vw - 2 * var(--map-gutter));
     line-height: 16px;
   }
+  /* Under the open place's row too, while it stands under the search bar (SearchBar). */
+  body:has(.open-place) .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
+    top: calc(env(safe-area-inset-top, 0px) + 7.75rem);
+  }
 }
 
 /* Search bar: one horizontal placement. Below md the bar fills the row left of

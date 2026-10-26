@@ -1,5 +1,5 @@
 // The accounts in SQLite (node:sqlite): the sign-in links mailed, the sessions, each account's place
-// names and recent places (frontend/src/lib/place-rules.ts), and its recordings and photos, whose
+// names and counted recent places (frontend/src/lib/place-rules.ts), and its recordings and photos, whose
 // files lie beside the database (`<database>-media/<account id>/<item id>.wav|.jpg`). Tokens are 32
 // random bytes and only their SHA-256 is kept, so the database alone signs nobody in. Every change
 // that must not half happen is one transaction.
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS place_titles (user_id INTEGER NOT NULL REFERENCES use
   updated_at INTEGER NOT NULL, PRIMARY KEY (user_id, position));
 CREATE TABLE IF NOT EXISTS recent_places (user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   position INTEGER NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, place TEXT, sone REAL, lden REAL,
-  PRIMARY KEY (user_id, position));
+  count INTEGER NOT NULL DEFAULT 1, opened_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, position));
 CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   kind TEXT NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, taken_at INTEGER NOT NULL, bytes INTEGER NOT NULL,
   duration_s REAL, sha256 TEXT NOT NULL, details TEXT NOT NULL);
@@ -77,6 +77,13 @@ export class AccountStore {
     // journal, unlike a write-ahead log, keeps no older page in the files after the commit.
     this.#db.exec('PRAGMA journal_mode = DELETE; PRAGMA secure_delete = ON; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;')
     this.#db.exec(SCHEMA)
+    // A database from before the recent places were counted: each was opened once, at no known time.
+    // Each column on its own, in one transaction: a start cut short adds both or neither.
+    const columns = new Set(this.#db.prepare('PRAGMA table_info(recent_places)').all().map(column => column.name))
+    const missing = [['count', 1], ['opened_at', 0]].filter(([name]) => !columns.has(name))
+    if (missing.length > 0) {
+      this.#transaction(() => missing.forEach(([name, value]) => this.#db.exec(`ALTER TABLE recent_places ADD COLUMN ${name} INTEGER NOT NULL DEFAULT ${value}`)))
+    }
   }
 
   close(): void {
@@ -177,7 +184,7 @@ export class AccountStore {
   }
 
   places(id: number): Places {
-    const recent = this.#db.prepare('SELECT lat, lng, place, sone, lden FROM recent_places WHERE user_id = ? ORDER BY position')
+    const recent = this.#db.prepare('SELECT lat, lng, place, sone, lden, count, opened_at AS openedAt FROM recent_places WHERE user_id = ? ORDER BY position')
       .all(id) as unknown as RecentPlace[]
     return { titles: this.#titles(id), recent }
   }
@@ -190,8 +197,8 @@ export class AccountStore {
 
   #writeRecent(id: number, recent: RecentPlace[]): void {
     this.#db.prepare('DELETE FROM recent_places WHERE user_id = ?').run(id)
-    const insert = this.#db.prepare('INSERT INTO recent_places (user_id, position, lat, lng, place, sone, lden) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    recent.forEach((place, k) => insert.run(id, k, place.lat, place.lng, place.place, place.sone, place.lden))
+    const insert = this.#db.prepare('INSERT INTO recent_places (user_id, position, lat, lng, place, sone, lden, count, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    recent.forEach((place, k) => insert.run(id, k, place.lat, place.lng, place.place, place.sone, place.lden, place.count, place.openedAt))
   }
 
   /** Names the place at `at` (null removes its name) as `withTitle` does; the account's names. */

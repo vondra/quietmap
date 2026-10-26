@@ -1,7 +1,8 @@
-// The account at the map's top right, where a visitor looks for it: "Sign in" while signed out, which
-// opens the mailed-link form under it; once signed in, the address's first letter, which opens the
-// address, "Sign out" and "Delete account". Nothing on a server without the sign-in, or before it has
-// answered. The places' tabs open it too (App); a press elsewhere or Escape closes it.
+// The account at the map's top right, beside the layers, where a visitor looks for it: "Sign in" while
+// signed out, which opens the mailed-link form under it; once signed in, the address's first letter,
+// which opens the address, "Sign out" and "Delete account". Nothing on a server without the sign-in,
+// or before it has answered. The history under the search field opens it too (App); a press
+// elsewhere or Escape closes it.
 import { useEffect, useRef, useState } from 'react'
 import { UserRound } from 'lucide-react'
 import { isSignedIn, type AccountState } from '../lib/places-keeper'
@@ -47,9 +48,8 @@ export default function AccountButton({ account, onSignOut, onDeleteAccount, ope
     if (done) onOpenChange(false)
   }
   return (
-    // Beside the search bar on a phone (`.map-top-bar` leaves it the room), over the card column from
-    // md up, which starts under it (App).
-    <div ref={box} data-testid="account" className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] right-(--map-gutter) z-[1004] flex flex-col items-end">
+    // Beside the search bar on a phone (`.map-top-bar` leaves it the room).
+    <div ref={box} data-testid="account" className="relative">
       <button
         ref={button}
         type="button"
@@ -67,7 +67,7 @@ export default function AccountButton({ account, onSignOut, onDeleteAccount, ope
           : <><UserRound className="size-4 shrink-0" /><span className="hidden md:inline">Sign in</span></>}
       </button>
       {open && (
-        <div className="mt-2 w-[min(20rem,calc(100vw-2*var(--map-gutter)))] rounded-md border border-black/5 bg-white p-3 shadow-lg">
+        <div className="absolute right-0 top-full mt-2 w-[min(20rem,calc(100vw-2*var(--map-gutter)))] rounded-md border border-black/5 bg-white p-3 shadow-lg">
           {isSignedIn(account) ? (
             <div className="flex flex-col gap-1.5">
               <p className="flex items-center gap-2 text-sm text-foreground">

@@ -4,10 +4,10 @@
 // neither working nor counting; a link checked without being used, used once within its 15 minutes;
 // the session's cookie, renewed at most daily and ended after 180 days unused; a change refused for
 // a page that names another account; names under the 30 m rule and the later time, recent places
-// replaced one per place, a longitude from a repeated world wrapped, a browser's places added at the
-// visitor's word; addresses and sessions forgotten when they end; everything deleted with the
-// account; what is sent checked; a server without accounts that answers 503, and the four values
-// configured all or none.
+// replaced one per place with their counts and times, a database from before the counts read with
+// them, a longitude from a repeated world wrapped, a browser's places added at the visitor's word;
+// addresses and sessions forgotten when they end; everything deleted with the account; what is sent
+// checked; a server without accounts that answers 503, and the four values configured all or none.
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -146,9 +146,17 @@ test("an account's names follow the 30 m rule and the later time; its recent pla
   assert.ok(future.updatedAt <= Date.now())
   assert.deepEqual((await name(50, null, Date.now())).json(), { titles: [] })
 
-  const recent = [{ lat: 1, lng: 2, place: 'Tijarafe, Spain', sone: 0.3, lden: 31 }, { lat: 3, lng: 4, place: null, sone: null, lden: null }]
+  const recent = [
+    { lat: 1, lng: 2, place: 'Tijarafe, Spain', sone: 0.3, lden: 31, count: 3, openedAt: 20 },
+    { lat: 3, lng: 4, place: null, sone: null, lden: null, count: 1, openedAt: 10 },
+  ]
   assert.equal((await send('PUT', '/api/places/recent', { recent }, headers)).statusCode, 204)
   assert.deepEqual((await send('GET', '/api/me', undefined, headers)).json().recent, recent)
+  // A count below one is one, a time from the future the server's now.
+  await send('PUT', '/api/places/recent', { recent: [{ lat: 1, lng: 2, count: 0, openedAt: Date.now() + DAY_MS }] }, headers)
+  const [kept] = (await send('GET', '/api/me', undefined, headers)).json().recent
+  assert.equal(kept.count, 1)
+  assert.ok(kept.openedAt <= Date.now())
   // Another account sees none of it.
   assert.deepEqual((await send('GET', '/api/me', undefined, await signIn('other@example.org'))).json(), { email: 'other@example.org', titles: [], recent: [] })
 })
@@ -159,7 +167,7 @@ test("a browser's places join the account at the visitor's word: names merged, r
   await send('PUT', '/api/places/title', { lat: 50, lng: 14, title: 'Home', updatedAt: 5 }, headers)
   const browser = {
     titles: [{ lat: 50.0001, lng: 14, title: 'Flat', updatedAt: 9 }, { lat: 48, lng: 16, title: 'Lake' }],
-    recent: [{ lat: 48, lng: 16, place: null, sone: 1.1, lden: 38 }],
+    recent: [{ lat: 48, lng: 16, place: null, sone: 1.1, lden: 38, count: 2, openedAt: 7 }],
   }
   const merged = (await send('POST', '/api/places/import', browser, headers)).json()
   assert.deepEqual(merged.titles, [{ lat: 50, lng: 14, title: 'Flat', updatedAt: 9 }, { lat: 48, lng: 16, title: 'Lake', updatedAt: 0 }])
@@ -221,8 +229,30 @@ test('a longitude from a repeated world is wrapped, and the recent places are on
   const twice = [{ lat: 50, lng: 14, place: 'A' }, { lat: 50.0001, lng: 14, place: 'B' }, { lat: 49, lng: 374 }]
   assert.equal((await send('PUT', '/api/places/recent', { recent: twice }, headers)).statusCode, 204)
   assert.deepEqual((await send('GET', '/api/me', undefined, headers)).json().recent, [
-    { lat: 50, lng: 14, place: 'A', sone: null, lden: null }, { lat: 49, lng: 14, place: null, sone: null, lden: null },
+    { lat: 50, lng: 14, place: 'A', sone: null, lden: null, count: 1, openedAt: 0 },
+    { lat: 49, lng: 14, place: null, sone: null, lden: null, count: 1, openedAt: 0 },
   ])
+})
+
+test('a database from before the recent places were counted, or half migrated, reads them opened once, at no known time', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'qm-accounts-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  for (const half of [false, true]) {
+    const database = join(directory, `accounts-${half}.sqlite`)
+    const old = new DatabaseSync(database)
+    old.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
+      CREATE TABLE recent_places (user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+        position INTEGER NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, place TEXT, sone REAL, lden REAL,
+        PRIMARY KEY (user_id, position));
+      INSERT INTO users VALUES (1, 'owner@example.org', 0);
+      INSERT INTO recent_places VALUES (1, 0, 50, 14, 'Kytín', 0.4, 33);`)
+    if (half) old.exec('ALTER TABLE recent_places ADD COLUMN count INTEGER NOT NULL DEFAULT 1')
+    old.close()
+    const store = new AccountStore(database)
+    // Rows come with no prototype: compared as plain objects.
+    assert.deepEqual(store.places(1).recent.map(place => ({ ...place })), [{ lat: 50, lng: 14, place: 'Kytín', sone: 0.4, lden: 33, count: 1, openedAt: 0 }])
+    store.close()
+  }
 })
 
 test('an address that asked for a link is forgotten after the hour, a session once it ends', async (t) => {
@@ -250,8 +280,8 @@ test('what is sent is checked: coordinates, names, the most places, and a change
   for (const sent of [{ lat: 91, lng: 0, title: 'x' }, { lat: 0, lng: 0, title: 'x'.repeat(81) }, { lat: 0, lng: 0, title: '  ' }, { lat: 0, lng: 0, title: 5 }]) {
     assert.equal((await send('PUT', '/api/places/title', sent, headers)).statusCode, 400, JSON.stringify(sent))
   }
-  const six = Array.from({ length: 6 }, (_, k) => ({ lat: k, lng: 0 }))
-  assert.equal((await send('PUT', '/api/places/recent', { recent: six }, headers)).statusCode, 400)
+  const tooMany = Array.from({ length: 51 }, (_, k) => ({ lat: k, lng: 0 }))
+  assert.equal((await send('PUT', '/api/places/recent', { recent: tooMany }, headers)).statusCode, 400)
   assert.equal((await send('PUT', '/api/places/recent', { recent: 'all' }, headers)).statusCode, 400)
   assert.equal((await send('POST', '/api/places/import', { titles: Array(201).fill({ lat: 0, lng: 0, title: 'x' }), recent: [] }, headers)).statusCode, 400)
   assert.equal((await send('PUT', '/api/places/title', { lat: 0, lng: 0, title: 'x' })).statusCode, 401)

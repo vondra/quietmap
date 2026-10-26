@@ -1,5 +1,5 @@
 // The optional sign-in in a real browser, the server mocked: a signed-out visitor finds it at the top
-// right and beside the places' tabs, and asks for a link; the link's page signs in only at a press and
+// right and under the history of places opened, and asks for a link; the link's page signs in only at a press and
 // adds the browser's places only at the visitor's word, keeping them in the browser too; a signed-in
 // visitor's names come from the account and go to it, the browser's own left as they were until
 // signing out at the top right.
@@ -24,7 +24,7 @@ async function seedBrowserPlaces(page: Page, titles: object[], recent: object[] 
 
 const storedTitles = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('quietmap.place-titles') ?? '[]'))
 
-test('a signed-out visitor finds the sign-in at the top right and beside the places, and asks for a link', async ({ page }) => {
+test('a signed-out visitor finds the sign-in at the top right and under the places opened, and asks for a link', async ({ page }) => {
   await installHermeticMap(page, POINT)
   await page.route('**/api/me', route => json(route, { error: 'Not signed in' }, 401))
   const asked: unknown[] = []
@@ -36,13 +36,15 @@ test('a signed-out visitor finds the sign-in at the top right and beside the pla
   const account = page.getByTestId('account')
   await expect(account.getByRole('button', { name: 'Sign in' })).toBeVisible()
   await expect(account.getByRole('textbox', { name: 'E-mail' })).toHaveCount(0)
-  await page.getByTestId('mobile-detail-sheet').getByRole('button', { name: 'Sign in to keep your places on all your devices' }).tap()
+  await page.getByRole('combobox').tap()
+  await page.getByRole('button', { name: 'Sign in to keep these places on all your devices' }).tap()
   await account.getByRole('textbox', { name: 'E-mail' }).fill(ACCOUNT)
   await account.getByRole('button', { name: 'Send me a link' }).tap()
   await expect(account.getByTestId('sign-in-sent')).toContainText(ACCOUNT)
   expect(asked).toEqual([{ email: ACCOUNT }])
   // A tap elsewhere closes it; the top right opens it again.
   await page.getByTestId('mobile-detail-sheet').getByRole('button', { name: 'Close' }).tap()
+  await expect(page.getByTestId('mobile-detail-sheet')).toHaveCount(0)
   await expect(account.getByTestId('sign-in-sent')).toHaveCount(0)
   await account.getByRole('button', { name: 'Sign in' }).tap()
   await expect(account.getByRole('textbox', { name: 'E-mail' })).toBeVisible()
@@ -62,14 +64,18 @@ test("a signed-in visitor's names come from the account and go to it; signed out
     sent.push(name)
     return json(route, { titles: [{ lat: POINT.lat, lng: POINT.lng, title: name.title, updatedAt: name.updatedAt }] })
   })
+  await page.route('**/api/places/recent', route => route.fulfill({ status: 204 }))
   await page.route('**/api/auth/signout', route => {
     signedIn = false
     return route.fulfill({ status: 204 })
   })
 
-  const tab = await openPoint(page)
-  await expect(tab).toContainText('Account name')
-  await expect(page.getByRole('button', { name: 'Sign in to keep your places on all your devices' })).toHaveCount(0)
+  const row = await openPoint(page)
+  await expect(row).toContainText('Account name')
+  await page.getByRole('combobox').tap()
+  await expect(page.getByRole('option', { name: /Account name/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in to keep these places on all your devices' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
   await renameOpenPlace(page, 'Renamed')
   await expect.poll(() => sent.map(name => name.title)).toEqual(['Renamed'])
   // The tapped point, which is POINT up to the map's float arithmetic.
@@ -114,7 +120,8 @@ test("the link's page signs in only at a press and adds the browser's places onl
   await page.waitForURL(url => url.pathname === '/')
   expect(added).toEqual([{
     titles: [{ lat: 50, lng: 14, title: 'Cabin', updatedAt: 3 }],
-    recent: [{ lat: 50, lng: 14, place: 'Bedřichov, Czechia', sone: 0.3, lden: 31 }],
+    // Kept before the history counted: opened once, at no known time.
+    recent: [{ lat: 50, lng: 14, place: 'Bedřichov, Czechia', sone: 0.3, lden: 31, count: 1, openedAt: 0 }],
   }])
   // Added to the account, they stay in this browser's own store as well, for when it signs out.
   expect(await storedTitles(page)).toEqual([{ lat: 50, lng: 14, title: 'Cabin', updatedAt: 3 }])

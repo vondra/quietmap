@@ -273,13 +273,15 @@ test('search: picking a result flies the map there and opens its popup', async (
     body: JSON.stringify([target]),
   }))
   await page.goto(mapUrl(POINT))
-  await page.getByRole('searchbox').fill('Ruzyně')
+  await page.getByRole('combobox').fill('Ruzyně')
   const option = page.getByRole('option', { name: new RegExp(target.display_name) })
   await expect(option).toBeVisible()
   await option.click()
   // The hash carries four decimals; anchor the complete values.
   await expect(page).toHaveURL(/lat=50\.1000&lng=14\.2600&/)
   await expect.poll(() => popupRequests(page)).toEqual([{ lat: target.lat, lng: target.lon }])
+  // The place keeps the result's name, not the geocoder's for its point.
+  await expect(page.getByTestId('open-place')).toContainText(target.display_name)
 })
 
 test('desktop: a press of the locate button after the visitor has moved opens the popup at the new place', async ({ page, context }) => {

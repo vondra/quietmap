@@ -24,6 +24,6 @@ export function usePlaces() {
       window.removeEventListener('storage', stored)
     }
   }, [keeper])
-  const { visit, nameLate, forget, rename, signOut, deleteAccount } = keeper
-  return { ...shown, visit, nameLate, forget, rename, signOut, deleteAccount }
+  const { open, answered, nameLate, forget, rename, signOut, deleteAccount } = keeper
+  return { ...shown, open, answered, nameLate, forget, rename, signOut, deleteAccount }
 }

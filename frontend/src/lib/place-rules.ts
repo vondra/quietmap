@@ -1,8 +1,8 @@
 // The rules of a visitor's places, the same in the browser (browser-places.ts) and on the server for a
-// signed-in visitor (server/src/accounts/): the recent places are the last five opened, newest
-// first, a place opened again keeping its tab where it is; one place is any point within 30 m; a name
-// stays at the point it was first given, and of two names for one place the later is kept. Pure, so
-// that the server runs this very file.
+// signed-in visitor (server/src/accounts/): the recent places are the history of the places opened,
+// clicked or searched, at most 50, the one opened last first and the others by how often they were
+// opened; one place is any point within 30 m; a name stays at the point it was first given, and of two
+// names for one place the later is kept. Pure, so that the server runs this very file.
 
 export interface RecentPlace {
   lat: number
@@ -12,6 +12,10 @@ export interface RecentPlace {
   /** The whole day's loudness (sone) and Lden (dB), when answered. */
   sone: number | null
   lden: number | null
+  /** How many times it was opened, and when last (ms since 1970; 0 for a place kept from before the
+   *  history counted). */
+  count: number
+  openedAt: number
 }
 
 /** A place's name as the visitor wrote it. */
@@ -23,8 +27,8 @@ export interface PlaceTitle {
   updatedAt: number
 }
 
-/** The most recent places kept: one row of tabs on a phone. */
-export const RECENT_PLACES_MAX = 5
+/** The most recent places kept. */
+export const RECENT_PLACES_MAX = 50
 /** The most names kept, the newest first. */
 export const PLACE_TITLES_MAX = 200
 /** The longest name. */
@@ -48,14 +52,41 @@ export function samePlace(a: { lat: number, lng: number }, b: { lat: number, lng
   return metresBetween(a, b) < SAME_PLACE_M
 }
 
-/** `list` with `place`: a new place first, the oldest beyond the most kept gone; a place already in
- *  it where its first entry stands, as tabs do, with `place`'s numbers and its older name until its
- *  own arrives, no other entry left within the place. */
-export function withPlace(list: RecentPlace[], place: RecentPlace): RecentPlace[] {
-  const k = list.findIndex(other => samePlace(other, place))
-  if (k < 0) return [place, ...list].slice(0, RECENT_PLACES_MAX)
-  const entry = place.place == null ? { ...place, place: list[k].place } : place
-  return list.flatMap((other, j) => (j === k ? [entry] : samePlace(other, place) ? [] : [other]))
+/** The history's order: the place opened last first, then the others by how often they were opened,
+ *  of equals the one opened later first (a stable sort: places kept from before the history counted
+ *  keep their order). */
+export function historyOrder(list: RecentPlace[]): RecentPlace[] {
+  const last = list.reduce<RecentPlace | null>((latest, place) => (latest == null || place.openedAt > latest.openedAt ? place : latest), null)
+  return [...list].sort((a, b) => Number(b === last) - Number(a === last) || b.count - a.count || b.openedAt - a.openedAt)
+}
+
+/** `list`, in the history's order, with `entry` replacing the place's entry or added; beyond the most
+ *  kept the one ranked last goes, and no other entry stays within the place. */
+function withEntry(list: RecentPlace[], entry: RecentPlace): RecentPlace[] {
+  return historyOrder([entry, ...list.filter(other => !samePlace(other, entry))]).slice(0, RECENT_PLACES_MAX)
+}
+
+/** `list` with the place at `at` opened once more at `openedAt`: its entry counted again, where it
+ *  was first opened, or a new one named `place` (a search's result) until its own name comes. */
+export function withOpened(list: RecentPlace[], at: { lat: number, lng: number }, openedAt: number, place: string | null = null): RecentPlace[] {
+  const older = list.find(other => samePlace(other, at))
+  return withEntry(list, older
+    ? { ...older, place: older.place ?? place, count: older.count + 1, openedAt }
+    : { lat: at.lat, lng: at.lng, place, sone: null, lden: null, count: 1, openedAt })
+}
+
+/** `list` with an answered place's numbers, and a name when its entry has none, where the entry stands;
+ *  `list` itself when nothing changes or the place is not in it (forgotten while it was computed). */
+export function withAnswer(
+  list: RecentPlace[],
+  answer: { lat: number, lng: number, place: string | null, sone: number | null, lden: number | null },
+): RecentPlace[] {
+  const k = list.findIndex(other => samePlace(other, answer))
+  if (k < 0) return list
+  const older = list[k]
+  const entry = { ...older, place: older.place ?? answer.place, sone: answer.sone, lden: answer.lden }
+  if (entry.place === older.place && entry.sone === older.sone && entry.lden === older.lden) return list
+  return list.map((other, j) => (j === k ? entry : other))
 }
 
 /** `list` with `name` given to the same place's entry if it has none yet (a name looked up after
@@ -65,8 +96,9 @@ export function withName(list: RecentPlace[], at: { lat: number, lng: number }, 
   return list.map(other => (other.place == null && samePlace(other, at) ? { ...other, place: name } : other))
 }
 
+/** `list` without the place, in the history's order (it may have been the one opened last). */
 export function withoutPlace(list: RecentPlace[], place: { lat: number, lng: number }): RecentPlace[] {
-  return list.filter(other => !samePlace(other, place))
+  return historyOrder(list.filter(other => !samePlace(other, place)))
 }
 
 /** Which of `titles` names the place at `at`: the nearest within one place's 30 m (the first of
