@@ -1,7 +1,8 @@
 // The rules of a visitor's places, the same in the browser (browser-places.ts) and on the server for a
 // signed-in visitor (server/src/accounts/): the recent places are the last five opened, newest
-// first; one place is any point within 30 m; a name stays at the point it was first given, and of
-// two names for one place the later is kept. Pure, so that the server runs this very file.
+// first, a place opened again keeping its tab where it is; one place is any point within 30 m; a name
+// stays at the point it was first given, and of two names for one place the later is kept. Pure, so
+// that the server runs this very file.
 
 export interface RecentPlace {
   lat: number
@@ -47,12 +48,14 @@ export function samePlace(a: { lat: number, lng: number }, b: { lat: number, lng
   return metresBetween(a, b) < SAME_PLACE_M
 }
 
-/** `list` with `place` first, in place of the same place's older entry (whose name it keeps until
- *  its own arrives), at most the most kept. */
+/** `list` with `place`: a new place first, the oldest beyond the most kept gone; a place already in
+ *  it where its first entry stands, as tabs do, with `place`'s numbers and its older name until its
+ *  own arrives, no other entry left within the place. */
 export function withPlace(list: RecentPlace[], place: RecentPlace): RecentPlace[] {
-  const older = list.find(other => samePlace(other, place))
-  const entry = place.place == null && older?.place != null ? { ...place, place: older.place } : place
-  return [entry, ...list.filter(other => !samePlace(other, place))].slice(0, RECENT_PLACES_MAX)
+  const k = list.findIndex(other => samePlace(other, place))
+  if (k < 0) return [place, ...list].slice(0, RECENT_PLACES_MAX)
+  const entry = place.place == null ? { ...place, place: list[k].place } : place
+  return list.flatMap((other, j) => (j === k ? [entry] : samePlace(other, place) ? [] : [other]))
 }
 
 /** `list` with `name` given to the same place's entry if it has none yet (a name looked up after

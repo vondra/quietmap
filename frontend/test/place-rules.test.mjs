@@ -1,6 +1,6 @@
-// The places' rules: the recent places newest first, one entry per place, at most five, names that
-// come back late; the names the visitor gives places, the later of two kept; what storage held read
-// defensively.
+// The places' rules: the recent places newest first, a place opened again in its tab, one entry per
+// place, at most five, names that come back late; the names the visitor gives places, the later of
+// two kept; what storage held read defensively.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -12,11 +12,20 @@ import {
 
 const place = (lat, lng, sone = 4) => ({ lat, lng, place: null, sone, lden: 43 })
 
-test('a place opened again moves to the front with its new numbers, not a second time', () => {
+test('a place opened again keeps its tab with its new numbers, a silent answer too, not a second time', () => {
   const list = withPlace(withPlace([], place(50, 14, 3)), place(49, 15))
   const again = withPlace(list, place(50.0001, 14.0001, 5))
   assert.equal(again.length, 2)
-  assert.deepEqual(again[0], place(50.0001, 14.0001, 5))
+  assert.equal(again[0].lat, 49)
+  assert.deepEqual(again[1], place(50.0001, 14.0001, 5))
+  assert.equal(withPlace(again, { lat: 50, lng: 14, place: null, sone: null, lden: null })[1].sone, null)
+})
+
+test('a place opened between two kept 40 m apart takes the first one\'s tab and leaves no second', () => {
+  const list = withPlace(withPlace([], place(50, 14)), place(50.00036, 14))
+  const between = withPlace(list, place(50.00018, 14))
+  assert.deepEqual(between.map(p => p.lat), [50.00018])
+  assert.deepEqual(withPlace(between, place(50, 14)).map(p => p.lat), [50])
 })
 
 test('points 30 m apart are separate places; at most five are kept, the oldest go', () => {
@@ -34,7 +43,7 @@ test('a name that comes back after the next click fills its own place only, and 
   const named = withName(list, { lat: 50.0001, lng: 14 }, 'Bedřichov')
   assert.deepEqual(named.map(p => p.place), [null, 'Bedřichov'])
   assert.deepEqual(withName(named, { lat: 50, lng: 14 }, 'Elsewhere').map(p => p.place), [null, 'Bedřichov'])
-  assert.equal(withPlace(named, place(50, 14, 6))[0].place, 'Bedřichov')
+  assert.equal(withPlace(named, place(50, 14, 6))[1].place, 'Bedřichov')
 })
 
 test('a removed place leaves the others in their order', () => {

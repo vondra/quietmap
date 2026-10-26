@@ -120,7 +120,9 @@ the European Union and ESA; all rights reserved).
 
 - Base map: © [CARTO](https://carto.com/about-carto/), © OpenStreetMap contributors
 - Terrain base map: © [OpenTopoMap](https://opentopomap.org/)
-- Satellite imagery: © [Esri](https://www.esri.com/), Maxar, Earthstar Geographics
+  ([CC-BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/)), SRTM
+- Satellite imagery: powered by [Esri](https://www.esri.com/); source: Esri, Vantor, Earthstar
+  Geographics, and the GIS User Community
 - Rendering: [MapLibre GL JS](https://maplibre.org/) and [deck.gl](https://deck.gl/)
 - Places to stay: [Stay22](https://www.stay22.com/)
 

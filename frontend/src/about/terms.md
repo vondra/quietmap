@@ -43,9 +43,9 @@ places stay in your browser.
 
 **Signing in** is optional: it keeps your named places on every device you sign in on, and your last
 five places as the device you used last saved them. Our server then keeps your e-mail address, those
-names and those places, until you delete the account under Layers, which deletes them at once; our
-two backup copies, on our own disks, drop them at their next nightly update (GDPR art. 6(1)(b), the
-service you asked for). The places your browser kept before you signed in stay in
+names and those places, until you delete the account at the map's top right, which deletes them at
+once; our two backup copies, on our own disks, drop them at their next nightly update (GDPR art.
+6(1)(b), the service you asked for). The places your browser kept before you signed in stay in
 it, and are added to the account only if you say so.
 The sign-in link is mailed by [Resend](https://resend.com), a mail service in the United States, which keeps the mail and
 its delivery log for 30 days. An address that asked for a link is kept for an hour, to limit how

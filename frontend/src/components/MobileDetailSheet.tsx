@@ -10,9 +10,9 @@ import { resolveSheetTouchEnd } from '../lib/sheet-drag'
 // Lazy popup body: see DetailCard.
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
 
-// The handle and the recent places' tabs over the sheet's body (measured on a 390 x 844 phone: the
-// opened sheet with both reached 372 px from the top).
-const SHEET_CHROME_PX = 66
+// The handle and the places' tabs over the sheet's body (measured on a 390 x 844 phone: 28 and 32 px,
+// the opened sheet reaching 378 px from the top).
+const SHEET_CHROME_PX = 60
 
 /** How far from the viewport's top the opened sheet reaches at most: its body is at most half the
  *  viewport less 16 px (`max-h-[calc(50dvh-16px)]` below), the handle and the tabs over it. */
@@ -31,15 +31,15 @@ interface MobileDetailSheetProps {
   calculationOpen: boolean
   onCalculationToggle: () => void
   onFan: (source: string, fan: SegmentFan | null) => void
-  /** The recent places' tabs, shown above the answer. */
-  recentPlaces?: ReactNode
+  /** The places' tabs, the open one's name among them, above the answer and in the peek. */
+  tabs?: ReactNode
   /** The place to stay at the point, when its pin opened the popup: above the answer, in the peek. */
   stay: Stay | null
-  /** The place's name, at the top of the answer, in the peek. */
-  placeTitle?: ReactNode
+  /** The open place's recordings and photos, at the top of the answer, in the peek. */
+  placeMedia?: ReactNode
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, recentPlaces, stay, placeTitle }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, tabs, stay, placeMedia }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -138,10 +138,10 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
         {/* Collapsed = a peek at the top of the detail (place + level) under
             a fixed cap; the tap now reaches onClick, so this state is real
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
-        {recentPlaces && <div className="px-2.5 pb-1">{recentPlaces}</div>}
+        {tabs && <div className="px-2.5">{tabs}</div>}
         {stay && <StayHeader stay={stay} />}
         <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px)]' : 'overflow-hidden max-h-24'}`}>
-          {placeTitle}
+          {placeMedia}
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

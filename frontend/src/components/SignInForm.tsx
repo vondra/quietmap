@@ -29,16 +29,18 @@ export default function SignInForm() {
       }}
     >
       <div className="flex gap-1.5">
-        {/* 16 px on a phone: iOS zooms the page into a smaller field and keeps it zoomed. */}
+        {/* 16 px on a touch screen: iOS zooms the page into a smaller field and keeps it zoomed. The
+            field takes the focus as the form opens (AccountButton). */}
         <input
           type="email"
           required
+          autoFocus
           autoComplete="email"
           aria-label="E-mail"
           placeholder="Your e-mail"
           value={email}
           onChange={event => setEmail(event.target.value)}
-          className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-base text-foreground focus:border-ring focus:outline-none md:text-sm"
+          className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-base text-foreground focus:border-ring focus:outline-none pointer-fine:text-sm"
         />
         <button
           type="submit"

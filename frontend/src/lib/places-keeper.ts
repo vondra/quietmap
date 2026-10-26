@@ -152,7 +152,7 @@ export function createPlacesKeeper() {
     titlesStored() {
       if (shown.account !== 'unknown' && !isSignedIn(shown.account)) show({ titles: loadPlaceTitles() ?? [] })
     },
-    /** An answered point joins the recent places, again first. */
+    /** An answered point joins the recent places: first, or in its tab when it is one already. */
     visit: (place: RecentPlace) => change({ recent: recent => withPlace(recent, place) }),
     /** A place's geocoded name, which came back after the click. */
     nameLate: (at: { lat: number, lng: number }, name: string) => change({ recent: recent => withName(recent, at, name) }),

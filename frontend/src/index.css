@@ -20,14 +20,28 @@ html, body {
   bottom: 10px !important;
 }
 
-/* The bottom-right corner is one row: "About quietmap.org", then the attribution ⓘ, which grows
-   leftwards when opened and pushes the link along instead of covering it. */
+/* The bottom-right corner is one row: the base map's credits, always shown (CARTO asks for its
+   credit on the map, not behind a click), then the ⓘ to the About pages, which credit every source
+   of the noise model (AboutControl). Three classes: maplibre's own rules come later. */
 .maplibregl-ctrl-bottom-right {
   display: flex;
   align-items: center;
+  gap: 6px;
+  padding: 0 10px 10px 0;
+}
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
+  margin: 0;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, .8);
 }
 .maplibregl-ctrl-bottom-right .maplibregl-ctrl.about-control {
-  margin: 10px 0;
+  order: 1;
+  margin: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333333' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / 16px 16px no-repeat;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, .1);
 }
 
 /* Google-like spacing in the bottom-left stack: +/- at the bottom, a gap,
@@ -59,78 +73,46 @@ html, body {
   .maplibregl-ctrl-bottom-left {
     display: none !important;
   }
-  /* The credits' ⓘ is a button of the control row, left of the layers button (10 + 44 + 10 px from
-     the edge), in the row's look (tucked under the row in maplibre's black disc it looked stray,
-     owner 2026-10-16). Opened, the credits rise above the row between the gutters, the way to the
-     About pages first (`.attrib-about`). */
+  /* The ⓘ is a button of the control row, left of the layers button (10 + 44 + 10 px from the edge),
+     in the row's look (tucked under the row in maplibre's black disc it looked stray, owner
+     2026-10-16). The credits stand under the search bar (46 px from 12 px), where neither sheet
+     reaches: a sheet over them would hide them. */
   .maplibregl-ctrl-bottom-right {
     bottom: 16px !important;
     right: 64px !important;
-  }
-  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib.maplibregl-compact {
-    margin: 0;
-    min-width: 44px;
-    min-height: 44px;
     padding: 0;
-    box-sizing: border-box;
-    border-radius: 0.5rem;
-    box-shadow: 0 0 0 2px rgba(0, 0, 0, .1);
   }
-  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib.maplibregl-compact::after {
-    display: none;
-  }
-  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib-button {
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl.about-control {
     width: 44px;
     height: 44px;
     border-radius: 0.5rem;
-    background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333333' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / 16px 16px no-repeat;
   }
-  .maplibregl-ctrl-bottom-right:has(.maplibregl-compact-show) {
-    bottom: 68px !important;
-    left: 10px;
-    right: 10px !important;
-    justify-content: flex-end;
-  }
-  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib.maplibregl-compact-show {
-    padding: 10px 52px 10px 12px;
-    font-size: 12px;
-    line-height: 1.5;
-  }
-  .maplibregl-ctrl-attrib .attrib-about {
-    display: block;
-    margin-bottom: 4px;
-    font-size: 14px;
-    font-weight: 600;
-    color: #111;
-  }
-}
-/* The ⓘ's focus ring for the keyboard only, as the app's buttons: maplibre rings it after a tap too. */
-.maplibregl-ctrl-attrib-button:focus:not(:focus-visible) {
-  box-shadow: none;
-}
-/* From md up the "About quietmap.org" link stands beside the ⓘ (AboutControl). */
-@media (min-width: 768px) {
-  .maplibregl-ctrl-attrib .attrib-about {
-    display: none;
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 4rem);
+    right: var(--map-gutter);
+    width: max-content;
+    max-width: calc(100vw - 2 * var(--map-gutter));
+    line-height: 16px;
   }
 }
 
-/* Search bar: one horizontal placement. Below md a
-   gutter-wide bar capped at 28rem, centered. From md up the bar stays
-   centered while that leaves the card column untouched, otherwise slides left
-   to sit one gutter before the column, and narrows once even that no longer
-   fits (clamp with min > max resolves to min). Audit 2026-09-06: the centered
-   bar covered the Layers header between 768 and 1112 px. */
+/* Search bar: one horizontal placement. Below md the bar fills the row left of
+   the account's 44 px button (AccountButton), capped at 28rem. From md up the
+   bar stays centered while that leaves the card column untouched, otherwise
+   slides left to sit one gutter before the column, and narrows once even that
+   no longer fits (clamp with min > max resolves to min). Audit 2026-09-06: the
+   centered bar covered the Layers header between 768 and 1112 px. */
 .map-top-bar {
   position: fixed;
-  left: 50%;
-  translate: -50% 0;
-  width: calc(100% - 2 * var(--map-gutter));
+  left: var(--map-gutter);
+  width: calc(100% - 3 * var(--map-gutter) - 2.75rem);
   max-width: 28rem;
 }
 @media (width >= theme(--breakpoint-md)) {
   .map-top-bar {
     --bar: min(28rem, calc(100% - var(--map-card-column) - 3 * var(--map-gutter)));
+    translate: -50% 0;
     width: var(--bar);
     left: clamp(
       calc(var(--map-gutter) + var(--bar) / 2),

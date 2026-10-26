@@ -30,6 +30,11 @@ export const BASEMAPS: BasemapDef[] = [
  *  MapLibre drew no standard map at all. */
 const POSITRON_STYLE_URL = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 
+/** OpenStreetMap's credit as CARTO's style words it: the noise model owes it on the map as well
+ *  (MapView), and MapLibre leaves out a credit another contains, so it shows once with every base
+ *  map that loaded, and alone on one that did not. */
+export const OSM_CREDIT = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+
 /** Glyphs for the places to stay's prices on the terrain map, whose labels are in its tiles. */
 const CARTO_GLYPHS = 'https://tiles.basemaps.cartocdn.com/fonts/{fontstack}/{range}.pbf'
 
@@ -45,7 +50,7 @@ const TERRAIN_STYLE: StyleSpecification = {
         'https://c.tile.opentopomap.org/{z}/{x}/{y}.png',
       ],
       tileSize: 256,
-      attribution: '&copy; OpenStreetMap, &copy; OpenTopoMap',
+      attribution: `${OSM_CREDIT}, SRTM | Map style: &copy; <a href="https://opentopomap.org/">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)`,
     },
   },
   layers: [{ id: 'opentopomap', type: 'raster', source: 'opentopomap' }],
@@ -57,7 +62,8 @@ const ESRI_IMAGERY: SourceSpecification = {
     'https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
   ],
   tileSize: 256,
-  attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+  // The service's own credit (its `copyrightText`, October 2026), after the "Powered by Esri" Esri asks for.
+  attribution: 'Powered by <a href="https://www.esri.com/">Esri</a> | Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
 }
 
 /** Without Positron (CARTO unreachable) the heatmap is drawn on Positron's paper. */

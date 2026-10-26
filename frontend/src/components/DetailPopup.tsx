@@ -10,15 +10,21 @@ import { sheetTop } from './MobileDetailSheet'
 import { stayAt } from './StayLayer'
 import type { Stay } from '../lib/stays'
 
-/** On a phone the popup's sheet rises over the lower half of the map: a point it would cover (at `y`
- *  px from the top) moves up to the middle of the map left between the search bar and the sheet,
- *  where the opened rows draw their roads, segments and rays. */
-function keepAboveSheet(map: MaplibreMap, y: number) {
-  if (window.matchMedia(DESKTOP_QUERY).matches) return
-  const top = document.querySelector('.map-top-bar')?.getBoundingClientRect().bottom ?? 0
-  const bottom = sheetTop(map.getContainer().clientHeight)
-  if (y < bottom - 24) return
-  map.panBy([0, y - (top + bottom) / 2], { duration: 400 })
+/** The popup's point in sight. Off the map (a tab of a place elsewhere), the map moves to it at the
+ *  same zoom. On a phone the popup's sheet rises over the lower half of the map: a point it would cover
+ *  (or one brought from off the map) goes to the middle of the map left between the search bar and
+ *  the sheet, where the opened rows draw their roads, segments and rays. */
+function keepInSight(map: MaplibreMap, at: { lat: number; lng: number }) {
+  const { x, y } = map.project([at.lng, at.lat])
+  const { clientWidth: width, clientHeight: height } = map.getContainer()
+  const phone = !window.matchMedia(DESKTOP_QUERY).matches
+  const top = phone ? document.querySelector('.map-top-bar')?.getBoundingClientRect().bottom ?? 0 : 0
+  const bottom = phone ? sheetTop(height) : height
+  if (x < 0 || x > width || y < 0 || y > height) {
+    map.easeTo({ center: [at.lng, at.lat], offset: [0, (top + bottom - height) / 2], duration: 400 })
+  } else if (phone && y >= bottom - 24) {
+    map.panBy([0, y - (top + bottom) / 2], { duration: 400 })
+  }
 }
 
 export interface DetailPopupProps {
@@ -70,10 +76,9 @@ export default function DetailPopup({ isCurrentDetailPosition, detailPosition, t
     if (triggerPosition) onDetailPositionChange?.(triggerPosition)
   }, [triggerPosition, onDetailPositionChange])
 
-  // Whatever opened the popup (a tap, a link's `d=`, a recent place), its point stays in sight.
+  // Whatever opened the popup (a tap, a link's `d=`, a place's tab), its point stays in sight.
   useEffect(() => {
-    if (!detailPosition || !map) return
-    keepAboveSheet(map.getMap(), map.project([detailPosition.lng, detailPosition.lat]).y)
+    if (detailPosition && map) keepInSight(map.getMap(), detailPosition)
   }, [detailPosition, map])
 
   // One streamed request per clicked point: every line redraws the popup. A new click (or closing

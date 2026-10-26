@@ -1,7 +1,7 @@
 // The map: basemap, noise heatmap, quiet zones, places to stay, hover readout, search flight, the
 // click popup and the track of the loudest flight highlighted in it.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import Map, { NavigationControl, GeolocateControl, useMap, type MapRef, type ViewStateChangeEvent } from 'react-map-gl/maplibre'
+import Map, { NavigationControl, GeolocateControl, type MapRef, type ViewStateChangeEvent } from 'react-map-gl/maplibre'
 import type { StyleSpecification, GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
 import FlyToLocation from './FlyToLocation'
 import DetailPopup from './DetailPopup'
@@ -17,51 +17,15 @@ import StayLayer from './StayLayer'
 import type { Stay, StaySearch } from '../lib/stays'
 import type { DataLayerId } from '../lib/data-layers'
 import MapStateSync from './MapStateSync'
-import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
+import { DEFAULT_BASEMAP, OSM_CREDIT, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-// The noise model's data: OpenStreetMap's ODbL asks for its credit on the map (the satellite base
-// map does not name it); every other source is credited on the About pages. On a phone the credits
-// open from the control row's ⓘ and lead with the way to the About pages (`.attrib-about`).
-const NOISE_DATA_CREDITS = '<a class="attrib-about" href="/about">About quietmap.org</a>'
-  + 'Noise model: &copy; OpenStreetMap contributors and <a href="/about/data-sources">others</a>'
-
-// OpenStreetMap's attribution guidelines let credits shown as a map opens fold away at the first
-// touch of the map or after five seconds (osmfoundation.org/wiki/Licence/Attribution_Guidelines).
-const CREDITS_SHOWN_MS = 5000
-
 // A geolocate move ends with the position at the map's centre (its accuracy's box is centred in
 // Mercator, a fraction of a pixel off); a move cut short leaves it farther.
 const ARRIVED_PX = 2
-
-/** The credits open with the map and fold into their ⓘ at the first touch of the map or after
- *  `CREDITS_SHOWN_MS`, once; a visitor's own tap on the ⓘ ends that, and the ⓘ opens them again. */
-function CreditsFoldAtFirstTouch() {
-  const { current: map } = useMap()
-  useEffect(() => {
-    if (!map) return
-    const credits = map.getContainer().querySelector('.maplibregl-ctrl-attrib')
-    const canvas = map.getCanvasContainer()
-    const listening = new AbortController()
-    const fold = () => {
-      credits?.classList.remove('maplibregl-compact-show')
-      stop()
-    }
-    const timer = setTimeout(fold, CREDITS_SHOWN_MS)
-    const stop = () => {
-      clearTimeout(timer)
-      listening.abort()
-    }
-    canvas.addEventListener('pointerdown', fold, { signal: listening.signal })
-    canvas.addEventListener('wheel', fold, { passive: true, signal: listening.signal })
-    credits?.querySelector('.maplibregl-ctrl-attrib-button')?.addEventListener('click', stop, { signal: listening.signal })
-    return stop
-  }, [map])
-  return null
-}
 
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
@@ -183,10 +147,12 @@ export default function MapView({
       onMoveEnd={handleMoveEnd}
       fadeDuration={0}
       maxZoom={16}
-      // Compact ⓘ: expands to the basemap sources' own credits (OSM/Carto —
-      // their licenses require on-map attribution) and the noise model's data.
-      // AboutControl sits left of it.
-      attributionControl={{ compact: true, customAttribution: NOISE_DATA_CREDITS }}
+      // The base map's credits, never folded: CARTO asks for its credit "visible on the map, legible,
+      // in any corner. Not hidden, faded or behind a click" (carto.com/attribution), Esri for its
+      // sources' names on the map. They name OpenStreetMap, whose credit the noise model owes too
+      // (`OSM_CREDIT`); every other source of the model is credited on the About pages, the ⓘ
+      // beside them (AboutControl).
+      attributionControl={{ compact: false, customAttribution: OSM_CREDIT }}
       // Defaults (deceleration 2500, maxSpeed 1400) give ~1.25 s inertia on a medium
       // flick — too sluggish. 4000 / 1100 lands around ~780 ms, between the default
       // and a Google-Maps-snappy feel.
@@ -194,7 +160,6 @@ export default function MapView({
     >
       <NavigationControl position="bottom-left" showCompass={false} />
       <AboutControl />
-      <CreditsFoldAtFirstTouch />
       {/* Precise location is user-triggered (Google pattern): the initial view
           only approximates from browser language (utils/initial-view.ts); GPS
           fires on this button's click, when the permission prompt is expected. */}

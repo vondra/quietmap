@@ -1,9 +1,10 @@
-// The optional sign-in in a real browser, the server mocked: a visitor who names a place is offered
-// it and asks for a link; the link's page signs in only at a press and adds the browser's places only
-// at the visitor's word, keeping them in the browser too; a signed-in visitor's names come from the
-// account and go to it, the browser's own left as they were until signing out.
+// The optional sign-in in a real browser, the server mocked: a signed-out visitor finds it at the top
+// right and beside the places' tabs, and asks for a link; the link's page signs in only at a press and
+// adds the browser's places only at the visitor's word, keeping them in the browser too; a signed-in
+// visitor's names come from the account and go to it, the browser's own left as they were until
+// signing out at the top right.
 import { expect, test, type Page, type Route } from '@playwright/test'
-import { PHONE, POINT, installHermeticMap, openPoint } from './support'
+import { PHONE, POINT, installHermeticMap, openPoint, renameOpenPlace } from './support'
 
 test.use(PHONE)
 
@@ -23,7 +24,7 @@ async function seedBrowserPlaces(page: Page, titles: object[], recent: object[] 
 
 const storedTitles = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('quietmap.place-titles') ?? '[]'))
 
-test('a visitor who names a place is offered the sign-in, asks for a link, or dismisses the offer for good', async ({ page }) => {
+test('a signed-out visitor finds the sign-in at the top right and beside the places, and asks for a link', async ({ page }) => {
   await installHermeticMap(page, POINT)
   await page.route('**/api/me', route => json(route, { error: 'Not signed in' }, 401))
   const asked: unknown[] = []
@@ -31,26 +32,20 @@ test('a visitor who names a place is offered the sign-in, asks for a link, or di
     asked.push(route.request().postDataJSON())
     return route.fulfill({ status: 204 })
   })
-  const title = await openPoint(page)
-  const offer = page.getByTestId('mobile-detail-sheet').getByTestId('sign-in-offer')
-  await expect(offer).toHaveCount(0)
-  await title.tap()
-  await page.keyboard.type('Cabin')
-  await page.keyboard.press('Enter')
-  await expect(offer).toBeVisible()
-  await offer.getByRole('button', { name: 'sign in' }).tap()
-  await page.getByRole('textbox', { name: 'E-mail' }).fill(ACCOUNT)
-  await page.getByRole('button', { name: 'Send me a link' }).tap()
-  await expect(page.getByTestId('sign-in-sent')).toContainText(ACCOUNT)
+  await openPoint(page)
+  const account = page.getByTestId('account')
+  await expect(account.getByRole('button', { name: 'Sign in' })).toBeVisible()
+  await expect(account.getByRole('textbox', { name: 'E-mail' })).toHaveCount(0)
+  await page.getByTestId('mobile-detail-sheet').getByRole('button', { name: 'Sign in to keep your places on all your devices' }).tap()
+  await account.getByRole('textbox', { name: 'E-mail' }).fill(ACCOUNT)
+  await account.getByRole('button', { name: 'Send me a link' }).tap()
+  await expect(account.getByTestId('sign-in-sent')).toContainText(ACCOUNT)
   expect(asked).toEqual([{ email: ACCOUNT }])
-
-  // Dismissed, it stays away on the next visit.
-  await openPoint(page)
-  await offer.getByRole('button', { name: 'Do not offer again' }).tap()
-  await expect(offer).toHaveCount(0)
-  await openPoint(page)
-  await expect(page.getByTestId('mobile-detail-sheet').getByTestId('place-title')).toHaveValue('Cabin')
-  await expect(offer).toHaveCount(0)
+  // A tap elsewhere closes it; the top right opens it again.
+  await page.getByTestId('mobile-detail-sheet').getByRole('button', { name: 'Close' }).tap()
+  await expect(account.getByTestId('sign-in-sent')).toHaveCount(0)
+  await account.getByRole('button', { name: 'Sign in' }).tap()
+  await expect(account.getByRole('textbox', { name: 'E-mail' })).toBeVisible()
 })
 
 test("a signed-in visitor's names come from the account and go to it; signed out, the browser's are back", async ({ page }) => {
@@ -72,25 +67,21 @@ test("a signed-in visitor's names come from the account and go to it; signed out
     return route.fulfill({ status: 204 })
   })
 
-  const title = await openPoint(page)
-  await expect(title).toHaveValue('Account name')
-  await expect(page.getByTestId('sign-in-offer')).toHaveCount(0)
-  await title.tap()
-  await title.fill('Renamed')
-  await page.keyboard.press('Enter')
+  const tab = await openPoint(page)
+  await expect(tab).toContainText('Account name')
+  await expect(page.getByRole('button', { name: 'Sign in to keep your places on all your devices' })).toHaveCount(0)
+  await renameOpenPlace(page, 'Renamed')
   await expect.poll(() => sent.map(name => name.title)).toEqual(['Renamed'])
   // The tapped point, which is POINT up to the map's float arithmetic.
   expect(Math.abs(sent[0].lat - POINT.lat) + Math.abs(sent[0].lng - POINT.lng)).toBeLessThan(1e-6)
   expect(sent[0].updatedAt).toBeGreaterThan(Date.parse('2026-01-01'))
   expect((await storedTitles(page)).map((name: { title: string }) => name.title)).toEqual(['Browser name'])
 
-  await page.getByRole('button', { name: 'Close' }).tap()
-  await page.getByRole('button', { name: 'Toggle layers panel' }).tap()
-  const account = page.getByTestId('account').filter({ visible: true })
-  await expect(account).toContainText(ACCOUNT)
+  const account = page.getByTestId('account')
+  await account.getByRole('button', { name: `Account: ${ACCOUNT}` }).tap()
   await account.getByRole('button', { name: 'Sign out' }).tap()
-  await expect(account).toContainText('Sign in to keep your places')
-  await expect(await openPoint(page)).toHaveValue('Browser name')
+  await expect(account.getByRole('button', { name: 'Sign in' })).toBeVisible()
+  await expect(await openPoint(page)).toContainText('Browser name')
 })
 
 test("the link's page signs in only at a press and adds the browser's places only at the visitor's word", async ({ page }) => {

@@ -1,7 +1,7 @@
-// A signed-in visitor's recordings and photos of the open place (lib/media-keeper.ts): a microphone, a
-// camera and how to hold the phone beside the place's name (MediaButtons); under it the recording while
-// it runs, what was not kept, and the place's items, each opened by a tap (PlaceMedia). The desktop
-// card and the phone sheet both draw them, from the one keeper. Nothing while signed out.
+// A signed-in visitor's recordings and photos of the open place (lib/media-keeper.ts), under its tab: a
+// microphone, a camera and how to hold the phone; under them the recording while it runs, what was not
+// kept, and the place's items, each opened by a tap. The desktop card and the phone sheet both draw
+// them, from the one keeper. Nothing while signed out.
 import { useRef, useState, useSyncExternalStore } from 'react'
 import { Camera, CircleStop, Image as ImageIcon, Info, LoaderCircle, Mic, Play } from 'lucide-react'
 import { mediaUrl } from '../lib/media'
@@ -24,51 +24,43 @@ const GUIDE = 'Stand still and quiet, a few metres from walls and cars. Hold the
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 const when = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
-export function MediaButtons({ media }: { media: MediaKeeper }) {
-  const shown = useSyncExternalStore(media.subscribe, media.shown)
-  const camera = useRef<HTMLInputElement>(null)
-  if (!shown.account || !shown.place) return null
-  return (
-    <>
-      <button aria-label="Record the sound here" className={ICON_BUTTON} disabled={shown.recording != null} onClick={() => media.record()}>
-        <Mic className="size-4" />
-      </button>
-      <button aria-label="Add a photo of this place" className={ICON_BUTTON} onClick={() => camera.current?.click()}>
-        <Camera className="size-4" />
-      </button>
-      <button aria-label="How to record" aria-expanded={shown.guide} className={ICON_BUTTON} onClick={media.toggleGuide}>
-        <Info className="size-4" />
-      </button>
-      <input
-        ref={camera}
-        data-testid="photo-input"
-        type="file"
-        accept="image/*"
-        hidden
-        onChange={event => {
-          const file = event.target.files?.[0]
-          event.target.value = ''
-          if (file) void media.addPhoto(file)
-        }}
-      />
-    </>
-  )
-}
-
 export default function PlaceMedia({ media }: { media: MediaKeeper }) {
   const shown = useSyncExternalStore(media.subscribe, media.shown)
+  const camera = useRef<HTMLInputElement>(null)
   // The item or upload open, as `item:<id>` or `upload:<id>`: an upload kept becomes an item closed.
   const [opened, setOpened] = useState<string | null>(null)
   const { place, recording } = shown
   if (!shown.account || !place) return null
   const pending = shown.pending.filter(upload => upload.account === shown.account && samePlace(upload, place))
   const items = shown.items ?? []
-  if (!recording && !shown.guide && !shown.problem && pending.length === 0 && items.length === 0) return null
   const item = items.find(each => `item:${each.id}` === opened)
   const upload = pending.find(each => `upload:${each.id}` === opened)
   const toggle = (key: string) => setOpened(opened === key ? null : key)
   return (
-    <div data-testid="place-media" className="flex flex-col gap-1.5 px-2.5 pr-8 pt-1 text-xs text-muted-foreground">
+    <div data-testid="place-media" className="flex flex-col gap-1.5 px-2.5 pt-1 text-xs text-muted-foreground">
+      <div className="-ml-1.5 flex items-center gap-0.5">
+        <button aria-label="Record the sound here" className={ICON_BUTTON} disabled={recording != null} onClick={() => media.record()}>
+          <Mic className="size-4" />
+        </button>
+        <button aria-label="Add a photo of this place" className={ICON_BUTTON} onClick={() => camera.current?.click()}>
+          <Camera className="size-4" />
+        </button>
+        <button aria-label="How to record" aria-expanded={shown.guide} className={ICON_BUTTON} onClick={media.toggleGuide}>
+          <Info className="size-4" />
+        </button>
+        <input
+          ref={camera}
+          data-testid="photo-input"
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={event => {
+            const file = event.target.files?.[0]
+            event.target.value = ''
+            if (file) void media.addPhoto(file)
+          }}
+        />
+      </div>
       {recording && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {recording.phase === 'asking' && <span>Waiting for the microphone…</span>}

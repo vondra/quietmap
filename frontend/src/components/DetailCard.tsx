@@ -1,5 +1,6 @@
-// The desktop popup card: a skeleton from the click on, then the streamed answer, or the error; under
-// the place to stay whose pin opened it.
+// The desktop popup card: the places' tabs and the close at its top, then the place to stay whose pin
+// opened it, the place's recordings and photos, and a skeleton from the click on, then the streamed
+// answer, or the error.
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
@@ -25,11 +26,13 @@ interface DetailCardProps {
   onFan: (source: string, fan: SegmentFan | null) => void
   /** The place to stay at the point, when its pin opened the popup. */
   stay: Stay | null
-  /** The place's name over the answer. */
-  placeTitle?: ReactNode
+  /** The places' tabs, the open one's name among them. */
+  tabs?: ReactNode
+  /** The open place's recordings and photos, over the answer. */
+  placeMedia?: ReactNode
 }
 
-export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, placeTitle }: DetailCardProps) {
+export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, tabs, placeMedia }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
@@ -48,15 +51,19 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
   // the card used to drag the whole popup left on vertical scroll.
   return (
     <FloatingCard className={`relative p-0 pointer-events-auto min-h-0 overflow-y-auto overflow-x-clip ${calculationOpen ? '' : 'max-h-[50dvh]'}`} ref={scrollRef}>
-      <button
-        onClick={onNoiseClose}
-        className="absolute top-1 right-1.5 z-10 p-1 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground"
-        aria-label="Close"
-      >
-        <X className="size-3.5" />
-      </button>
+      {/* The tabs and the close stay at the top while the answer scrolls under them. */}
+      <div className="sticky top-0 z-10 flex items-start gap-1 rounded-t-md bg-white pt-1.5 pl-1.5">
+        <div className="min-w-0 flex-1">{tabs}</div>
+        <button
+          onClick={onNoiseClose}
+          className="shrink-0 p-1.5 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground"
+          aria-label="Close"
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
       {stay && <StayHeader stay={stay} />}
-      {placeTitle}
+      {placeMedia}
       {showSkeleton
         ? <DetailSkeleton position={position} error={error} />
         : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

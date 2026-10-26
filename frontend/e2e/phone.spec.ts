@@ -1,5 +1,6 @@
-// A phone's way through the map in a real browser, without a backend: the popup's sheet, the
-// control row with the credits' ⓘ and the layers panel, the locate button, and a place's name.
+// A phone's way through the map in a real browser, without a backend: the popup's sheet, the base
+// map's credits, the control row with the ⓘ to the About pages and the layers panel, the locate
+// button, and the places' tabs with their names.
 import { expect, test } from '@playwright/test'
 import { FIXTURE_FLIGHTS, popupUpdate, withAircraft } from './answers'
 import {
@@ -12,6 +13,8 @@ import {
   installHermeticMap,
   mapUrl,
   popupRequests,
+  openPoint,
+  openTab,
   sendPopupLine,
 } from './support'
 
@@ -34,6 +37,11 @@ test('map tap opens the real mobile sheet and layer controls', async ({ page }) 
 
   await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
   await expect(sheet.getByTestId('lden')).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
+  // The base map's credits stay in sight with the sheet open: under the search bar, above the sheet.
+  const credits = page.locator('.maplibregl-ctrl-attrib')
+  const box = async (element: typeof credits) => (await element.boundingBox())!
+  await expect(credits).toContainText('OpenStreetMap contributors')
+  expect((await box(credits)).y + (await box(credits)).height).toBeLessThanOrEqual((await box(sheet)).y)
   // The sheet would cover the tapped point (the map's centre): the map moves it up, the view's
   // centre south of it. A finger leaves no hover readout beside the popup.
   const viewLat = () => page.evaluate(() => Number(new URLSearchParams(location.hash.slice(1)).get('lat')))
@@ -58,27 +66,18 @@ test('map tap opens the real mobile sheet and layer controls', async ({ page }) 
   await page.goto(`/?e2e=layers${mapUrl(POINT).slice(1)}`)
   await reopenedTileLoaded
   await afterPaint(page)
-  // The credits stay open while the map loads and paints, and fold at the first touch of the map
-  // into their ⓘ, a button of the control row beside the layers button; it opens them again,
-  // the About first.
-  const credits = page.locator('.attrib-about')
-  await expect(credits).toBeVisible()
+  // The credits stay after a touch of the map; the ⓘ, a button of the row beside the layers button,
+  // leads to the About pages; the layers' sheet leaves the credits in sight too.
   await page.locator('.maplibregl-canvas-container').dispatchEvent('pointerdown')
-  await expect(credits).toBeHidden()
-  const info = page.locator('.maplibregl-ctrl-attrib-button')
+  await expect(credits).toBeInViewport({ ratio: 1 })
+  const info = page.getByRole('link', { name: 'About quietmap.org' })
+  await expect(info).toHaveAttribute('href', '/about')
   const layersButton = page.getByRole('button', { name: 'Toggle layers panel' })
-  const bottom = async (button: typeof info) => {
-    const box = await button.boundingBox()
-    return box ? box.y + box.height : NaN
-  }
-  expect(await bottom(info)).toBeCloseTo(await bottom(layersButton), 0)
-  await info.tap()
-  await expect(credits).toBeVisible()
-  await expect(credits).toHaveAttribute('href', '/about')
-  await info.tap()
+  expect((await box(info)).y + (await box(info)).height).toBeCloseTo((await box(layersButton)).y + (await box(layersButton)).height, 0)
   await layersButton.tap()
   const panel = page.locator('[data-testid="layers-panel"]:visible')
   await expect(panel).toBeVisible()
+  expect((await box(credits)).y + (await box(credits)).height).toBeLessThanOrEqual((await box(page.getByRole('button', { name: 'Drag to close' }))).y)
   // Each switch turns its own layer over.
   const road = panel.getByTestId('layer-road')
   const rail = panel.getByTestId('layer-railway')
@@ -118,42 +117,84 @@ test('the locate button opens the popup where the visitor stands, again from a m
   await expect(sheet).toBeVisible()
 })
 
-test('a place takes the name the visitor gives it in the sheet, and keeps it on the next visit', async ({ page }) => {
+test('places are tabs: a new one first, an old one opened where it stands, each named in its tab and kept', async ({ page }) => {
   await installHermeticMap(page, POINT)
   const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const sheet = page.getByTestId('mobile-detail-sheet')
+  const tabs = sheet.getByTestId('place-tab')
+  const field = sheet.getByTestId('place-title')
+  const tapAt = async (dx: number, dy: number) => {
+    const { x, y } = await canvasCenter(page)
+    await page.touchscreen.tap(x + dx, y + dy)
+  }
   const openAtPoint = async (url: string) => {
     const tileLoaded = page.waitForResponse(response =>
       new URL(response.url()).pathname === tilePath && response.status() === 200,
     )
     await page.goto(url)
     await tileLoaded
-    const { x, y } = await canvasCenter(page)
-    await page.touchscreen.tap(x, y)
-    return page.getByTestId('mobile-detail-sheet').getByTestId('place-title')
+    await tapAt(0, 0)
   }
-  let title = await openAtPoint(mapUrl(POINT))
-  // The geocoded name is proposed in the field, which a phone does not zoom into.
-  await expect(title).toHaveAttribute('placeholder', 'E2E fixture')
-  await expect(title).toHaveValue('')
-  expect(await title.evaluate(field => getComputedStyle(field).fontSize)).toBe('16px')
-  // A tap edits it; Escape leaves it as it was, Enter keeps what was typed.
-  await title.tap()
-  await expect(title).toBeFocused()
+  await openAtPoint(mapUrl(POINT))
+  // The tab shows the geocoded name; a tap on it writes a name, in a field a phone does not zoom into.
+  await expect(tabs).toHaveCount(1)
+  await expect(openTab(page)).toContainText('E2E fixture')
+  await openTab(page).getByTitle('Rename this place').tap()
+  await expect(field).toBeFocused()
+  await expect(field).toHaveValue('E2E fixture')
+  expect(await field.evaluate(input => getComputedStyle(input).fontSize)).toBe('16px')
+  // Escape leaves it as it was, Enter keeps what was typed.
   await page.keyboard.type('Discarded')
   await page.keyboard.press('Escape')
-  await expect(title).toHaveValue('')
-  await title.tap()
+  await expect(field).toHaveCount(0)
+  await expect(openTab(page)).toContainText('E2E fixture')
+  await openTab(page).getByTitle('Rename this place').tap()
   await page.keyboard.type('Above the house')
   await page.keyboard.press('Enter')
-  await expect(title).not.toBeFocused()
-  await expect(title).toHaveValue('Above the house')
+  await expect(field).toHaveCount(0)
+  await expect(openTab(page)).toContainText('Above the house')
+
+  // Answered, a place stays a tab; a place opened next comes first, one tab and one name each.
+  await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB))
+  await tapAt(0, -120)
+  await expect.poll(() => popupRequests(page)).toHaveLength(2)
+  const next = (await popupRequests(page))[1]
+  await sendPopupLine(page, popupUpdate(1, false, next.lat, next.lng, SOURCE_DB))
+  await expect(tabs).toHaveCount(2)
+  await expect(tabs.nth(0).locator('[aria-current="page"]')).toHaveCount(1)
+  await expect(tabs.nth(1)).toContainText('Above the house')
+  await expect(sheet.getByTitle('Rename this place')).toHaveCount(1)
+  // The named place's tab opens it again at once, where its tab stands.
+  await tabs.nth(1).getByRole('button', { name: /Above the house/ }).tap()
+  await expect(tabs.nth(1).locator('[aria-current="page"]')).toHaveCount(1)
+  await expect.poll(() => popupRequests(page)).toHaveLength(3)
+  await expect(tabs).toHaveCount(2)
+
   // A new document (a changed, ignored query string) and the same point: the name is kept.
-  title = await openAtPoint(`/?e2e=title${mapUrl(POINT).slice(1)}`)
-  await expect(title).toHaveValue('Above the house')
-  // Emptied, the name gives the proposal back.
-  await title.tap()
-  await title.fill('')
+  await openAtPoint(`/?e2e=title${mapUrl(POINT).slice(1)}`)
+  await expect(openTab(page)).toContainText('Above the house')
+  // Emptied, the name gives the geocoded one back.
+  await openTab(page).getByTitle('Rename this place').tap()
+  await field.fill('')
   await page.keyboard.press('Enter')
-  await expect(title).toHaveValue('')
-  await expect(title).toHaveAttribute('placeholder', 'E2E fixture')
+  await expect(openTab(page)).toContainText('E2E fixture')
+})
+
+test('a name left as it was is not kept, though the geocoded name came while it was being written', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  let release = () => {}
+  const late = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/reverse?**', async route => {
+    await late
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ place: 'Late name' }) })
+  })
+  await openPoint(page)
+  await openTab(page).getByTitle('Rename this place').tap()
+  const field = page.getByTestId('mobile-detail-sheet').getByTestId('place-title')
+  await expect(field).toHaveValue(/^[\d.]+, [\d.]+$/)
+  release()
+  await expect(field).toHaveAttribute('placeholder', 'Late name')
+  await page.keyboard.press('Enter')
+  await expect(openTab(page)).toContainText('Late name')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('quietmap.place-titles') ?? '[]'))).toEqual([])
 })
