@@ -114,7 +114,7 @@ test("the link's page signs in only at a press and adds the browser's places onl
   expect(new URL(page.url()).hash).toBe('')
   expect(used).toEqual([])
   await page.getByRole('button', { name: 'Sign in' }).tap()
-  await expect(page.getByText('This browser keeps 1 named place and 1 recent place.')).toBeVisible()
+  await expect(page.getByText('This browser keeps 1 named place and 1 place you opened.')).toBeVisible()
   expect(used).toEqual([{ token: 'a-token' }])
   await page.getByRole('button', { name: 'Add them' }).tap()
   await page.waitForURL(url => url.pathname === '/')

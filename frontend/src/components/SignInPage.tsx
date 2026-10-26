@@ -19,7 +19,9 @@ type Step =
   | { kind: 'expired' }
   | { kind: 'unreachable' }
 
-const BUTTON = 'rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90'
+// The quiet zones' green (QUIET_RGB, #16a34a) a step darker, as the mail's button: white on it is
+// 5.0:1, WCAG AA; a hover darkens it further.
+const BUTTON = 'rounded-md bg-[#15803d] px-4 py-2 text-sm font-medium text-white hover:brightness-90'
 const QUIET_BUTTON = 'rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-accent'
 
 const openMap = () => window.location.replace('/')
@@ -64,10 +66,10 @@ export default function SignInPage() {
   }
 
   return (
-    <main className="h-full overflow-y-auto bg-background">
-      <div className="mx-auto flex max-w-md flex-col gap-4 px-6 py-16">
-        <a href="/" className="flex items-center gap-2.5">
-          <img src="/favicon.svg" alt="" className="size-9" />
+    <main className="h-full overflow-y-auto bg-muted px-4 py-12 sm:py-20">
+      <div className="mx-auto flex max-w-md flex-col gap-4 rounded-xl border border-border bg-background p-8">
+        <a href="/" className="mb-2 flex items-center gap-2.5">
+          <img src="/favicon.svg" alt="" className="size-10" />
           <span className="text-2xl font-semibold tracking-[-0.04em] text-foreground">quietmap.org</span>
         </a>
         {step.kind === 'checking' || step.kind === 'busy' ? (
@@ -75,14 +77,14 @@ export default function SignInPage() {
         ) : step.kind === 'confirm' ? (
           <>
             <h1 className="text-xl font-semibold text-foreground">Sign in as {step.email}?</h1>
-            <p className="text-muted-foreground">Your named and recent places are then kept with this account, on every device you sign in on.</p>
+            <p className="text-muted-foreground">Your named places and the places you opened then follow you to every device you sign in on.</p>
             <div><button className={BUTTON} onClick={() => signIn(step.email)}>Sign in</button></div>
           </>
         ) : step.kind === 'add' ? (
           <>
             <h1 className="text-xl font-semibold text-foreground">You are signed in.</h1>
             <p className="text-muted-foreground">
-              This browser keeps {[step.titles && plural(step.titles, 'named place'), step.recent && plural(step.recent, 'recent place')].filter(Boolean).join(' and ')}.
+              This browser keeps {[step.titles && plural(step.titles, 'named place'), step.recent && `${plural(step.recent, 'place')} you opened`].filter(Boolean).join(' and ')}.
               Add them to your account?
             </p>
             <div className="flex gap-2">
@@ -103,7 +105,7 @@ export default function SignInPage() {
         ) : (
           <>
             <h1 className="text-xl font-semibold text-foreground">This link has expired or was used already.</h1>
-            <p className="text-muted-foreground">Ask for a new one under Layers on the map.</p>
+            <p className="text-muted-foreground">Ask for a new one on the map, from the sign-in at its top right.</p>
             <div><button className={BUTTON} onClick={openMap}>Open the map</button></div>
           </>
         )}

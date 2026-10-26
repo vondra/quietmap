@@ -94,3 +94,8 @@ export const PALETTE_LUT: Uint8ClampedArray = (() => {
   }
   return lut
 })()
+
+/** The quiet zones' green (Tailwind's green-600 #16a34a), washed at 43 % over the map wherever the
+ *  total is at or under the chosen loudness: green is quiet. The logo's ring around its 0
+ *  (`scripts/logo.mjs`) is this green; the sign-in mail's and page's buttons a step darker. */
+export const QUIET_RGB = [22, 163, 74] as const

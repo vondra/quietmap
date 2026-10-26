@@ -1,8 +1,8 @@
 // The friendly 404 page for browser visitors (API clients keep JSON — web.ts).
 // Self-contained by design: one HTML string, inline CSS, zero requests except
 // /favicon.svg — referenced, not embedded, so a logo redesign shows up here
-// automatically. The noise-ramp stops mirror the map's heatmap palette
-// (frontend/src/lib/heatmap-palette.ts, same list as favicon.svg).
+// automatically. The meter is the map's scale (frontend/src/lib/heatmap-palette.ts):
+// the quiet zones' green, then 3, 6, 12, 24 and 48 sone by log2 of loudness.
 
 export const NOT_FOUND_PAGE_HTML = `<!doctype html>
 <html lang="en">
@@ -22,15 +22,14 @@ export const NOT_FOUND_PAGE_HTML = `<!doctype html>
   main { max-width: 460px; text-align: center; }
   img { width: 88px; height: 88px; }
   h1 { margin: 20px 0 10px; font-size: 28px; font-weight: 650; letter-spacing: -0.02em; }
-  h1 em { font-style: normal; color: #75085C; }
+  h1 em { font-style: normal; color: #914097; }
   .sub { color: #555; font-size: 16px; line-height: 1.5; }
   .meter { margin: 34px 0 6px; position: relative; }
   .ramp {
     height: 12px; border-radius: 6px; border: 1px solid rgba(0,0,0,.10);
-    /* same stops as the map heatmap ramp (v5.b, 30–80 dB) — quiet at the left, loud at the right */
+    /* the map's scale: quiet green at the left, then 3 to 48 sone by log2 of loudness */
     background: linear-gradient(90deg,
-      #FFFFFF 0%, #82A6AD 8%, #A0BABF 18%, #B8D6D1 28%, #CEE4CC 38%, #E2F2BF 48%,
-      #F3C683 58%, #E87E4D 67%, #CD463E 76%, #A11A4D 85%, #75085C 93%, #430A4A 100%);
+      #16A34A 0%, #16A34A 12%, #FFD94A 28%, #FF7F19 46%, #E22F28 64%, #914097 82%, #4E2062 100%);
   }
   .pin {
     position: absolute; left: 0; top: -19px; font-size: 13px; line-height: 1;
@@ -42,7 +41,7 @@ export const NOT_FOUND_PAGE_HTML = `<!doctype html>
     display: inline-block; margin-top: 30px; padding: 11px 22px; border-radius: 999px;
     background: #171717; color: #fff; text-decoration: none; font-size: 15px; font-weight: 600;
   }
-  a.home:hover { background: #430A4A; }
+  a.home:hover { background: #4E2062; }
   .foot { margin-top: 26px; font-size: 12.5px; color: #999; }
 </style>
 </head>
@@ -55,7 +54,7 @@ export const NOT_FOUND_PAGE_HTML = `<!doctype html>
   <div class="meter" role="img" aria-label="Noise scale: you are below the quiet end">
     <span class="pin" aria-hidden="true">▼</span>
     <div class="ramp"></div>
-    <div class="scale"><span class="you">0 dB · you are here</span><span>80+ dB</span></div>
+    <div class="scale"><span class="you">0 sone · you are here</span><span>48+ sone</span></div>
   </div>
   <a class="home" href="/">← Back to the map</a>
   <p class="foot">404 · quietmap.org — Find your quiet place</p>

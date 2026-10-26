@@ -5,6 +5,7 @@ import { TileLayer } from '@deck.gl/geo-layers'
 import { BitmapLayer } from '@deck.gl/layers'
 import { useMap } from 'react-map-gl/maplibre'
 
+import { QUIET_RGB } from '../lib/heatmap-palette'
 import { fetchAndDecodeHM3, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from '../lib/hm3-decoder'
 import { buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
 
@@ -14,7 +15,7 @@ import { buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-ur
 // only because hexes had no raster to shade. The heatmap is now a raster,
 // so thresholding its pixels into a green bitmap is pixel-accurate and reuses
 // the HM3 tile machinery with none of that complexity.
-const QUIET_RGBA = [22, 163, 74, 110] as const // green-600 @ ~0.43
+const QUIET_RGBA = [...QUIET_RGB, 110] as const // @ ~0.43
 
 // Display floor for the wash — zoomed further out the green blobs read as
 // noise, not places (the `total` data itself goes down to z2).
