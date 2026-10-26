@@ -1,10 +1,11 @@
 // The map application: search, layer controls, the map, and the popup card or sheet, with every
 // piece of state mirrored into the shareable URL hash.
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import { Layers3 } from 'lucide-react'
 import MapView from './components/MapView'
 import SearchBar from './components/SearchBar'
-import ControlCard from './components/ControlCard'
+import ControlCard, { type CardTab } from './components/ControlCard'
+import IsochronPanel, { type IsochronRequest } from './components/IsochronPanel'
+import { ICON_BUTTON } from './components/ui/button'
 import DetailCard from './components/DetailCard'
 import LayersPanel from './components/LayersPanel'
 import MobileDetailSheet from './components/MobileDetailSheet'
@@ -16,7 +17,7 @@ import { contributorHighlight, highlightGeoJson, topFlightKey } from './componen
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import AccountButton from './components/AccountButton'
-import PlaceMedia from './components/PlaceMedia'
+import PlaceMedia, { MediaButtons } from './components/PlaceMedia'
 import { samePlace, titleAt } from './lib/place-rules'
 import { usePlaces } from './hooks/usePlaces'
 import { createMediaKeeper } from './lib/media-keeper'
@@ -152,13 +153,34 @@ export default function App() {
     linkCounted.current = true
     countOpening(initial.detailPosition)
   }, [initial.detailPosition, countOpening])
-  // The account's form at the top right, opened there or from the history.
+  // The phone's account under its button at the top right; the desktop's corner card, its layers or
+  // its account, folded while a popup is open (the popup has the column) and on its layers again when
+  // it closes. Both open from the history's sign-in line too.
   const [accountOpen, setAccountOpen] = useState(false)
-  // The desktop layers card: open while no popup is, folded while one is (the popup has the column),
-  // its button beside the account turning it over.
   const popupOpen = detailPosition != null
-  const [layersCardOpen, setLayersCardOpen] = useState(!popupOpen)
-  useEffect(() => setLayersCardOpen(!popupOpen), [popupOpen])
+  const [cardTab, setCardTab] = useState<CardTab | null>(popupOpen ? null : 'layers')
+  useEffect(() => setCardTab(popupOpen ? null : 'layers'), [popupOpen])
+  // The area reachable from the open place: whether its panel is open, and the area drawn for a point,
+  // shown while that point is open. A new request drops the one before, whose answer would otherwise
+  // land after it.
+  const [isochronOpen, setIsochronOpen] = useState(false)
+  const [isochron, setIsochron] = useState<{ at: { lat: number; lng: number }; area: GeoJSON.FeatureCollection } | null>(null)
+  const isochronRequest = useRef<AbortController | null>(null)
+  const showIsochron = useCallback(async ({ lat, lng, minutes, modes }: IsochronRequest) => {
+    isochronRequest.current?.abort()
+    const request = new AbortController()
+    isochronRequest.current = request
+    setIsochron(null)
+    const url = `/api/isochron?lat=${lat}&lng=${lng}&minutes=${minutes}&modes=${modes.join(',')}`
+    const response = await fetch(url, { signal: request.signal }).catch(() => null)
+    const answer = await response?.json().catch(() => null) as GeoJSON.FeatureCollection & { error?: string } | null
+    if (request.signal.aborted) return
+    if (response?.status === 429) throw new Error('Too many areas asked from here. Try again in a minute.')
+    if (!response?.ok || !answer?.features) throw new Error(answer?.error ?? 'The map could not be reached. Try again in a minute.')
+    setIsochron({ at: { lat, lng }, area: answer })
+    const missing = modes.find(mode => !answer.features.some(feature => feature.properties?.mode === mode))
+    if (missing) throw new Error(`The area ${missing === 'car' ? 'by car' : 'on foot'} could not be drawn. Try again in a minute.`)
+  }, [])
   // The signed-in visitor's recordings and photos of the open place.
   const [media] = useState(() => createMediaKeeper(startRecording))
   useEffect(() => media.open(isSignedIn(account) ? account.email : null, detailPosition), [media, account, detailPosition])
@@ -319,9 +341,26 @@ export default function App() {
     if (sameDetailPosition(detailPositionRef.current, next.detailPosition)) return
     handleDetailPositionChange(next.detailPosition)
   }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleStaysChange, handleDetailPositionChange])
-  // Made anew for each place under its key: siblings under one key once left a name field behind at
-  // every new place.
-  const placeMedia = detailPosition && <PlaceMedia key={`${detailPosition.lat},${detailPosition.lng}`} media={media} />
+  // The area reachable from the open place: its button at the search field's end, where dev1 had it,
+  // its panel under the place's row.
+  const isochronButton = (
+    <button
+      type="button"
+      aria-label="Reachable area"
+      aria-expanded={isochronOpen}
+      title="The area reachable from here"
+      className={`${ICON_BUTTON} aria-expanded:bg-accent aria-expanded:text-foreground`}
+      onClick={() => setIsochronOpen(open => !open)}
+    >
+      {/* The place and the rings reached from it (dev1's). */}
+      <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+        <circle cx="12" cy="12" r="2.5" />
+        <circle cx="12" cy="12" r="6.5" strokeDasharray="4 3" />
+        <circle cx="12" cy="12" r="10.5" strokeDasharray="4 5" />
+      </svg>
+    </button>
+  )
+  const isochronPanel = isochronOpen && detailPosition && <IsochronPanel at={detailPosition} onShow={showIsochron} />
   const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange }
 
   return (
@@ -349,31 +388,34 @@ export default function App() {
         onOpenPlace={place => handleDetailPositionChange({ lat: place.lat, lng: place.lng })}
         onRename={rename}
         onForget={forgetPlace}
-        onSignIn={account === null ? () => setAccountOpen(true) : undefined}
-      />
-      {/* The layers and the account side by side at the top right (the layers' button from md up: a
-          phone has its own in the control row); the card column starts under them. */}
-      <div className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] right-(--map-gutter) z-[2004] flex items-start gap-2">
-        <button
-          type="button"
-          aria-expanded={layersCardOpen}
-          onClick={() => setLayersCardOpen(open => !open)}
-          className="hidden h-9 items-center gap-2 rounded-md border border-input bg-background px-3 text-sm font-medium text-foreground shadow-lg hover:bg-muted aria-expanded:bg-muted md:flex"
-        >
-          <Layers3 className="size-4 shrink-0" />
-          Layers
-        </button>
+        onSignIn={account === null ? () => (desktop ? setCardTab('account') : setAccountOpen(true)) : undefined}
+        // The microphone and the camera where a visitor records, on a touch screen, by the place's name;
+        // under the row the take, the how-to before it, and the place's recordings and photos. Made anew
+        // for each place and account under its key (what was open belongs to them): siblings under one
+        // key once left a name field behind.
+        openAction={<MediaButtons media={media} />}
+        fieldAction={isochronButton}
+      >
+        {isochronPanel}
+        {detailPosition && <PlaceMedia key={`${isSignedIn(account) ? account.email : ''}@${detailPosition.lat},${detailPosition.lng}`} media={media} />}
+      </SearchBar>
+      {/* The phone's account beside the search field (a desktop has it as the corner card's tab). */}
+      <div className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] right-(--map-gutter) z-[2004] md:hidden">
         <AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={accountOpen} onOpenChange={setAccountOpen} />
       </div>
 
       {/* UI overlays */}
       <div className="absolute inset-0 z-[1002] pointer-events-none">
         {/* The layers card and the detail card are shrinkable flex items (min-h-0)
-            that scroll their own content, so on a short viewport both stay reachable. The column
-            starts under the layers and the account (36 px from 12 px) and ends over the map's corner,
-            whose credits and ⓘ stay in sight with every card open. */}
-        <div className="hidden md:flex absolute top-14 right-(--map-gutter) bottom-11 flex-col gap-2 w-(--map-card-column) overflow-hidden">
-          {layersCardOpen && <ControlCard
+            that scroll their own content, so on a short viewport both stay reachable. The column ends
+            over the map's corner, whose credits and ⓘ stay in sight with every card open. */}
+        <div className="hidden md:flex absolute top-3 right-(--map-gutter) bottom-11 flex-col gap-2 w-(--map-card-column) overflow-hidden">
+          <ControlCard
+            tab={cardTab}
+            onTabChange={setCardTab}
+            account={account}
+            onSignOut={signOut}
+            onDeleteAccount={deleteAccount}
             quietClustersEnabled={quietClustersEnabled}
             onQuietClustersChange={handleQuietClustersChange}
             quietThreshold={quietThreshold}
@@ -383,7 +425,7 @@ export default function App() {
             dataLayers={dataLayers}
             onDataLayersChange={handleDataLayersChange}
             {...stayControls}
-          />}
+          />
           <DetailCard
             noiseData={noiseDetailData}
             position={detailPosition}
@@ -394,7 +436,6 @@ export default function App() {
             onCalculationToggle={toggleCalculation}
             onFan={showFan}
             stay={selectedStay}
-            placeMedia={placeMedia}
           />
         </div>
 
@@ -423,6 +464,7 @@ export default function App() {
         detailPosition={detailPosition}
         highlight={highlight}
         segmentFan={fan}
+        isochron={isochron && sameDetailPosition(isochron.at, detailPosition) ? isochron.area : null}
         quietClustersEnabled={quietClustersEnabled}
         quietThreshold={quietThreshold}
         heatmapLayers={heatmapLayers}
@@ -437,7 +479,7 @@ export default function App() {
       {!layersOpen && (
         <button
           onClick={() => { setLayersOpen(true); handleNoiseClose() }}
-          className="fixed bottom-[16px] right-[10px] z-[1003] flex h-11 w-11 items-center justify-center rounded-lg bg-white md:hidden"
+          className="fixed bottom-[16px] right-[10px] z-[1003] flex h-11 w-11 items-center justify-center rounded-lg bg-background md:hidden"
           style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}
           aria-label="Toggle layers panel"
         >
@@ -477,7 +519,6 @@ export default function App() {
         onCalculationToggle={toggleCalculation}
         onFan={showFan}
         stay={selectedStay}
-        placeMedia={placeMedia}
       />
 
     </div>

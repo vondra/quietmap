@@ -172,7 +172,7 @@ export default function StayLayer({ search }: { search: StaySearch }) {
         <div
           data-testid="stay-note"
           role="status"
-          className="pointer-events-none absolute left-1/2 top-[calc(env(safe-area-inset-top,0px)+4rem)] z-[1] -translate-x-1/2 whitespace-nowrap rounded-full border border-black/5 bg-white/95 px-3 py-1 text-xs text-muted-foreground shadow-md"
+          className="pointer-events-none absolute left-1/2 top-[calc(env(safe-area-inset-top,0px)+4rem)] z-[1] -translate-x-1/2 whitespace-nowrap rounded-full border border-border bg-card/95 px-3 py-1 text-xs text-muted-foreground shadow-md"
         >
           {note}
         </div>

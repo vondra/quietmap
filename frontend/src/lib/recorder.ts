@@ -8,10 +8,6 @@
 import workletUrl from './recorder-worklet.ts?worker&url'
 import { RECORDING_SAMPLES_MAX, pcm16, wavFile } from './wav.ts'
 
-/** A take ends by itself after half a minute (Hush City's 30 s, NoiseCapture's 28 s), unless asked to
- *  go on to ten minutes, which the statistical levels L50 and L90 want. */
-export const TAKE_S = 30
-const TAKE_LONG_S = 600
 /** The voice processing asked off: requests, which a browser may not grant; what it did is kept. */
 const MICROPHONE = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }
 /** Raised when what a take keeps, or how, changes. */
@@ -32,8 +28,6 @@ export interface Take {
 
 export interface Recorder {
   stop(): void
-  /** Goes on past half a minute, to ten minutes. */
-  keepGoing(): void
   /** Starts the audio the browser held back; called in a tap. */
   resume(): void
 }
@@ -54,10 +48,10 @@ async function device(): Promise<Record<string, unknown> | null> {
   return data ? data.getHighEntropyValues(['model', 'platformVersion']).catch(() => null) : null
 }
 
-/** Starts a recording, in the tap that asked for it. `onPhase` hears its phase, each second taken
- *  and its limit (s); `onEnd` gets the take, or null and what went wrong when nothing was taken. */
+/** Starts a recording, in the tap that asked for it. `onPhase` hears its phase and each second taken;
+ *  `onEnd` gets the take, or null and what went wrong when nothing was taken. */
 export function startRecording(
-  onPhase: (phase: RecordingPhase, seconds: number, limitS: number) => void,
+  onPhase: (phase: RecordingPhase, seconds: number) => void,
   onEnd: (take: Take | null, problem?: string) => void,
 ): Recorder {
   const context = new AudioContext()
@@ -65,7 +59,6 @@ export function startRecording(
   const rate = context.sampleRate
   const blocks: Int16Array<ArrayBuffer>[] = []
   let taken = 0
-  let limit = TAKE_S * rate
   let phase: RecordingPhase = 'asking'
   let stream: MediaStream | null = null
   // The graph's nodes, held here: a browser may collect a source no one holds, and its sound stops.
@@ -87,7 +80,7 @@ export function startRecording(
     if (ended) void lock.release()
     else wakeLock = lock
   }).catch(() => {})
-  const show = () => onPhase(phase, Math.floor(taken / rate), Math.round(limit / rate))
+  const show = () => onPhase(phase, Math.floor(taken / rate))
 
   const hidden = () => {
     if (document.visibilityState === 'hidden') end('hidden')
@@ -116,13 +109,15 @@ export function startRecording(
     show()
   }
 
+  // A take runs until the visitor stops it, or until it holds what the server keeps (ten minutes at
+  // 48 kHz), and is kept then.
   function keep(samples: Float32Array) {
     if (ended) return
-    const kept = samples.subarray(0, limit - taken)
+    const kept = samples.subarray(0, RECORDING_SAMPLES_MAX - taken)
     const second = Math.floor(taken / rate)
     blocks.push(pcm16(kept))
     taken += kept.length
-    if (taken >= limit) end('limit')
+    if (taken >= RECORDING_SAMPLES_MAX) end('limit')
     else if (Math.floor(taken / rate) !== second) show()
   }
 
@@ -171,10 +166,6 @@ export function startRecording(
 
   return {
     stop: () => end('stopped'),
-    keepGoing: () => {
-      limit = Math.min(RECORDING_SAMPLES_MAX, TAKE_LONG_S * rate)
-      show()
-    },
     resume: () => void context.resume(),
   }
 }

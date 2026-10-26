@@ -2,6 +2,7 @@
 // and guests' score, the price of the stay, what it offers, and the link to the offer.
 import { ExternalLink } from 'lucide-react'
 import { formatPrice, pricePerNight, type Stay } from '../lib/stays'
+import { PRIMARY_BUTTON } from './ui/button'
 
 export default function StayHeader({ stay }: { stay: Stay }) {
   const night = pricePerNight(stay)
@@ -35,14 +36,14 @@ export default function StayHeader({ stay }: { stay: Stay }) {
             ? <><span className="font-semibold">{formatPrice(night, stay.currency)}</span> a night · {formatPrice(stay.total, stay.currency)} for {stay.nights} night{stay.nights === 1 ? '' : 's'}</>
             : <span className="text-muted-foreground">No price for these dates</span>}
         </div>
-        {offers && <div className="text-[11px] text-muted-foreground">{offers}</div>}
+        {offers && <div className="text-xs text-muted-foreground">{offers}</div>}
         <a
           href={stay.url}
           target="_blank"
           rel="noopener noreferrer sponsored"
-          className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+          className={`${PRIMARY_BUTTON} mt-1.5`}
         >
-          View offer <ExternalLink className="size-3" aria-hidden="true" />
+          View offer <ExternalLink className="size-3.5" aria-hidden="true" />
         </a>
       </div>
     </div>

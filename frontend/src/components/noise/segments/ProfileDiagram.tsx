@@ -71,7 +71,7 @@ export function ProfileDiagram({ ray, receiverAltitudeM, slantM }: {
           y={y(top.foot + top.height)}
           width={1.5}
           height={Math.max(y(top.foot) - y(top.foot + top.height), 0.5)}
-          className={top.building ? 'fill-zinc-500' : 'fill-orange-800/80'}
+          className={top.building ? 'fill-zinc-500' : 'fill-orange-800/80 dark:fill-orange-400/80'}
         />
       ))}
       <line
@@ -83,7 +83,7 @@ export function ProfileDiagram({ ray, receiverAltitudeM, slantM }: {
         className="fill-none stroke-amber-600" strokeWidth={0.8} strokeDasharray="1 2"
       />
       <circle cx={x(0)} cy={y(source)} r={2.2} className="fill-red-600" />
-      <circle cx={x(length)} cy={y(receiverAltitudeM)} r={2.2} className="fill-sky-700" />
+      <circle cx={x(length)} cy={y(receiverAltitudeM)} r={2.2} className="fill-sky-700 dark:fill-sky-400" />
     </svg>
   )
 }

@@ -71,7 +71,7 @@ export function TopFlightsTable({ flights, onHighlightFlight }: {
               <td className="max-w-0 pl-2">
                 <FadingText>
                   <HoverText title={cells.aircraftTitle}>
-                    <a href={cells.href} target="_blank" rel="noopener noreferrer" className="text-sky-700 hover:underline">
+                    <a href={cells.href} target="_blank" rel="noopener noreferrer" className="text-sky-700 hover:underline dark:text-sky-400">
                       {cells.aircraft}
                       <span className="sr-only"> (its trace on adsb.lol, in a new tab)</span>
                     </a>

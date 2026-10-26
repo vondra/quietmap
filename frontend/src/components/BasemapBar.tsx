@@ -46,7 +46,7 @@ export default function BasemapBar({ basemap, onBasemapChange, onLocate, locatin
       {/* Desktop: vertical column, bottom-left — a gap above the locate
           button, which sits a gap above +/- (Google-like stack). */}
       <div className="hidden md:flex flex-col items-start fixed bottom-[131px] left-[10px] z-[1002]">
-        <div className="rounded bg-white overflow-hidden" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}>
+        <div className="rounded bg-background overflow-hidden" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}>
           {BASEMAPS.map((b, i) => (
             <button
               key={b.id}
@@ -55,8 +55,8 @@ export default function BasemapBar({ basemap, onBasemapChange, onLocate, locatin
               className={`${BTN} transition-colors ${
                 basemap === b.id
                   ? 'bg-primary text-primary-foreground'
-                  : 'text-[#333] hover:bg-[#f2f2f2]'
-              } ${i > 0 ? 'border-t border-[rgba(0,0,0,0.1)]' : ''}`}
+                  : 'text-foreground/80 hover:bg-accent'
+              } ${i > 0 ? 'border-t border-border' : ''}`}
             >
               {ICONS[b.id]}
             </button>
@@ -68,7 +68,7 @@ export default function BasemapBar({ basemap, onBasemapChange, onLocate, locatin
           ONE flex container, so their baseline, margins and sizes can never
           drift apart. */}
       <div className="flex md:hidden items-center gap-[10px] fixed bottom-[16px] left-[10px] z-[1002]">
-        <div className="flex rounded-lg bg-white overflow-hidden" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}>
+        <div className="flex rounded-lg bg-background overflow-hidden" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}>
           {BASEMAPS.map((b, i) => (
             <button
               key={b.id}
@@ -77,8 +77,8 @@ export default function BasemapBar({ basemap, onBasemapChange, onLocate, locatin
               className={`${BTN} transition-colors ${
                 basemap === b.id
                   ? 'bg-primary text-primary-foreground'
-                  : 'text-[#333] hover:bg-[#f2f2f2]'
-              } ${i > 0 ? 'border-l border-[rgba(0,0,0,0.1)]' : ''}`}
+                  : 'text-foreground/80 hover:bg-accent'
+              } ${i > 0 ? 'border-l border-border' : ''}`}
             >
               {ICONS[b.id]}
             </button>
@@ -91,8 +91,8 @@ export default function BasemapBar({ basemap, onBasemapChange, onLocate, locatin
             aria-pressed={!!locating}
             title={locating ? 'Stop following my location' : 'Show my location'}
             aria-label={locating ? 'Stop following my location' : 'Show my location'}
-            className={`${BTN} rounded-lg bg-white transition-colors disabled:opacity-40 disabled:cursor-default ${
-              locating ? 'text-[#1565c0]' : 'text-[#333] hover:bg-[#f2f2f2]'
+            className={`${BTN} rounded-lg bg-background transition-colors disabled:opacity-40 disabled:cursor-default ${
+              locating ? 'text-[#1565c0] dark:text-[#64b5f6]' : 'text-foreground/80 hover:bg-accent'
             }`}
             style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}
           >

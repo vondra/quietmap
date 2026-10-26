@@ -35,7 +35,9 @@ individual visitors, and nothing from the logs is shared with third parties.
 The base map loads from CARTO, with OpenTopoMap's terrain or Esri's satellite images when you
 pick them; each sees your IP address and the area you view. If you turn on places to stay, our
 server asks Stay22 for rooms in that area for your dates and number of guests, without your IP
-address; the places' photos load from other sites, and an offer's link is an affiliate link.
+address; the places' photos load from other sites, and an offer's link is an affiliate link. The area
+reachable from a place is drawn by FOSSGIS's routing service in Germany, which our server asks with
+the point and the minutes alone.
 
 Your precise location is used only if you tap the locate button and grant your browser's
 permission prompt. While you are signed out, the places you opened (up to 50, with how often and when

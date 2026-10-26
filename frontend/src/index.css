@@ -32,7 +32,10 @@ html, body {
 .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
   margin: 0;
   border-radius: 4px;
-  background-color: rgba(255, 255, 255, .8);
+  background-color: color-mix(in oklch, var(--background) 80%, transparent);
+}
+.maplibregl-ctrl-attrib a {
+  color: var(--foreground) !important;
 }
 .maplibregl-ctrl-bottom-right .maplibregl-ctrl.about-control {
   order: 1;
@@ -40,8 +43,30 @@ html, body {
   width: 26px;
   height: 26px;
   border-radius: 9999px;
-  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333333' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / 16px 16px no-repeat;
+  /* The icon drawn in the text's colour through its mask, so that both schemes hold. */
+  background-color: var(--background);
+  color: var(--foreground);
   box-shadow: 0 0 0 2px rgba(0, 0, 0, .1);
+}
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl.about-control::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / 16px 16px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E") center / 16px 16px no-repeat;
+}
+/* The zoom buttons' and the locate button's icons, dark on light, turned for the dark scheme. */
+@media (prefers-color-scheme: dark) {
+  .maplibregl-ctrl-group {
+    background: var(--background) !important;
+  }
+  .maplibregl-ctrl-group button + button {
+    border-top-color: var(--border) !important;
+  }
+  .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+    filter: invert(1);
+  }
 }
 
 /* Google-like spacing in the bottom-left stack: +/- at the bottom, a gap,
@@ -75,8 +100,9 @@ html, body {
   }
   /* The ⓘ is a button of the control row, left of the layers button (10 + 44 + 10 px from the edge),
      in the row's look (tucked under the row in maplibre's black disc it looked stray, owner
-     2026-10-16). The credits stand under the search bar (46 px from 12 px), where neither sheet
-     reaches: a sheet over them would hide them. */
+     2026-10-16). The credits stand under the search bar and what stands under its field (the open
+     place's row, its recordings; SearchBar measures it), where neither sheet reaches: a sheet over
+     them would hide them. */
   .maplibregl-ctrl-bottom-right {
     bottom: 16px !important;
     right: 64px !important;
@@ -89,29 +115,25 @@ html, body {
   }
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
     position: fixed;
-    top: calc(env(safe-area-inset-top, 0px) + 4rem);
+    top: calc(var(--map-top-bar-bottom, calc(env(safe-area-inset-top, 0px) + 3.5rem)) + 0.5rem);
     right: var(--map-gutter);
     width: max-content;
     max-width: calc(100vw - 2 * var(--map-gutter));
     line-height: 16px;
   }
-  /* Under the open place's row too, while it stands under the search bar (SearchBar). */
-  body:has(.open-place) .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
-    top: calc(env(safe-area-inset-top, 0px) + 7.75rem);
-  }
 }
 
-/* Search bar: one horizontal placement. Below md the bar fills the row left of
-   the account's 44 px button (AccountButton), capped at 28rem. From md up the
-   bar stays centered while that leaves the card column untouched, otherwise
-   slides left to sit one gutter before the column, and narrows once even that
-   no longer fits (clamp with min > max resolves to min). Audit 2026-09-06: the
-   centered bar covered the Layers header between 768 and 1112 px. */
+/* Search bar: one horizontal placement. Below md the bar takes the width
+   between the gutters, its field leaving the account's 44 px button its room
+   (SearchBar). From md up the bar stays centered while that leaves the card
+   column untouched, otherwise slides left to sit one gutter before the column,
+   and narrows once even that no longer fits (clamp with min > max resolves to
+   min). Audit 2026-09-06: the centered bar covered the Layers header between
+   768 and 1112 px. */
 .map-top-bar {
   position: fixed;
   left: var(--map-gutter);
-  width: calc(100% - 3 * var(--map-gutter) - 2.75rem);
-  max-width: 28rem;
+  width: calc(100% - 2 * var(--map-gutter));
 }
 @media (width >= theme(--breakpoint-md)) {
   .map-top-bar {
@@ -150,6 +172,34 @@ html, body {
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
   --radius: 0.625rem;
+  color-scheme: light;
+}
+
+/* The dark scheme follows the system's, as a phone's maps app does: the same tokens darker (dev4's
+   values). The base map stays light: the noise's colours darken with loudness, and its loudest purple
+   (L* 22) would vanish on a dark map (MapView). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+  }
 }
 
 @theme inline {
@@ -202,7 +252,7 @@ html, body {
   .about-prose h2 { @apply mt-10 mb-2 scroll-mt-6 text-2xl font-bold text-foreground; }
   .about-prose h3 { @apply mt-6 mb-2 scroll-mt-6 text-lg font-semibold text-foreground; }
   .about-prose .about-sections { @apply my-6 border-l-2 border-border pl-4; }
-  .about-prose .about-sections p { @apply mt-0 mb-1 text-xs font-medium uppercase tracking-wide; }
+  .about-prose .about-sections p { @apply mt-0 mb-1 text-xs font-medium text-foreground; }
   .about-prose .about-sections ul { @apply my-0 list-none pl-0 sm:columns-2 sm:gap-8; }
   .about-prose .about-sections li { @apply my-0 break-inside-avoid py-0.5 pl-0; }
   .about-prose p { @apply my-3; }

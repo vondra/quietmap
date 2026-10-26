@@ -22,6 +22,10 @@ export interface Config {
   noIndex: boolean
   /** The Photon geocoder that finds and names places: its base URL, the public one unless set. */
   photonUrl: string
+  /** The Valhalla router that draws the area reachable from a place: its base URL. Unset, FOSSGIS's
+   *  public one, for development: its terms allow a call a second and no production service. The
+   *  privacy terms (frontend/src/about/terms.md) name the router a deployment uses. */
+  valhallaUrl: string
   /** The Stay22 account the places to stay are searched with: its affiliate id and API key; without
    *  one `/api/stay` answers 503, and the noise map stays up. */
   stay22: { aid: string; apiKey: string } | null
@@ -75,6 +79,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tilesDir: directory(required(env, 'QM_TILES_DIR'), 'QM_TILES_DIR'),
     noIndex: env.QM_NOINDEX === '1',
     photonUrl: env.QM_PHOTON_URL || 'https://photon.komoot.io',
+    valhallaUrl: env.QM_VALHALLA_URL || 'https://valhalla1.openstreetmap.de',
     stay22: stay22Account(env),
     accounts: accounts(env),
   }

@@ -46,7 +46,7 @@ export default function SourceToggles({
             title={row.tooltip}
             aria-pressed={active}
             data-testid={`layer-${row.id}`}
-            className="flex w-full items-center gap-2.5 py-1.5 px-1 rounded-lg hover:bg-black/5 transition-colors cursor-pointer"
+            className="flex w-full items-center gap-2.5 py-1.5 px-1 rounded-lg hover:bg-accent transition-colors cursor-pointer"
           >
             <span className={active ? 'text-foreground' : 'text-muted-foreground'}>{row.icon}</span>
             <span className={`flex-1 text-left text-sm ${active ? 'text-foreground' : 'text-muted-foreground'}`}>{row.label}</span>

@@ -1,10 +1,11 @@
-// The desktop popup card: the place's recordings and photos and the close at its head, then the place to
-// stay whose pin opened it, and a skeleton from the click on, then the streamed answer, or the error.
-import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
+// The desktop popup card: its head the place's loudness, the close beside it, then the place to stay
+// whose pin opened it, and a skeleton from the click on, then the streamed answer, or the error.
+import { lazy, Suspense, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
+import { ICON_BUTTON } from './ui/button'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import type { Stay } from '../lib/stays'
 
@@ -25,11 +26,9 @@ interface DetailCardProps {
   onFan: (source: string, fan: SegmentFan | null) => void
   /** The place to stay at the point, when its pin opened the popup. */
   stay: Stay | null
-  /** The open place's recordings and photos, at the card's head. */
-  placeMedia?: ReactNode
 }
 
-export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, placeMedia }: DetailCardProps) {
+export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
@@ -48,16 +47,11 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
   // the card used to drag the whole popup left on vertical scroll.
   return (
     <FloatingCard className={`relative p-0 pointer-events-auto min-h-0 overflow-y-auto overflow-x-clip ${calculationOpen ? '' : 'max-h-[50dvh]'}`} ref={scrollRef}>
-      {/* The close floats at the card's head, the rows beside it, and stays in sight while the
+      {/* The close floats at the card's head, the loudness beside it, and stays in sight while the
           answer scrolls under it. */}
-      <button
-        onClick={onNoiseClose}
-        className="sticky top-0 z-10 float-right m-0.5 p-1.5 rounded-md bg-white/90 hover:bg-black/5 text-muted-foreground hover:text-foreground"
-        aria-label="Close"
-      >
-        <X className="size-3.5" />
+      <button onClick={onNoiseClose} className={`${ICON_BUTTON} sticky top-0 z-10 float-right m-0.5 bg-card/90`} aria-label="Close">
+        <X className="size-4" />
       </button>
-      {placeMedia}
       {stay && <StayHeader stay={stay} />}
       {showSkeleton
         ? <DetailSkeleton position={position} error={error} />

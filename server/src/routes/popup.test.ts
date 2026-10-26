@@ -23,6 +23,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     tilesDir: scratch,
     noIndex: false,
     photonUrl: 'http://127.0.0.1:9',
+    valhallaUrl: 'http://127.0.0.1:9',
     stay22: { aid: 'test-aid', apiKey: 'test-key' },
     accounts: null,
     ...overrides,

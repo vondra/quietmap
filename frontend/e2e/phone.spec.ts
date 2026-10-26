@@ -135,23 +135,25 @@ test('the open place stands under the search field, renamed there; the search li
     await tapAt(0, 0)
   }
   const rename = async (name: string) => {
-    await row.getByRole('button', { name: /^Rename/ }).tap()
+    await field.tap()
     await field.fill(name)
     await page.keyboard.press('Enter')
-    await expect(row).toContainText(name)
+    await expect(field).toHaveValue(name)
   }
   await openAtPoint(mapUrl(POINT))
-  // The geocoded name stands under the search field; its pencil writes a name there, in a field a phone
-  // does not zoom into. Escape leaves it as it was, Enter keeps what was typed.
-  await expect(row).toContainText('E2E fixture')
-  await row.getByRole('button', { name: /^Rename/ }).tap()
-  await expect(field).toBeFocused()
+  // The geocoded name stands under the search field as the field that renames it, in a size a phone
+  // does not zoom into: a tap puts the caret into the name as written, to add to it. Escape leaves it
+  // as it was, Enter keeps what was typed.
   await expect(field).toHaveValue('E2E fixture')
   expect(await field.evaluate(input => getComputedStyle(input).fontSize)).toBe('16px')
-  await page.keyboard.type('Discarded')
+  await field.tap()
+  await expect(field).toBeFocused()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' discarded')
+  await expect(field).toHaveValue('E2E fixture discarded')
   await page.keyboard.press('Escape')
-  await expect(field).toHaveCount(0)
-  await expect(row).toContainText('E2E fixture')
+  await expect(field).not.toBeFocused()
+  await expect(field).toHaveValue('E2E fixture')
   await rename('Above the house')
 
   // A second place, named too, then the first again from the list (at once, by the keys), then a third
@@ -167,7 +169,7 @@ test('the open place stands under the search field, renamed there; the search li
   await page.keyboard.press('Enter')
   await expect.poll(() => popupRequests(page)).toHaveLength(3)
   await expect(options).toHaveCount(0)
-  await expect(row).toContainText('Above the house')
+  await expect(field).toHaveValue('Above the house')
   await tapAt(-60, -220)
   await expect.poll(() => popupRequests(page)).toHaveLength(4)
   const search = page.getByRole('combobox')
@@ -188,34 +190,28 @@ test('the open place stands under the search field, renamed there; the search li
   // Escape closes the list and brings the open place's row back.
   await page.keyboard.press('Escape')
   await expect(options).toHaveCount(0)
-  await expect(row).toContainText('E2E fixture')
-  // From the field the keys rename a place (F2) and forget one (Shift+Delete), and give the field back.
+  await expect(field).toHaveValue('E2E fixture')
+  // From the field the keys forget a place (Shift+Delete); a row's cross, kept in its place, too.
   await search.fill('')
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('ArrowDown')
-  await page.keyboard.press('F2')
-  await expect(options.nth(1).getByTestId('place-title')).toBeFocused()
-  await page.keyboard.type('Home')
-  await page.keyboard.press('Enter')
-  await expect(options.nth(1)).toContainText('Home')
-  await expect(search).toBeFocused()
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Shift+Delete')
   await expect(options).toHaveCount(2)
-  await expect(options.nth(1)).toContainText('Home')
-  // A tap on a row opens its place.
-  await options.nth(1).getByRole('button', { name: /^Home/ }).tap()
+  await expect(options.nth(1)).toContainText('Above the house')
+  // A tap on a row opens its place, its name the field again.
+  await options.nth(1).getByRole('button', { name: /^Above the house/ }).tap()
   await expect.poll(() => popupRequests(page)).toHaveLength(5)
-  await expect(row).toContainText('Home')
+  await expect(field).toHaveValue('Above the house')
 
   // A new document (a changed, ignored query string) and the same point: the name is kept; emptied, it
   // gives the geocoded one back.
   await openAtPoint(`/?e2e=title${mapUrl(POINT).slice(1)}`)
-  await expect(row).toContainText('Home')
-  await row.getByRole('button', { name: /^Rename/ }).tap()
+  await expect(field).toHaveValue('Above the house')
+  await field.tap()
   await field.fill('')
   await page.keyboard.press('Enter')
-  await expect(row).toContainText('E2E fixture')
+  await expect(field).toHaveValue('E2E fixture')
 })
 
 test('a name left as it was is not kept, though the geocoded name came while it was being written', async ({ page }) => {
@@ -227,12 +223,12 @@ test('a name left as it was is not kept, though the geocoded name came while it 
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ place: 'Late name' }) })
   })
   const row = await openPoint(page)
-  await row.getByRole('button', { name: /^Rename/ }).tap()
   const field = row.getByTestId('place-title')
+  await field.tap()
   await expect(field).toHaveValue(/^[\d.]+, [\d.]+$/)
   release()
   await expect(field).toHaveAttribute('placeholder', 'Late name')
   await page.keyboard.press('Enter')
-  await expect(row).toContainText('Late name')
+  await expect(field).toHaveValue('Late name')
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('quietmap.place-titles') ?? '[]'))).toEqual([])
 })

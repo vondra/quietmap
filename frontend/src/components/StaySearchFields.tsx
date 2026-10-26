@@ -24,10 +24,10 @@ function Choices<T>({ label, value, options, onChange, testId }: {
           aria-checked={value === option.value}
           title={option.title}
           onClick={() => onChange(option.value)}
-          className={`cursor-pointer rounded-md border px-1 py-px text-[11px] leading-4 tracking-tight transition-colors ${
+          className={`cursor-pointer rounded-md border px-1.5 py-0.5 text-xs leading-4 transition-colors ${
             value === option.value
               ? 'border-foreground bg-foreground text-background'
-              : 'border-border bg-background text-muted-foreground hover:bg-black/5'
+              : 'border-border bg-background text-muted-foreground hover:bg-accent'
           }`}
         >
           {option.text}
@@ -37,12 +37,13 @@ function Choices<T>({ label, value, options, onChange, testId }: {
   )
 }
 
-const DATE_INPUT = 'min-w-0 flex-1 rounded-md border border-input bg-background px-1 py-px text-[11px] leading-4 text-foreground focus:border-ring focus:outline-none'
-const STEP = 'flex size-5 cursor-pointer items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-black/5 disabled:cursor-default disabled:opacity-40'
+// 16 px on a touch screen: iOS zooms into a smaller field.
+const DATE_INPUT = 'min-w-0 flex-1 rounded-md border border-input bg-background px-1.5 py-0.5 text-base leading-5 text-foreground focus:border-ring focus:outline-none pointer-fine:text-xs pointer-fine:leading-4'
+const STEP = 'flex size-5 cursor-pointer items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:cursor-default disabled:opacity-40'
 
 export default function StaySearchFields({ search, onChange }: { search: StaySearch; onChange: (search: StaySearch) => void }) {
   return (
-    <div className="mb-1.5 ml-7 mt-0.5 grid grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 text-[11px]">
+    <div className="mb-1.5 ml-7 mt-0.5 grid grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 text-xs">
       <span className="text-muted-foreground">Type</span>
       <Choices<StayKind>
         label="Type" testId="stay-kind" value={search.kind} onChange={kind => onChange({ ...search, kind })}

@@ -1,12 +1,14 @@
 // The search field and what drops down under it, as on a web map: with nothing typed, the history of
 // places opened (clicked or searched, the one opened last first, then by how often); typed, the places
 // of the history it names, then the geocoder's suggestions leaning towards the map's view. The field
-// keeps the focus while the arrows move through the list: Enter opens, F2 renames, Shift+Delete
-// forgets, Escape, Tab or a press elsewhere closes it (a press on the map does nothing more). While it
-// is closed the open place stands under the field, as the list's selected item, to rename.
+// keeps the focus while the arrows move through the list: Enter opens, Shift+Delete forgets, Escape,
+// Tab or a press elsewhere closes it (a press on the map does nothing more). While it is closed the
+// open place stands under the field, as the list's selected item, its name the field that renames it,
+// with its action and what that opens (App: the reachable area).
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react'
-import { History, UserRound } from 'lucide-react'
+import { History, Search, UserRound } from 'lucide-react'
 import PlaceRow from './PlaceRow'
+import { FLOATING } from './ui/button'
 import { placeLabel, samePlace, titleAt, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
 
 interface SearchResult {
@@ -21,7 +23,7 @@ type Point = { lat: number; lng: number }
 /** The places of the history a query names, at most. */
 const NAMED_MAX = 3
 /** About six rows of the list in sight (px), the rest scrolled within it. */
-const LIST_MAX_PX = 312
+const LIST_MAX_PX = 336
 
 interface SearchBarProps {
   onSelect: (result: SearchResult) => void
@@ -39,21 +41,25 @@ interface SearchBarProps {
   onForget: (place: RecentPlace) => void
   /** Offers the sign-in under the history; none while signed in or without the sign-in. */
   onSignIn?: () => void
+  /** The open place's actions, at its row's end. */
+  openAction?: ReactNode
+  /** The open place's action at the field's end, where Google's directions stand (the reachable area). */
+  fieldAction?: ReactNode
+  /** Under the open place's row: what its actions opened. */
+  children?: ReactNode
 }
 
 /** Text compared without case and accents. */
 const folded = (text: string) => text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 const keyOf = (at: Point) => `${at.lat},${at.lng}`
 
-export default function SearchBar({ onSelect, getMapView, history, titles, open, notSaved, onOpenPlace, onRename, onForget, onSignIn }: SearchBarProps) {
+export default function SearchBar({ onSelect, getMapView, history, titles, open, notSaved, onOpenPlace, onRename, onForget, onSignIn, openAction, fieldAction, children }: SearchBarProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   // The visitor is at the field (it took the focus or the keys): the list shows what it has.
   const [listing, setListing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [highlighted, setHighlighted] = useState(-1)
-  // The place whose name is being written, by its key.
-  const [renaming, setRenaming] = useState<string | null>(null)
   // The list's height above a phone's keyboard (the visual viewport shrinks under it, the layout's not).
   const [room, setRoom] = useState(LIST_MAX_PX)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -156,9 +162,6 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
     } else if (e.key === 'Enter' && highlighted >= 0) {
       e.preventDefault()
       choose(highlighted)
-    } else if (e.key === 'F2' && place) {
-      e.preventDefault()
-      setRenaming(keyOf(place))
     } else if (e.key === 'Delete' && e.shiftKey && place) {
       e.preventDefault()
       onForget(place)
@@ -169,6 +172,20 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
   useEffect(() => {
     if (highlighted >= 0) listRef.current?.children[highlighted]?.scrollIntoView({ block: 'nearest' })
   }, [highlighted])
+
+  // How low the bar reaches with what stands under the field: a phone's map credits stand under it
+  // (index.css).
+  useEffect(() => {
+    const bar = containerRef.current
+    if (!bar) return
+    const observer = new ResizeObserver(() =>
+      document.documentElement.style.setProperty('--map-top-bar-bottom', `${bar.getBoundingClientRect().bottom}px`))
+    observer.observe(bar)
+    return () => {
+      observer.disconnect()
+      document.documentElement.style.removeProperty('--map-top-bar-bottom')
+    }
+  }, [])
 
   // The list keeps above a phone's keyboard, the sign-in line under it too.
   useEffect(() => {
@@ -181,27 +198,6 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
     return () => viewport.removeEventListener('resize', fit)
   }, [listed])
 
-  const nameRow = (row: ReturnType<typeof described>, rest: {
-    listed?: boolean
-    sone: number | null
-    highlighted: boolean
-    onOpen: () => void
-    onForget?: () => void
-    children?: ReactNode
-  }) => (
-    <PlaceRow
-      {...row}
-      {...rest}
-      editing={renaming === keyOf(row.at)}
-      onEditingChange={(editing, byKeys) => {
-        setRenaming(editing ? keyOf(row.at) : null)
-        // A name written in the list and kept by a key gives the keys back to the field.
-        if (!editing && byKeys && rest.listed) inputRef.current?.focus()
-      }}
-      onRename={onRename}
-    />
-  )
-
   return (
     <>
       {/* A press anywhere else while the list is open only closes it (the field's blur, or the click):
@@ -210,7 +206,8 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
       {/* Above the card column and the phone's sheets, under the account's form at the top right;
           `.map-top-bar` (index.css) keeps it clear of the column horizontally on md+. */}
       <div ref={containerRef} className="map-top-bar top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[2003]">
-        <div className="relative">
+        {/* On a phone the field leaves the account's button its room; the rows under it take the width. */}
+        <div className="relative max-md:mr-[calc(2.75rem+var(--map-gutter))]">
           <input
             ref={inputRef}
             id="search"
@@ -234,16 +231,17 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
             }}
             onKeyDown={handleKeyDown}
             placeholder="Search address..."
-            className="w-full rounded-lg border border-input bg-background px-4 py-2.5 pr-10 text-foreground shadow-lg placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
+            className={`${FLOATING} w-full px-4 py-2.5 pr-10 placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30`}
           />
-          <span id="search-keys" hidden>Up and down choose a place, Enter opens it, F2 renames it, Shift+Delete forgets it.</span>
+          <span id="search-keys" hidden>Up and down choose a place, Enter opens it, Shift+Delete forgets it.</span>
           {loading && (
             <div className="absolute right-10 top-3 text-muted-foreground text-sm">...</div>
           )}
+          {open && !listed && <div className="absolute right-1.5 top-1/2 -translate-y-1/2">{fieldAction}</div>}
         </div>
         {listed ? (
           <div
-            className="mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
+            className={`${FLOATING} mt-1 overflow-hidden bg-popover`}
             onMouseDown={(e) => {
               if (!(e.target instanceof HTMLInputElement)) e.preventDefault()
             }}
@@ -251,15 +249,17 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
             <ul ref={listRef} id="search-list" role="listbox" aria-label="Places" className="overflow-y-auto overscroll-contain" style={{ maxHeight: room }}>
               {places.map((place, k) => (
                 <li key={keyOf(place)} id={`search-option-${k}`} role="option" aria-selected={k === highlighted} onMouseEnter={() => setHighlighted(k)}>
-                  {nameRow(described(place, place.place), {
-                    listed: true,
-                    sone: place.sone,
-                    highlighted: k === highlighted,
-                    onOpen: () => choose(k),
-                    onForget: () => onForget(place),
-                    // The open place by its pin, the others as the history.
-                    children: open != null && samePlace(place, open.at) ? undefined : <History className="size-4 shrink-0 text-muted-foreground" />,
-                  })}
+                  <PlaceRow
+                    listed
+                    {...described(place, place.place)}
+                    sone={place.sone}
+                    highlighted={k === highlighted}
+                    onOpen={() => choose(k)}
+                    onForget={() => onForget(place)}
+                  >
+                    {/* The open place by its pin, the others as the history. */}
+                    {open != null && samePlace(place, open.at) ? undefined : <History className="size-4 shrink-0 text-muted-foreground" />}
+                  </PlaceRow>
                 </li>
               ))}
               {shownResults.map((r, i) => {
@@ -271,13 +271,22 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
                     role="option"
                     aria-selected={k === highlighted}
                     onMouseEnter={() => setHighlighted(k)}
-                    onClick={() => choose(k)}
-                    className={`cursor-pointer px-4 py-2 border-t border-border first:border-t-0 ${k === highlighted ? 'bg-accent' : ''}`}
+                    // The geocoder's answers under the history's places, a line between them.
+                    className={i === 0 && places.length > 0 ? 'border-t border-border' : undefined}
                   >
-                    <div className="text-sm font-medium text-popover-foreground truncate">{r.display_name}</div>
-                    {r.secondary && (
-                      <div className="text-xs text-muted-foreground truncate">{r.secondary}</div>
-                    )}
+                    <PlaceRow
+                      listed
+                      at={{ lat: r.lat, lng: r.lon }}
+                      name={r.display_name}
+                      given={false}
+                      proposal={null}
+                      detail={r.secondary}
+                      sone={null}
+                      highlighted={k === highlighted}
+                      onOpen={() => choose(k)}
+                    >
+                      <Search className="size-4 shrink-0 text-muted-foreground" />
+                    </PlaceRow>
                   </li>
                 )
               })}
@@ -286,26 +295,36 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
               <button
                 type="button"
                 tabIndex={-1}
-                className="flex w-full items-center gap-3 border-t border-border px-3 py-2 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                // A row's look: the same icon column and the same size as the places above it.
+                className="flex min-h-11 w-full items-center gap-1 border-t border-border pr-1 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
                 onClick={() => {
                   setListing(false)
                   onSignIn()
                 }}
               >
-                <UserRound className="size-4 shrink-0" />
+                <span className="grid place-items-center pl-3 pr-2"><UserRound className="size-4 shrink-0" /></span>
                 Sign in to keep these places on all your devices
               </button>
             )}
           </div>
         ) : open && (
-          // Made anew for each place: a name being written belongs to the place it was begun for.
-          <div key={keyOf(open.at)} data-testid="open-place" className="open-place mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-lg">
-            {nameRow(described(open.at, open.place), {
-              sone: open.sone,
-              highlighted: true,
-              onOpen: () => inputRef.current?.focus(),
-            })}
-          </div>
+          <>
+            {/* Made anew for each place: a name being written belongs to the place it was begun for. Its
+                key names the row alone: siblings under one key once left a row behind at every place. */}
+            <div key={`open:${keyOf(open.at)}`} data-testid="open-place" className={`${FLOATING} mt-1 overflow-hidden bg-popover`}>
+              <PlaceRow
+                {...described(open.at, open.place)}
+                sone={open.sone}
+                highlighted
+                onOpen={() => inputRef.current?.focus()}
+                onRename={onRename}
+                action={openAction}
+              />
+              {/* Scrolled within what is left above a phone's sheet (MobileDetailSheet's sheetTop), the
+                  map's credits under it too, and never shut on a short screen; a desktop has no sheet. */}
+              <div className="max-h-[max(6rem,calc(50dvh-11rem))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
+            </div>
+          </>
         )}
         {notSaved && <p role="alert" className="mt-1 rounded-md bg-popover px-3 py-1 text-xs text-destructive shadow-lg">Not saved: the map could not be reached.</p>}
       </div>

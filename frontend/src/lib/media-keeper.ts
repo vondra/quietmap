@@ -24,18 +24,18 @@ export interface MediaShown {
   items: MediaItem[] | null
   /** Recordings and photos not yet kept, of every place and account. */
   pending: Pending[]
-  recording: { phase: RecordingPhase, seconds: number, limitS: number } | null
+  recording: { phase: RecordingPhase, seconds: number } | null
   /** What went wrong with the last recording or photo before it could be sent. */
   problem: string | null
-  /** How to hold the phone is shown. */
-  guide: boolean
+  /** How to record is shown, its OK starting the take. */
+  asking: boolean
 }
 
 const samePoint = (a: Point | null, b: Point | null) => a?.lat === b?.lat && a?.lng === b?.lng
 
 /** The keeper, recording with `start` (recorder.ts's `startRecording`). */
 export function createMediaKeeper(start: typeof startRecording) {
-  let shown: MediaShown = { account: null, place: null, items: null, pending: [], recording: null, problem: null, guide: false }
+  let shown: MediaShown = { account: null, place: null, items: null, pending: [], recording: null, problem: null, asking: false }
   const listeners = new Set<() => void>()
   const show = (next: Partial<MediaShown>) => {
     shown = { ...shown, ...next }
@@ -71,7 +71,7 @@ export function createMediaKeeper(start: typeof startRecording) {
     open(account: string | null, place: Point | null) {
       if (account !== shown.account || !samePoint(place, shown.place)) {
         recorder?.stop()
-        show({ account, place, items: null, problem: null })
+        show({ account, place, items: null, problem: null, asking: false })
       }
       if (!account || !place || shown.items) return
       void listMedia(place).then(items => {
@@ -82,20 +82,21 @@ export function createMediaKeeper(start: typeof startRecording) {
       })
     },
 
-    /** Records at the open place; called in the tap. */
+    /** Shows how to record, or takes it back. */
+    ask: (asking: boolean) => show({ asking, problem: null }),
+    /** Records at the open place until stopped; called in the tap of the OK under how to record. */
     record() {
       if (recorder || !shown.account || !shown.place) return
       const at = { account: shown.account, place: shown.place }
       const takenAt = Date.now()
-      show({ problem: null })
-      recorder = start((phase, seconds, limitS) => show({ recording: { phase, seconds, limitS } }), (take: Take | null, problem?: string) => {
+      show({ problem: null, asking: false })
+      recorder = start((phase, seconds) => show({ recording: { phase, seconds } }), (take: Take | null, problem?: string) => {
         recorder = null
         show({ recording: null, problem: problem ?? null })
         if (take) void send(made(at, { kind: 'sound', takenAt, body: take.wav, durationS: take.durationS, details: take.details }))
       })
     },
     stopRecording: () => recorder?.stop(),
-    keepRecording: () => recorder?.keepGoing(),
     resumeRecording: () => recorder?.resume(),
 
     /** Keeps a photo the visitor took or chose at the open place. */
@@ -122,8 +123,6 @@ export function createMediaKeeper(start: typeof startRecording) {
       if (!(await deleteMedia(account, id))) return show({ problem: 'It could not be deleted. Try again.' })
       show({ items: shown.items && shown.items.filter(item => item.id !== id) })
     },
-
-    toggleGuide: () => show({ guide: !shown.guide }),
   }
 }
 

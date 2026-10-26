@@ -1,11 +1,13 @@
 // Recordings and photos of a place in a real browser with Chromium's fake microphone, the server
-// mocked: a signed-in visitor records at the open place and stops, and the take goes to the account
-// as the WAV the server takes, under an id of its own, with the place and how it was recorded; one
-// the server did not keep is sent again under the same id and then listed. A photo is drawn again as a
-// JPEG without the camera's EXIF and kept. Signed out, the place has no such buttons.
+// mocked: on a phone the open place's row under the search field carries the microphone, which says how
+// to record and starts at its OK; the take runs until Stop and goes to the account as the WAV the
+// server takes, under an id of its own, with the place and how it was recorded; one the server did not
+// keep plays from the page, is sent again under the same id, then listed, and a tap plays it from the
+// server. A photo is drawn again as a
+// JPEG without the camera's EXIF and kept. Signed out, or on a desktop, the place has no such buttons.
 import { readFileSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
-import { PHONE, POINT, installHermeticMap, openPoint } from './support'
+import { PHONE, POINT, canvasCenter, installHermeticMap, mapUrl, openPoint } from './support'
 
 test.use({ ...PHONE, permissions: ['microphone'] })
 
@@ -25,11 +27,15 @@ async function signedInMap(page: Page, { refuseFirst = false } = {}) {
   await page.route('**/api/media?**', route => json(route, { items: kept }))
   await page.route(/\/api\/media\/[0-9a-f]{32}$/, route => {
     const request = route.request()
+    const id = new URL(request.url()).pathname.split('/').pop()!
+    if (request.method() === 'GET') {
+      const stored = sent.find(each => each.id === id)
+      return stored ? route.fulfill({ status: 200, contentType: stored.type, body: stored.body }) : route.fulfill({ status: 404 })
+    }
     if (request.method() !== 'PUT') return route.fulfill({ status: 404 })
     const headers = request.headers()
     const about = JSON.parse(decodeURIComponent(headers['x-quietmap-media']))
     const body = request.postDataBuffer()!
-    const id = new URL(request.url()).pathname.split('/').pop()!
     sent.push({ id, type: headers['content-type'], account: headers['x-quietmap-account'], about, body })
     if (refuseFirst && sent.length === 1) return json(route, { error: 'The map has no room for it now. Try again later.' }, 507)
     const sound = headers['content-type'] === 'audio/wav'
@@ -45,15 +51,31 @@ async function signedInMap(page: Page, { refuseFirst = false } = {}) {
 
 test('a recording at the open place goes to the account as a WAV; one not kept is sent again under its id', async ({ page }) => {
   const { sent } = await signedInMap(page, { refuseFirst: true })
-  await openPoint(page)
-  const sheet = page.getByTestId('mobile-detail-sheet')
-  await sheet.getByRole('button', { name: 'Record the sound here' }).tap()
-  await expect(sheet.getByTestId('recording-time')).toContainText('0:01 / 0:30')
-  await sheet.getByRole('button', { name: 'Stop' }).tap()
+  const row = await openPoint(page)
+  const media = page.getByTestId('place-media')
+  await row.getByRole('button', { name: 'Record the sound here' }).tap()
+  // How to record, in two sentences; nothing is recorded before its OK, and Cancel takes it away.
+  await expect(media).toContainText('until you press Stop')
+  await media.getByRole('button', { name: 'Cancel' }).tap()
+  await expect(media).toHaveCount(0)
+  await row.getByRole('button', { name: 'Record the sound here' }).tap()
+  await media.getByRole('button', { name: 'OK, record' }).tap()
+  await expect(media.getByTestId('recording-time')).toHaveText('0:01')
+  await media.getByRole('button', { name: 'Stop' }).tap()
 
-  await sheet.getByRole('button', { name: 'Not kept' }).tap()
-  await sheet.getByRole('button', { name: 'Send again' }).tap()
-  await expect(sheet.getByTestId('media-item')).toHaveCount(1)
+  // A tap plays it, in the tap: not kept, from the page's copy, which plays on once it is kept; then,
+  // closed and tapped again, from the server.
+  const playing = () => media.locator('audio').evaluate((audio: HTMLAudioElement) =>
+    `${audio.src.startsWith('blob:') ? 'page' : new URL(audio.src).pathname.split('/')[2]} ${audio.played.length > 0 ? 'played' : 'silent'} ${audio.duration >= 1}`)
+  await media.getByRole('button', { name: 'Not kept' }).tap()
+  await expect.poll(playing).toBe('page played true')
+  await media.getByRole('button', { name: 'Send again' }).tap()
+  await expect(media.getByTestId('media-item')).toHaveCount(1)
+  await expect(media.getByText('Saving…')).toHaveCount(0)
+  await media.getByTestId('media-item').tap()
+  await expect(media.locator('audio')).toBeHidden()
+  await media.getByTestId('media-item').tap()
+  await expect.poll(playing).toBe('media played true')
   expect(sent).toHaveLength(2)
   const [first, again] = sent
   expect(again.id).toBe(first.id)
@@ -83,10 +105,9 @@ test('a recording at the open place goes to the account as a WAV; one not kept i
 
 test('a photo is drawn again as a JPEG without the EXIF that held its position, and kept at the place', async ({ page }) => {
   const { sent } = await signedInMap(page)
-  await openPoint(page)
-  const sheet = page.getByTestId('mobile-detail-sheet')
-  await sheet.getByTestId('photo-input').setInputFiles({ name: 'place.jpg', mimeType: 'image/jpeg', buffer: PHOTO })
-  await expect(sheet.getByTestId('media-item')).toHaveCount(1)
+  const row = await openPoint(page)
+  await row.getByTestId('photo-input').setInputFiles({ name: 'place.jpg', mimeType: 'image/jpeg', buffer: PHOTO })
+  await expect(page.getByTestId('place-media').getByTestId('media-item')).toHaveCount(1)
   const [photo] = sent
   expect(photo.type).toBe('image/jpeg')
   expect(photo.body.subarray(0, 2).toString('hex')).toBe('ffd8')
@@ -97,8 +118,22 @@ test('a photo is drawn again as a JPEG without the EXIF that held its position, 
 test('signed out, a place has no recording or photo buttons', async ({ page }) => {
   await installHermeticMap(page, POINT)
   await page.route('**/api/me', route => json(route, { error: 'Not signed in' }, 401))
-  await expect(await openPoint(page)).toBeVisible()
-  const sheet = page.getByTestId('mobile-detail-sheet')
-  await expect(sheet.getByRole('button', { name: 'Record the sound here' })).toHaveCount(0)
-  await expect(sheet.getByTestId('photo-input')).toHaveCount(0)
+  const row = await openPoint(page)
+  await expect(row).toBeVisible()
+  await expect(row.getByRole('button', { name: 'Record the sound here' })).toHaveCount(0)
+  await expect(row.getByTestId('photo-input')).toHaveCount(0)
+})
+
+test('on a desktop a signed-in visitor has no microphone or camera, and the popup starts with the loudness', async ({ browser }) => {
+  // A desktop: a mouse, no touch (the file's phone settings reach a new page too).
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, isMobile: false, hasTouch: false })
+  await signedInMap(page)
+  await page.goto(mapUrl(POINT))
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.click(x, y)
+  const row = page.getByTestId('open-place')
+  await expect(row).toBeVisible()
+  await expect(row.getByRole('button', { name: 'Record the sound here' })).toBeHidden()
+  await expect(page.getByTestId('detail-popup-skeleton').filter({ visible: true })).toBeVisible()
+  await page.close()
 })

@@ -71,7 +71,7 @@ test("a signed-in visitor's names come from the account and go to it; signed out
   })
 
   const row = await openPoint(page)
-  await expect(row).toContainText('Account name')
+  await expect(row.getByTestId('place-title')).toHaveValue('Account name')
   await page.getByRole('combobox').tap()
   await expect(page.getByRole('option', { name: /Account name/ })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Sign in to keep these places on all your devices' })).toHaveCount(0)
@@ -87,7 +87,7 @@ test("a signed-in visitor's names come from the account and go to it; signed out
   await account.getByRole('button', { name: `Account: ${ACCOUNT}` }).tap()
   await account.getByRole('button', { name: 'Sign out' }).tap()
   await expect(account.getByRole('button', { name: 'Sign in' })).toBeVisible()
-  await expect(await openPoint(page)).toContainText('Browser name')
+  await expect((await openPoint(page)).getByTestId('place-title')).toHaveValue('Browser name')
 })
 
 test("the link's page signs in only at a press and adds the browser's places only at the visitor's word", async ({ page }) => {

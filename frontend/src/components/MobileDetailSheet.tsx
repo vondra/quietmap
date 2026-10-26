@@ -1,11 +1,12 @@
 // The phone popup's bottom sheet, with a drag handle, a collapsed peek and the streamed answer.
-import { lazy, Suspense, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
+import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import { X } from 'lucide-react'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import type { Stay } from '../lib/stays'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
+import { ICON_BUTTON } from './ui/button'
 
 // Lazy popup body: see DetailCard.
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
@@ -33,11 +34,9 @@ interface MobileDetailSheetProps {
   onFan: (source: string, fan: SegmentFan | null) => void
   /** The place to stay at the point, when its pin opened the popup: above the answer, in the peek. */
   stay: Stay | null
-  /** The open place's recordings and photos, at the top of the answer, in the peek. */
-  placeMedia?: ReactNode
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, placeMedia }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -112,13 +111,8 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
       >
         {/* A visible way to close it, as the desktop card has; a swipe down on the handle closes it
             too, but nothing on a phone tells that. */}
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="absolute top-0 right-1.5 z-10 p-1.5 rounded-md text-muted-foreground hover:text-foreground"
-        >
-          <X className="size-4" />
+        <button type="button" onClick={onClose} aria-label="Close" className={`${ICON_BUTTON} absolute top-0 right-1.5 z-10`}>
+          <X className="size-5" />
         </button>
         <div
           className="flex justify-center py-3 cursor-grab"
@@ -138,7 +132,6 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
         {stay && <StayHeader stay={stay} />}
         <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px)]' : 'overflow-hidden max-h-24'}`}>
-          {placeMedia}
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

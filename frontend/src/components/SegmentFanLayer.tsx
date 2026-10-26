@@ -7,13 +7,10 @@ import type { FilterSpecification } from 'maplibre-gl'
 import { useEffect, useRef } from 'react'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
 import type { SegmentFan } from '../types/noise'
+import { framePadding } from './map-frame'
 
 const LINE_LAYOUT = { 'line-cap': 'round', 'line-join': 'round' } as const
 const kind = (name: string): FilterSpecification => ['==', ['get', 'kind'], name]
-/** Below this width the popup is the bottom sheet over the lower half of the map. */
-const PHONE_WIDTH_PX = 768
-/** The desktop popup's column on the right: its width and two gutters. */
-const CARD_COLUMN_PX = 360 + 2 * 12
 /** The closest the map comes to frame an opened piece: a street's width stays readable. */
 const OPENED_PIECE_MAX_ZOOM = 18
 
@@ -47,14 +44,6 @@ export function fanGeoJson(fan: SegmentFan): GeoJSON.FeatureCollection {
   }
 }
 
-/** The map's padding around what it frames: clear of the search bar, and of the popup's card
- *  column on a desktop or of the bottom sheet on a phone. */
-function framePadding() {
-  return window.innerWidth < PHONE_WIDTH_PX
-    ? { top: 72, bottom: Math.round(window.innerHeight / 2) + 24, left: 24, right: 24 }
-    : { top: 72, bottom: 48, left: 48, right: CARD_COLUMN_PX + 24 }
-}
-
 /** Frames the fan: when a row's segments first appear, the map moves out (never in) only as far as
  *  needed to show the segments that make the level with the receiver; when a segment is opened,
  *  the map frames that segment, its rays and the receiver. */
@@ -70,7 +59,7 @@ function useFrameFan(fan: SegmentFan | null) {
     const opened = fan.opened?.index ?? null
     const before = framed.current?.row === row ? framed.current : null
     framed.current = { row, opened }
-    const padding = framePadding()
+    const padding = framePadding(map.getContainer())
     const frame = (points: [number, number][], maxZoom: number) => {
       const lats = points.map(([lat]) => lat)
       const lons = points.map(([, lon]) => lon)

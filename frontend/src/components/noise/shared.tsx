@@ -9,8 +9,8 @@ import { ChevronDown } from 'lucide-react'
 export const DETAIL_TEXT = 'text-[11px] leading-snug text-muted-foreground tabular-nums'
 /** A table's column names. */
 export const COLUMN_NAME = 'text-[10px] font-normal text-muted-foreground/70'
-/** What a table or a section is, above it. */
-export const CAPTION = 'text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground'
+/** What a table or a section is, above it, in sentence case like every label. */
+export const CAPTION = 'text-[11px] font-semibold text-muted-foreground'
 
 /** Any display field as text, whatever its shape. */
 export function fieldText(value: unknown): string {

@@ -16,9 +16,10 @@ export function Switch({ on, size = 'default' }: { on: boolean; size?: keyof typ
         on ? 'bg-primary' : 'bg-muted-foreground/20'
       }`}
     >
+      {/* The knob against its track in either scheme: the primary's own foreground when on. */}
       <span
-        className={`inline-block ${s.knob} rounded-full bg-white shadow-sm transition-transform ${
-          on ? s.on : s.off
+        className={`inline-block ${s.knob} rounded-full shadow-sm transition-transform ${
+          on ? `${s.on} bg-primary-foreground` : `${s.off} bg-background`
         }`}
       />
     </span>

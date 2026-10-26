@@ -214,10 +214,12 @@ export async function openPoint(page: Page) {
   return page.getByTestId('open-place')
 }
 
-/** Names the open place in its row under the search field on a phone: its pencil, the name, Enter. */
+/** Names the open place in its row under the search field on a phone: a tap on its name, the name,
+ *  Enter. */
 export async function renameOpenPlace(page: Page, name: string) {
-  await page.getByTestId('open-place').getByRole('button', { name: /^Rename/ }).tap()
-  await page.getByTestId('open-place').getByTestId('place-title').fill(name)
+  const field = page.getByTestId('open-place').getByTestId('place-title')
+  await field.tap()
+  await field.fill(name)
   await page.keyboard.press('Enter')
 }
 

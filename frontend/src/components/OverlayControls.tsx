@@ -26,7 +26,7 @@ function ToggleRow({ active, icon, label, tooltip, onClick }: {
       onClick={onClick}
       title={tooltip}
       aria-pressed={active}
-      className="flex w-full items-center gap-2.5 py-1.5 px-1 rounded-lg hover:bg-black/5 transition-colors cursor-pointer"
+      className="flex w-full items-center gap-2.5 py-1.5 px-1 rounded-lg hover:bg-accent transition-colors cursor-pointer"
     >
       <span className={active ? 'text-foreground' : 'text-muted-foreground'}>{icon}</span>
       <span className={`flex-1 text-left text-sm ${active ? 'text-foreground' : 'text-muted-foreground'}`}>{label}</span>
@@ -51,11 +51,11 @@ function LoudnessSlider({ value, onChange, testId }: {
   const at = Math.max(0, QUIET_THRESHOLDS.findIndex((t) => t === local))
   return (
     <div className="flex items-center gap-2 ml-7 mt-0.5 mb-1">
-      <span className="text-[11px] text-muted-foreground shrink-0">below</span>
+      <span className="text-xs text-muted-foreground shrink-0">below</span>
       <input type="range" data-testid={testId} value={at}
         onChange={(e) => setLocal(QUIET_THRESHOLDS[parseInt(e.target.value, 10)])} min={0} max={QUIET_THRESHOLDS.length - 1} step={1}
         className="flex-1 h-1 accent-primary cursor-pointer" />
-      <span className="text-[11px] text-muted-foreground tabular-nums w-14 text-right">{local} sone</span>
+      <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">{local} sone</span>
     </div>
   )
 }

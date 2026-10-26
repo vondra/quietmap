@@ -276,12 +276,13 @@ test('search: picking a result flies the map there and opens its popup', async (
   await page.getByRole('combobox').fill('Ruzyně')
   const option = page.getByRole('option', { name: new RegExp(target.display_name) })
   await expect(option).toBeVisible()
-  await option.click()
+  // A press anywhere in the row opens its place, its empty end too.
+  await option.click({ position: { x: (await option.boundingBox())!.width - 8, y: 24 } })
   // The hash carries four decimals; anchor the complete values.
   await expect(page).toHaveURL(/lat=50\.1000&lng=14\.2600&/)
   await expect.poll(() => popupRequests(page)).toEqual([{ lat: target.lat, lng: target.lon }])
   // The place keeps the result's name, not the geocoder's for its point.
-  await expect(page.getByTestId('open-place')).toContainText(target.display_name)
+  await expect(page.getByTestId('open-place').getByTestId('place-title')).toHaveValue(target.display_name)
 })
 
 test('desktop: a press of the locate button after the visitor has moved opens the popup at the new place', async ({ page, context }) => {
@@ -301,4 +302,85 @@ test('desktop: a press of the locate button after the visitor has moved opens th
   await context.setGeolocation({ latitude: walked.lat, longitude: walked.lng, accuracy: 10 })
   await locate.click()
   await expect.poll(() => popupRequests(page)).toEqual([first, walked])
+})
+
+test('desktop: the layers and the sign-in are two tabs of the corner card, its form one a browser fills', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  await page.route('**/api/me', route => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"Not signed in"}' }))
+  await page.goto(mapUrl(POINT))
+  const layers = page.getByRole('tab', { name: 'Layers' })
+  const signIn = page.getByRole('tab', { name: 'Sign in' })
+  await expect(layers).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('layer-road').filter({ visible: true })).toBeVisible()
+  await signIn.click()
+  await expect(signIn).toHaveAttribute('aria-selected', 'true')
+  // What a browser's autofill reads: a form, a labelled e-mail field named and marked for it, a submit.
+  const email = page.getByLabel('Sign in with your e-mail')
+  await expect(email).toHaveAttribute('type', 'email')
+  await expect(email).toHaveAttribute('name', 'email')
+  await expect(email).toHaveAttribute('autocomplete', 'email')
+  await expect(page.locator('form[name="sign-in"] button[type="submit"]')).toHaveText('Send me a link')
+  await expect(email).not.toBeFocused()
+  // The arrow keys move between the tabs, the open one the tab stop.
+  await page.keyboard.press('ArrowLeft')
+  await expect(layers).toBeFocused()
+  await expect(layers).toHaveAttribute('aria-selected', 'true')
+  await expect(signIn).toHaveAttribute('tabindex', '-1')
+  await page.keyboard.press('ArrowRight')
+  await expect(signIn).toBeFocused()
+  await expect(email).toBeVisible()
+  // A click on the map opens a popup, which folds the card to its tabs.
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.click(x, y)
+  await expect(email).toHaveCount(0)
+  await expect(signIn).toBeVisible()
+})
+
+test("desktop: the reachable area is drawn from the open place by the button at the search field's end; a new one drops the one on its way", async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  const asked: string[] = []
+  await page.route('**/api/isochron?**', async route => {
+    asked.push(new URL(route.request().url()).search)
+    // The first answer comes late, after the second was asked.
+    if (asked.length === 1) await new Promise(resolve => setTimeout(resolve, 1500))
+    const ring = [[POINT.lng - 0.01, POINT.lat - 0.01], [POINT.lng + 0.01, POINT.lat - 0.01], [POINT.lng, POINT.lat + 0.01], [POINT.lng - 0.01, POINT.lat - 0.01]]
+    const modes = new URL(route.request().url()).searchParams.get('modes')!.split(',')
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      type: 'FeatureCollection', features: modes.map(mode => ({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] }, properties: { mode, minutes: 60 } })),
+    }) }).catch(() => {})
+  })
+  const dropped = page.waitForEvent('requestfailed', request => request.url().includes('/api/isochron?'))
+  await page.goto(mapUrl(POINT))
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.click(x, y)
+  const button = page.getByRole('button', { name: 'Reachable area' })
+  const panel = page.getByTestId('open-place').getByTestId('isochron-panel')
+  await button.click()
+  await panel.getByRole('button', { name: 'Car' }).click()
+  await panel.getByRole('button', { name: 'Show area' }).click()
+  await expect.poll(() => asked).toHaveLength(1)
+  const query = new URLSearchParams(asked[0])
+  expect([query.get('minutes'), query.get('modes')]).toEqual(['60', 'walk'])
+  expect(Number(query.get('lat'))).toBeCloseTo(POINT.lat, 6)
+  // Folded and opened again while the first is on its way, the panel asks anew.
+  await button.click()
+  await button.click()
+  await panel.getByRole('spinbutton', { name: 'Minutes' }).fill('5')
+  await panel.getByRole('button', { name: 'Show area' }).click()
+  expect((await dropped).failure()?.errorText).toContain('ABORTED')
+  expect(new URLSearchParams(asked[1]).get('minutes')).toBe('5')
+  await expect(panel.getByRole('button', { name: 'Show area' })).toBeEnabled()
+  await expect(panel.getByRole('alert')).toHaveCount(0)
+})
+
+test('the dark scheme follows the system: the controls darken, the base map stays light', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await installHermeticMap(page, POINT)
+  await page.goto(mapUrl(POINT))
+  const search = page.getByRole('combobox')
+  await expect(search).toBeVisible()
+  const background = () => search.evaluate(input => getComputedStyle(input).backgroundColor)
+  expect(await background()).toBe('oklch(0.145 0 0)')
+  await page.emulateMedia({ colorScheme: 'light' })
+  expect(await background()).toBe('oklch(1 0 0)')
 })

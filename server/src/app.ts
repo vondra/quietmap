@@ -10,6 +10,7 @@ import { isLoopbackClient, rateLimitClientKey } from './rate-limit.ts'
 import { PopupRunner } from './popup-runner.ts'
 import { popupRoutes } from './routes/popup.ts'
 import { searchRoutes } from './routes/search.ts'
+import { isochronRoutes } from './routes/isochron.ts'
 import { heatmapPmtilesRoutes } from './routes/heatmap-pmtiles.ts'
 import { heatmapManifestRoutes } from './routes/heatmap-manifest.ts'
 import { rasterRoutes } from './routes/raster.ts'
@@ -24,7 +25,7 @@ const POPUP_QUEUE_PER_SLOT = 2
 /** A click still computing after this is killed and answered with an error. */
 const POPUP_TIMEOUT_MS = 30_000
 
-export type AppConfig = Pick<Config, 'popupBin' | 'rasterBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex' | 'photonUrl' | 'stay22' | 'accounts'>
+export type AppConfig = Pick<Config, 'popupBin' | 'rasterBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex' | 'photonUrl' | 'valhallaUrl' | 'stay22' | 'accounts'>
 
 export async function buildApp(
   config: AppConfig,
@@ -84,6 +85,7 @@ export async function buildApp(
   })
   await app.register(popupRoutes, { runner, years: config.years })
   await app.register(searchRoutes, { photonUrl: config.photonUrl })
+  await app.register(isochronRoutes, { valhallaUrl: config.valhallaUrl })
   await app.register(heatmapPmtilesRoutes, { tilesDir: config.tilesDir })
   await app.register(heatmapManifestRoutes, { tilesDir: config.tilesDir })
   await app.register(rasterRoutes, { rasterBin: config.rasterBin, preparedDir: config.preparedDir, year: config.years[0] })

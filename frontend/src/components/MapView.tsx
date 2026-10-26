@@ -12,6 +12,7 @@ import HeatmapOverlay from './HeatmapOverlay'
 import { HEATMAP_LAYERS, sourceOf, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
 import AboutControl from './AboutControl'
+import IsochronLayer from './IsochronLayer'
 import DataLayersOverlay from './DataLayersOverlay'
 import StayLayer from './StayLayer'
 import type { Stay, StaySearch } from '../lib/stays'
@@ -43,6 +44,8 @@ interface MapViewProps {
   highlight?: GeoJSON.FeatureCollection | null
   /** An opened row's segments and the rays of the one selected. */
   segmentFan?: SegmentFan | null
+  /** The area reachable from the open place, once drawn. */
+  isochron?: GeoJSON.FeatureCollection | null
   quietClustersEnabled?: boolean
   quietThreshold?: number
   heatmapLayers?: Record<string, boolean>
@@ -61,7 +64,7 @@ interface MapViewProps {
 
 export default function MapView({
   isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, highlight, segmentFan,
+  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, highlight, segmentFan, isochron,
   quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers, stays,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
@@ -213,6 +216,7 @@ export default function MapView({
       {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} />}
       {/* The segments above the opened row's highlight: a style rebuild adds the layers in this
           order. */}
+      <IsochronLayer area={isochron ?? null} />
       <FlightTrackLayer highlight={highlight ?? null} />
       <SegmentFanLayer fan={segmentFan ?? null} />
       {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}

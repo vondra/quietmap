@@ -52,12 +52,12 @@ function TerrainProfile({ ground, slantM }: { ground: Ground, slantM: number }) 
       )}
       <ProfileDiagram ray={ray} receiverAltitudeM={receiverAltitudeM} slantM={slantM} />
       <div className={COLUMN_NAME}>
-        <span className="text-red-600">●</span> source <span className="text-sky-700">●</span> receiver
+        <span className="text-red-600">●</span> source <span className="text-sky-700 dark:text-sky-400">●</span> receiver
         {' '}<span className="text-sky-600">- -</span> calm <span className="text-amber-600">···</span> downwind
         <br />
         <span className="text-green-600">▬</span> soft ground <span className="text-zinc-400">▬</span> hard ground
         {has(true) && <> <span className="text-zinc-500">▮</span> building</>}
-        {has(false) && <> <span className="text-orange-800">▮</span> barrier</>}
+        {has(false) && <> <span className="text-orange-800 dark:text-orange-400">▮</span> barrier</>}
       </div>
     </div>
   )

@@ -26,7 +26,7 @@ export default function DetailSkeleton({ position, error }: DetailSkeletonProps)
         </div>
       ) : (
         <div className="border-b border-border pb-0.5 mb-0.5">
-          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/40 animate-pulse">
+          <span className="text-[11px] font-medium text-muted-foreground/60 animate-pulse">
             Loading noise sources…
           </span>
         </div>

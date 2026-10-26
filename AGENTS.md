@@ -30,6 +30,27 @@ pages first (`frontend/src/about/`): `data-preparation.md`, `noise-at-a-point.md
 - Physics lives once in `physics/`; a model change updates its tests and says so in the commit.
 - Before every commit run `./scripts/check-fast.sh` and read its whole output.
 
+## UI style
+
+One look for the whole web, quiet around the map and its noise colours:
+
+- Colours only from the tokens in `frontend/src/index.css`: `:root`, and its dark scheme, which
+  follows the system's; a literal colour only for a mark that means something (a map layer, a
+  diagram's key, the locate blue), with its `dark:` variant where it sits on a card. The base map
+  stays light in the dark scheme, as the noise colours darken with loudness.
+- Type: Geist. 14 px (`text-sm`) for controls, the search's rows and buttons; 12 px (`text-xs`) for
+  what is secondary and the popup's source rows (four columns in 360 px); on a touch screen names and
+  text fields 16 px (iOS zooms into smaller fields); 11 and 10 px only in what a popup's row opens;
+  larger only for the popup's level. Weights 400, 500 for names and controls, 600 for numbers and
+  captions. Sentence case, no all-caps labels.
+- Buttons, chips and floating surfaces from `frontend/src/components/ui/` (`button.ts`,
+  `check-chip.tsx`); controls 32 px high in a card, tabs 36, a phone's floating controls 44.
+- A row: a fixed icon column, the text left-aligned, numbers tabular at the right, its actions at the
+  end as wide in every row, so that nothing moves on hover or between rows. Icons: lucide, 16 px, 20 px
+  for a touch screen's actions.
+- An action where and when the visitor needs it: the account at the top right, the microphone and the
+  camera on a touch screen at the open place, nothing explained in more than two sentences.
+
 ## Data
 
 - Compute numbers from data, never estimate them. Every benchmark difference is explained.
