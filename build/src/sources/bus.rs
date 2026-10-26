@@ -1,16 +1,16 @@
 //! Buses on the roads nobody counted: the bus, trolleybus and coach lines of OpenStreetMap
 //! (`fetch/bus.sh`), per way the line directions they serve (a line at most two, however many of
-//! its variants are mapped). A street's
-//! buses grow with its lines less than in proportion, as where many lines meet each runs less
-//! often there, and with the trips its surroundings make (the caller's `service`, 1 where 100,000
-//! trips a day begin or end within 2 km): 30.1 a day for one line direction, times the line
-//! directions to the power 0.667, a trolleybus line weighing 2.75 bus lines. Fitted by least
-//! squares on the timetables (GTFS) of 35 cities and rural areas in 14 countries whose routes
-//! match the streets, each place alike (private evidence 2026-10-26, buses): the 60 departures a
-//! route and direction this replaces read 3.4 dB over the timetables in the median place, this law
-//! 0.4 dB; in 8 German cities left out of the fit 5.0 and 2.2 dB. A route that tags its
-//! interval runs that often for 18 hours; a coach line 4 a day each direction. The buses run on
-//! their timetables' day, evening and night shares. A counted road keeps its count, buses included.
+//! its variants are mapped). A street's buses grow with its lines less than in proportion, as where
+//! many lines meet each runs less often there, and with the trips its surroundings make (the
+//! caller's `service`, 1 where 100,000 trips a day begin or end within 2 km): 30.1 a day for one
+//! line direction, times the line directions to the power 0.667, a trolleybus line weighing 2.75
+//! bus lines. Fitted by least squares on the timetables (GTFS) of 35 cities and rural areas in 14
+//! countries whose routes match the streets, each place alike (private evidence 2026-10-26, buses):
+//! the 60 departures a route and direction this replaces read 3.4 dB over the timetables in the
+//! median place, this law 0.4 dB; in 8 German cities left out of the fit 5.0 and 2.2 dB. A line
+//! that tags its interval runs its shortest for 18 hours each direction (`fetch/bus-ways.py`); a
+//! coach line 4 a day each direction. The buses run on their timetables' day, evening and night
+//! shares. A counted road keeps its count, buses included.
 
 use physics::bands::PERIODS;
 use std::path::Path;
@@ -103,7 +103,7 @@ mod tests {
         let near = |(buses, coaches): (f64, f64), (expected, expected_coaches): (f64, f64)| {
             (buses - expected).abs() < 0.1 && coaches == expected_coaches
         };
-        // A line both ways where the service share is 1: 47.8 buses; a village's quarter of them.
+        // A line both ways where the service share is 1: 47.8 buses; a quarter of them at a quarter.
         assert!(near(routes.daily(11, 1.0), (47.8, 0.0)));
         assert!(near(routes.daily(11, 0.25), (11.95, 0.0)));
         // Three bus lines both ways and a trolleybus line: 6 + 2 x 2.75 = 11.5 line directions.

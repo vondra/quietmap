@@ -422,9 +422,9 @@ fn bus_service_share(trip_ends: f64) -> f64 {
 }
 
 /// The share of [`super::bus`]'s buses where the buildings are not known: by the row's built-up
-/// flag (unknown, rural, urban), the share [`BuildingTraffic::bus_service`] gives the rows of that
-/// flag with bus lines where the buildings are known (the places of its fit, rows by length), unknown
-/// their mean.
+/// flag (unknown, rural, urban), the geometric mean of the shares [`BuildingTraffic::bus_service`]
+/// gives the rows of that flag with bus lines where the buildings are known (the places of its fit,
+/// rows by length: the law's ln fit), unknown their mean.
 pub const BUS_SERVICE_BY_BUILT_UP: [f64; 3] = [0.91, 0.43, 1.40];
 
 /// The length of a square's open local streets (km), for [`BuildingTraffic::load`].

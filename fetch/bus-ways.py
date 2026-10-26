@@ -3,20 +3,19 @@
 bus_departures coach_departures`, the line directions of each kind without an interval on the way
 and the departures a day of the bus and trolleybus routes and of the coach routes that tag their
 interval (18 hours of it). A line is its kind, ref and network (else operator), a route without a
-ref a line of its own: on a way its variants count at most twice, for both directions; where one
-of them tags its interval the line runs at most two directions of its shortest interval and its
-untagged variants nothing (Toluca's terminal: 132 routes of 29 refs every 5-15 minutes summed to
-21,601 departures a day). A public_transport v2 route is one direction, an older route both unless
-its member is forward or backward. Platforms and stops are not driven. Usage: osmium cat
-ROUTES.osm.pbf -f opl | bus-ways.py OUT.txt"""
+ref a line of its own: on a way its variants count at most twice, for both directions, and where
+one of them tags its interval each of those runs the line's shortest (Toluca's terminal: 132 routes
+of 29 refs every 5-15 minutes had summed to 21,601 departures a day). A public_transport v2 route is
+one direction, an older route both unless its member is forward or backward. Platforms and stops
+are not driven. Usage: osmium cat ROUTES.osm.pbf -f opl | bus-ways.py OUT.txt"""
 import sys, re, collections
 def unescape(text):
     # OPL escapes: %XXXX% hex code points
     return re.sub(r'%([0-9a-fA-F]+)%', lambda m: chr(int(m.group(1), 16)), text)
-# way -> (kind, line) -> directions of the routes without an interval, and of those with one their
-# departures a day, directions and most departures a day a direction.
+# way -> (kind, line) -> its variants' directions, and the most departures a day a direction its
+# variants that tag an interval run.
 lines = collections.defaultdict(lambda: collections.defaultdict(int))
-timed = collections.defaultdict(lambda: collections.defaultdict(lambda: [0.0, 0, 0.0]))
+timed = collections.defaultdict(dict)
 stats = collections.Counter()
 KIND = {'bus': 0, 'trolleybus': 1, 'coach': 2}
 for line in sys.stdin:
@@ -55,7 +54,7 @@ for line in sys.stdin:
         if 2 <= value <= 720:
             interval = value
     ref = tags.get('ref', '').strip()
-    line_key = (ref, (tags.get('network') or tags.get('operator') or '').strip().lower()) if ref else fields[0]
+    line = (KIND[route], ref, (tags.get('network') or tags.get('operator') or '').strip().lower()) if ref else fields[0]
     stats[route] += 1
     if interval: stats['with interval'] += 1
     for member in members.split(','):
@@ -65,22 +64,18 @@ for line in sys.stdin:
         if role in ('platform', 'platform_entry_only', 'platform_exit_only', 'stop', 'stop_entry_only', 'stop_exit_only'):
             continue
         directions = 1 if (v2 or role in ('forward', 'backward')) else 2
+        lines[int(way)][(KIND[route], line)] += directions
         if interval:
-            line = timed[int(way)][(KIND[route], line_key)]
-            line[0] += directions * 18 * 60 / interval
-            line[1] += directions
-            line[2] = max(line[2], 18 * 60 / interval)
-        else:
-            lines[int(way)][(KIND[route], line_key)] += directions
+            timed[int(way)][line] = max(timed[int(way)].get(line, 0.0), 18 * 60 / interval)
 out = open(sys.argv[1], 'w')
-ways = sorted(lines.keys() | timed.keys())
+ways = sorted(lines)
 for way in ways:
     kinds, departures = [0, 0, 0], [0.0, 0.0]
-    tagged = timed.get(way, {})
-    for (kind, line_key), directions in lines.get(way, {}).items():
-        if (kind, line_key) not in tagged:
+    for (kind, line), directions in lines[way].items():
+        most = timed.get(way, {}).get(line)
+        if most:
+            departures[1 if kind == KIND['coach'] else 0] += min(directions, 2) * most
+        else:
             kinds[kind] += min(directions, 2)
-    for (kind, _), (summed, directions, most) in tagged.items():
-        departures[1 if kind == KIND['coach'] else 0] += min(summed, min(directions, 2) * most)
     out.write(f"{way} {kinds[0]} {kinds[1]} {kinds[2]} {departures[0]:.1f} {departures[1]:.1f}\n")
 print('ways', len(ways), dict(stats.most_common(12)), file=sys.stderr)
