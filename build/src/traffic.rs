@@ -971,7 +971,7 @@ impl Surroundings {
         Ok(Self::from_grids(square, &grids))
     }
 
-    fn from_grids(square: Square, grids: &HashMap<Square, Vec<f32>>) -> Self {
+    pub(crate) fn from_grids(square: Square, grids: &HashMap<Square, Vec<f32>>) -> Self {
         let side = GRID_SIDE as i64;
         let world = i64::from(SQUARES_PER_AXIS);
         let mut cells = vec![0.0f64; WINDOW * WINDOW];

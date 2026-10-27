@@ -72,6 +72,11 @@ impl BusRoutes {
         Ok(BusRoutes { ways, service })
     }
 
+    /// Whether an OSM way carries a bus, trolleybus or coach line (every way listed carries one).
+    pub fn serves(&self, way: i64) -> bool {
+        self.ways.binary_search(&way).is_ok()
+    }
+
     /// Buses and coaches a day on an OSM way, its lines without an interval running `service`
     /// of the buses where 100,000 trips a day begin or end within 2 km.
     pub fn daily(&self, way: i64, service: f64) -> (f64, f64) {
@@ -111,6 +116,7 @@ mod tests {
         // A route every ten minutes runs its 108; a coach line 4 a day each way.
         assert_eq!(routes.daily(9, 1.0), (108.0, 4.0));
         assert_eq!(routes.daily(8, 1.0), (0.0, 0.0));
+        assert!(routes.serves(10) && !routes.serves(8));
         // A coach route every hour stays coaches, not buses.
         assert_eq!(routes.daily(10, 1.0), (0.0, 18.0));
         // 400 line directions, as São Paulo's corridors list: 1,637 a day where the share is 1.

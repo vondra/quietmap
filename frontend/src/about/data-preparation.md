@@ -24,7 +24,7 @@ China, India and a few other countries.
 Another 14 % take their traffic from a model trained on the counted roads. It predicts a road's
 traffic from the trips the buildings within 1, 5 and 15 km make. The remaining 54 % have only an
 average for their road class in their country (October 2026). A side street nobody counted carries
-the trips its own buildings make.
+the trips its own buildings make; in a town, one that a bus line runs along also what passes through.
 
 <details>
 <summary>How a road's sound power is computed</summary>
@@ -37,7 +37,12 @@ junctions and the place's yearly air temperature.
   model of the same kind, fitted on 13 European countries; where a country's default stands
   instead (Russia, Turkey, Japan, Iran, Ukraine), it is kept. A street carries the trips its
   buildings make, OpenStreetMap's and Overture's, routed along the street network to the nearest
-  main road.
+  main road. In a town, an unclassified street, and a residential street that a bus, trolleybus or
+  coach line runs along, carries at least what Great Britain's, France's and Sweden's counted
+  unclassified streets carry among as many trips within 2 km: such a residential street is a through
+  street that its class misses. In Great Britain's random sample of counted minor roads, 592 of them
+  carry 1,820 vehicles a day in the median; the trips routed down them read 8.2 dB low, this rule
+  0.5 dB.
 - **A count beside its road.** A count that a dataset put on a service road, side lane, street or
   ramp beside the counted road, within 10 % of that road's own and within 30 m of it, or on a side
   lane of the road's name with its very count, belongs to the road: the way takes the model of its

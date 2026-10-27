@@ -1,6 +1,8 @@
 //! The daily traffic of the road rows nobody counted, from the buildings ([`crate::traffic`]): a
 //! local street carries the trip ends routed down it to the nearest main road, no background and
-//! no street more than the one it drains into; a main road of the classes the counts cover takes
+//! no street more than the one it drains into, and in a town an unclassified street, or a
+//! residential one that carries a bus line, at least what its trip ends around predict for an
+//! unclassified street; a main road of the classes the counts cover takes
 //! the counted roads' relation between their traffic and the trip ends generated around them
 //! (fitted on the counted rows of 13 European countries, evidence 2026-10-01, building traffic);
 //! in 58 countries a major road likewise takes its traffic from a model of the counted major roads
@@ -254,8 +256,10 @@ fn unselected_tertiary_shift_db(around: f64) -> f64 {
 }
 
 /// dev4 classes the trees run down (residential, living street, service) and unclassified,
-/// which in a town also takes its class's relation to the trip ends around it.
+/// which in a town also takes its class's relation to the trip ends around it, as does a
+/// residential street that carries a bus line there.
 const TREE_CLASSES: [u8; 3] = [5, 6, 7];
+const RESIDENTIAL: u8 = 5;
 const UNCLASSIFIED: u8 = 9;
 /// dev4's built-up code of a row inside a settlement's built-up area.
 const URBAN: u8 = 2;
@@ -318,13 +322,13 @@ impl BuildingTraffic {
 
     /// The modelled daily total of a row whose traffic dev4 guessed or whose count is a copy,
     /// `None` where no model replaces it (the conversion keeps a guess and drops a copy): `class`
-    /// (dev4 code), `built_up` (0 unknown, 1 rural, 2 urban), `middle` (z30). A fallback's total
-    /// stands on a main road (its split does not); a copy takes the model of its class wherever
-    /// there is one.
+    /// (dev4 code), `built_up` (0 unknown, 1 rural, 2 urban), `bus_line` (its way carries a bus,
+    /// trolleybus or coach line), `middle` (z30). A fallback's total stands on a main road (its
+    /// split does not); a copy takes the model of its class wherever there is one.
     pub fn total(
         &self,
         row: usize,
-        (class, built_up, oneway): (u8, u8, bool),
+        (class, built_up, oneway, bus_line): (u8, u8, bool, bool),
         (middle, country_iso, guess): ((i32, i32), u16, Guess),
         (thai_rural_road, lanes): (bool, u8),
     ) -> Option<f64> {
@@ -334,6 +338,20 @@ impl BuildingTraffic {
             .get(row)
             .copied()
             .filter(|f| f.is_finite());
+        // A residential street that carries a bus line in a town is a through street its class
+        // missed: in Great Britain's random sample of counted minor roads (DfT), 592 such streets
+        // carry 1,820 vehicles a day in the median, which the trips routed down them read 8.2 dB
+        // low and the town's unclassified streets' rule 0.5 dB (mean absolute error 8.8 -> 2.6
+        // dB); its 3,368 residential streets without a line would read 4.1 dB high by that rule.
+        // It takes a two-way street's traffic: those counted streets are all two-way, and the
+        // other classes' one-way roads carry 0.83-0.93 of their two-way ones, where the
+        // unclassified fit's one-way term (1.5 times) put 4,200 vehicles a day on Barcelona's
+        // one-way back streets with a bus line.
+        let (class, oneway) = if class == RESIDENTIAL && bus_line && built_up == URBAN {
+            (UNCLASSIFIED, false)
+        } else {
+            (class, oneway)
+        };
         let iso = country_iso.to_le_bytes();
         let shift_db = |class: u8| {
             let Some(shifts) = COUNTRY_SHIFTS_DB
@@ -530,6 +548,47 @@ mod tests {
         assert!(SELECTIVE_TERTIARY_COUNTS.windows(2).all(|w| w[0] < w[1]));
         assert!(!SELECTIVE_TERTIARY_COUNTS.contains(b"SE"));
         assert!(SELECTIVE_TERTIARY_COUNTS.contains(b"CZ"));
+    }
+
+    /// A residential street that carries a bus line in a town collects what passes through, as the
+    /// town's unclassified streets do; without a line, outside a town or as another local class,
+    /// its routed trips alone.
+    #[test]
+    fn a_residential_bus_street_in_a_town_takes_the_unclassified_streets_traffic() {
+        let square = Square { x: 276, y: 173 };
+        let grids = std::collections::HashMap::from([(
+            square,
+            vec![10.0f32; crate::traffic::GRID_SIDE * crate::traffic::GRID_SIDE],
+        )]);
+        let traffic = BuildingTraffic {
+            traffic: SquareTraffic {
+                flows: vec![59.0],
+                grid: Vec::new(),
+            },
+            surroundings: Surroundings::from_grids(square, &grids),
+        };
+        // The square's middle: z30 eastings from the west, northings from the south.
+        let middle = ((276 << 21) + (1 << 20), ((512 - 174) << 21) + (1 << 20));
+        let czechia = u16::from_le_bytes(*b"CZ");
+        let total = |class, built_up, oneway, bus_line| {
+            traffic
+                .total(
+                    0,
+                    (class, built_up, oneway, bus_line),
+                    (middle, czechia, Guess::ClassPrior),
+                    (false, 0),
+                )
+                .unwrap()
+        };
+        let unclassified = total(UNCLASSIFIED, URBAN, false, false);
+        assert!(unclassified > 300.0, "{unclassified}");
+        assert_eq!(total(RESIDENTIAL, URBAN, false, true), unclassified);
+        // One way, it takes the two-way street's traffic, not the one-way unclassified street's.
+        assert_eq!(total(RESIDENTIAL, URBAN, true, true), unclassified);
+        assert!(total(UNCLASSIFIED, URBAN, true, false) > unclassified);
+        assert_eq!(total(RESIDENTIAL, URBAN, false, false), 59.0);
+        assert_eq!(total(RESIDENTIAL, 1, false, true), 59.0);
+        assert_eq!(total(7, URBAN, false, true), 59.0);
     }
 
     #[test]

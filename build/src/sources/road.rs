@@ -790,6 +790,7 @@ pub fn convert(
                             class.value(row),
                             built_up.value(row),
                             oneway.value(row) != 0,
+                            bus.is_some_and(|bus| bus.serves(osm_id.value(row))),
                         ),
                         (middle_z30, country.value(row), guess),
                         (thai_rural_road_ref(refs.value(row)), lanes.value(row)),
