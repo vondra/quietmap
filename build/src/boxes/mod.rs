@@ -22,7 +22,9 @@ use physics::doc29::thrust::SegmentFlight;
 use physics::weather::WeatherTable;
 use place::{BoxKey, BoxPiece, Placement, TileHasher, cut_within_tile};
 use rayon::prelude::*;
-use read::{FLAG_DEPARTURE, FLAG_HELICOPTER_DESCENT, FLAG_ON_GROUND, FlightSegment};
+use read::{
+    FLAG_DEPARTURE, FLAG_HELICOPTER_DESCENT, FLAG_ON_GROUND, FLAG_SECONDARY_ONLY, FlightSegment,
+};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -140,9 +142,11 @@ pub struct BoxEntry {
     pub ground_m: f64,
     /// Flights per average day that crossed it in each period (a flight passing at 23:00 counts in
     /// the evening and the night, as its energy does), and per period the last flight seen there
-    /// (a flight's segments arrive together within a day).
+    /// (a flight's segments arrive together within a day) with the weight it was counted at and
+    /// whether the primary provider saw it.
     pub flights_per_day: [f64; PERIODS],
     last_flight: [u64; PERIODS],
+    last_counted: [(f64, bool); PERIODS],
     pub kept: Vec<KeptPiece>,
 }
 
@@ -347,9 +351,17 @@ fn add_day(
                         metres(piece.end),
                     );
                     entry.ground_m = piece.ground_m;
+                    // A crossing the primary provider saw any of counts at its weight, one only
+                    // the secondary saw at the secondary's (the P/B + S/I estimator), whichever
+                    // piece came first.
+                    let primary = segment.flags & FLAG_SECONDARY_ONLY == 0;
                     if entry.last_flight[period] != segment.flight_id {
                         entry.last_flight[period] = segment.flight_id;
+                        entry.last_counted[period] = (*weight, primary);
                         entry.flights_per_day[period] += *weight;
+                    } else if primary && !entry.last_counted[period].1 {
+                        entry.flights_per_day[period] += *weight - entry.last_counted[period].0;
+                        entry.last_counted[period] = (*weight, true);
                     }
                     let keep_level_db = emitted
                         .emission

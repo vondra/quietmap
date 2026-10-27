@@ -252,3 +252,39 @@ fn a_flight_across_a_period_boundary_counts_in_both() {
             .all(|(_, entry)| entry.flights_per_day[0] == 0.0)
     );
 }
+
+/// A crossing counts once at the primary provider's weight wherever it saw a piece of it, whether
+/// a piece only the secondary saw came first or not; a crossing only the secondary saw counts at
+/// the secondary's weight (the P/B + S/I estimator). r083 counted the first piece's weight.
+#[test]
+fn a_crossing_counts_at_the_primarys_weight_whatever_came_first() {
+    let flight: Vec<FlightSegment> = departures().into_iter().take(40).collect();
+    let terrain = HashMap::new();
+    let scope: HashSet<TileId> = [0, 1].iter().flat_map(|&ring| PRAGUE.ring(ring)).collect();
+    let placement = Placement::new(&scope, &terrain, BOX_EDGE_LEVEL_STEP_DB);
+    let secondary = |segment: &FlightSegment| FlightSegment {
+        flags: segment.flags | FLAG_SECONDARY_ONLY,
+        ..segment.clone()
+    };
+    // Every segment seen by both providers, the secondary's copy first, last or alone.
+    let counts = |sighting: &dyn Fn(&FlightSegment) -> Vec<(FlightSegment, f64)>| {
+        let weighted: Vec<(FlightSegment, f64)> = flight.iter().flat_map(sighting).collect();
+        let mut boxes = Boxes::default();
+        add_day(
+            std::slice::from_mut(&mut boxes),
+            &[(&placement, PIECES_PER_BOX)],
+            &weighted,
+            (Square::of(PRAGUE), &PlaceAtmosphere::model()),
+        );
+        boxes
+            .iter()
+            .map(|(_, entry)| entry.flights_per_day[0])
+            .collect::<Vec<f64>>()
+    };
+    let first = counts(&|s| vec![(secondary(s), 0.25), (s.clone(), 0.5)]);
+    let last = counts(&|s| vec![(s.clone(), 0.5), (secondary(s), 0.25)]);
+    let alone = counts(&|s| vec![(secondary(s), 0.25)]);
+    assert!(!first.is_empty());
+    assert!(first.iter().chain(&last).all(|count| *count == 0.5));
+    assert!(alone.iter().all(|count| *count == 0.25));
+}
