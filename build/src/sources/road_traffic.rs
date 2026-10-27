@@ -551,8 +551,9 @@ mod tests {
     }
 
     /// A residential street that carries a bus line in a town collects what passes through, as the
-    /// town's unclassified streets do; without a line, outside a town or as another local class,
-    /// its routed trips alone.
+    /// town's unclassified streets do, and keeps its routed trips where they are more; without a
+    /// line, outside a town or where the built-up area is unknown, and as another local class, its
+    /// routed trips alone.
     #[test]
     fn a_residential_bus_street_in_a_town_takes_the_unclassified_streets_traffic() {
         let square = Square { x: 276, y: 173 };
@@ -562,7 +563,7 @@ mod tests {
         )]);
         let traffic = BuildingTraffic {
             traffic: SquareTraffic {
-                flows: vec![59.0],
+                flows: vec![59.0, 4_000.0],
                 grid: Vec::new(),
             },
             surroundings: Surroundings::from_grids(square, &grids),
@@ -570,25 +571,30 @@ mod tests {
         // The square's middle: z30 eastings from the west, northings from the south.
         let middle = ((276 << 21) + (1 << 20), ((512 - 174) << 21) + (1 << 20));
         let czechia = u16::from_le_bytes(*b"CZ");
-        let total = |class, built_up, oneway, bus_line| {
+        let total = |row, class, built_up, oneway, bus_line| {
             traffic
                 .total(
-                    0,
+                    row,
                     (class, built_up, oneway, bus_line),
                     (middle, czechia, Guess::ClassPrior),
                     (false, 0),
                 )
                 .unwrap()
         };
-        let unclassified = total(UNCLASSIFIED, URBAN, false, false);
-        assert!(unclassified > 300.0, "{unclassified}");
-        assert_eq!(total(RESIDENTIAL, URBAN, false, true), unclassified);
+        let unclassified = total(0, UNCLASSIFIED, URBAN, false, false);
+        assert!((300.0..4_000.0).contains(&unclassified), "{unclassified}");
+        assert_eq!(total(0, RESIDENTIAL, URBAN, false, true), unclassified);
+        assert_eq!(total(1, RESIDENTIAL, URBAN, false, true), 4_000.0);
         // One way, it takes the two-way street's traffic, not the one-way unclassified street's.
-        assert_eq!(total(RESIDENTIAL, URBAN, true, true), unclassified);
-        assert!(total(UNCLASSIFIED, URBAN, true, false) > unclassified);
-        assert_eq!(total(RESIDENTIAL, URBAN, false, false), 59.0);
-        assert_eq!(total(RESIDENTIAL, 1, false, true), 59.0);
-        assert_eq!(total(7, URBAN, false, true), 59.0);
+        assert_eq!(total(0, RESIDENTIAL, URBAN, true, true), unclassified);
+        assert!(total(0, UNCLASSIFIED, URBAN, true, false) > unclassified);
+        assert_eq!(total(0, RESIDENTIAL, URBAN, false, false), 59.0);
+        for built_up in [0, 1] {
+            assert_eq!(total(0, RESIDENTIAL, built_up, false, true), 59.0);
+        }
+        for local_class in [6, 7] {
+            assert_eq!(total(0, local_class, URBAN, false, true), 59.0);
+        }
     }
 
     #[test]
