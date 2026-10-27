@@ -8,7 +8,7 @@ use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::weather::{PlaceWeather, WeatherTable};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::AIRCRAFT_REACH_M;
-use popup::aircraft::rolls::{HeardRoll, ROLL_REACH_M, prepare as prepare_rolls};
+use popup::aircraft::rolls::{HeardPath, ROLL_REACH_M, prepare as prepare_rolls};
 use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect, loud};
 use popup::obstacles::Scene;
 use popup::release::{Release, RingFiles};
@@ -287,8 +287,8 @@ pub struct Square<'a> {
     pub candidates: Vec<Candidate>,
     pub index: Index,
     pub aircraft: Vec<AircraftTile<'a>>,
-    /// The rolls of the runways within their reach of the square.
-    pub rolls: Vec<HeardRoll>,
+    /// The rolls of the runways within their reach of the square, by path.
+    pub rolls: Vec<HeardPath>,
     /// The source tiles the candidates came from (a candidate's `display.tile`), where its display
     /// record is read.
     pub sources: Vec<Sources<'a>>,

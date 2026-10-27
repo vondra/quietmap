@@ -267,7 +267,8 @@ extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint
         for (int period = 0; period < PERIODS; period++) {
             float e = share * sel[period] * impedance / PERIOD_SECONDS[period];
             energy[period] += e;
-            lambda[period] += e * b.lambda_per_slant[period] * closest_slant_m;
+            // The slant at least the NPD curves' nearest, where the exposure is read, as on the cores.
+            lambda[period] += e * b.lambda_per_slant[period] * fmaxf(closest_slant_m, NPD_NEAREST_SLANT_M);
         }
     }
     __shared__ float partial[2 * PERIODS][FLIGHT_THREADS];

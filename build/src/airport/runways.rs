@@ -191,12 +191,14 @@ pub struct RollKey {
     pub class: u8,
 }
 
-/// Where a roll runs: from its start (the start of roll, the touchdown point) to its end
-/// (latitude, longitude), its length and its speed at lift-off or touchdown.
+/// Where a roll runs: from its start (the start of roll, the touchdown point) to its end, toward
+/// the runway's end ahead (latitude, longitude; its direction, one for every class rolling the
+/// runway that way), its length and its speed at lift-off or touchdown.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RollPath {
     pub start: [f64; 2],
     pub end: [f64; 2],
+    pub ahead: [f64; 2],
     pub length_m: f64,
     pub speed_ms: f64,
 }
@@ -357,6 +359,7 @@ impl Runways {
         (to > from).then(|| RollPath {
             start: position(from),
             end: position(to),
+            ahead: position(runway.length_m),
             length_m: to - from,
             speed_ms: speed_kt * METRES_PER_SECOND_PER_KNOT,
         })

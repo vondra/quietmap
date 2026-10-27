@@ -195,6 +195,59 @@ fn rolls_are_written_in_the_tile_of_their_start() {
     std::fs::remove_dir_all(&out).unwrap();
 }
 
+/// Every class of a runway direction rolls on one heading, the runway's, whatever its own length:
+/// on a diagonal runway at 60 deg N a 300 m piston roll, an A320's 1,800 m and a 777's 2,600 m
+/// keep the same stored heading (each heading toward its own end had split one runway's take-offs
+/// into several streams of passes, `popup::aircraft::rolls`).
+#[test]
+fn every_class_of_a_runway_direction_rolls_on_one_heading() {
+    let out = std::env::temp_dir().join(format!("qm-roll-headings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    let mut aeroways = Aeroways::default();
+    let airport = aeroways.intern(Airport {
+        key: "DIAGONAL".into(),
+        name: String::new(),
+    });
+    let (first, last) = ([60.0, 10.0], [60.03125, 10.0625]);
+    let point = |share: f64| [0, 1].map(|k| first[k] + share * (last[k] - first[k]));
+    for piece in 0..10u16 {
+        let share = f64::from(piece) / 10.0;
+        aeroways.lines.push(AerowayLine {
+            osm_id: 1,
+            segment: piece,
+            ends: [point(share), point(share + 0.1)],
+            aeroway: Aeroway::Runway,
+            airport,
+            square: Square { x: 270, y: 148 },
+        });
+    }
+    let runways = Runways::new(&aeroways);
+    let key = |class| RollKey {
+        runway: 0,
+        forward: true,
+        landing: false,
+        class,
+    };
+    let classes = [class("CNA172"), class("A320-232"), class("777300")];
+    let rolls: BTreeMap<RollKey, [f64; 3]> = (classes.iter())
+        .map(|&class| (key(class), [1.0, 0.0, 0.0]))
+        .collect();
+    assert_eq!(roll_tiles::write(&rolls, &runways, &out, &out).unwrap(), 3);
+    let tile = TileId::containing(Mercator::from_degrees(first[0], first[1]));
+    let bytes = tiles::square::read_tile(&out, tile, tiles::Kind::AircraftRolls)
+        .unwrap()
+        .expect("the tile of the start");
+    let read = tiles::aircraft_rolls::parse(&bytes).unwrap();
+    let lengths: Vec<f64> = read.iter().map(|roll| roll.length_m).collect();
+    assert_eq!(lengths.len(), 3, "{lengths:?}");
+    assert!(
+        read.iter()
+            .all(|roll| roll.heading_rad == read[0].heading_rad),
+        "{read:?}"
+    );
+    std::fs::remove_dir_all(&out).unwrap();
+}
+
 /// A runway drawn as two ways meeting end to end is one runway: a take-off starts at its far end
 /// and rolls on past the join; a way meeting it across is another runway, and a stopway past its
 /// end is not its pavement to roll from.

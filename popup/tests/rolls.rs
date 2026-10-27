@@ -109,23 +109,38 @@ fn the_rolls_are_heard_to_eight_kilometres() {
 }
 
 /// The classes rolling one path pass the receiver in one stream: a hundred A320 take-offs a day
-/// heard as one roll or as two of fifty pass it as often (each roll's own rate had heard a
-/// runway's forty classes as rare as one of them, and its loudness fell where its level rose).
+/// heard as one roll or as two of fifty pass it as often, and an A320's and a 737's as often as
+/// both apart (each roll's own rate had heard a runway's forty classes as rare as one of them, and
+/// its loudness fell where its level rose); two runway directions leaving one point at 57 deg left
+/// and right of east, their cosines equal, stay two streams.
 #[test]
 fn the_classes_rolling_one_path_pass_as_one_stream() {
     let a320 = class("A320-232");
-    let whole = lambda(&[roll(a320, false, 100.0)], [900.0, 300.0]);
-    let halves = lambda(
-        &[roll(a320, false, 50.0), roll(a320, false, 50.0)],
-        [900.0, 300.0],
-    );
+    let b738 = class("737800");
+    let at = [900.0, 300.0];
+    let whole = lambda(&[roll(a320, false, 100.0)], at);
+    let halves = lambda(&[roll(a320, false, 50.0), roll(a320, false, 50.0)], at);
     assert!((halves / whole - 1.0).abs() < 1e-9, "{halves} vs {whole}");
+    let together = lambda(&[roll(a320, false, 100.0), roll(b738, false, 60.0)], at);
+    let apart = whole + lambda(&[roll(b738, false, 60.0)], at);
+    assert!(
+        (together / apart - 1.0).abs() < 1e-9,
+        "{together} vs {apart}"
+    );
+    let turned = |heading_rad| Roll {
+        heading_rad,
+        ..roll(a320, false, 100.0)
+    };
+    let one = lambda(&[turned(1.0)], [500.0, 0.0]);
+    let both = lambda(&[turned(1.0), turned(-1.0)], [500.0, 0.0]);
+    assert!((both / one - 1.0).abs() < 1e-9, "{both} vs {one}");
 }
 
-/// A roll passes a receiver for as long as its own speeds take: on the runway as at the NPD
-/// curves' nearest 30.5 m, where its sound exposure is read (the axis had made a pass last a
-/// twentieth of a second), and beside its start the 11 s an A320 takes from rest over its first
-/// 100 m, half of it in Kurze's lambda.
+/// A roll passes a receiver for as long as its own speeds take over the pass's distance around
+/// the receiver's nearest point: on the runway as at the NPD curves' nearest 30.5 m, where its
+/// sound exposure is read (the axis had made a pass last a twentieth of a second), and 100 m beside
+/// its start, where the stretch lies on the roll's first 100 m, the 11 s an A320 takes over them
+/// from rest (half of it had been taken there).
 #[test]
 fn a_roll_passes_for_as_long_as_its_speeds_take() {
     let a320 = class("A320-232");
@@ -138,10 +153,35 @@ fn a_roll_passes_for_as_long_as_its_speeds_take() {
     );
     let acceleration = 77.2f64.powi(2) / (2.0 * 1_800.0);
     let from_rest = (2.0 * 100.0 / acceleration).sqrt();
-    let expected = 100.0 / (12.0 * 3_600.0) * 0.5 * from_rest;
+    let expected = 100.0 / (12.0 * 3_600.0) * from_rest;
     let at_start = lambda(&rolls, [0.0, 100.0]);
     assert!(
         (at_start / expected - 1.0).abs() < 0.01,
         "{at_start} vs {expected}"
+    );
+}
+
+/// Beside the middle of an A320's roll a Cessna's 300 m roll on the same path, over 600 m back,
+/// passes nearest at its own end: a stream of its own, joining the A320's at its energy's weight
+/// (its passes counted into the A320's had tripled their lambda), as two paths do.
+#[test]
+fn a_short_roll_passes_in_its_own_stream_beside_a_longer_ones_middle() {
+    let a320 = roll(class("A320-232"), false, 90.0);
+    let cessna = Roll {
+        length_m: 300.0,
+        speed_ms: 28.3,
+        ..roll(class("CNA172"), false, 10.0)
+    };
+    let at = [900.0, 20.0];
+    let (jet, piston) = (
+        heard(std::slice::from_ref(&a320), at),
+        heard(std::slice::from_ref(&cessna), at),
+    );
+    let weighted =
+        (jet.energy_lambda[0] + piston.energy_lambda[0]) / (jet.energy[0] + piston.energy[0]);
+    let together = lambda(&[a320, cessna], at);
+    assert!(
+        (together / weighted - 1.0).abs() < 1e-9,
+        "{together} vs {weighted}"
     );
 }

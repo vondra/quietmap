@@ -91,15 +91,11 @@ pub struct RollSegment {
     pub increment_db: [f64; 2],
 }
 
-/// A ground-roll segment's SEL at the receiver, the slant its NPD curves were read at, the
-/// distance to the segment's nearest point (where the aircraft passes closest) and where along the
-/// segment that point lies (0 its start, 1 its end).
+/// A ground-roll segment's SEL at the receiver and the slant its NPD curves were read at.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RollSel {
     pub sel_db: f64,
     pub slant_m: f64,
-    pub nearest_m: f64,
-    pub nearest_share: f64,
 }
 
 /// The SEL of one ground-roll segment of a `kind` roll at the receiver, terrain and buildings
@@ -112,12 +108,6 @@ pub fn roll_segment_sel(
 ) -> RollSel {
     let geometry = &segment.geometry;
     let closest = closest_points(geometry.start_m, geometry.end_m);
-    let nearest_m = closest
-        .on_segment_m
-        .iter()
-        .map(|v| v * v)
-        .sum::<f64>()
-        .sqrt();
     let share = closest.along.clamp(0.0, 1.0);
     let mut emission = segment.emission;
     if let Some([start, end]) = segment.thrust_lb {
@@ -138,8 +128,6 @@ pub fn roll_segment_sel(
         return RollSel {
             sel_db: sel.sel_db + increment_db,
             slant_m: east_m.hypot(north_m).hypot(up_m),
-            nearest_m,
-            nearest_share: share,
         };
     };
     let (terrain_loss_db, building_loss_db) = (
@@ -181,30 +169,19 @@ pub fn roll_segment_sel(
             building_loss_db,
         ) + increment_db,
         slant_m: distance_m,
-        nearest_m,
-        nearest_share: share,
     }
 }
 
-/// One movement of a roll at the receiver: its SEL energy (linear, all its segments), the distance
-/// to the roll's nearest point and that point's distance along the roll from its start (m).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RollHeard {
-    pub sel_energy: f64,
-    pub nearest_m: f64,
-    pub nearest_along_m: f64,
-}
-
-/// One movement of `steps` of a `kind` roll at the receiver: the roll from `start_m` along the
-/// unit `direction` (receiver frame, metres; height above the receiver in `start_m[2]`),
-/// `ground_m` the runway below the receiver's height.
-pub fn roll_heard(
+/// One movement of `steps` of a `kind` roll at the receiver, its SEL energy (linear, all its
+/// segments): the roll from `start_m` along the unit `direction` (receiver frame, metres; height
+/// above the receiver in `start_m[2]`), `ground_m` the runway below the receiver's height.
+pub fn roll_sel_energy(
     kind: RollKind,
     steps: &[RollStep],
     (start_m, direction): ([f64; 3], [f64; 2]),
     ground_m: f64,
     horizons: &impl ReceiverHorizons,
-) -> RollHeard {
+) -> f64 {
     let at = |along: f64| {
         [
             start_m[0] + direction[0] * along,
@@ -212,32 +189,23 @@ pub fn roll_heard(
             start_m[2],
         ]
     };
-    let mut heard = RollHeard {
-        sel_energy: 0.0,
-        nearest_m: f64::INFINITY,
-        nearest_along_m: 0.0,
-    };
-    for step in steps {
-        let segment = RollSegment {
-            geometry: SegmentGeometry {
-                start_m: at(step.from_m),
-                end_m: at(step.to_m),
-                ground_under_start_m: ground_m,
-                ground_under_end_m: ground_m,
-            },
-            emission: step.emission,
-            thrust_lb: step.thrust_lb,
-            bracket: bracket_of,
-            increment_db: step.increment_db,
-        };
-        let sel = roll_segment_sel(kind, &segment, horizons);
-        heard.sel_energy += 10f64.powf(sel.sel_db / 10.0);
-        if sel.nearest_m < heard.nearest_m {
-            heard.nearest_m = sel.nearest_m;
-            heard.nearest_along_m = step.from_m + sel.nearest_share * (step.to_m - step.from_m);
-        }
-    }
-    heard
+    (steps.iter())
+        .map(|step| {
+            let segment = RollSegment {
+                geometry: SegmentGeometry {
+                    start_m: at(step.from_m),
+                    end_m: at(step.to_m),
+                    ground_under_start_m: ground_m,
+                    ground_under_end_m: ground_m,
+                },
+                emission: step.emission,
+                thrust_lb: step.thrust_lb,
+                bracket: bracket_of,
+                increment_db: step.increment_db,
+            };
+            10f64.powf(roll_segment_sel(kind, &segment, horizons).sel_db / 10.0)
+        })
+        .sum()
 }
 
 #[cfg(test)]

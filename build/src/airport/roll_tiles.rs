@@ -53,13 +53,15 @@ pub fn write(
         let Some(path) = runways.path(key) else {
             continue;
         };
-        let [start, end] =
-            [path.start, path.end].map(|[lat, lon]| Mercator::from_degrees(lat, lon));
+        let [start, end, ahead] =
+            [path.start, path.end, path.ahead].map(|[lat, lon]| Mercator::from_degrees(lat, lon));
         let tile = TileId::containing(start);
         let local = tile
             .to_local(start)
             .ok_or_else(|| format!("{:?} outside its own tile", path.start))?;
-        let [east, north] = LocalFrame::at(start).to_metres(end);
+        // Toward the runway's end, not the class's own: every class of a runway direction keeps one
+        // heading, the identity of the stream its passes make (`popup::aircraft::rolls`).
+        let [east, north] = LocalFrame::at(start).to_metres(ahead);
         let field_m = 0.5 * (ground.height_m(start)? + ground.height_m(end)?);
         by_tile.entry(tile).or_default().push(Roll {
             start: local,

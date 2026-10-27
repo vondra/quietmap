@@ -63,15 +63,11 @@ impl RollProfile {
         }
     }
 
-    /// The seconds the roll spends within `reach_m` of `along_m` along it, at its constant
-    /// acceleration (Eq. 3-3): how long it passes a receiver nearest it there, `2 reach / speed`
-    /// at a steady speed, and finite beside the start of roll, where the aircraft sets off from
-    /// rest.
-    pub fn seconds_within(&self, along_m: f64, reach_m: f64) -> f64 {
-        let (from_m, to_m) = (
-            (along_m - reach_m).max(0.0),
-            (along_m + reach_m).min(self.length_m),
-        );
+    /// The seconds the roll takes from `from_m` to `to_m` along it, the part of it within the roll,
+    /// at its constant acceleration (Eq. 3-3): distance over speed at a steady speed, and finite
+    /// from the start of roll, where the aircraft sets off from rest.
+    pub fn seconds_between(&self, from_m: f64, to_m: f64) -> f64 {
+        let (from_m, to_m) = (from_m.max(0.0), to_m.min(self.length_m));
         if to_m <= from_m {
             return 0.0;
         }
