@@ -1,13 +1,14 @@
 //! Prepared z12 tiles: numbering and coordinates ([`geo`]), the z9 squares and their files, one a
 //! square and kind ([`square`]: read and write), and one module per kind with its tile format,
-//! writer and reader ([`terrain`], [`terrain_fine`], [`obstacles`], [`sources`], [`aircraft`]);
-//! [`aircraft_tracks`] holds the year's flights as the map draws them.
+//! writer and reader ([`terrain`], [`terrain_fine`], [`obstacles`], [`sources`], [`aircraft`],
+//! [`aircraft_rolls`]); [`aircraft_tracks`] holds the year's flights as the map draws them.
 //!
 //! For visitors, down to this code: the About page Data preparation, The files
 //! (`frontend/src/about/data-preparation.md`).
 
 pub mod aircraft;
 pub mod aircraft_events;
+pub mod aircraft_rolls;
 pub mod aircraft_tracks;
 pub mod geo;
 pub mod obstacles;
@@ -32,6 +33,8 @@ pub enum Kind {
     AircraftFar,
     /// What flies over each cell: flights a day above 50, 60 and 70 dB.
     AircraftEvents,
+    /// The runways' take-off and landing rolls that start in each tile.
+    AircraftRolls,
 }
 
 impl Kind {
@@ -44,6 +47,7 @@ impl Kind {
             Kind::Aircraft => "aircraft",
             Kind::AircraftFar => "aircraft-far",
             Kind::AircraftEvents => "aircraft-events",
+            Kind::AircraftRolls => "aircraft-rolls",
         }
     }
 }

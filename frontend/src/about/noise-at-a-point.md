@@ -202,8 +202,9 @@ aircraft
 <summary>The tiles it reads</summary>
 
 The popup reads the point's tile and its eight neighbours, computes and sends a first answer. Then
-it reads one more ring of tiles at a time until every ground source within 12 km and every flight
-within 16 km is covered, sending the whole answer again after each ring. At Greenwich in London it
+it reads one more ring of tiles at a time until every ground source within 12 km, every flight
+within 16 km and every runway roll starting within 8 km is covered, sending the whole answer again
+after each ring. At Greenwich in London it
 reads 219 MB in 114 reads, the flight tracks and the weather among them.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
@@ -334,11 +335,12 @@ layers to the place, by octave band and by day, evening and night. That gives Ld
 
 The map does not know when a car or a plane passed; it knows how many pass and how fast: a road's
 vehicles a day, spread over the hours by measured hourly profiles, a railway's trains by period,
-from timetables where they exist, a flight path's flights by period. Each is a stream of passes at
-random times, and the source's distance and speed tell how much of the time the level spends at
-each value (Kurze's statistics of moving sources). A road with 600 vehicles an hour at 50 km/h is a
-series of passes 20 m away and a steady sound from about 80 m; one flight a day 1 km away is near
-its peak for about half a minute. Sources add up only within the same moment, so the sum is taken
+from timetables where they exist, a flight path's flights and a runway's take-offs and landings by
+period. Each is a stream of passes at random times, and the source's distance and speed tell how
+much of the time the level spends at each value (Kurze's statistics of moving sources). A road with
+600 vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m;
+one flight a day 1 km away is near its peak for about half a minute; a take-off passes a house
+100 m beside its start of roll in about 11 seconds, as it sets off from rest. Sources add up only within the same moment, so the sum is taken
 for every hour of road traffic and ten states of the weather; bells, calls, a car park's cars, a
 range's shots, courts, pitches, playgrounds, pools and terraces in use, the guests outside bars
 and restaurants and the plant of shops, offices and restaurants while it runs sound in their share
@@ -401,7 +403,8 @@ legal noise map or a property certificate.
 - `obstacles/reflection.rs`, `obstacles/reflection_coverage.rs`: the same covered area for the popup
   and the painter, tabulated only where the bounds of tall footprints and reachable receiver windows
   intersect; `physics/src/reflection.rs` turns its share into the receiver bonus.
-- `aircraft/`: the boxes through the popup's equation, the flight list, the events, the tracks.
+- `aircraft/`: the boxes through the popup's equation, the runways' rolls segment by segment
+  (`physics/src/doc29/roll.rs`), the flight list, the events, the tracks.
 - `rows.rs`, `percentiles.rs`, `distribution.rs`, `loudness.rs`, `shares.rs`, `lines.rs`,
   `listing.rs`, `json.rs`: the rows, the levels over time, Nden, the shares, the lines on the map,
   the listed pieces and the update as one line of JSON.

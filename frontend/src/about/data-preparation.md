@@ -215,8 +215,12 @@ Riyadh, Tehran, Accra, Moscow Sheremetyevo and Lagos.
   their type's certification level. A flight of unknown type flies as a helicopter or a Cessna 172
   by its transponder's category, as a Cessna 172 when its median speed in the air is under 140 kt
   and it carries no airline flight number, else as a generic jet.
-- **Its phases.** On the ground: taxiing, take-off and landing rolls on the runways and taxiways,
-  mapped or found where the flights' ground tracks run. Airborne: up to 7,620 m (25,000 ft) above
+- **Its phases.** On the ground: take-off and landing rolls as Doc 29 computes them, one for each
+  runway direction, operation and aircraft class with its movements of an average day. A take-off
+  runs from the runway's end at take-off thrust and is loudest beside its start, where the
+  aircraft is slowest, and heard behind it too; a landing runs from 291 m past the threshold and
+  slows to 15 m/s on reverse thrust. Taxiing runs on the runways and taxiways, mapped or found
+  where the flights' ground tracks run. Airborne: up to 7,620 m (25,000 ft) above
   the ground, the last distance of the noise tables; a flight turns to cruise at 8,000 m and back
   below 7,200 m. Cruise: above it.
 - **The year in boxes.** The flights are summed into boxes of airspace: a cell of the map's grid
@@ -447,6 +451,7 @@ a smooth field's information is the residual of a planar prediction of its heigh
 | `aircraft` | a year of flights, summed into boxes of airspace | 466 GB, 2.6 million tiles in 57,670 files |
 | `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 64 GB, 2.6 million tiles in 57,670 files |
 | `aircraft-events` | per cell 380 m wide in London, the flights of a day whose loudest moment reaches 50, 60 and 70 dB | 9.6 GB, 1.6 million tiles in 35,830 files |
+| `aircraft-rolls` | the take-off and landing rolls that start in the tile, one for each runway direction, operation and aircraft class | 26 bytes a roll |
 
 Beside the squares lie the year's flight tracks, 28 GB in 256 files, read only to draw a listed
 flight, and its weather table, 16.6 MB for every half degree: a 30-year climatology, the same in
@@ -491,12 +496,12 @@ altitude at its two ends.
 | Industry | a point, or a point every 75 m over a site above 5,000 m²; a turbine at its hub | a site; a turbine |
 | Buildings | a point, or a point every 30 m over a building above 2,000 m² and every 75 m over a pitch or car park above 5,000 m² | a building; a pitch or car park; the guests of a bar; a church's bells |
 | Ships | a point every 250 m over the water of a cell of vessel density | a cell |
-| Airports | a straight stretch of a runway or taxiway, at most 250 m | an airport's ground operations, in the aircraft row |
+| Airports | a straight stretch of a runway or taxiway with taxiing, at most 250 m | an airport's ground operations, in the aircraft row |
 
 Three tiles of central London, from Hammersmith to Bermondsey, hold 69,475 road pieces, half of
 them shorter than 18 m; 5,932 railway pieces; 2,514 industrial points, 153,965 points of the
 buildings layer and 589 of ships on the Thames. Flights are not pieces: they are the boxes
-described under Aircraft.
+described under Aircraft, and the runways' rolls.
 
 </details>
 
@@ -530,6 +535,7 @@ described under Aircraft.
 | `sources` | `tiles/src/sources.rs` | 12-byte lines and 8-byte points, 32-byte records, each distinct emission row (per octave band and period a u16 in 0.01 dB) and display once, 8-byte deck entries (a bridge line's deck altitude at its ends); a display is its layer's fields typed by one schema (`tiles/src/sources/display.rs`: texts in the tile's table, numbers as whole counts of their field's decimal step, a railway's trains a day, a turbine's hub height and rating and an airport's movements as 8-byte reals), as the builder wrote them |
 | `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with only the periods it is heard in and its loudest flight pieces, its slab a row of the tile's band table, its flights a day as a 16-bit rate; the tile's flight table; a piece's ends from its box's centroid (the farthest exact); a box finds its periods and pieces from the counts every 32 boxes |
 | `aircraft-events` | `tiles/src/aircraft_events.rs` | 16 x 16 z16 cells a tile, the flights a day as 16-bit rates; no tile where no flight reaches 50 dB |
+| `aircraft-rolls` | `tiles/src/aircraft_rolls.rs` | 26 bytes a roll: its start in tile steps, its heading in 2^-16 of a turn, its length (m), its lift-off or touchdown speed (0.01 m/s), its runway's elevation (m), its aircraft class, take-off or landing, its movements a day per period as 32-bit reals |
 | `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start behind a fence of every 256th part's key, so a listed flight reads one 4 KB page of the directory; a part's points as 2-byte steps at 1e-5 deg |
 | `weather` | `physics/src/weather.rs` | 0.5 deg nodes: favourable probability per period and 16 sectors in percent, absorption per octave in 0.01 dB/km |
 
@@ -586,7 +592,14 @@ boxes' day weights. `aircraft-tracks` keeps every flight of the year flat, its s
 20 m by Douglas-Peucker, broken at the antimeridian and at any step over 300 km. `aircraft-check`
 holds the boxes against every segment, the list against the exact ten loudest and the events
 against exact counts. Airport ground operations (`build/src/airport`) put the window's ground legs
-on the aeroway lines: a leg on a runway rolls at 40 kt or faster or as a take-off roll, and taxis
-otherwise; a flight seen low over a runway without a roll of its own gets its class's typical roll.
+on the aeroway lines. A leg rolling along a runway, a take-off's or one of 40 kt or more, is its
+flight's take-off or landing roll, once for each stretch on the ground (every touch-and-go of a
+circuit rolls again; a stop's legs up to its slowest land, those after it take off). A movement no
+leg was seen making rolls where the flight was lost descending or found climbing below 150 m along
+a runway: at its first and last segments in the air and on both sides of every stop, also one
+nobody saw on the ground, a gap between a descent and a climb (where no receiver sees the ground,
+an arrival and the next departure stay one flight). Each movement counts once, at the weight of
+the provider that saw it. The rolls take their class's typical length and speed and go to the
+`aircraft-rolls` tiles on the terrain under them; every other leg taxis or drives on its line.
 
 </details>

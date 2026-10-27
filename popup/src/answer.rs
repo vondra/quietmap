@@ -7,7 +7,10 @@
 use crate::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver};
 use crate::aircraft::flights::FlightTotals;
 use crate::aircraft::horizons::Horizons;
-use crate::aircraft::{holds_boxes_in_reach, reads_fine_boxes, ring_aircraft};
+use crate::aircraft::rolls::{RollSums, prepare as prepare_rolls, roll_sums};
+use crate::aircraft::{
+    holds_boxes_in_reach, holds_rolls_in_reach, reads_fine_boxes, ring_aircraft,
+};
 use crate::building::{BuildingClick, loudest_facade};
 use crate::candidates::{
     Attributes, Candidate, DisplayRef, GROUND_REACH_M, TileCandidates, collect,
@@ -27,10 +30,12 @@ use crate::update::{
 };
 use physics::bands::{PERIODS, lden_energy};
 use physics::bound::receiver_bound;
-use physics::doc29::atmosphere::place_rates_db_per_m;
+use physics::doc29::atmosphere::{PlaceAtmosphere, place_rates_db_per_m};
 use physics::weather::PlaceWeather;
 use rayon::prelude::*;
 use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use tiles::aircraft::Aircraft;
 use tiles::geo::{LocalFrame, Mercator, TileId};
 use tiles::sources::{Layer, Sources, display_fields};
@@ -135,6 +140,12 @@ pub fn answer(
     let weather = physics::weather::read_place(&release.weather_path, lat, lon)?;
     let weather_read_seconds = weather_started.elapsed().as_secs_f64();
     let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
+    // The yearly atmosphere of each square the rolls heard start in, as the boxes take theirs.
+    let mut roll_atmospheres: HashMap<tiles::square::Square, PlaceAtmosphere> = HashMap::new();
+    // A roll lies in the tile of its start and runs on up to a few kilometres, into the next ring:
+    // the rolls read wait for the last ring of ground (whose reach passes every roll within the
+    // rolls'), so that what screens them is read, as the painter has it.
+    let mut rolls_read = Vec::new();
     // The flights' energy and energy times lambda per period, for the percentile levels.
     let (mut flight_energy, mut flight_energy_lambda) = ([0.0; PERIODS], [0.0; PERIODS]);
     // The flights' Lden energies per kind (airliners, regional and business jets, propeller
@@ -166,16 +177,18 @@ pub fn answer(
         if reads_ground {
             kinds.extend([Kind::Terrain, Kind::Obstacles, Kind::Sources]);
         }
-        // Fine boxes near the click, far boxes elsewhere.
+        // Fine boxes near the click, far boxes elsewhere; the rolls within their reach.
         if ring <= aircraft_rings {
-            kinds.extend([Kind::Aircraft, Kind::AircraftFar]);
+            kinds.extend([Kind::Aircraft, Kind::AircraftFar, Kind::AircraftRolls]);
         }
         let fine = |tile: TileId| reads_fine_boxes(&frame, tile);
         // Far boxes only from tiles that can hold one within reach of the receiver (the click
-        // until the first ring has placed it, a façade after).
+        // until the first ring has placed it, a façade after); the first ring's rolls all, each
+        // heard by its distance from the façade then.
         let receiver_m = station
             .as_ref()
             .map_or([0.0, 0.0], |station| station.position);
+        let placed = station.is_some();
         let cell = &rings[ring as usize];
         let _ = cell.set(RingFiles::read(
             release,
@@ -184,6 +197,7 @@ pub fn answer(
             |tile, kind| match kind {
                 Kind::Aircraft => fine(tile),
                 Kind::AircraftFar => !fine(tile) && holds_boxes_in_reach(&frame, tile, receiver_m),
+                Kind::AircraftRolls => !placed || holds_rolls_in_reach(&frame, tile, receiver_m),
                 _ => true,
             },
         )?);
@@ -199,6 +213,7 @@ pub fn answer(
             Option<Obstacles<'a>>,
             Option<Sources<'a>>,
             Option<Aircraft<'a>>,
+            Option<Vec<tiles::aircraft_rolls::Roll>>,
         );
         let parsed: Vec<Result<Parsed, String>> = (0..read.tiles.len())
             .into_par_iter()
@@ -220,11 +235,16 @@ pub fn answer(
                     .or_else(|| read.file(index, Kind::AircraftFar))
                     .map(Aircraft::parse)
                     .transpose();
+                let rolls = read
+                    .file(index, Kind::AircraftRolls)
+                    .map(tiles::aircraft_rolls::parse)
+                    .transpose();
                 Ok((
                     terrain.map_err(|e| e.to_string())?,
                     obstacles.map_err(|e| e.to_string())?,
                     sources.map_err(|e| e.to_string())?,
                     aircraft.map_err(|e| e.to_string())?,
+                    rolls.map_err(|e| e.to_string())?,
                 ))
             })
             .collect();
@@ -232,7 +252,7 @@ pub fn answer(
         let mut ring_obstacles = Vec::new();
         let mut ring_aircraft_tiles = Vec::new();
         for (index, (&tile, parsed)) in read.tiles.iter().zip(parsed).enumerate() {
-            let (terrain, tile_obstacles, sources, aircraft) = parsed?;
+            let (terrain, tile_obstacles, sources, aircraft, rolls) = parsed?;
             if reads_ground {
                 ground.insert(tile, terrain);
                 ring_obstacles.push((tile, tile_obstacles));
@@ -242,6 +262,19 @@ pub fn answer(
             }
             if let Some(aircraft) = aircraft {
                 ring_aircraft_tiles.push((tile, aircraft));
+            }
+            if let Some(rolls) = rolls {
+                let square = tiles::square::Square::of(tile);
+                let place = match roll_atmospheres.entry(square) {
+                    Entry::Occupied(known) => known.into_mut(),
+                    Entry::Vacant(slot) => {
+                        let (lat, lon) = square.middle_tile().centre().to_degrees();
+                        let weather =
+                            physics::weather::read_place(&release.weather_path, lat, lon)?;
+                        slot.insert(PlaceAtmosphere::new(&weather.alpha_db_per_km))
+                    }
+                };
+                rolls_read.extend(prepare_rolls(tile, &rolls, place));
             }
         }
         obstacles.insert_all(ring_obstacles);
@@ -404,8 +437,8 @@ pub fn answer(
             altitude_m: station.altitude_m,
         };
         let horizons = horizons.as_ref().expect("built at the first read");
-        // The ring's boxes join the aircraft layer before its sources (airport ground operations)
-        // are selected: their energy counts in the layer's omitted-energy account.
+        // The ring's boxes and rolls join the aircraft layer before its sources (airport ground
+        // operations) are selected: their energy counts in the layer's omitted-energy account.
         let aircraft = &mut selections[Layer::Aircraft as usize];
         let ring_flights = ring_aircraft(
             &ring_aircraft_tiles,
@@ -414,16 +447,26 @@ pub fn answer(
             horizons,
             &mut flights,
         );
+        let rolls_heard = if ring >= ground_rings {
+            roll_sums(&std::mem::take(&mut rolls_read), &frame, receiver, horizons)
+        } else {
+            RollSums::default()
+        };
         for period in 0..PERIODS {
-            aircraft.energy[period] += ring_flights.energy[period];
-            flight_energy[period] += ring_flights.energy[period];
-            flight_energy_lambda[period] += ring_flights.energy_lambda[period];
+            let heard = ring_flights.energy[period] + rolls_heard.energy[period];
+            aircraft.energy[period] += heard;
+            flight_energy[period] += heard;
+            flight_energy_lambda[period] +=
+                ring_flights.energy_lambda[period] + rolls_heard.energy_lambda[period];
         }
-        for (kind, ring_kind) in flight_kinds.iter_mut().zip(ring_flights.kinds) {
-            *kind += ring_kind;
+        for (kind, (boxes, rolls)) in flight_kinds
+            .iter_mut()
+            .zip(ring_flights.kinds.into_iter().zip(rolls_heard.kinds))
+        {
+            *kind += boxes + rolls;
         }
-        aircraft.evaluated += ring_flights.heard;
-        aircraft.covered += ring_flights.heard;
+        aircraft.evaluated += ring_flights.heard + rolls_heard.heard;
+        aircraft.covered += ring_flights.heard + rolls_heard.heard;
         let evaluation = Receiver {
             ground: &ground,
             obstacles: &obstacles,

@@ -1,11 +1,12 @@
 //! The aircraft layer of a click: the receiver's horizons ([`horizons`]), every box of the read
-//! tiles through the click-time equation ([`boxes`]), the loudest flights ([`flights`]) and what
-//! flies over the receiver ([`events`]).
+//! tiles through the click-time equation ([`boxes`]), the runways' rolls ([`rolls`]), the loudest
+//! flights ([`flights`]) and what flies over the receiver ([`events`]).
 
 pub mod boxes;
 pub mod events;
 pub mod flights;
 pub mod horizons;
+pub mod rolls;
 pub mod tracks;
 
 use boxes::{AircraftReceiver, FLIGHT_KINDS, tile_energy};
@@ -26,6 +27,12 @@ pub const FINE_BOXES_WITHIN_M: f64 = 3_000.0;
 /// Whether `tile` is read with its fine boxes for a click at the origin of `frame`.
 pub fn reads_fine_boxes(frame: &LocalFrame, tile: TileId) -> bool {
     tile_gap_m(frame, tile, [0.0, 0.0]) <= FINE_BOXES_WITHIN_M
+}
+
+/// Whether `tile` can hold the start of a roll within the rolls' reach of a receiver at `position`
+/// (click metres), a metre for the start's rounding to tile steps.
+pub fn holds_rolls_in_reach(frame: &LocalFrame, tile: TileId, position: [f64; 2]) -> bool {
+    tile_gap_m(frame, tile, position) <= rolls::ROLL_REACH_M + 1.0
 }
 
 /// Whether `tile` can hold a box within the aircraft reach of a receiver at `position` (click

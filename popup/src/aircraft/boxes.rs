@@ -10,7 +10,7 @@ use physics::doc29::boxes::{
     AircraftBoxAtReceiver, BoxSel, box_sel_at_receiver, minimum_line_slant_m,
 };
 use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
-use physics::doc29::npd::lamax_rise_bound_db;
+use physics::doc29::npd::{NPD_NEAREST_SLANT_M, lamax_rise_bound_db};
 use physics::doc29::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M};
 use rayon::prelude::*;
 use tiles::aircraft::{Aircraft, AircraftBox, BoxPlace, Group};
@@ -196,10 +196,12 @@ fn box_at(
 }
 
 /// A box's flights' Kurze lambda per period: the period's flights a day over its hours, times its
-/// closest slant over the flights' speed.
+/// closest slant over the flights' speed, the slant at least the NPD curves' nearest, where its
+/// sound exposure is read.
 fn box_lambda(record: &AircraftBox, sel: &BoxSel) -> [f64; PERIODS] {
+    let slant_m = sel.closest_slant_m.max(NPD_NEAREST_SLANT_M);
     std::array::from_fn(|period| {
-        record.flights_per_day[period] / (PERIOD_HOURS[period] * 3_600.0) * sel.closest_slant_m
+        record.flights_per_day[period] / (PERIOD_HOURS[period] * 3_600.0) * slant_m
             / FLIGHT_SPEED_M_S
     })
 }

@@ -6,8 +6,9 @@
 //! Map: [`npd`] (curves, interpolation, tail, scaled distance, power rows per class), [`thrust`]
 //! (a segment's power bracket), [`helicopters`] (certified levels per designator), [`corrections`]
 //! (Delta_V, Delta_F, Lambda, Delta_I), [`screening`] (edge loss and its composition with Lambda),
-//! [`segment`] (a segment at a receiver), [`box_geometry`], [`box_sums`] and [`boxes`] (an aircraft
-//! box: its size, the sums a builder keeps, and the click-time equation); generated tables
+//! [`segment`] (a segment at a receiver), [`roll_profile`] and [`roll`] (a take-off or landing
+//! roll's segments, and a roll at a receiver), [`box_geometry`], [`box_sums`] and [`boxes`] (an
+//! aircraft box: its size, the sums a builder keeps, and the click-time equation); generated tables
 //! [`profiles_generated`] (profiles, classes, designator mapping) and [`thrust_generated`] (thrust
 //! rows per class).
 
@@ -20,6 +21,8 @@ pub mod corrections;
 pub mod helicopters;
 pub mod npd;
 pub mod profiles_generated;
+pub mod roll;
+pub mod roll_profile;
 pub mod screening;
 pub mod segment;
 pub mod spectra_generated;

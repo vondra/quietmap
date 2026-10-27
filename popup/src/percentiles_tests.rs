@@ -98,8 +98,9 @@ fn a_road_runs_at_the_period_shares_its_fields_carry() {
 }
 
 /// A local road alone at night is loudest in its morning hour, its flow then well over its
-/// night mean; airport movements run in the periods their energy fell in, ground vehicles
-/// counted.
+/// night mean; airport movements run in the periods their sound exposure fell in, ground vehicles
+/// counted: at an even mean power all day, at one rate every hour (the mean power alone put
+/// three times the day's rate into the evening's four hours).
 #[test]
 fn a_road_follows_its_hours_and_movements_their_periods() {
     let steady = Line {
@@ -131,6 +132,12 @@ fn a_road_follows_its_hours_and_movements_their_periods() {
         .unwrap();
     assert_eq!(per_hour[0], 0.0);
     assert!((per_hour[2] - 10.0 / 8.0).abs() < 1e-12);
+    let (per_hour, _, _) = Passes::read(Layer::Aircraft, &cargo)
+        .traffic([1.0; PERIODS])
+        .unwrap();
+    for rate in per_hour {
+        assert!((rate - 10.0 / 24.0).abs() < 1e-12, "{per_hour:?}");
+    }
 }
 
 /// One sparse road alone: its levels are the quantiles of its line over the period's hours,

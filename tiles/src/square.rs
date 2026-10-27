@@ -79,6 +79,15 @@ impl Square {
         }
     }
 
+    /// The tile south-east of the square's centre: where its yearly atmosphere is read, at the
+    /// tile's centre, for every flight sound heard from the square.
+    pub fn middle_tile(self) -> TileId {
+        TileId {
+            x: self.x * TILES_PER_SIDE + TILES_PER_SIDE / 2,
+            y: self.y * TILES_PER_SIDE + TILES_PER_SIDE / 2,
+        }
+    }
+
     /// The square and its existing neighbours (x wraps, y stops at the poles).
     pub fn with_neighbours(self) -> Vec<Square> {
         let mut squares = Vec::new();

@@ -2,6 +2,7 @@
 //! aircraft and airport vehicles with the columns ground operations need (the boxes' reader keeps
 //! the airborne ones). Only these columns are decoded.
 
+use super::low_ends::{Airborne, FlightTrack, LowEnd};
 use crate::aircraft::{IS_DEPARTURE, SECONDARY_ONLY};
 use crate::stage1::DayFile;
 use arrow_array::cast::AsArray;
@@ -10,6 +11,7 @@ use arrow_array::{Array, RecordBatch};
 use physics::doc29::profiles_generated::noise_class_of;
 use physics::emission::airport::GroundVehicle;
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Stage 1 codes: the ground phase and the vehicle kinds.
@@ -31,9 +33,6 @@ const COLUMNS: [&str; 13] = [
     "speed_kt",
     "agl_avg_m",
 ];
-/// A flight's first or last airborne segment is a low end below this height above the ground (m).
-pub const LOW_END_M: f32 = 150.0;
-
 /// What moves along a leg.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mover {
@@ -49,6 +48,9 @@ pub enum Mover {
 pub struct GroundLeg {
     /// ICAO address and start time of the flight (the unit of a movement).
     pub flight_id: u64,
+    /// Which of the flight's stretches on the ground: one more after every time it was airborne,
+    /// so each touch-and-go of a circuit rolls again (Stage 1 keeps them in one flight).
+    pub episode: u16,
     pub mover: Mover,
     pub period: u8,
     /// A take-off roll (Stage 1: accelerating faster than 60 kt/min).
@@ -61,28 +63,14 @@ pub struct GroundLeg {
     pub speed_kt: f64,
 }
 
-/// A flight's first or last airborne segment when it is low: where it left or reached the
-/// ground, seen from the air (a roll the ground receivers may have missed).
-#[derive(Debug, Clone, PartialEq)]
-pub struct LowEnd {
-    pub flight_id: u64,
-    pub class: u8,
-    pub period: u8,
-    /// The flight's first airborne segment (else its last).
-    pub first: bool,
-    /// Stage 1 took the segment for a departure (climbing).
-    pub departure: bool,
-    pub secondary_only: bool,
-    /// Latitude and longitude of both ends (deg).
-    pub start: [f64; 2],
-    pub end: [f64; 2],
-}
-
-/// A day's ground legs and the low ends of its flights.
+/// A day's ground legs, the low ends of its flights, and which of their stretches on the ground
+/// an airborne segment followed (a take-off ended them; a stretch after an airborne one began
+/// with a landing).
 #[derive(Debug, Default)]
 pub struct DayLegs {
     pub legs: Vec<GroundLeg>,
     pub low_ends: Vec<LowEnd>,
+    pub lift_offs: HashSet<(u64, u16)>,
 }
 
 fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array, String> {
@@ -106,23 +94,7 @@ pub fn read_ground_legs(
     let window = 2 * rayon::current_num_threads();
     let indices: Vec<usize> = (0..file.batches()).collect();
     let mut day = DayLegs::default();
-    // The current flight: its id, airborne segments so far, its first one, its last one and the
-    // last one the primary provider saw (each kept only when low): where only the secondary
-    // completed a landing, the primary's last low segment still witnesses it (Codex, review of
-    // r055: one landing counted 697/354 times a day).
-    type Flight = (u64, usize, Option<LowEnd>, Option<LowEnd>, Option<LowEnd>);
-    let mut flight: Option<Flight> = None;
-    let close = |flight: Option<Flight>, low: &mut Vec<LowEnd>| {
-        if let Some((_, count, first, last, last_primary)) = flight {
-            let last = last.filter(|_| count > 1);
-            let last_primary = last_primary.filter(|end| count > 1 && Some(end) != last.as_ref());
-            for end in [first, last, last_primary].into_iter().flatten() {
-                if keep(end.start, end.end) {
-                    low.push(end);
-                }
-            }
-        }
-    };
+    let mut track: Option<FlightTrack> = None;
     let batches = indices.chunks(window).flat_map(|chunk| {
         let decoded: Vec<Result<RecordBatch, String>> =
             chunk.par_iter().map(|&index| file.batch(index)).collect();
@@ -146,38 +118,35 @@ pub fn read_ground_legs(
         let (start_lat, start_lon, end_lat, end_lon, speed) =
             (start_lat?, start_lon?, end_lat?, end_lon?, speed?);
         let height = column(&batch, "agl_avg_m")?.as_primitive::<Float32Type>();
-        for row in 0..batch.num_rows() {
-            if phase.value(row) == PHASE_GROUND || kind.value(row) != KIND_AIRCRAFT {
+        let mut episodes = vec![0u16; batch.num_rows()];
+        for (row, row_episode) in episodes.iter_mut().enumerate() {
+            if kind.value(row) != KIND_AIRCRAFT {
                 continue;
             }
             let id = flight_id.value(row);
-            let end = |first: bool| {
-                (height.value(row) < LOW_END_M).then(|| LowEnd {
-                    flight_id: id,
-                    class: noise_class_of(profile.value(row)),
-                    period: period.value(row),
-                    first,
-                    departure: flags.value(row) & IS_DEPARTURE != 0,
-                    secondary_only: flags.value(row) & SECONDARY_ONLY != 0,
-                    start: [start_lat.value(row), start_lon.value(row)].map(f64::from),
-                    end: [end_lat.value(row), end_lon.value(row)].map(f64::from),
-                })
-            };
-            let primary = flags.value(row) & SECONDARY_ONLY == 0;
-            match flight.as_mut() {
-                Some((current, count, _, last, last_primary)) if *current == id => {
-                    *count += 1;
-                    *last = end(false);
-                    if primary {
-                        *last_primary = end(false);
-                    }
-                }
+            let flight = match track.as_mut() {
+                Some(flight) if flight.flight_id() == id => flight,
                 _ => {
-                    close(flight.take(), &mut day.low_ends);
-                    let last_primary = if primary { end(false) } else { None };
-                    flight = Some((id, 1, end(true), end(false), last_primary));
+                    if let Some(done) = track.take() {
+                        done.close(&mut day.low_ends);
+                    }
+                    track.insert(FlightTrack::new(id))
                 }
+            };
+            if phase.value(row) == PHASE_GROUND {
+                *row_episode = flight.ground(&mut day.lift_offs, &mut day.low_ends);
+                continue;
             }
+            let segment = Airborne {
+                start: [start_lat.value(row), start_lon.value(row)],
+                end: [end_lat.value(row), end_lon.value(row)],
+                height_m: height.value(row),
+                departure: flags.value(row) & IS_DEPARTURE != 0,
+                secondary_only: flags.value(row) & SECONDARY_ONLY != 0,
+                class: noise_class_of(profile.value(row)),
+                period: period.value(row),
+            };
+            flight.airborne(segment, &mut day.lift_offs, &mut day.low_ends);
         }
         let kept: Vec<GroundLeg> = (0..batch.num_rows())
             .into_par_iter()
@@ -201,6 +170,7 @@ pub fn read_ground_legs(
                 }
                 Some(GroundLeg {
                     flight_id: flight_id.value(row),
+                    episode: episodes[row],
                     mover,
                     period: period.value(row),
                     departure: flags.value(row) & IS_DEPARTURE != 0,
@@ -213,6 +183,9 @@ pub fn read_ground_legs(
             .collect();
         day.legs.extend(kept);
     }
-    close(flight.take(), &mut day.low_ends);
+    if let Some(done) = track {
+        done.close(&mut day.low_ends);
+    }
+    day.low_ends.retain(|end| keep(end.start, end.end));
     Ok(day)
 }

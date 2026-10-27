@@ -6,7 +6,6 @@
 use crate::aircraft::flat::flat_distance_m;
 use crate::dev4::{Dev4, Square, column, text, z30_corner_degrees};
 use arrow_array::{Float32Array, Int16Array, Int32Array, Int64Array, StringArray, UInt8Array};
-use physics::emission::airport::GroundOperation;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use tiles::geo::MAX_LATITUDE_DEG;
@@ -18,6 +17,16 @@ const AERODROME: u8 = 5;
 const AERODROME_MIN_RADIUS_M: f64 = 6_000.0;
 const AERODROME_RADIUS_FACTOR: f64 = 1.5;
 
+/// What an aeroway line is: a runway (or an airstrip), where aircraft roll; a stopway, the
+/// pavement past a runway's end that only an aborted take-off uses; a taxiway (aprons are areas,
+/// which dev4's ground traffic never met).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aeroway {
+    Runway,
+    Stopway,
+    Taxiway,
+}
+
 /// One aeroway microsegment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AerowayLine {
@@ -25,7 +34,7 @@ pub struct AerowayLine {
     pub segment: u16,
     /// Latitude and longitude of both ends (deg).
     pub ends: [[f64; 2]; 2],
-    pub operation: GroundOperation,
+    pub aeroway: Aeroway,
     /// Index into [`Aeroways::airports`].
     pub airport: u32,
     /// The square whose file lists it: its traffic is written there.
@@ -62,11 +71,12 @@ struct Aerodrome {
     radius_m: f64,
 }
 
-/// dev4 aeroway codes of lines: runway 0, stopway 6 and airstrip 7 roll, taxiway 1 taxis.
-fn operation_of(aeroway: u8) -> Option<GroundOperation> {
-    match aeroway {
-        0 | 6 | 7 => Some(GroundOperation::RunwayRoll),
-        1 => Some(GroundOperation::Taxi),
+/// dev4 aeroway codes of lines: runway 0 and airstrip 7, stopway 6, taxiway 1.
+fn aeroway_of(code: u8) -> Option<Aeroway> {
+    match code {
+        0 | 7 => Some(Aeroway::Runway),
+        6 => Some(Aeroway::Stopway),
+        1 => Some(Aeroway::Taxiway),
         _ => None,
     }
 }
@@ -179,7 +189,7 @@ impl Aeroways {
                 let [start_x, start_y, end_x, end_y] = grid;
                 let (start_x, start_y, end_x, end_y) = (start_x?, start_y?, end_x?, end_y?);
                 for row in 0..batch.num_rows() {
-                    let Some(operation) = operation_of(kind.value(row)) else {
+                    let Some(aeroway) = aeroway_of(kind.value(row)) else {
                         continue;
                     };
                     let corner = |x: &Int32Array, y: &Int32Array| {
@@ -203,7 +213,7 @@ impl Aeroways {
                         segment: u16::try_from(segment.value(row))
                             .map_err(|_| context("negative segment_idx".into()))?,
                         ends,
-                        operation,
+                        aeroway,
                         airport,
                         square,
                     });
@@ -246,7 +256,7 @@ impl Aeroways {
                     osm_id,
                     segment: piece as u16,
                     ends: [at(from), at(to)],
-                    operation: GroundOperation::RunwayRoll,
+                    aeroway: Aeroway::Runway,
                     airport,
                     square: square_of(at(0.5 * (from + to))),
                 });

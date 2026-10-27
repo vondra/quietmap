@@ -217,12 +217,15 @@ pub fn corners_of(
 ) -> Result<Option<Corners>, String> {
     let n = grid.pixels;
     let rectangle = |x0: f64, y0: f64, x1: f64, y1: f64| rectangle_at(square, n, x0, y0, x1, y1);
-    let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
+    let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none())
+        && square.rolls.is_empty();
     if square.candidates.is_empty() {
         let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);
         // Empty aircraft files still assess buildings: an unexposed facade remains unassessed.
         if no_flights
-            || (!square.has_aircraft_boxes() && square.obstacles.is_open_rectangle(low, high))
+            || (!square.has_aircraft_boxes()
+                && square.rolls.is_empty()
+                && square.obstacles.is_open_rectangle(low, high))
         {
             return Ok(None);
         }

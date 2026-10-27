@@ -26,6 +26,7 @@ mod trace;
 pub mod tracks;
 
 /// The flags of a written segment, for the readers of the day files (the aircraft boxes).
+pub use filters::MIN_SEGMENT_LENGTH_M;
 pub use segments::{HELICOPTER_DESCENT, IS_DEPARTURE, ON_GROUND, SECONDARY_ONLY};
 
 use crate::dev4::Dev4;

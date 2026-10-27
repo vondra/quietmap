@@ -1,15 +1,14 @@
 //! The airport traffic of one z9 square (`<dir>/<x9>/<y9>.arrow`), written by the traffic pass
-//! and read by the sources converter: every aeroway line of the square with ground traffic, its
-//! airport and its sound power per metre per period and band.
+//! and read by the sources converter: every aeroway line of the square with taxiing or vehicles,
+//! its airport and its sound power per metre per period and band.
 
-use super::lines::Airport;
+use super::lines::{Aeroway, Airport};
 use crate::dev4::{Square, column, read_table, text};
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt16Array,
 };
 use arrow_schema::{Field, Schema};
 use physics::bands::{BAND_FREQUENCY_HZ, BANDS, PERIODS};
-use physics::emission::airport::GroundOperation;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,7 +28,7 @@ pub struct LineTraffic {
     pub segment: u16,
     /// Latitude and longitude of both ends (deg).
     pub ends: [[f64; 2]; 2],
-    pub operation: GroundOperation,
+    pub aeroway: Aeroway,
     pub airport: Airport,
     /// The airport's arrivals and departures (aircraft on its runways) and ground vehicles per
     /// average day.
@@ -78,12 +77,13 @@ pub fn write(
         ("start_lon".into(), floats(&|l| l.ends[0][1])),
         ("end_lat".into(), floats(&|l| l.ends[1][0])),
         ("end_lon".into(), floats(&|l| l.ends[1][1])),
+        // The pavement's width is all the sources read: a stopway is as wide as its runway.
         (
             "runway".into(),
             Arc::new(
                 lines
                     .iter()
-                    .map(|l| Some(l.operation == GroundOperation::RunwayRoll))
+                    .map(|l| Some(l.aeroway != Aeroway::Taxiway))
                     .collect::<BooleanArray>(),
             ),
         ),
@@ -156,10 +156,10 @@ pub fn read(dir: &Path, square: Square) -> Result<Vec<LineTraffic>, String> {
                     [start_lat.value(row), start_lon.value(row)],
                     [end_lat.value(row), end_lon.value(row)],
                 ],
-                operation: if runway.value(row) {
-                    GroundOperation::RunwayRoll
+                aeroway: if runway.value(row) {
+                    Aeroway::Runway
                 } else {
-                    GroundOperation::Taxi
+                    Aeroway::Taxiway
                 },
                 airport: Airport {
                     key: text(key, row).to_string(),

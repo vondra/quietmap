@@ -1,11 +1,14 @@
 //! One z12 square's neighbourhood, read and parsed once for all its pixels: the ground and the
 //! obstacles to the ground reach of its farthest pixel, every ground source whose reach covers
-//! one of its pixels, indexed by place and reach, and the aircraft boxes to the aircraft reach.
+//! one of its pixels, indexed by place and reach, the aircraft boxes to the aircraft reach and the
+//! runways' rolls to theirs.
 
 use physics::bound::{ReceiverBound, receiver_bound};
+use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::weather::{PlaceWeather, WeatherTable};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::AIRCRAFT_REACH_M;
+use popup::aircraft::rolls::{HeardRoll, ROLL_REACH_M, prepare as prepare_rolls};
 use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect, loud};
 use popup::obstacles::Scene;
 use popup::release::{Release, RingFiles};
@@ -62,7 +65,7 @@ pub fn gap_to_tile(frame: &LocalFrame, tile: TileId, position: [f64; 2]) -> f64 
 impl Files {
     /// Reads the ground kinds to the ground reach of the square's every pixel and the aircraft
     /// boxes to theirs: the fine boxes of tiles within their distance of the square, the far ones
-    /// of every tile.
+    /// of every tile; the rolls of the tiles within their reach.
     pub fn read(release: &Release, tile: TileId) -> Result<Self, String> {
         let frame = LocalFrame::at(tile.centre());
         let ground_rings = rings_for(&frame, GROUND_REACH_M);
@@ -91,10 +94,12 @@ impl Files {
                 Kind::Sources,
                 Kind::Aircraft,
                 Kind::AircraftFar,
+                Kind::AircraftRolls,
             ],
             |other, kind| match kind {
                 Kind::Aircraft => square_gap(other) <= FINE_BOXES_WITHIN_M,
                 Kind::AircraftFar => true,
+                Kind::AircraftRolls => square_gap(other) <= ROLL_REACH_M + 1.0,
                 _ => ring_of(other) <= ground_rings,
             },
         )?;
@@ -282,6 +287,8 @@ pub struct Square<'a> {
     pub candidates: Vec<Candidate>,
     pub index: Index,
     pub aircraft: Vec<AircraftTile<'a>>,
+    /// The rolls of the runways within their reach of the square.
+    pub rolls: Vec<HeardRoll>,
     /// The source tiles the candidates came from (a candidate's `display.tile`), where its display
     /// record is read.
     pub sources: Vec<Sources<'a>>,
@@ -310,6 +317,12 @@ impl<'a> Square<'a> {
         let mut obstacle_tiles = Vec::new();
         let mut sources: Vec<(TileId, Sources<'a>)> = Vec::new();
         let mut aircraft = Vec::new();
+        let mut rolls = Vec::new();
+        // The yearly atmosphere of each square the rolls start in, as the boxes take theirs.
+        let mut roll_atmospheres: std::collections::HashMap<
+            tiles::square::Square,
+            PlaceAtmosphere,
+        > = std::collections::HashMap::new();
         for (index, &other) in read.tiles.iter().enumerate() {
             if read.kinds.contains(&Kind::Terrain) && ground_slot(tile, other, files.ground_rings) {
                 let terrain = read
@@ -335,6 +348,15 @@ impl<'a> Square<'a> {
                     .map_err(|e| e.to_string())
             };
             let (fine, far) = (parse(Kind::Aircraft)?, parse(Kind::AircraftFar)?);
+            if let Some(bytes) = read.file(index, Kind::AircraftRolls) {
+                let parsed = tiles::aircraft_rolls::parse(bytes).map_err(|e| e.to_string())?;
+                let place = (roll_atmospheres.entry(tiles::square::Square::of(other)))
+                    .or_insert_with_key(|square| {
+                        let (lat, lon) = square.middle_tile().centre().to_degrees();
+                        PlaceAtmosphere::new(&weather.place(lat, lon).alpha_db_per_km)
+                    });
+                rolls.extend(prepare_rolls(other, &parsed, place));
+            }
             if fine.is_some() || far.is_some() {
                 aircraft.push(AircraftTile {
                     tile: other,
@@ -385,6 +407,7 @@ impl<'a> Square<'a> {
             candidates,
             index,
             aircraft,
+            rolls,
             sources: sources.into_iter().map(|(_, file)| file).collect(),
         })
     }

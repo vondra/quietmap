@@ -249,15 +249,35 @@ fn force_balance_thrust_lb(
 /// at FL290), and the force balance stands alone: dev4 dropped such segments, a quiet place's
 /// cruise traffic. `None` for a non-finite thrust; impossible observations are Stage 1's to drop.
 pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracket> {
-    let model = &THRUST[class];
-    if !model.has_thrust {
+    if !THRUST[class].has_thrust {
         return Some(PowerBracket::FIRST_ROW);
     }
-    let (powers, rows) = if flight.departure {
-        (&model.dep_power, model.dep_rows)
+    segment_thrust_lb(class, flight).map(|thrust_lb| bracket_of(class, flight.departure, thrust_lb))
+}
+
+/// The bracket of `thrust_lb` (corrected net thrust per engine) over a class's departure or
+/// approach rows; row 0 for a class without thrust tables.
+pub fn bracket_of(class: usize, departure: bool, thrust_lb: f64) -> PowerBracket {
+    let model = &THRUST[class];
+    if !model.has_thrust {
+        return PowerBracket::FIRST_ROW;
+    }
+    if departure {
+        bracket_power(&model.dep_power, model.dep_rows, thrust_lb)
     } else {
-        (&model.app_power, model.app_rows)
-    };
+        bracket_power(&model.app_power, model.app_rows, thrust_lb)
+    }
+}
+
+/// The corrected net thrust per engine (lb) a segment flies, as [`power_bracket`] reads it: ground
+/// rolls their rating, a departure below its cutback MaxTakeoff, a final approach its landing
+/// configuration's force balance, the rest the force balance within [Idle, MaxClimb]. `None` for
+/// a class without a thrust model or a non-finite thrust.
+pub fn segment_thrust_lb(class: usize, flight: &SegmentFlight) -> Option<f64> {
+    let model = &THRUST[class];
+    if !model.has_thrust {
+        return None;
+    }
     let h_ft = flight.pressure_altitude_m / METRES_PER_FOOT;
     let delta = isa_pressure_ratio(h_ft);
     let vc_kt = flight.speed_kt * isa_density_ratio(h_ft).sqrt();
@@ -305,9 +325,7 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
         ))
     };
     // A NaN fails every comparison of the bracket and would read the loudest row.
-    thrust_lb
-        .is_finite()
-        .then(|| bracket_power(powers, rows, thrust_lb))
+    thrust_lb.is_finite().then_some(thrust_lb)
 }
 
 /// Eq. 4-3 bracket of corrected thrust `thrust_lb` over the first `rows` tabulated `powers`;

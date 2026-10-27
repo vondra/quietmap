@@ -1,12 +1,13 @@
 //! Aircraft energy at block corners from distance-weighted lattices, with the popup's boxes and spectra.
 //!
-//! The flights at a square's block corners: the aircraft boxes as the popup reads them for a
-//! click. Cruise boxes whose pieces and both average flight lines stay beyond 8 km use a 5 x 5
-//! lattice only where screening does not apply and every corner reads the same boxes within
-//! reach. The other far boxes use the hum's points and the near ones every second block corner,
-//! each interpolated where it changes slowly; their linear energies and energies times the
-//! flights' rate and passing duration are blended. Their spectral shares keep the finer grid
-//! at every second block corner, with checked interpolation ([`crate::flight_spectra`]).
+//! The flights at a square's block corners: the aircraft boxes and the runways' rolls as the popup
+//! reads them for a click. Cruise boxes whose pieces and both average flight lines stay beyond 8 km
+//! use a 5 x 5 lattice only where screening does not apply and every corner reads the same boxes
+//! within reach. The other far boxes use the hum's points and the near ones, with the rolls, every
+//! second block corner, each interpolated where it changes slowly; their linear energies and
+//! energies times the flights' rate and passing duration are blended. Their spectral shares keep
+//! the finer grid at every second block corner, with checked interpolation
+//! ([`crate::flight_spectra`]).
 
 use crate::exact::Batch;
 use crate::exact::Point;
@@ -17,6 +18,7 @@ use physics::bands::{PERIODS, lden_energy};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver, tile_flight_sums};
 use popup::aircraft::horizons::Horizons;
+use popup::aircraft::rolls::{ROLL_REACH_M, roll_sums};
 use rayon::prelude::*;
 use tiles::aircraft::Aircraft;
 use tiles::geo::TileId;
@@ -68,9 +70,51 @@ pub fn tiles_heard<'a>(
         .collect()
 }
 
-/// All flights at `point` within the aircraft reach,
-/// fine boxes from tiles within their distance of the point, as the popup reads them for a click
-/// there.
+/// The rolls heard at `point`, as the popup hears them for a click there.
+pub(crate) fn rolls_at(square: &Square, point: &Point) -> Result<FlightSums, String> {
+    let within_reach = |start| {
+        let [east, north] = square.frame.to_metres(start);
+        (east - point.position[0]).hypot(north - point.position[1]) <= ROLL_REACH_M
+    };
+    if !square.rolls.iter().any(|roll| within_reach(roll.start)) {
+        return Ok([[0.0; PERIODS]; 2]);
+    }
+    let horizons = Horizons::build(
+        &square.ground,
+        &square.obstacles,
+        point.position,
+        point.altitude_m,
+        point.own_footprint,
+    )?;
+    let receiver = AircraftReceiver {
+        position: point.position,
+        altitude_m: point.altitude_m,
+    };
+    let sums = roll_sums(&square.rolls, &square.frame, receiver, &horizons);
+    Ok([sums.energy, sums.energy_lambda])
+}
+
+/// Adds each request's rolls to its near flights.
+fn add_rolls(
+    square: &Square,
+    sums: &mut [[FlightSums; 2]],
+    requests: &[FlightRequest],
+) -> Result<(), String> {
+    sums.par_iter_mut()
+        .zip(requests)
+        .try_for_each(|(sums, request)| {
+            let rolls = rolls_at(square, request.point)?;
+            for (totals, values) in sums[0].iter_mut().zip(rolls) {
+                for (sum, value) in totals.iter_mut().zip(values) {
+                    *sum += value;
+                }
+            }
+            Ok(())
+        })
+}
+
+/// All flights at `point` within the aircraft reach, fine boxes from tiles within their distance
+/// of the point, and the rolls within theirs, as the popup reads them for a click there.
 pub(crate) fn aircraft_sums(square: &Square, point: &Point) -> Result<FlightSums, String> {
     let horizons = Horizons::build(
         &square.ground,
@@ -83,7 +127,8 @@ pub(crate) fn aircraft_sums(square: &Square, point: &Point) -> Result<FlightSums
         position: point.position,
         altitude_m: point.altitude_m,
     };
-    let mut total = [[0.0; PERIODS]; 2];
+    let rolls = roll_sums(&square.rolls, &square.frame, receiver, &horizons);
+    let mut total = [rolls.energy, rolls.energy_lambda];
     for heard in tiles_heard(square, point.position, AIRCRAFT_REACH_M) {
         let sums = tile_flight_sums(
             &heard.boxes,
@@ -153,18 +198,20 @@ pub(crate) fn flights_at_corners(
     batch: Option<&dyn Batch>,
 ) -> Result<Vec<FlightSums>, String> {
     let boxes = FlightBoxes::new(square, grid, corners);
-    if boxes.occupied.iter().all(|&occupied| !occupied) {
+    if boxes.occupied.iter().all(|&occupied| !occupied) && square.rolls.is_empty() {
         return Ok(vec![[[0.0; PERIODS]; 2]; corners.len()]);
     }
     let corner_side = grid.pixels / grid.block + 1;
     let ratio = grid.hum / grid.block;
     let coarse_side = grid.pixels / grid.hum + 1;
     let air_side = grid.pixels / (2 * grid.block) + 1;
-    let sums = flight_sums(
+    let requests = lattice_requests(grid, corners, &boxes);
+    let mut sums = flight_sums(square, &boxes, &requests, batch)?;
+    // The rolls join the near boxes at every second corner.
+    add_rolls(
         square,
-        &boxes,
-        &lattice_requests(grid, corners, &boxes),
-        batch,
+        &mut sums[coarse_side * coarse_side..],
+        &requests[coarse_side * coarse_side..],
     )?;
     let (coarse, air) = sums.split_at(coarse_side * coarse_side);
     let blend = |i: usize, j: usize, step: usize, lookup: &dyn Fn(usize, usize) -> FlightSums| {
@@ -205,7 +252,9 @@ pub(crate) fn flights_at_corners(
         .filter(|(sums, _)| sums.is_none())
         .map(|(_, corner)| near_request(corner, &boxes))
         .collect();
-    let mut exact_sums = flight_sums(square, &boxes, &requests, batch)?.into_iter();
+    let mut exact_sums = flight_sums(square, &boxes, &requests, batch)?;
+    add_rolls(square, &mut exact_sums, &requests)?;
+    let mut exact_sums = exact_sums.into_iter();
     let near_energy: Vec<FlightSums> = near_energy
         .into_iter()
         .map(|sums| sums.unwrap_or_else(|| exact_sums.next().unwrap()[0]))

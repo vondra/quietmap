@@ -1,72 +1,40 @@
 //! Airport ground operations (dev4 `ground_ops.rs`, `airport_traffic.rs` and `gse.rs`): the sound
-//! energy one aircraft or ground vehicle leaves per metre of the runway or taxiway it moves along,
-//! per octave band. The builder sums it over a window's movements into sound power per metre, which
-//! the popup propagates as any other line source.
+//! energy one taxiing aircraft or one ground vehicle leaves per metre of the runway or taxiway it
+//! moves along, per octave band. The builder sums it over a window's movements into sound power per
+//! metre, which the popup propagates as any other line source. Take-off and landing rolls are Doc
+//! 29 segments (`crate::doc29::roll`), not lines.
 
 use crate::bands::BANDS;
 use crate::bound::POINT_DIVERGENCE_OFFSET_DB;
 use crate::doc29::npd::Family;
 use crate::doc29::profiles_generated::CLASS_FAMILY;
 
-/// What a movement does on an aeroway line: dev4 takes runway, stopway and airstrip lines as
-/// runway roll and taxiway lines as taxiing (aprons are areas, which its ground traffic never met).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GroundOperation {
-    RunwayRoll,
-    Taxi,
-}
-
-/// Runway roll per family as dev4's 1 km event SEL anchor (dB): flyover NPDs overstate the roll
-/// by 6-10 dB, so the bands are set per type: narrowbody jet 104, widebody 108, regional jet 100,
-/// business jet 99, turboprop 97, helicopter 94, piston single 92.
-pub fn runway_roll_event_sel_db(family: Family) -> f64 {
+/// Taxiing per family as a 1 km event SEL anchor (dB): dev4's runway-roll anchors (narrowbody jet
+/// 104, widebody 108, regional jet 100, business jet 99, turboprop 97, helicopter 94, piston single
+/// 92) less the 12 dB dev4 put taxiing below them.
+pub fn taxi_event_sel_db(family: Family) -> f64 {
     match family {
-        Family::Narrowbody => 104.0,
-        Family::Widebody => 108.0,
-        Family::Regional => 100.0,
-        Family::Business => 99.0,
-        Family::Turboprop => 97.0,
-        Family::Helicopter => 94.0,
-        Family::Piston => 92.0,
+        Family::Narrowbody => 92.0,
+        Family::Widebody => 96.0,
+        Family::Regional => 88.0,
+        Family::Business => 87.0,
+        Family::Turboprop => 85.0,
+        Family::Helicopter => 82.0,
+        Family::Piston => 80.0,
     }
 }
 /// dev4's per-metre level of an anchor, 10 lg(25/pi): its receiver formula LW' + 10 lg(theta/d)
-/// then reads the anchor - 0.14 dB at 25 m from the middle of a 1 km roll.
+/// then reads the anchor - 0.14 dB at 25 m from the middle of a 1 km pass.
 const EVENT_SEL_TO_PER_METRE_DB: f64 = 9.01;
-/// Taxiing sits 12 dB below the runway roll.
-const TAXI_BELOW_RUNWAY_DB: f64 = 12.0;
-/// A departure's roll runs at take-off power.
-const RUNWAY_DEPARTURE_BONUS_DB: f64 = 2.0;
+/// The speed the anchors hold (kt).
+pub const TAXI_REFERENCE_SPEED_KT: f64 = 18.0;
+/// Relative band levels of taxiing (dB, Z-weighted).
+const TAXI_SPECTRUM_DB: [f64; BANDS] = [14.0, 11.0, 8.0, 5.0, 2.0, 0.0, -3.0, -7.0];
 /// The dwell correction -10 lg(v / v_ref) (Doc 29 Eq. 4-14: energy per metre goes as 1/v) stays
 /// within +-3 dB, so outlying ADS-B speeds do not dominate; dev4 applies it above 1 kt.
 const SPEED_CORRECTION_LIMIT_DB: f64 = 3.0;
 const SPEED_CORRECTION_MIN_KT: f64 = 1.0;
 const METRES_PER_SECOND_PER_KT: f64 = 1852.0 / 3600.0;
-
-impl GroundOperation {
-    pub const fn name(self) -> &'static str {
-        match self {
-            GroundOperation::RunwayRoll => "runway_roll",
-            GroundOperation::Taxi => "taxi",
-        }
-    }
-
-    /// The speed the anchors hold (kt).
-    const fn reference_speed_kt(self) -> f64 {
-        match self {
-            GroundOperation::RunwayRoll => 70.0,
-            GroundOperation::Taxi => 18.0,
-        }
-    }
-
-    /// Relative band levels (dB, Z-weighted).
-    const fn spectrum_db(self) -> [f64; BANDS] {
-        match self {
-            GroundOperation::RunwayRoll => [17.0, 14.0, 11.0, 8.0, 5.0, 2.0, -1.0, -5.0],
-            GroundOperation::Taxi => [14.0, 11.0, 8.0, 5.0, 2.0, 0.0, -3.0, -7.0],
-        }
-    }
-}
 
 /// Band levels of `spectrum_db` whose Z-weighted sum is `total_db`.
 fn bands_of_total(total_db: f64, spectrum_db: &[f64; BANDS]) -> [f64; BANDS] {
@@ -80,30 +48,21 @@ fn bands_of_total(total_db: f64, spectrum_db: &[f64; BANDS]) -> [f64; BANDS] {
 }
 
 /// Sound energy per metre (dB re 1 pW s per metre, per band, Z-weighted) of one aircraft of noise
-/// class `class` on `operation` at `speed_kt`; `None` when it does not move. dev4's per-metre
-/// level lacks the 10 lg 4 pi of point divergence its receiver formula leaves out and the CNOSSOS
-/// point sum divides by (10^1.1): the same level at the receiver needs 11 dB more here.
-pub fn aircraft_pass_energy_db(
-    class: u8,
-    operation: GroundOperation,
-    departure: bool,
-    speed_kt: f64,
-) -> Option<[f64; BANDS]> {
+/// class `class` taxiing at `speed_kt`; `None` when it does not move. dev4's per-metre level lacks
+/// the 10 lg 4 pi of point divergence its receiver formula leaves out and the CNOSSOS point sum
+/// divides by (10^1.1): the same level at the receiver needs 11 dB more here.
+pub fn aircraft_taxi_energy_db(class: u8, speed_kt: f64) -> Option<[f64; BANDS]> {
     if speed_kt.is_nan() || speed_kt <= 0.0 {
         return None;
     }
-    let runway_sel_db = runway_roll_event_sel_db(CLASS_FAMILY[usize::from(class)]);
-    let mut total = runway_sel_db + EVENT_SEL_TO_PER_METRE_DB + POINT_DIVERGENCE_OFFSET_DB;
-    match operation {
-        GroundOperation::RunwayRoll if departure => total += RUNWAY_DEPARTURE_BONUS_DB,
-        GroundOperation::RunwayRoll => {}
-        GroundOperation::Taxi => total -= TAXI_BELOW_RUNWAY_DB,
-    }
+    let mut total = taxi_event_sel_db(CLASS_FAMILY[usize::from(class)])
+        + EVENT_SEL_TO_PER_METRE_DB
+        + POINT_DIVERGENCE_OFFSET_DB;
     if speed_kt > SPEED_CORRECTION_MIN_KT {
-        total += (-10.0 * (speed_kt / operation.reference_speed_kt()).log10())
+        total += (-10.0 * (speed_kt / TAXI_REFERENCE_SPEED_KT).log10())
             .clamp(-SPEED_CORRECTION_LIMIT_DB, SPEED_CORRECTION_LIMIT_DB);
     }
-    Some(bands_of_total(total, &operation.spectrum_db()))
+    Some(bands_of_total(total, &TAXI_SPECTRUM_DB))
 }
 
 /// Airport ground vehicles by dev4's classes (`gse_class` 0-2 of the segments).

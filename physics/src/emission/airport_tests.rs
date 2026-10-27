@@ -1,5 +1,5 @@
-//! Ground operations against dev4's numbers: the per-class anchors at the reference speeds, the
-//! 1 km roll read at 25 m, the departure bonus, the dwell clamp and the ground vehicles' pass.
+//! Ground operations against dev4's numbers: the per-class taxiing at the reference speed, the 1 km
+//! pass read at 25 m, the dwell clamp and the ground vehicles' pass.
 
 use super::*;
 use crate::bands::{A_WEIGHTING_DB, energy};
@@ -29,17 +29,16 @@ fn a_weighted_db(bands: &[f64; BANDS]) -> f64 {
         .log10()
 }
 
-/// Z-weighted pass energy of a 737-800 (dev4's class 2 in its tests).
-fn b738(operation: GroundOperation, departure: bool, speed_kt: f64) -> f64 {
-    let class = class_named("737800");
-    total_db(&aircraft_pass_energy_db(class, operation, departure, speed_kt).unwrap())
+/// Z-weighted pass energy of a 737-800 taxiing (dev4's class 2 in its tests).
+fn b738(speed_kt: f64) -> f64 {
+    total_db(&aircraft_taxi_energy_db(class_named("737800"), speed_kt).unwrap())
 }
 
-/// The families keep dev4's per-class anchors: its narrowbody, widebody, regional, business,
-/// turboprop, piston and helicopter classes.
+/// The families keep dev4's per-class taxiing, its runway anchors less 12 dB: its narrowbody,
+/// widebody, regional, business, turboprop, piston and helicopter classes.
 #[test]
-fn every_family_has_dev4s_runway_anchor() {
-    for (name, anchor) in [
+fn every_family_taxis_twelve_decibels_below_dev4s_runway_anchor() {
+    for (name, runway_anchor) in [
         ("737800", 104.0),
         ("A320-232", 104.0),
         ("7879", 108.0),
@@ -51,22 +50,18 @@ fn every_family_has_dev4s_runway_anchor() {
         ("HELICOPTER", 94.0),
     ] {
         let family = CLASS_FAMILY[usize::from(class_named(name))];
-        assert_eq!(runway_roll_event_sel_db(family), anchor, "{name}");
+        assert_eq!(taxi_event_sel_db(family), runway_anchor - 12.0, "{name}");
     }
 }
 
-/// At the reference speeds the sum is dev4's per-metre level (anchor + 9.01 dB, taxi 12 dB lower)
-/// plus the 11 dB of the point divergence: runway 124.01 dB, taxi 112.01 dB for 104 dB anchors.
+/// At 18 kt the sum is dev4's per-metre level (anchor + 9.01 dB) plus the 11 dB of the point
+/// divergence: 112.01 dB for a 92 dB anchor, in dev4's taxi shape.
 #[test]
-fn reference_speeds_give_dev4_levels_plus_the_point_divergence() {
-    assert!((b738(GroundOperation::RunwayRoll, false, 70.0) - 124.01).abs() < 1e-9);
-    assert!((b738(GroundOperation::Taxi, false, 18.0) - 112.01).abs() < 1e-9);
-    let widebody = class_named("7879");
-    let widebody =
-        aircraft_pass_energy_db(widebody, GroundOperation::RunwayRoll, false, 70.0).unwrap();
-    assert!((total_db(&widebody) - 128.01).abs() < 1e-9);
-    let spectrum =
-        aircraft_pass_energy_db(class_named("737800"), GroundOperation::Taxi, false, 18.0).unwrap();
+fn the_reference_speed_gives_dev4_levels_plus_the_point_divergence() {
+    assert!((b738(18.0) - 112.01).abs() < 1e-9);
+    let widebody = aircraft_taxi_energy_db(class_named("7879"), 18.0).unwrap();
+    assert!((total_db(&widebody) - 116.01).abs() < 1e-9);
+    let spectrum = aircraft_taxi_energy_db(class_named("737800"), 18.0).unwrap();
     assert!(
         (spectrum[0] - spectrum[7] - 21.0).abs() < 1e-9,
         "taxi shape 14 .. -7 dB"
@@ -78,36 +73,22 @@ fn reference_speeds_give_dev4_levels_plus_the_point_divergence() {
 #[test]
 fn a_kilometre_roll_reads_the_anchor_at_25_m() {
     let theta = 2.0 * (500.0f64 / 25.0).atan();
-    let received = b738(GroundOperation::Taxi, false, 18.0)
-        + 10.0 * (theta / (POINT_DIVERGENCE_LINEAR * 25.0)).log10();
+    let received = b738(18.0) + 10.0 * (theta / (POINT_DIVERGENCE_LINEAR * 25.0)).log10();
     let anchor = 104.0 - 12.0;
     assert!((received - (anchor - 0.14)).abs() < 0.01, "{received}");
 }
 
-#[test]
-fn a_departure_rolls_two_decibels_louder_and_taxiing_has_no_bonus() {
-    let delta = b738(GroundOperation::RunwayRoll, true, 70.0)
-        - b738(GroundOperation::RunwayRoll, false, 70.0);
-    assert!((delta - 2.0).abs() < 1e-9);
-    let taxi = b738(GroundOperation::Taxi, true, 18.0) - b738(GroundOperation::Taxi, false, 18.0);
-    assert_eq!(taxi, 0.0);
-}
-
-/// Slower is louder per metre, within +-3 dB: 20 kt on the runway and 8 kt taxiing pin at +3 dB,
-/// 36 kt taxiing at -3 dB; below 1 kt no correction, and a stopped aircraft leaves nothing.
+/// Slower is louder per metre, within +-3 dB: 8 kt pins at +3 dB, 36 kt at -3 dB; below 1 kt no
+/// correction, and a stopped aircraft leaves nothing.
 #[test]
 fn the_dwell_correction_is_clamped_at_three_decibels() {
-    let runway = |kt| b738(GroundOperation::RunwayRoll, false, kt);
-    let taxi = |kt| b738(GroundOperation::Taxi, false, kt);
-    assert!(runway(20.0) > runway(50.0) && runway(50.0) > runway(70.0));
-    assert!(runway(70.0) > runway(150.0));
-    assert!((runway(20.0) - runway(70.0) - 3.0).abs() < 1e-9);
-    assert!((taxi(8.0) - taxi(18.0) - 3.0).abs() < 1e-9);
-    assert!((taxi(36.0) - taxi(18.0) + 3.0).abs() < 1e-9);
-    assert!((taxi(0.5) - taxi(18.0)).abs() < 1e-9);
+    assert!(b738(10.0) > b738(18.0) && b738(18.0) > b738(30.0));
+    assert!((b738(8.0) - b738(18.0) - 3.0).abs() < 1e-9);
+    assert!((b738(36.0) - b738(18.0) + 3.0).abs() < 1e-9);
+    assert!((b738(0.5) - b738(18.0)).abs() < 1e-9);
     for stopped in [0.0, -1.0, f64::NAN] {
         assert_eq!(
-            aircraft_pass_energy_db(class_named("737800"), GroundOperation::Taxi, false, stopped),
+            aircraft_taxi_energy_db(class_named("737800"), stopped),
             None
         );
         assert_eq!(vehicle_pass_energy_db(GroundVehicle::Heavy, stopped), None);

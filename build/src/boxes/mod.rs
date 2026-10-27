@@ -189,12 +189,7 @@ impl BoxEntry {
 /// The yearly atmosphere of a z9 square: the weather table's absorption at its centre (the table
 /// has 0.5 degree nodes, a square spans 0.7 degrees of longitude).
 pub(crate) fn place_atmosphere(weather: &WeatherTable, square: Square) -> PlaceAtmosphere {
-    let centre = TileId {
-        x: square.x * 8 + 4,
-        y: square.y * 8 + 4,
-    }
-    .centre();
-    let (lat, lon) = centre.to_degrees();
+    let (lat, lon) = square.middle_tile().centre().to_degrees();
     PlaceAtmosphere::new(&weather.place(lat, lon).alpha_db_per_km)
 }
 

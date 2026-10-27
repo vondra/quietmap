@@ -1,8 +1,9 @@
 //! Ground legs onto synthetic aeroway lines: a leg's length is conserved when buffers overlap, a
-//! day of passes becomes sound power per metre, a flight is one movement per airport and day, and
-//! strips missing from the lines are found in the legs off them.
+//! day of taxiing becomes sound power per metre, a flight rolling on a runway is one roll of its
+//! runway direction a day, and strips missing from the lines are found in the legs off them.
 
 use super::lines::{AerowayLine, Airport};
+use super::low_ends::LowEnd;
 use super::*;
 use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, flat_distance_m};
 use physics::emission::airport::GroundVehicle;
@@ -97,11 +98,11 @@ fn airport(count: usize) -> Aeroways {
         key: "TEST".into(),
         name: "Test Airport".into(),
     });
-    let line = |ends, operation, segment| AerowayLine {
-        osm_id: 7,
+    let line = |ends, aeroway, osm_id, segment| AerowayLine {
+        osm_id,
         segment,
         ends,
-        operation,
+        aeroway,
         airport,
         square: Square { x: 276, y: 173 },
     };
@@ -110,18 +111,25 @@ fn airport(count: usize) -> Aeroways {
         let ends = [at(0.0, east), at(0.0, east + 250.0)];
         aeroways
             .lines
-            .push(line(ends, GroundOperation::RunwayRoll, index as u16));
+            .push(line(ends, Aeroway::Runway, 7, index as u16));
     }
     let taxiway = [at(200.0, 0.0), at(200.0, 250.0)];
+    aeroways.lines.push(line(taxiway, Aeroway::Taxiway, 8, 0));
     aeroways
-        .lines
-        .push(line(taxiway, GroundOperation::Taxi, count as u16));
-    aeroways
+}
+
+/// The noise class of an ANP aircraft.
+fn class(name: &str) -> u8 {
+    physics::doc29::profiles_generated::CLASS_NAMES
+        .iter()
+        .position(|&n| n == name)
+        .expect("a class") as u8
 }
 
 fn leg(flight_id: u64, mover: Mover, start: [f64; 2], end: [f64; 2]) -> GroundLeg {
     GroundLeg {
         flight_id,
+        episode: 0,
         mover,
         period: 0,
         departure: true,
@@ -136,103 +144,215 @@ fn index_of(aeroways: &Aeroways) -> LineIndex {
     LineIndex::new(&aeroways.lines.iter().map(|l| l.ends).collect::<Vec<_>>())
 }
 
-/// Ten departures along a whole runway line on one of two baseline days: 5 a day, each leaving its
-/// pass energy on every metre, which the day spreads over its 12 hours.
+/// One day of `legs` and `low_ends` at `weights` through the traffic pass of `aeroways`, the
+/// stretches on the ground in `lift_offs` followed by an airborne segment.
+fn traffic_with(
+    aeroways: &Aeroways,
+    (legs, low_ends, lift_offs): (&[GroundLeg], &[LowEnd], &[(u64, u16)]),
+    weights: (f64, f64),
+) -> Traffic {
+    let (index, runways) = (index_of(aeroways), Runways::new(aeroways));
+    let mut traffic = Traffic::new(aeroways);
+    let day = DayLegs {
+        legs: legs.to_vec(),
+        low_ends: low_ends.to_vec(),
+        lift_offs: lift_offs.iter().copied().collect(),
+    };
+    traffic.add_day((aeroways, &index, &runways), &day, weights);
+    traffic
+}
+
+/// [`traffic_with`] a day whose flights were never seen airborne.
+fn traffic_of(
+    aeroways: &Aeroways,
+    (legs, low_ends): (&[GroundLeg], &[LowEnd]),
+    weights: (f64, f64),
+) -> Traffic {
+    traffic_with(aeroways, (legs, low_ends, &[]), weights)
+}
+
+fn total(bands: [f64; BANDS]) -> f64 {
+    bands.iter().map(|level| energy(*level)).sum()
+}
+
+/// Ten flights taxiing along the taxiway on one of two baseline days: 5 a day, each leaving its
+/// pass energy on every metre, which the day spreads over its 12 hours; taxiing is no movement.
 #[test]
-fn a_day_of_passes_becomes_sound_power_per_metre() {
+fn a_day_of_taxiing_becomes_sound_power_per_metre() {
     let aeroways = airport(1);
-    let index = index_of(&aeroways);
     let b738 = Mover::Aircraft { class: 2 };
     let legs: Vec<GroundLeg> = (0..10)
-        .map(|flight| leg(flight, b738, at(0.0, 0.0), at(0.0, 250.0)))
+        .map(|flight| GroundLeg {
+            departure: false,
+            speed_kt: 18.0,
+            ..leg(flight, b738, at(200.0, 0.0), at(200.0, 250.0))
+        })
         .collect();
-    let mut traffic = Traffic::new(&aeroways);
-    traffic.add_day(&aeroways, &index, &legs, (0.5, 0.0));
-    let pass = aircraft_pass_energy_db(2, GroundOperation::RunwayRoll, true, 70.0).unwrap();
-    let power = traffic.power_db(0);
+    let traffic = traffic_of(&aeroways, (&legs, &[]), (0.5, 0.0));
+    let pass = aircraft_taxi_energy_db(2, 18.0).unwrap();
+    let power = traffic.power_db(1);
     for band in 0..BANDS {
         let expected = pass[band] + 10.0 * (5.0f64 / (12.0 * 3_600.0)).log10();
         assert!((power[0][band] - expected).abs() < 0.01, "{band}");
         assert_eq!(power[1][band], f64::NEG_INFINITY);
     }
-    assert_eq!(traffic.movements[0], [0.0, 5.0, 0.0]);
-    assert!(
-        traffic
-            .power_db(1)
-            .iter()
-            .flatten()
-            .all(|l| *l == f64::NEG_INFINITY)
-    );
+    assert_eq!(traffic.movements[0], [0.0, 0.0, 0.0]);
+    assert!(traffic.rolls.is_empty());
+    let runway = traffic.power_db(0);
+    assert!(runway.iter().flatten().all(|l| *l == f64::NEG_INFINITY));
 }
 
-/// One flight rolling over two runway lines and taxiing is one departure; a flight only the
-/// secondary provider saw counts at the increment weight; a vehicle's pass on the taxiway is its
-/// W / v and a vehicle movement; an arrival rolls without the departure bonus.
+/// One flight rolling over two runway lines and taxiing is one take-off of the runway eastwards;
+/// a flight only the secondary provider saw counts at the increment weight; a landing rolls
+/// eastwards; the runway lines carry no energy, the taxiway the taxiing and a vehicle's pass, its
+/// W / v, and the vehicle is a movement.
 #[test]
-fn movements_count_once_per_flight_and_day_at_their_weight() {
+fn rolls_count_once_per_flight_and_day_at_their_weight() {
     let aeroways = airport(2);
-    let index = index_of(&aeroways);
     let b738 = Mover::Aircraft { class: 2 };
     let heavy = Mover::Vehicle(GroundVehicle::Heavy);
     let mut secondary = leg(2, b738, at(0.0, 0.0), at(0.0, 250.0));
     secondary.secondary_only = true;
     let mut arrival = leg(3, b738, at(0.0, 250.0), at(0.0, 500.0));
     arrival.departure = false;
+    let mut taxi = leg(1, b738, at(200.0, 0.0), at(200.0, 250.0));
+    (taxi.departure, taxi.speed_kt) = (false, 18.0);
     let legs = [
         leg(1, b738, at(0.0, 0.0), at(0.0, 250.0)),
         leg(1, b738, at(0.0, 250.0), at(0.0, 500.0)),
-        leg(1, b738, at(200.0, 0.0), at(200.0, 250.0)),
+        taxi,
         secondary,
         arrival,
-        leg(4, heavy, at(200.0, 0.0), at(200.0, 250.0)),
+        GroundLeg {
+            speed_kt: 10.0,
+            ..leg(4, heavy, at(200.0, 0.0), at(200.0, 250.0))
+        },
     ];
-    let mut traffic = Traffic::new(&aeroways);
-    traffic.add_day(&aeroways, &index, &legs, (0.25, 0.5));
+    let traffic = traffic_of(&aeroways, (&legs, &[]), (0.25, 0.5));
     assert_eq!(traffic.movements[0], [0.25, 0.25 + 0.5, 0.25]);
-    let day_energy = |line: usize| {
-        let bands = traffic.energy[line][0];
-        bands.iter().sum::<f64>()
+    let key = |landing| RollKey {
+        runway: 0,
+        forward: true,
+        landing,
+        class: 2,
     };
-    let total = |bands: [f64; BANDS]| bands.iter().map(|level| energy(*level)).sum::<f64>();
-    let departure =
-        total(aircraft_pass_energy_db(2, GroundOperation::RunwayRoll, true, 70.0).unwrap());
-    let landing =
-        total(aircraft_pass_energy_db(2, GroundOperation::RunwayRoll, false, 70.0).unwrap());
-    let taxi = total(aircraft_pass_energy_db(2, GroundOperation::Taxi, true, 70.0).unwrap());
-    let vehicle = total(vehicle_pass_energy_db(GroundVehicle::Heavy, 70.0).unwrap());
-    let close = |got: f64, expected: f64| (got / expected - 1.0).abs() < 1e-3;
-    assert!(close(day_energy(0), 0.25 * departure + 0.5 * departure));
-    assert!(close(day_energy(1), 0.25 * departure + 0.25 * landing));
-    assert!(close(day_energy(2), 0.25 * taxi + 0.25 * vehicle));
+    assert_eq!(traffic.rolls.len(), 2);
+    assert_eq!(traffic.rolls[&key(false)], [0.25 + 0.5, 0.0, 0.0]);
+    assert_eq!(traffic.rolls[&key(true)], [0.25, 0.0, 0.0]);
+    let day_energy = |line: usize| traffic.energy[line][0].iter().sum::<f64>();
+    assert_eq!(day_energy(0) + day_energy(1), 0.0);
+    let expected = 0.25 * total(aircraft_taxi_energy_db(2, 18.0).unwrap())
+        + 0.25 * total(vehicle_pass_energy_db(GroundVehicle::Heavy, 10.0).unwrap());
+    assert!((day_energy(2) / expected - 1.0).abs() < 1e-3);
 }
 
 /// On a runway, a flight crossing at 15 kt taxis and is no movement; the start of a take-off roll
-/// at 15 kt rolls but counts only with a leg of the roll above 40 kt; a landing at 70 kt arrives.
+/// at 15 kt is a take-off; a landing at 70 kt westwards is a landing on the runway westwards.
 #[test]
-fn slow_legs_on_a_runway_taxi_unless_they_roll_off() {
+fn slow_legs_on_a_runway_taxi_unless_they_roll() {
     let aeroways = airport(1);
-    let index = index_of(&aeroways);
     let b738 = Mover::Aircraft { class: 2 };
     let slow = |flight: u64, departure: bool| GroundLeg {
         departure,
         speed_kt: 15.0,
         ..leg(flight, b738, at(0.0, 0.0), at(0.0, 250.0))
     };
-    let mut landing = leg(3, b738, at(0.0, 0.0), at(0.0, 250.0));
+    let mut landing = leg(3, b738, at(0.0, 250.0), at(0.0, 0.0));
     landing.departure = false;
     let legs = [slow(1, false), slow(2, true), landing];
-    let mut traffic = Traffic::new(&aeroways);
-    traffic.add_day(&aeroways, &index, &legs, (1.0, 0.0));
-    assert_eq!(traffic.movements[0], [1.0, 0.0, 0.0]);
-    let total = |bands: [f64; BANDS]| bands.iter().map(|level| energy(*level)).sum::<f64>();
-    let pass = |operation, departure, speed| {
-        total(aircraft_pass_energy_db(2, operation, departure, speed).unwrap())
-    };
-    let expected = pass(GroundOperation::Taxi, false, 15.0)
-        + pass(GroundOperation::RunwayRoll, true, 15.0)
-        + pass(GroundOperation::RunwayRoll, false, 70.0);
+    let traffic = traffic_of(&aeroways, (&legs, &[]), (1.0, 0.0));
+    assert_eq!(traffic.movements[0], [1.0, 1.0, 0.0]);
+    let rolls: Vec<(bool, bool)> = traffic
+        .rolls
+        .keys()
+        .map(|k| (k.forward, k.landing))
+        .collect();
+    assert_eq!(rolls, vec![(false, true), (true, false)]);
+    let expected = total(aircraft_taxi_energy_db(2, 15.0).unwrap());
     let got: f64 = traffic.energy[0][0].iter().sum();
     assert!((got / expected - 1.0).abs() < 1e-3, "{got} vs {expected}");
+}
+
+/// A circuit's touch-and-goes are one flight in Stage 1: each of its stretches on the ground rolls
+/// again, two landings and two take-offs here.
+#[test]
+fn every_touch_and_go_of_a_flight_rolls() {
+    let aeroways = airport(2);
+    let c172 = Mover::Aircraft { class: 3 };
+    let circuit: Vec<GroundLeg> = (0..2)
+        .flat_map(|episode| {
+            let landing = GroundLeg {
+                episode: 2 * episode + 1,
+                departure: false,
+                ..leg(5, c172, at(0.0, 0.0), at(0.0, 250.0))
+            };
+            let take_off = GroundLeg {
+                episode: 2 * episode + 1,
+                ..leg(5, c172, at(0.0, 250.0), at(0.0, 500.0))
+            };
+            [landing, take_off]
+        })
+        .collect();
+    // Each stretch on the ground follows an airborne segment and is followed by one.
+    let traffic = traffic_with(&aeroways, (&circuit, &[], &[(5, 1), (5, 3)]), (1.0, 0.0));
+    assert_eq!(traffic.movements[0], [2.0, 2.0, 0.0]);
+}
+
+/// A take-off leg over a crossing runway rolls on the runway it runs along, not the one it
+/// crosses first in the lines' order.
+#[test]
+fn a_roll_is_on_the_runway_it_runs_along() {
+    let mut aeroways = airport(2);
+    let crossing = AerowayLine {
+        osm_id: 3,
+        segment: 0,
+        ends: [at(-250.0, 300.0), at(250.0, 300.0)],
+        aeroway: Aeroway::Runway,
+        airport: 0,
+        square: Square { x: 276, y: 173 },
+    };
+    aeroways.lines.insert(0, crossing);
+    let runways = Runways::new(&aeroways);
+    let b738 = Mover::Aircraft { class: 2 };
+    let legs = [leg(1, b738, at(0.0, 200.0), at(0.0, 400.0))];
+    let traffic = traffic_of(&aeroways, (&legs, &[]), (1.0, 0.0));
+    let (runway, forward) = runways
+        .rolling(7, &legs[0], 2)
+        .expect("the east-west runway");
+    let along = RollKey {
+        runway,
+        forward,
+        landing: false,
+        class: 2,
+    };
+    assert_eq!(
+        traffic.rolls.keys().copied().collect::<Vec<_>>(),
+        vec![along]
+    );
+    assert_eq!(runways.rolling(3, &legs[0], 2), None);
+}
+
+/// A landing that speeds up to vacate the runway carries Stage 1's take-off flag on that leg: its
+/// stretch on the ground, after an airborne segment and before none, is one landing.
+#[test]
+fn a_landing_speeding_up_to_vacate_is_no_take_off() {
+    let aeroways = airport(2);
+    let b738 = Mover::Aircraft { class: 2 };
+    let roll_out = GroundLeg {
+        episode: 1,
+        departure: false,
+        speed_kt: 110.0,
+        ..leg(6, b738, at(0.0, 0.0), at(0.0, 250.0))
+    };
+    let vacating = GroundLeg {
+        episode: 1,
+        departure: true,
+        speed_kt: 20.0,
+        ..leg(6, b738, at(0.0, 250.0), at(0.0, 300.0))
+    };
+    let traffic = traffic_of(&aeroways, (&[roll_out, vacating], &[]), (1.0, 0.0));
+    assert_eq!(traffic.movements[0], [1.0, 0.0, 0.0]);
+    assert_eq!(traffic.rolls.len(), 1);
 }
 
 #[test]
@@ -253,14 +373,14 @@ fn a_square_file_reads_back_as_written() {
     let square = Square { x: 276, y: 173 };
     let mut power_db = [[70.25; BANDS]; PERIODS];
     power_db[2] = [f64::NEG_INFINITY; BANDS];
-    let lines: Vec<LineTraffic> = [GroundOperation::RunwayRoll, GroundOperation::Taxi]
+    let lines: Vec<LineTraffic> = [Aeroway::Runway, Aeroway::Taxiway]
         .into_iter()
         .enumerate()
-        .map(|(index, operation)| LineTraffic {
+        .map(|(index, aeroway)| LineTraffic {
             osm_id: 123 + index as i64,
             segment: index as u16,
             ends: [at(0.0, 0.0), at(0.0, 250.0)],
-            operation,
+            aeroway,
             airport: Airport {
                 key: "LKPR".into(),
                 name: "Letiště Václava Havla Praha".into(),
@@ -340,9 +460,7 @@ fn a_strip_off_every_line_is_found_and_carries_its_landings() {
         strip_airport.key.starts_with("airstrip "),
         "{strip_airport:?}"
     );
-    let index = index_of(&aeroways);
-    let mut traffic = Traffic::new(&aeroways);
-    traffic.add_day(&aeroways, &index, &days[0], (1.0, 0.0));
+    let traffic = traffic_of(&aeroways, (&days[0], &[]), (1.0, 0.0));
     assert_eq!(
         traffic.movements[pieces[0].airport as usize],
         [10.0, 0.0, 0.0]
@@ -366,147 +484,6 @@ fn a_strip_needs_ten_flights_on_three_days_off_every_line() {
     assert!(discovered(&on_the_runway).is_empty());
 }
 
-/// The first or last low segment of flight `flight`: 100 m along the runway line direction
-/// (eastwards) ending at `east_m`.
-fn low_end(flight: u64, first: bool, departure: bool, class: u8, east_m: f64) -> legs::LowEnd {
-    legs::LowEnd {
-        flight_id: flight,
-        class,
-        period: 0,
-        first,
-        departure,
-        secondary_only: false,
-        start: at(0.0, east_m - 100.0),
-        end: at(0.0, east_m),
-    }
-}
+mod rolls;
 
-/// On a 2,500 m runway (ten 250 m pieces, west to east): a departure first seen 500 m past its
-/// east end rolls 1,800 m from the west end, accelerating; a landing last seen 1 km before the
-/// west threshold rolls 1,400 m from 300 m past it, slowing; each as four legs. A flight with its
-/// own roll, a helicopter, a climb across the runway and a flight low mid-way get none.
-#[test]
-fn flights_seen_low_over_a_runway_get_the_rolls_they_miss() {
-    let aeroways = airport(10);
-    let runways = rolls::Runways::new(&aeroways);
-    let class = |name| {
-        physics::doc29::profiles_generated::CLASS_NAMES
-            .iter()
-            .position(|&n| n == name)
-            .expect("a class") as u8
-    };
-    let (a320, helicopter) = (class("A320-232"), class("HELICOPTER"));
-    let ends = [
-        low_end(1, true, true, a320, 3_000.0),
-        low_end(2, false, false, a320, -1_000.0),
-        low_end(3, true, true, a320, 3_000.0),
-        low_end(4, true, true, helicopter, 3_000.0),
-        legs::LowEnd {
-            end: at(100.0, 2_900.0),
-            ..low_end(5, true, true, a320, 2_900.0)
-        },
-        low_end(6, true, true, a320, 500.0),
-    ];
-    let own_roll = leg(
-        3,
-        Mover::Aircraft { class: a320 },
-        at(0.0, 0.0),
-        at(0.0, 250.0),
-    );
-    let rolls = rolls::missing_rolls(&[own_roll], &ends, &runways);
-    assert_eq!(rolls.len(), 2 * rolls::LEGS, "{rolls:?}");
-    let (take_off, landing) = rolls.split_at(rolls::LEGS);
-    let east_of = |point: [f64; 2]| length_m(at(0.0, 0.0), point);
-    assert!(
-        take_off
-            .iter()
-            .all(|leg| leg.flight_id == 1 && leg.departure)
-    );
-    assert!(east_of(take_off[0].start) < 1.0);
-    assert!((east_of(take_off[3].end) - 1_800.0).abs() < 1.0);
-    assert!(
-        take_off
-            .windows(2)
-            .all(|pair| pair[0].speed_kt < pair[1].speed_kt)
-    );
-    assert!(
-        landing
-            .iter()
-            .all(|leg| leg.flight_id == 2 && !leg.departure)
-    );
-    assert!((east_of(landing[0].start) - 300.0).abs() < 1.0);
-    assert!((east_of(landing[3].end) - 1_700.0).abs() < 1.0);
-    assert!(
-        landing
-            .windows(2)
-            .all(|pair| pair[0].speed_kt > pair[1].speed_kt)
-    );
-}
-
-/// One count per movement: an increment day on which the primary saw a departure low at the
-/// runway and the secondary saw its roll keeps the primary's (a roll added from its low end) and
-/// drops the secondary's legs there; a landing only the secondary saw, 50 km away, stays.
-#[test]
-fn where_the_primary_saw_a_flight_low_its_roll_counts_once() {
-    let aeroways = airport(10);
-    let runways = rolls::Runways::new(&aeroways);
-    let a320 = physics::doc29::profiles_generated::CLASS_NAMES
-        .iter()
-        .position(|&name| name == "A320-232")
-        .expect("a class") as u8;
-    let roll = |departure: bool, east_m: f64| GroundLeg {
-        secondary_only: true,
-        departure,
-        speed_kt: 120.0,
-        ..leg(
-            7,
-            Mover::Aircraft { class: a320 },
-            at(0.0, east_m),
-            at(0.0, east_m + 250.0),
-        )
-    };
-    // The take-off roll at the runway, the landing roll 50 km east, both seen by the secondary.
-    let mut legs = vec![roll(true, 0.0), roll(false, 50_000.0)];
-    let ends = [
-        low_end(7, true, true, a320, 3_000.0),
-        legs::LowEnd {
-            secondary_only: true,
-            ..low_end(7, false, false, a320, 49_000.0)
-        },
-    ];
-    let kept = rolls::primary_first(&mut legs, &ends);
-    assert_eq!(legs.len(), 1);
-    assert!(length_m(at(0.0, 50_000.0), legs[0].start) < 1.0);
-    assert_eq!(kept.len(), 2);
-    let rolls = rolls::missing_rolls(&legs, &kept, &runways);
-    assert_eq!(rolls.len(), rolls::LEGS, "{rolls:?}");
-    assert!(
-        rolls
-            .iter()
-            .all(|roll| !roll.secondary_only && roll.departure)
-    );
-    // A landing the primary followed low on final and the secondary completed: the reader keeps
-    // the primary's last low end beside the secondary's; the secondary's end and roll go, and the
-    // landing rolls once, from the primary's end.
-    let mut legs = vec![roll(false, 0.0)];
-    let ends = [
-        low_end(8, false, false, a320, -1_200.0),
-        legs::LowEnd {
-            secondary_only: true,
-            ..low_end(8, false, false, a320, -300.0)
-        },
-    ];
-    for leg in &mut legs {
-        leg.flight_id = 8;
-    }
-    let kept = rolls::primary_first(&mut legs, &ends);
-    assert!(legs.is_empty());
-    assert_eq!(kept, vec![ends[0].clone()]);
-    let rolls = rolls::missing_rolls(&legs, &kept, &runways);
-    assert_eq!(rolls.len(), rolls::LEGS, "{rolls:?}");
-    assert!(
-        rolls
-            .iter()
-            .all(|roll| !roll.secondary_only && !roll.departure)
-    );
-}
+mod low_ends;

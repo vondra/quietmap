@@ -29,7 +29,7 @@ pub struct FlightSpectra {
 impl FlightSpectra {
     pub fn new(square: &Square, pixels: usize, spacing: usize) -> Result<Self, String> {
         let side = pixels / spacing + 1;
-        if !square.has_aircraft_boxes() {
+        if !square.has_aircraft_boxes() && square.rolls.is_empty() {
             return Ok(Self {
                 side,
                 spacing,

@@ -4,7 +4,8 @@
 //! (`physics::percentile`) at its own lambda = (emitters per metre) x (its distance): vehicles on
 //! a road (the daily flow over the period's share and hours, over the speed), trains on a track
 //! (the period's trains over its hours, over the speed), airport movements on an aeroway (at taxi
-//! speed); the flights heard one more line at the boxes' energy-weighted lambda; events (church
+//! speed); the flights heard one more line at the energy-weighted lambda of the boxes and the
+//! runways' roll paths (`crate::aircraft::rolls`, a path's classes one stream); events (church
 //! bells) on for their duty, the share of the period they sound, at their mean over it; industry,
 //! buildings, ships and the unlisted remainder steady at their mean. A road's flow follows the
 //! hours of the day within each period (measured hourly profiles: a night's 3 am carries a fifth
@@ -61,8 +62,10 @@ pub fn hour_factor(profile: usize, period: usize, slot: usize) -> f64 {
     share(slot) / mean
 }
 
-/// Airport movements taxi and roll at about 20 kt on average (m/s).
-const MOVEMENT_SPEED_M_S: f64 = 10.0;
+/// Airport movements on the aeroway lines taxi (their rolls are flights, `crate::aircraft::rolls`)
+/// at the taxi emission's reference speed (m/s).
+const MOVEMENT_SPEED_M_S: f64 =
+    physics::emission::airport::TAXI_REFERENCE_SPEED_KT * 1_852.0 / 3_600.0;
 /// Emitters closer than this are at this distance (m): a receiver on the line itself.
 const DISTANCE_MIN_M: f64 = 1.0;
 
@@ -218,16 +221,15 @@ impl Passes {
     }
 
     /// Passes per hour by period, their speed (m/s) and hourly profile for a source of `energy` per
-    /// period (an aeroway's movements by the periods its energy fell in, at taxi speed); `None` for
-    /// a steady source or unknown traffic.
+    /// period (an aeroway's movements shared over the periods as its sound exposure, each period's
+    /// mean power times its hours, at taxi speed); `None` for a steady source or unknown traffic.
     fn traffic(&self, energy: [f64; PERIODS]) -> Option<([f64; PERIODS], f64, Option<usize>)> {
         match *self {
             Passes::Traffic(per_hour, speed, profile) => Some((per_hour, speed, profile)),
             Passes::Movements(daily) => {
-                let total: f64 = energy.iter().sum();
-                (total > 0.0).then(|| {
-                    let per_hour =
-                        std::array::from_fn(|p| daily * energy[p] / total / PERIOD_HOURS[p]);
+                let exposure: f64 = (0..PERIODS).map(|p| energy[p] * PERIOD_HOURS[p]).sum();
+                (exposure > 0.0).then(|| {
+                    let per_hour = std::array::from_fn(|p| daily * energy[p] / exposure);
                     (per_hour, MOVEMENT_SPEED_M_S, None)
                 })
             }

@@ -1,11 +1,11 @@
-//! Airport ground operations as sources of the aircraft layer: every aeroway line with ground
-//! traffic ([`crate::airport`]) a line piece above the pavement carrying its sound power per metre,
+//! Airport ground operations as sources of the aircraft layer: every aeroway line with taxiing or
+//! vehicles ([`crate::airport`]) a line piece above the pavement carrying its sound power per metre,
 //! and one contributor per airport, as dev4 showed them.
 
 use super::{Converted, fields, group_key, split_at_tile_edges};
 use crate::airport::file::{self, LineTraffic};
+use crate::airport::lines::Aeroway;
 use crate::dev4::Square;
-use physics::emission::airport::GroundOperation;
 use serde_json::json;
 use std::path::Path;
 use tiles::geo::{GlobalSteps, Mercator};
@@ -30,9 +30,9 @@ pub fn attribute(line: &LineTraffic) -> Attribute {
         layer: Layer::Aircraft,
         height_m: SOURCE_HEIGHT_M,
         ground_percent: 0,
-        platform_half_width_m: match line.operation {
-            GroundOperation::RunwayRoll => RUNWAY_HALF_WIDTH_M,
-            GroundOperation::Taxi => TAXIWAY_HALF_WIDTH_M,
+        platform_half_width_m: match line.aeroway {
+            Aeroway::Runway | Aeroway::Stopway => RUNWAY_HALF_WIDTH_M,
+            Aeroway::Taxiway => TAXIWAY_HALF_WIDTH_M,
         },
         exclusion_radius_m: 0.0,
         footprint_id: 0,
@@ -83,13 +83,13 @@ mod tests {
     use super::*;
     use crate::airport::lines::Airport;
     use physics::bands::{BANDS, energy};
-    use physics::emission::airport::aircraft_pass_energy_db;
+    use physics::emission::airport::aircraft_taxi_energy_db;
     use physics::line::LinePieceGeometry;
 
-    /// A runway of four 250 m lines east from (50.1, 14.25) with `departures` B738 departures a
-    /// day rolling at 70 kt, by day only.
-    fn runway(departures: f64) -> Vec<LineTraffic> {
-        let pass = aircraft_pass_energy_db(2, GroundOperation::RunwayRoll, true, 70.0).unwrap();
+    /// A taxiway of four 250 m lines east from (50.1, 14.25) with `departures` B738 departures a
+    /// day taxiing at 18 kt, by day only.
+    fn taxiway(departures: f64) -> Vec<LineTraffic> {
+        let pass = aircraft_taxi_energy_db(2, 18.0).unwrap();
         let degrees_per_metre = 1.0 / (111_320.0 * 50.1f64.to_radians().cos());
         (0..4)
             .map(|index| LineTraffic {
@@ -101,7 +101,7 @@ mod tests {
                         14.25 + (250.0 * f64::from(index) + east) * degrees_per_metre,
                     ]
                 }),
-                operation: GroundOperation::RunwayRoll,
+                aeroway: Aeroway::Taxiway,
                 airport: Airport {
                     key: "TEST".into(),
                     name: "Test Airport".into(),
@@ -120,13 +120,13 @@ mod tests {
             .collect()
     }
 
-    /// A hundred departures a day on a 1 km runway, 25 m from its middle at the source height:
+    /// A hundred departures a day taxiing along 1 km, 25 m from its middle at the source height:
     /// the free-field day level of the four pieces through the CNOSSOS point sum is dev4's
-    /// receiver formula, its per-metre level (anchor 104 + 9.01 + 2 dB) + 10 lg(theta / d) over
-    /// a hundred events in 12 hours; one contributor names the airport.
+    /// receiver formula, its per-metre level (taxi anchor 92 + 9.01 dB) + 10 lg(theta / d) over a
+    /// hundred events in 12 hours; one contributor names the airport.
     #[test]
-    fn a_runway_of_departures_reads_dev4_level_at_25_m() {
-        let lines = runway(100.0);
+    fn a_taxiway_of_departures_reads_dev4_level_at_25_m() {
+        let lines = taxiway(100.0);
         let attributes: Vec<Attribute> = lines.iter().map(attribute).collect();
         let mut received = 0.0;
         for (index, attribute) in attributes.iter().enumerate() {
@@ -140,11 +140,11 @@ mod tests {
             received += bands * geometry.subtended_angle_rad() * geometry.divergence_factor();
             assert_eq!(attribute.emission[2], [f64::NEG_INFINITY; BANDS]);
             assert_eq!(attribute.group_key, attributes[0].group_key);
+            assert_eq!(attribute.platform_half_width_m, TAXIWAY_HALF_WIDTH_M);
         }
         let theta = 2.0 * (500.0f64 / 25.0).atan();
-        let dev4 = 104.0
+        let dev4 = 92.0
             + 9.01
-            + 2.0
             + 10.0 * (100.0f64 / (12.0 * 3_600.0)).log10()
             + 10.0 * (theta / 25.0).log10();
         assert!((10.0 * received.log10() - dev4).abs() < 0.01);
