@@ -21,7 +21,7 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Every tile kind a click reads (`tiles::Kind`).
-KINDS = ("terrain", "terrain-fine", "obstacles", "sources", "aircraft", "aircraft-far", "aircraft-events")
+KINDS = ("terrain", "terrain-fine", "obstacles", "sources", "aircraft", "aircraft-far", "aircraft-events", "aircraft-rolls")
 # The farthest a click reads: 16 km of flights (popup/src/aircraft/boxes.rs), from the centre tile's
 # edge, a ring more for a façade's receiver; a z12 tile is 9,783.9 m times cos(latitude) wide.
 AIRCRAFT_REACH_M = 16_000.0

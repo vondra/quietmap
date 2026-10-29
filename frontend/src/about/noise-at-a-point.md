@@ -201,14 +201,17 @@ aircraft
 <details>
 <summary>The tiles it reads</summary>
 
-The popup reads the point's tile and its eight neighbours, computes and sends a first answer. Then
-it reads one more ring of tiles at a time until every ground source within 12 km, every flight
-within 16 km and every runway roll starting within 8 km is covered, sending the whole answer again
+The popup reads the point's tile, its eight neighbours and the terrain out to 8 km, then computes
+and sends a first answer. It reads one more ring of tiles at a time until every ground source
+within 12 km, every flight within 16 km and every runway roll starting within 8 km is covered,
+sending the whole answer again
 after each ring. At Greenwich in London it
 reads 219 MB in 114 reads, the flight tracks and the weather among them.
 
+Every flight uses the same horizon, built once from that terrain and the nearby buildings.
+
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
-<svg viewBox="0 0 400 268" role="img" aria-label="Seven by seven tiles around a point in London: the inner three by three give the first answer, five by five cover the ground sources within 12 km, seven by seven the flights within 16 km" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
+<svg viewBox="0 0 400 268" role="img" aria-label="Seven by seven tiles around a point in London: the inner three by three and terrain out to 8 km give the first answer, five by five cover the ground sources within 12 km, seven by seven the flights within 16 km" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
 <rect x="8" y="8" width="252" height="252" fill="currentColor" fill-opacity=".05"/>
 <rect x="44" y="44" width="180" height="180" fill="currentColor" fill-opacity=".1"/>
 <rect x="80" y="80" width="108" height="108" fill="currentColor" fill-opacity=".18"/>
@@ -224,9 +227,9 @@ reads 219 MB in 114 reads, the flight tracks and the weather among them.
 <rect x="276" y="76" width="16" height="16" fill="currentColor" fill-opacity=".15"/>
 <rect x="276" y="132" width="16" height="16" fill="currentColor" fill-opacity=".05" stroke="currentColor" stroke-opacity=".3"/>
 <g fill="currentColor"><text x="300" y="33">3 × 3 tiles</text><text x="300" y="89">5 × 5 tiles</text><text x="300" y="145">7 × 7 tiles</text><text x="276" y="204">a tile: 6.1 km</text></g>
-<g fill="currentColor" fill-opacity=".7"><text x="300" y="50">first answer</text><text x="300" y="106">ground: 12 km</text><text x="300" y="162">flights: 16 km</text><text x="276" y="221">in London</text></g>
+<g fill="currentColor" fill-opacity=".7"><text x="300" y="50">first sources</text><text x="300" y="106">ground: 12 km</text><text x="300" y="162">flights: 16 km</text><text x="276" y="221">in London</text></g>
 </svg>
-<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A point in London. The first answer comes from the 3 × 3 tiles around it; the ground sources within 12 km take 5 × 5 tiles, the flights within 16 km 7 × 7.</figcaption>
+<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A point in London. The first answer uses sources from the 3 × 3 tiles around it and terrain out to 8 km; the ground sources within 12 km take 5 × 5 tiles, the flights within 16 km 7 × 7.</figcaption>
 </figure>
 
 </details>
@@ -413,8 +416,8 @@ legal noise map or a property certificate.
 after 30 s or when the visitor leaves) and forwards its lines as they come; `frontend/` redraws the
 panel on every line.
 
-The targets are measured with `bench/cold.py` and `bench/report.py` from a cold disk. The first
-answer comes within 0.2 s and the full answer within 0.5 s from an NVMe disk, 0.5 s and 1.5 s from a
+The latency targets, checked with `bench/cold.py` and `bench/report.py` from a cold disk, are
+0.2 s to the first answer and 0.5 s to the full answer from an NVMe disk, 0.5 s and 1.5 s from a
 hard disk. Each layer's Lden is within 0.1 dB of the full computation in 95 % of the layer answers,
 and within 0.3 dB in all. Each update stays under 100 KB, held by caps on the lines and tracks it
 carries.

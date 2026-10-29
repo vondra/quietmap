@@ -202,16 +202,12 @@ impl Ground {
         terrain.sample(position).ok_or_else(|| no_data_at(position))
     }
 
-    /// The terrain height at `metres`, its fine detail added, `None` where no tile is read yet or a
-    /// node has no data (the aircraft horizons skip such samples; a ray never meets them); an error
-    /// where a fine file fails.
+    /// The terrain height at `metres`, its fine detail added, `None` at a node without data;
+    /// an error where a tile was not read or its fine file fails.
     pub fn read_height_m(&self, metres: [f64; 2]) -> Result<Option<f64>, String> {
         let position = self.frame.to_mercator(metres).snapped_to_lattice();
         let tile = TileId::containing(position);
-        let Some(terrain) = self.slot(tile).and_then(|slot| self.tiles[slot].as_ref()) else {
-            return Ok(None);
-        };
-        let Some(terrain) = terrain else {
+        let Some(terrain) = self.terrain_of(tile)? else {
             return Ok(Some(OCEAN.height_m));
         };
         let Some((place, sample)) = terrain

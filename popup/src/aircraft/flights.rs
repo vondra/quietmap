@@ -17,8 +17,8 @@ use physics::doc29::npd::{class_anchor, is_helicopter_class};
 use physics::doc29::profiles_generated::FALLBACK_NOISE_CLASS;
 use physics::doc29::screening::ReceiverHorizons;
 use physics::doc29::segment::{
-    ClosestPoints, SegmentEmission, SegmentGeometry, closest_points, receiver_impedance_for_db,
-    receiver_lmax_db, screened_segment_sel, segment_screening_db,
+    SegmentEmission, SegmentGeometry, closest_points, receiver_impedance_for_db, receiver_lmax_db,
+    segment_sel_at_receiver,
 };
 use physics::doc29::thrust::PowerBracket;
 use physics::loudness::{A_WEIGHTING_DB, OCTAVE_START};
@@ -156,8 +156,8 @@ pub struct FlightTotals {
     /// The listed flights, the first ten by [`listed_first`], kept as pieces are read: the list's
     /// entry level at each chunk of the search without sorting every flight read.
     listed: Vec<(u32, u32)>,
-    /// Every piece read, in the order read, its screening found with the horizons it was read
-    /// with, for the listed flights' SEL ([`Self::sum_listed`]): nine in ten pieces read are of
+    /// Every piece read, in the order read, for the listed flights' SEL ([`Self::sum_listed`]):
+    /// screening is deferred too, using the receiver's complete horizon; nine in ten pieces are of
     /// flights never listed (Lleida's light squares, 2026-10-25).
     pieces: Vec<PieceRead>,
     /// Pieces read per box: all it keeps, or fewer (the benchmark's trials).
@@ -204,9 +204,8 @@ impl FlightTotals {
             .expect("ten listed")
     }
 
-    /// Reads the pieces of boxes `boxes` (indices into `aircraft`) of `tile`: their Lmax and their
-    /// screening by `horizons`, the rest of their SEL left for [`Self::sum_listed`].
-    #[allow(clippy::too_many_arguments)]
+    /// Reads the pieces of boxes `boxes` (indices into `aircraft`) of `tile`: their Lmax, with
+    /// their screened SEL left for [`Self::sum_listed`].
     pub fn add_boxes(
         &mut self,
         aircraft: &Aircraft<'_>,
@@ -214,7 +213,6 @@ impl FlightTotals {
         boxes: &[usize],
         frame: &LocalFrame,
         receiver: AircraftReceiver,
-        horizons: &impl ReceiverHorizons,
     ) {
         for &index in boxes {
             let record = aircraft.box_place(index);
@@ -262,8 +260,7 @@ impl FlightTotals {
                     PieceRead {
                         flight: key,
                         emission,
-                        screening: segment_screening_db(&geometry, &points, horizons),
-                        closest: points,
+                        geometry,
                     },
                 );
             }
@@ -293,14 +290,14 @@ impl FlightTotals {
     }
 
     /// The listed flights' SEL: each sums every piece of it read, in the order read, at a receiver
-    /// at `altitude_m`, each screened as it was read (a click's ring by the terrain read so far).
-    pub fn sum_listed(&mut self, altitude_m: f64) {
+    /// at `altitude_m`, using the same complete horizon for every piece and every ring.
+    pub fn sum_listed(&mut self, altitude_m: f64, horizons: &impl ReceiverHorizons) {
         let mut sums = [f64::NEG_INFINITY; FLIGHTS_SHOWN];
         for piece in &self.pieces {
             let Some(at) = self.listed.iter().position(|&key| key == piece.flight) else {
                 continue;
             };
-            let sel = screened_segment_sel(&piece.emission, piece.closest, piece.screening);
+            let sel = segment_sel_at_receiver(&piece.emission, &piece.geometry, horizons);
             let impedance_db = receiver_impedance_for_db(&piece.emission, altitude_m);
             sums[at] = 10.0 * (energy(sums[at]) + energy(sel.sel_db + impedance_db)).log10();
         }
@@ -325,9 +322,7 @@ impl FlightTotals {
 struct PieceRead {
     flight: (u32, u32),
     emission: SegmentEmission,
-    closest: ClosestPoints,
-    /// Its terrain and building losses ([`segment_screening_db`]).
-    screening: [f64; 2],
+    geometry: SegmentGeometry,
 }
 
 #[cfg(test)]
@@ -385,13 +380,8 @@ mod tests {
         assert_eq!(heard_spectrum_energy(&[], &rates), unlisted);
     }
 
-    /// A stored piece of the fallback class at 300 m, east of the receiver, screened by `horizons`.
-    fn piece_east(
-        totals: &FlightTotals,
-        key: (u32, u32),
-        east_m: f64,
-        horizons: &impl ReceiverHorizons,
-    ) -> PieceRead {
+    /// A stored piece of the fallback class at 300 m, east of the receiver.
+    fn piece_east(totals: &FlightTotals, key: (u32, u32), east_m: f64) -> PieceRead {
         let piece = FlightPiece {
             flight: 0,
             ends: [[0, 0]; 2],
@@ -408,12 +398,10 @@ mod tests {
             ground_under_start_m: 0.0,
             ground_under_end_m: 0.0,
         };
-        let closest = closest_points(geometry.start_m, geometry.end_m);
         PieceRead {
             flight: key,
             emission: emission_of(&piece, "", &totals.place),
-            screening: segment_screening_db(&geometry, &closest, horizons),
-            closest,
+            geometry,
         }
     }
 
@@ -421,9 +409,8 @@ mod tests {
         totals: &mut FlightTotals,
         (icao, start_unix): (u32, u32),
         (lmax_db, east_m): (f64, f64),
-        horizons: &impl ReceiverHorizons,
     ) {
-        let piece = piece_east(totals, (icao, start_unix), east_m, horizons);
+        let piece = piece_east(totals, (icao, start_unix), east_m);
         let new = || LoudFlight {
             icao,
             callsign: String::new(),
@@ -455,7 +442,7 @@ mod tests {
             } else {
                 ((state >> 20) % 100) as f64 / 2.0
             };
-            read(&mut totals, (icao, icao % 3), (lmax_db, 100.0), &Hill(0.0));
+            read(&mut totals, (icao, icao % 3), (lmax_db, 100.0));
             let mut all: Vec<&LoudFlight> = totals.flights.values().collect();
             all.sort_by(|a, b| listed_first(a, b));
             all.truncate(FLIGHTS_SHOWN);
@@ -488,27 +475,26 @@ mod tests {
     }
 
     /// A flight listed only in a click's later ring sums every piece it had, in the order read,
-    /// each screened by the horizons of the ring that read it, as the click summed each piece as
-    /// it was read.
+    /// each screened by the same complete horizon as an eagerly computed piece.
     #[test]
-    fn a_flight_listed_late_sums_every_piece_screened_as_it_was_read() {
+    fn a_flight_listed_late_sums_every_piece_with_the_complete_horizon() {
         let mut totals = FlightTotals::default();
-        // The first ring, its terrain screening 3 dB: eleven flights, flight k at Lmax k, so the
+        // The first ring: eleven flights, flight k at Lmax k, so the
         // quietest, flight 0, is not listed.
         for icao in 0..=FLIGHTS_SHOWN as u32 {
             let level = (f64::from(icao), 100.0 * f64::from(icao + 1));
-            read(&mut totals, (icao, 0), level, &Hill(3.0));
+            read(&mut totals, (icao, 0), level);
         }
-        totals.sum_listed(0.0);
+        totals.sum_listed(0.0, &Hill(9.0));
         assert_eq!(totals.flights[&(0, 0)].sel_db, f64::NEG_INFINITY);
         assert_eq!(totals.entry_lmax_db(), 1.0);
-        // The next ring, more terrain read, 9 dB: flight 0 read again, nearer, passes flight 1.
-        read(&mut totals, (0, 0), (1.5, 50.0), &Hill(9.0));
+        // The next ring: flight 0 read again, nearer, passes flight 1.
+        read(&mut totals, (0, 0), (1.5, 50.0));
         assert_eq!(totals.entry_lmax_db(), 1.5);
-        totals.sum_listed(0.0);
-        let sel = |east_m: f64, loss_db: f64| {
-            let piece = piece_east(&totals, (0, 0), east_m, &Hill(loss_db));
-            screened_segment_sel(&piece.emission, piece.closest, piece.screening).sel_db
+        totals.sum_listed(0.0, &Hill(9.0));
+        let sel = |east_m: f64| {
+            let piece = piece_east(&totals, (0, 0), east_m);
+            segment_sel_at_receiver(&piece.emission, &piece.geometry, &Hill(9.0)).sel_db
                 + receiver_impedance_for_db(&piece.emission, 0.0)
         };
         let summed = |sels: &[f64]| {
@@ -518,9 +504,9 @@ mod tests {
         };
         assert_eq!(
             totals.flights[&(0, 0)].sel_db,
-            summed(&[sel(100.0, 3.0), sel(50.0, 9.0)])
+            summed(&[sel(100.0), sel(50.0)])
         );
-        assert_eq!(totals.flights[&(2, 0)].sel_db, summed(&[sel(300.0, 3.0)]));
+        assert_eq!(totals.flights[&(2, 0)].sel_db, summed(&[sel(300.0)]));
         let order: Vec<u32> = totals.loudest().iter().map(|flight| flight.icao).collect();
         assert_eq!(order, [10, 9, 8, 7, 6, 5, 4, 3, 2, 0]);
     }

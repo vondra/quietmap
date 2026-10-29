@@ -1,12 +1,12 @@
 //! Progressive noise answers at a click from prepared sources, aircraft, terrain and yearly weather.
 //!
-//! The ring loop: read the clicked tile and ring 1 whole, answer, then ring after ring until the
-//! reach is covered. Every ring's candidates join their layer's selection ([`crate::selection`]).
+//! The ring loop: read the clicked tile, ring 1 and the aircraft horizon's terrain, answer, then
+//! ring after ring until the reach is covered. Each ring joins its layer's selection.
 //! A click inside a building is answered at its loudest façade ([`crate::building`]).
 
 use crate::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver};
 use crate::aircraft::flights::FlightTotals;
-use crate::aircraft::horizons::Horizons;
+use crate::aircraft::horizons::{Horizons, TERRAIN_REACH_M};
 use crate::aircraft::rolls::{RollSums, prepare as prepare_rolls, roll_sums};
 use crate::aircraft::{
     holds_boxes_in_reach, holds_rolls_in_reach, reads_fine_boxes, ring_aircraft,
@@ -108,7 +108,7 @@ pub fn display_fields_of(
     Ok(serde_json::Value::Object(object))
 }
 
-/// Answers a click, calling `emit` after the first read (tile + ring 1) and after every further ring.
+/// Answers a click after tile + ring 1 and the aircraft horizon's terrain, then after each ring.
 pub fn answer(
     release: &Release,
     lat: f64,
@@ -136,6 +136,7 @@ pub fn answer(
         Some(release.year_root.clone()),
     );
     let mut horizons: Option<Horizons> = None;
+    let mut terrain_rings = 0;
     let weather_started = std::time::Instant::now();
     let weather = physics::weather::read_place(&release.weather_path, lat, lon)?;
     let weather_read_seconds = weather_started.elapsed().as_secs_f64();
@@ -173,9 +174,13 @@ pub fn answer(
             centre.ring(ring)
         };
         let reads_ground = ring <= ground_rings;
+        let reads_terrain = reads_ground && ring > terrain_rings;
         let mut kinds = Vec::new();
+        if reads_terrain {
+            kinds.push(Kind::Terrain);
+        }
         if reads_ground {
-            kinds.extend([Kind::Terrain, Kind::Obstacles, Kind::Sources]);
+            kinds.extend([Kind::Obstacles, Kind::Sources]);
         }
         // Fine boxes near the click, far boxes elsewhere; the rolls within their reach.
         if ring <= aircraft_rings {
@@ -253,8 +258,10 @@ pub fn answer(
         let mut ring_aircraft_tiles = Vec::new();
         for (index, (&tile, parsed)) in read.tiles.iter().zip(parsed).enumerate() {
             let (terrain, tile_obstacles, sources, aircraft, rolls) = parsed?;
-            if reads_ground {
+            if reads_terrain {
                 ground.insert(tile, terrain);
+            }
+            if reads_ground {
                 ring_obstacles.push((tile, tile_obstacles));
             }
             if let Some(sources) = sources {
@@ -276,6 +283,9 @@ pub fn answer(
                 };
                 rolls_read.extend(prepare_rolls(tile, &rolls, place));
             }
+        }
+        if reads_terrain {
+            terrain_rings = ring;
         }
         obstacles.insert_all(ring_obstacles);
         let enclosing = if ring == 1 {
@@ -423,7 +433,35 @@ pub fn answer(
             aircraft_events = Some(events);
             (reads, bytes) = (reads + usize::from(read > 0), bytes + read);
         }
-        if reads_ground {
+        if horizons.is_none() {
+            // Every flight ring uses the same complete terrain horizon; otherwise an early
+            // flight keeps the loss from a partial horizon even after the missing ridge is read.
+            let horizon_rings = rings_needed(&frame, centre, station.position, TERRAIN_REACH_M)
+                .min(most_ground_rings);
+            if horizon_rings > terrain_rings {
+                let tiles = ((terrain_rings + 1)..=horizon_rings)
+                    .flat_map(|ring| centre.ring(ring))
+                    .collect();
+                let terrain = RingFiles::read(release, tiles, vec![Kind::Terrain], |_, _| true)?;
+                let parsed: Vec<_> = (0..terrain.tiles.len())
+                    .into_par_iter()
+                    .map(|index| {
+                        terrain
+                            .file(index, Kind::Terrain)
+                            .map(Terrain::parse)
+                            .transpose()
+                            .map_err(|error| error.to_string())
+                    })
+                    .collect();
+                for (&tile, parsed) in terrain.tiles.iter().zip(parsed) {
+                    ground.insert(tile, parsed?);
+                }
+                reads += terrain.tile_count;
+                bytes += terrain.bytes;
+                read_seconds += terrain.read_seconds;
+                evaluate_seconds -= terrain.read_seconds;
+                terrain_rings = horizon_rings;
+            }
             horizons = Some(Horizons::build(
                 &ground,
                 &obstacles,

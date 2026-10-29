@@ -151,10 +151,10 @@ pub fn read_loudest_in_order(
         }
         for &(_, tile_index, index) in &chunk {
             let (tile, boxes) = &tiles[tile_index];
-            flights.add_boxes(boxes, *tile, &[index], frame, receiver, horizons);
+            flights.add_boxes(boxes, *tile, &[index], frame, receiver);
         }
     }
-    flights.sum_listed(receiver.altitude_m);
+    flights.sum_listed(receiver.altitude_m, horizons);
 }
 
 #[cfg(test)]

@@ -211,14 +211,7 @@ pub(super) fn report(
                     .iter()
                     .map(|&(index, _)| index)
                     .collect();
-                exhaustive.add_boxes(
-                    aircraft,
-                    *tile,
-                    &within,
-                    &receiver.frame,
-                    aircraft_receiver,
-                    &Unscreened,
-                );
+                exhaustive.add_boxes(aircraft, *tile, &within, &receiver.frame, aircraft_receiver);
             }
         }
         let listed: Vec<(u64, f64, f64)> = searched

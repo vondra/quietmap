@@ -13,6 +13,8 @@ use std::f64::consts::TAU;
 /// bands, sampled at 48 points from 30 m to 8 km, growing geometrically (dev4).
 pub const TERRAIN_SECTORS: usize = 32;
 const TERRAIN_BAND_LIMITS_M: [f64; 6] = [500.0, 1_000.0, 2_000.0, 3_500.0, 5_500.0, 8_000.0];
+/// Terrain must be read to this distance before any flight is screened.
+pub const TERRAIN_REACH_M: f64 = TERRAIN_BAND_LIMITS_M[HORIZON_BANDS - 1];
 const TERRAIN_SAMPLES: usize = 48;
 const TERRAIN_FIRST_SAMPLE_M: f64 = 30.0;
 /// Buildings: 256 sectors of 1.41 deg; bands doubling from 16 m to 512 m (dev4).
@@ -129,10 +131,10 @@ pub struct Horizons {
 }
 
 impl Horizons {
-    /// The horizons of the receiver at `position` (click metres) and `altitude_m`, from the terrain
-    /// and buildings read so far: samples in tiles not yet read are skipped, so a first answer's
-    /// horizon may lack far edges (edges only screen what lies behind them). The walls of
-    /// `own_footprint`, the building a painted point stands in (0 for none), are no horizon.
+    /// The horizons of the receiver at `position` (click metres) and `altitude_m`, from terrain
+    /// and buildings within their full reaches; fails if a tile is unread. Nodes without terrain
+    /// data are skipped. The walls of `own_footprint`, the building a painted point stands in
+    /// (0 for none), are no horizon.
     pub fn build(
         ground: &Ground,
         obstacles: &Scene<'_>,
@@ -141,8 +143,8 @@ impl Horizons {
         own_footprint: u64,
     ) -> Result<Self, String> {
         let mut terrain = SectorEdges::new(TERRAIN_SECTORS);
-        let growth = (TERRAIN_BAND_LIMITS_M[5] / TERRAIN_FIRST_SAMPLE_M)
-            .powf(1.0 / (TERRAIN_SAMPLES - 1) as f64);
+        let growth =
+            (TERRAIN_REACH_M / TERRAIN_FIRST_SAMPLE_M).powf(1.0 / (TERRAIN_SAMPLES - 1) as f64);
         for sector in 0..TERRAIN_SECTORS {
             let [east, north] = sector_direction(sector, TERRAIN_SECTORS);
             let mut range_m = TERRAIN_FIRST_SAMPLE_M;

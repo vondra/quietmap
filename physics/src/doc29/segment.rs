@@ -322,8 +322,7 @@ pub fn segment_screening_db(
 }
 
 /// [`segment_sel_at_receiver`] of a segment with its `closest` points and its losses `screening`
-/// ([`segment_screening_db`]) found before: a click's loudest flights find them as each piece is
-/// read, with that ring's horizons, and the rest only for the flights listed.
+/// ([`segment_screening_db`]) found before.
 pub fn screened_segment_sel(
     emission: &SegmentEmission,
     closest: ClosestPoints,

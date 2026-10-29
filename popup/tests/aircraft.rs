@@ -1,6 +1,4 @@
-//! The aircraft layer of the ring loop on a synthetic release (flat ocean): a box of one segment
-//! answers as the kernel's SEL of that segment, as the day's Leq; for tiles beyond 3 km the far
-//! boxes are read; a box beyond the reach is not heard.
+//! Aircraft in a synthetic release: segment energy, far boxes, reach and complete terrain screening.
 
 use physics::bands::{PERIOD_HOURS, PERIODS};
 use physics::doc29::box_sums::{BoxSums, SegmentEnergies};
@@ -236,4 +234,117 @@ fn each_period_counts_its_own_flights() {
         (ratio - PERIOD_HOURS[0] / PERIOD_HOURS[2]).abs() < 1e-9,
         "{ratio}"
     );
+}
+
+/// A first-ring flight is screened by a ridge in the next terrain ring: the horizon's sector
+/// centre falls across the tile edge. Both streamed answers must equal the complete scene.
+#[test]
+fn every_flight_ring_uses_the_complete_terrain_horizon() {
+    use popup::aircraft::boxes::{AircraftReceiver, tile_energy};
+    use popup::aircraft::horizons::Horizons;
+    use popup::obstacles::Scene;
+    use popup::scene::Ground;
+    use tiles::aircraft::Aircraft;
+    use tiles::terrain::{Node, Terrain, Window, code_of_height_m};
+
+    let tile_frame = LocalFrame::at(TILE.centre());
+    let receiver_position = tile_frame.to_mercator([0.3 * tile_frame.east_m_per_unit, 0.0]);
+    let frame = LocalFrame::at(receiver_position);
+    let aircraft_tile = TileId {
+        x: TILE.x + 1,
+        ..TILE
+    };
+    let ridge_tile = TileId {
+        x: TILE.x + 2,
+        ..TILE
+    };
+    let (emission, _, _) = departure(0.0);
+    let east = 0.49 * tile_frame.east_m_per_unit;
+    let north = 0.49 * tile_frame.north_m_per_unit;
+    let record = box_of(
+        &emission,
+        [east - 2.0, north + 5.0, 600.0],
+        [east + 2.0, north - 5.0, 600.0],
+    );
+    let root = release_with_boxes("horizon", aircraft_tile, Kind::Aircraft, &[record]);
+    let window = Window::of_tile(ridge_tile);
+    let nodes = vec![
+        Node {
+            height_code: code_of_height_m(1_000.0),
+            impervious_percent: 0,
+            forest_percent: 0,
+            canopy_m: 0,
+        };
+        window.node_count()
+    ];
+    let ridge = tiles::terrain::encode(window, &nodes);
+    write_tiles(
+        &root.join("2026"),
+        Kind::Terrain,
+        &[(ridge_tile, ridge.clone())],
+    )
+    .unwrap();
+
+    let mut ground = Ground::new(frame, TILE, 3, None);
+    for ring in 0..=3 {
+        for tile in TILE.ring(ring) {
+            ground.insert(
+                tile,
+                (tile == ridge_tile).then(|| Terrain::parse(&ridge).unwrap()),
+            );
+        }
+    }
+    let mut obstacles = Scene::new(frame);
+    obstacles.insert_all(
+        (0..=3)
+            .flat_map(|ring| TILE.ring(ring))
+            .map(|tile| (tile, None))
+            .collect(),
+    );
+    let horizons = Horizons::build(&ground, &obstacles, [0.0; 2], RECEIVER_ALTITUDE_M, 0).unwrap();
+    let receiver = AircraftReceiver {
+        position: [0.0; 2],
+        altitude_m: RECEIVER_ALTITUDE_M,
+    };
+    let bytes = tiles::square::read_tile(&root.join("2026"), aircraft_tile, Kind::Aircraft)
+        .unwrap()
+        .unwrap();
+    let aircraft = Aircraft::parse(&bytes).unwrap();
+    let expected = tile_energy(&aircraft, aircraft_tile, &frame, receiver, &horizons).energy[0];
+    let unscreened = tile_energy(&aircraft, aircraft_tile, &frame, receiver, &Unscreened).energy[0];
+    assert!(
+        10.0 * (unscreened / expected).log10() > 1.0,
+        "the far ridge must screen the flight"
+    );
+
+    let release = Release::open(&root, "2026").unwrap();
+    let (lat, lon) = receiver_position.to_degrees();
+    let mut updates = 0;
+    answer(
+        &release,
+        lat,
+        lon,
+        &Options {
+            exact: false,
+            source: Vec::new(),
+            piece: None,
+        },
+        &mut |update| {
+            let heard = update
+                .layers
+                .iter()
+                .find(|layer| layer.layer == Layer::Aircraft)
+                .unwrap();
+            assert!((10.0 * (heard.energy[0] / expected).log10()).abs() < 1e-6);
+            assert_eq!(
+                update.statistics.reads, 3,
+                "weather, aircraft, terrain, each read once"
+            );
+            updates += 1;
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(updates > 1);
+    std::fs::remove_dir_all(root).unwrap();
 }
