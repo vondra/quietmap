@@ -1,19 +1,34 @@
 //! HM3 tile streams and the atomic square bundles the painter writes.
 
 use crate::exact::LAYERS;
-use crate::paint::Cells;
-use rayon::prelude::*;
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use tiles::sources::Layer;
 
 pub const TILE_PX: usize = 512;
 pub const HEADER: [u8; 5] = *b"HM3 \x07";
-const SQUARE_HEADER_BYTES: usize = 14;
+
+pub use crate::hm3_square::{PaintedSquare, painted, read_nden, verify, write};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Metric {
+    Nden,
+    Lden,
+}
+
+impl Metric {
+    fn header(self) -> [u8; 5] {
+        match self {
+            Self::Nden => HEADER,
+            Self::Lden => *b"HMD \x01",
+        }
+    }
+}
 // Fixed Paeth at quality 11 meets the measured volume budget; Up and quality 10 do not.
-const BROTLI_QUALITY: u8 = 11;
+const NDEN_BROTLI_QUALITY: u8 = 11;
+// Disk-only Lden uses quality 9: the stored cells are unchanged, with much less encoding work.
+const LDEN_BROTLI_QUALITY: u8 = 9;
 // This is the smallest window that retains every possible within-tile match.
 const BROTLI_WINDOW_LOG2: u8 = 19;
 
@@ -34,7 +49,7 @@ pub fn square_path(out: &Path, zoom: u32, square: (u32, u32)) -> PathBuf {
         .join(format!("{}_{}.hm3", square.0, square.1))
 }
 
-fn tiles_per_side(zoom: u32) -> Result<usize, String> {
+pub(crate) fn tiles_per_side(zoom: u32) -> Result<usize, String> {
     match zoom {
         12 | 13 => Ok(1 << (zoom - 12)),
         _ => Err("the painted zoom is 12 or 13".into()),
@@ -71,11 +86,19 @@ fn paeth_prediction(cells: &[u8], at: usize) -> u8 {
 
 /// One served Brotli stream: HM3 version 7, layer byte, then fixed PNG Paeth residuals modulo 256.
 pub fn encode_tile(cells: &[u8], layer: usize) -> Result<Vec<u8>, String> {
+    encode_metric_tile(cells, layer, Metric::Nden)
+}
+
+pub(crate) fn encode_metric_tile(
+    cells: &[u8],
+    layer: usize,
+    metric: Metric,
+) -> Result<Vec<u8>, String> {
     if cells.len() != TILE_PX * TILE_PX || layer > LAYERS {
         return Err("not one layer's 512 by 512 cells".into());
     }
     let mut predicted = Vec::with_capacity(HEADER.len() + 1 + cells.len());
-    predicted.extend_from_slice(&HEADER);
+    predicted.extend_from_slice(&metric.header());
     predicted.push(layer as u8);
     for (at, &cell) in cells.iter().enumerate() {
         predicted.push(cell.wrapping_sub(paeth_prediction(cells, at)));
@@ -83,7 +106,13 @@ pub fn encode_tile(cells: &[u8], layer: usize) -> Result<Vec<u8>, String> {
     // Google's C encoder: at quality 11 it takes half to three quarters of the Rust port's time on
     // painted tiles, its streams within 0.1 % of the port's bytes (2026-10-21).
     let encoder = (brotlic::BrotliEncoderOptions::new())
-        .quality(brotlic::Quality::new(BROTLI_QUALITY).map_err(|e| e.to_string())?)
+        .quality(
+            brotlic::Quality::new(match metric {
+                Metric::Nden => NDEN_BROTLI_QUALITY,
+                Metric::Lden => LDEN_BROTLI_QUALITY,
+            })
+            .map_err(|e| e.to_string())?,
+        )
         .window_size(brotlic::WindowSize::new(BROTLI_WINDOW_LOG2).map_err(|e| e.to_string())?)
         .build()
         .map_err(|e| e.to_string())?;
@@ -93,6 +122,14 @@ pub fn encode_tile(cells: &[u8], layer: usize) -> Result<Vec<u8>, String> {
 }
 
 pub fn decode_tile(encoded: &[u8], layer: usize) -> Result<Vec<u8>, String> {
+    decode_metric_tile(encoded, layer, Metric::Nden)
+}
+
+pub(crate) fn decode_metric_tile(
+    encoded: &[u8],
+    layer: usize,
+    metric: Metric,
+) -> Result<Vec<u8>, String> {
     if layer > LAYERS {
         return Err("unknown HM3 layer".into());
     }
@@ -119,7 +156,7 @@ pub fn decode_tile(encoded: &[u8], layer: usize) -> Result<Vec<u8>, String> {
     if !matches!(result, brotli::BrotliResult::ResultSuccess)
         || input_offset != encoded.len()
         || output_offset != expected
-        || bytes[..HEADER.len()] != HEADER
+        || bytes[..HEADER.len()] != metric.header()
         || bytes[HEADER.len()] as usize != layer
     {
         return Err("not this layer's HM3 tile".into());
@@ -130,192 +167,6 @@ pub fn decode_tile(encoded: &[u8], layer: usize) -> Result<Vec<u8>, String> {
         bytes[at] = bytes[at].wrapping_add(paeth_prediction(&bytes, at));
     }
     Ok(bytes)
-}
-
-/// A complete square: HM3S, version, zoom, square x/y (u32 little-endian), then (offset, length)
-/// u32 pairs in layer, tile-row, tile-column order. Offsets start at the file's beginning;
-/// identical streams share a range. Every stream is already the bytes served from PMTiles.
-pub struct PaintedSquare {
-    file: std::fs::File,
-    entries: Vec<(u32, u32)>,
-    per_side: usize,
-}
-
-impl PaintedSquare {
-    pub fn open(out: &Path, zoom: u32, square: (u32, u32)) -> Result<Self, String> {
-        let per_side = tiles_per_side(zoom)?;
-        let path = square_path(out, zoom, square);
-        let read = || -> Result<Self, String> {
-            let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-            let mut header = [0; SQUARE_HEADER_BYTES];
-            file.read_exact_at(&mut header, 0)
-                .map_err(|e| e.to_string())?;
-            if header[..4] != *b"HM3S"
-                || header[4] != HEADER[4]
-                || header[5] as u32 != zoom
-                || header[6..10] != square.0.to_le_bytes()
-                || header[10..14] != square.1.to_le_bytes()
-            {
-                return Err("not this square's HM3 bundle".into());
-            }
-            let directory_bytes = (LAYERS + 1) * per_side * per_side * 8;
-            let mut directory = vec![0; directory_bytes];
-            file.read_exact_at(&mut directory, SQUARE_HEADER_BYTES as u64)
-                .map_err(|e| e.to_string())?;
-            let file_bytes = file.metadata().map_err(|e| e.to_string())?.len();
-            let entries: Vec<(u32, u32)> = directory
-                .chunks_exact(8)
-                .map(|entry| {
-                    (
-                        u32::from_le_bytes(entry[..4].try_into().expect("offset")),
-                        u32::from_le_bytes(entry[4..].try_into().expect("length")),
-                    )
-                })
-                .collect();
-            if entries.iter().any(|&(offset, length)| {
-                (offset as usize) < SQUARE_HEADER_BYTES + directory_bytes
-                    || length == 0
-                    || length as usize > TILE_PX * TILE_PX + 1024
-                    || u64::from(offset) + u64::from(length) > file_bytes
-            }) {
-                return Err("HM3 bundle has an invalid tile range".into());
-            }
-            Ok(Self {
-                file,
-                entries,
-                per_side,
-            })
-        };
-        read().map_err(|e| format!("{}: {e}", path.display()))
-    }
-
-    pub fn compressed_tile(&self, layer: usize, tx: usize, ty: usize) -> Result<Vec<u8>, String> {
-        if layer > LAYERS || tx >= self.per_side || ty >= self.per_side {
-            return Err("tile outside its HM3 square".into());
-        }
-        let (offset, length) = self.entries[(layer * self.per_side + ty) * self.per_side + tx];
-        let mut bytes = vec![0; length as usize];
-        self.file
-            .read_exact_at(&mut bytes, u64::from(offset))
-            .map_err(|e| e.to_string())?;
-        Ok(bytes)
-    }
-}
-
-fn tile_layer_cells(cells: &Cells, per_side: usize, index: usize) -> impl Iterator<Item = u8> + '_ {
-    let layer = index / (per_side * per_side);
-    let tx = index % per_side;
-    let ty = index / per_side % per_side;
-    (0..TILE_PX).flat_map(move |row| {
-        let start = (ty * TILE_PX + row) * per_side * TILE_PX + tx * TILE_PX;
-        cells[start..start + TILE_PX]
-            .iter()
-            .map(move |pixel| pixel[layer])
-    })
-}
-
-pub fn write(out: &Path, zoom: u32, square: (u32, u32), cells: &Cells) -> Result<(), String> {
-    let per_side = tiles_per_side(zoom)?;
-    let side = per_side * TILE_PX;
-    if cells.len() != side * side || square.0 >= 4096 || square.1 >= 4096 {
-        return Err("not a zoom-12 square's cells".into());
-    }
-    let count = (LAYERS + 1) * per_side * per_side;
-    // Equal cells in one layer have equal served bytes; find them before entropy coding.
-    let first_identical_tile: Vec<usize> = (0..count)
-        .map(|index| {
-            (index / (per_side * per_side) * per_side * per_side..index)
-                .find(|&previous| {
-                    tile_layer_cells(cells, per_side, previous)
-                        .eq(tile_layer_cells(cells, per_side, index))
-                })
-                .unwrap_or(index)
-        })
-        .collect();
-    let compressed: Vec<Option<Vec<u8>>> = (0..count)
-        .into_par_iter()
-        .map(|index| {
-            if first_identical_tile[index] == index {
-                let tile: Vec<u8> = tile_layer_cells(cells, per_side, index).collect();
-                encode_tile(&tile, index / (per_side * per_side)).map(Some)
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<_, _>>()?;
-    let mut bytes = Vec::from(&b"HM3S"[..]);
-    bytes.extend([HEADER[4], zoom as u8]);
-    bytes.extend(square.0.to_le_bytes());
-    bytes.extend(square.1.to_le_bytes());
-    bytes.resize(SQUARE_HEADER_BYTES + count * 8, 0);
-    let mut offsets = vec![0; count];
-    for (index, first) in first_identical_tile.into_iter().enumerate() {
-        let tile = compressed[first]
-            .as_ref()
-            .expect("an encoded distinct tile");
-        let offset = if first == index {
-            let offset = bytes.len() as u32;
-            bytes.extend_from_slice(tile);
-            offsets[index] = offset;
-            offset
-        } else {
-            offsets[first]
-        };
-        let entry = &mut bytes[SQUARE_HEADER_BYTES + index * 8..][..8];
-        entry[..4].copy_from_slice(&offset.to_le_bytes());
-        entry[4..].copy_from_slice(&(tile.len() as u32).to_le_bytes());
-    }
-    let path = square_path(out, zoom, square);
-    let directory = path.parent().expect("a square's directory");
-    std::fs::create_dir_all(directory).map_err(|e| format!("{}: {e}", directory.display()))?;
-    let mut temporary = tempfile::NamedTempFile::new_in(directory).map_err(|e| e.to_string())?;
-    temporary.write_all(&bytes).map_err(|e| e.to_string())?;
-    temporary.as_file().sync_all().map_err(|e| e.to_string())?;
-    temporary
-        .persist_noclobber(&path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    sync_square_directory(directory)
-}
-
-fn sync_square_directory(directory: &Path) -> Result<(), String> {
-    std::fs::File::open(directory)
-        .and_then(|file| file.sync_all())
-        .map_err(|error| format!("{}: {error}", directory.display()))
-}
-
-pub fn read(out: &Path, zoom: u32, square: (u32, u32)) -> Result<Cells, String> {
-    let stored = PaintedSquare::open(out, zoom, square)?;
-    let side = stored.per_side * TILE_PX;
-    let mut cells = vec![[crate::paint::NO_LEVEL; LAYERS + 1]; side * side];
-    for layer in 0..=LAYERS {
-        for ty in 0..stored.per_side {
-            for tx in 0..stored.per_side {
-                let tile = decode_tile(&stored.compressed_tile(layer, tx, ty)?, layer)?;
-                for (row, values) in tile.chunks_exact(TILE_PX).enumerate() {
-                    let start = (ty * TILE_PX + row) * side + tx * TILE_PX;
-                    for (pixel, &byte) in cells[start..start + TILE_PX].iter_mut().zip(values) {
-                        pixel[layer] = byte;
-                    }
-                }
-            }
-        }
-    }
-    Ok(cells)
-}
-
-pub fn painted(out: &Path, zoom: u32, square: (u32, u32)) -> Result<bool, String> {
-    let path = square_path(out, zoom, square);
-    match path.metadata() {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("{}: {error}", path.display())),
-        Ok(metadata) if metadata.is_file() => {
-            PaintedSquare::open(out, zoom, square)?;
-            // A previous run can fail after installing the filename; finish its directory sync.
-            sync_square_directory(path.parent().expect("a square's directory"))?;
-            Ok(true)
-        }
-        Ok(_) => Err(format!("{}: not a square bundle file", path.display())),
-    }
 }
 
 fn listed(path: &Path) -> Result<Vec<PathBuf>, String> {

@@ -18,7 +18,6 @@ use popup::percentiles::Resolution;
 use rayon::prelude::*;
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tiles::sources::Layer;
 
 /// A point's loudness per layer and in total: known (sone), or its sound packed for the card.
 enum Loudness {
@@ -181,14 +180,14 @@ impl PointPainter<'_> {
                 flights: blend_flights(around.map(|corner| corners.flights[corner]), fx, fy),
             };
             let reflection = point.reflection();
-            let mut layers: [f64; LAYERS] =
-                std::array::from_fn(|layer| lden_energy(&rest.steady[layer]));
-            for (&index, energy) in lists[k].iter().zip(&evaluated.pairs[range.clone()]) {
-                layers[square.candidates[index as usize].layer as usize] +=
-                    lden_energy(&energy.mixed);
-            }
-            let mut layers = layers.map(|energy| reflection * energy);
-            layers[Layer::Aircraft as usize] += lden_energy(&rest.flights[0]);
+            let layers = crate::levels::layer_energy(
+                square,
+                &rest.steady,
+                &rest.flights[0],
+                reflection,
+                &lists[k],
+                &evaluated.pairs[range.clone()],
+            );
             let sound = pixel_sound(
                 square,
                 &corners.displays,

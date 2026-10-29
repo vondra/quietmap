@@ -2,6 +2,24 @@
 
 use super::*;
 use crate::hm3::{self, square_path};
+use crate::levels::PaintedCells;
+
+fn write(
+    out: &Path,
+    zoom: u32,
+    square: (u32, u32),
+    cells: &crate::paint::Cells,
+) -> Result<(), String> {
+    hm3::write(
+        out,
+        zoom,
+        square,
+        &PaintedCells {
+            nden: cells.clone(),
+            lden: cells.clone(),
+        },
+    )
+}
 
 #[test]
 fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
@@ -11,7 +29,7 @@ fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
     let cells = vec![[80; LAYERS + 1]; 1024 * 1024];
     for (worker, square) in [("a", (2, 2)), ("b", (3, 2))] {
         let root = workers.path().join(worker);
-        hm3::write(&root, 13, square, &cells).unwrap();
+        write(&root, 13, square, &cells).unwrap();
         let destination = square_path(merged.path(), 13, square);
         std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
         let mut interrupted =
@@ -23,7 +41,7 @@ fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
             std::fs::read(square_path(&root, 13, square)).unwrap(),
             std::fs::read(square_path(merged.path(), 13, square)).unwrap()
         );
-        hm3::write(&root, 13, (square.0, square.1 + 1), &cells).unwrap();
+        write(&root, 13, (square.0, square.1 + 1), &cells).unwrap();
         crate::merge::merge(&root, merged.path(), 13).unwrap();
         assert!(hm3::painted(merged.path(), 13, (square.0, square.1 + 1)).unwrap());
     }
@@ -72,7 +90,7 @@ fn kept_regions_pack_the_same_archives_and_a_repainted_square_refolds_its_region
     };
     // Two squares in zoom-8 region (0, 0), one in region (1, 0).
     for (k, square) in [(2, 2), (3, 2), (20, 2)].into_iter().enumerate() {
-        hm3::write(merged.path(), 13, square, &cells(60 + 9 * k as u8, k)).unwrap();
+        write(merged.path(), 13, square, &cells(60 + 9 * k as u8, k)).unwrap();
     }
     let archives = |directory: &Path| -> Vec<Vec<u8>> {
         layer_names()
@@ -97,7 +115,7 @@ fn kept_regions_pack_the_same_archives_and_a_repainted_square_refolds_its_region
     // A square repainted after its region was kept.
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::remove_file(square_path(merged.path(), 13, (3, 2))).unwrap();
-    hm3::write(merged.path(), 13, (3, 2), &cells(90, 3)).unwrap();
+    write(merged.path(), 13, (3, 2), &cells(90, 3)).unwrap();
     let (fresh, reused) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     pack(merged.path(), 13, fresh.path(), "b1", None).unwrap();
     pack(merged.path(), 13, reused.path(), "b1", Some(regions.path())).unwrap();

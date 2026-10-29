@@ -11,9 +11,9 @@
 //! `qm-paint merge --from DIR --out DIR --zoom Z`: atomic byte copies of completed squares.
 
 use paint::exact::Batch;
-use paint::exact::LAYERS;
 use paint::hm3::painted;
-use paint::paint::{Corners, Grid, SILENCE, corners_of, paint_pixels};
+use paint::levels::PaintedCells;
+use paint::paint::{Corners, Grid, corners_of, paint_pixels};
 use paint::square::{Files, Square};
 use paint_gpu::batch::GpuBatch;
 use paint_gpu::device::{DeviceSquare, Gpu};
@@ -359,7 +359,7 @@ fn finish_square(
         seconds: [read_s, built_s, corners_s],
     } = prepared;
     let cells = match corners {
-        None => vec![[SILENCE; LAYERS + 1]; grid.pixels * grid.pixels],
+        None => PaintedCells::silence(grid.pixels * grid.pixels),
         Some(corners) => {
             let square = Square::new(weather, tile, &files)?;
             let batch = gpu
@@ -370,7 +370,8 @@ fn finish_square(
                 grid,
                 batch.as_ref().map(|b| b as &dyn Batch),
                 corners,
-            )?
+            )
+            .map_err(|error| format!("square {}/{}: {error}", tile.x, tile.y))?
         }
     };
     let painted_s = corners_s + started.elapsed().as_secs_f64();

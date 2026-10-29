@@ -210,7 +210,7 @@ interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, t
 `flight_boxes.rs` (on the card `paint-gpu/src/aircraft.rs`), the aircraft spectra
 `paint/src/flight_spectra.rs`, a
 building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
-`popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs`: per layer and the total,
+`popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs` and `hm3_square.rs`: per layer and the total,
 512 × 512 cells of twice the loudness level in phon (80 one sone, a doubling 20; 254 silence under
 1/16 sone, 255 not assessed). Each tile is compressed when painted: PNG's Paeth predictor uses
 the left, above and upper-left cells (zero outside the tile), and the cell minus that prediction,
@@ -220,8 +220,20 @@ archives in the measured urban area shrink by 26 % against raw-cell Brotli at qu
 The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` restores the same prediction in place;
 every cell, including silence and not assessed, returns exactly.
 
-The painter writes one atomic HM3 square bundle, its directory pointing at these compressed tile
-streams, identical tile grids encoded and stored once. Two writers compress and publish the bundles
+The square format supports one atomic bundle containing these Nden streams and disk-only Lden
+in decibels for each layer and the total. Lden comes from the same propagated energies, summed before taking
+the logarithm, and is stored in half-decibel steps from 0 to 126.5 dB, capped above that range:
+254 means below 0 dB, 255 not assessed. It is
+kept on disk with the same predictor and lossless Brotli at quality 9; the displayed map and its
+lower zooms still use Nden. In open background blocks,
+Lden uses the original hum and aircraft energy fields at each pixel, while Nden keeps its shared
+corner blend. A sampled source patch must also agree with its exact probe within half a decibel
+in each layer and the total; otherwise its remaining pixels are calculated individually.
+The bundle's directory points at compressed tile streams, identical tile grids encoded and stored
+once. Container version 8 holds both quantities; already painted version-7 bundles contain only
+Nden and remain complete. The Nden tile streams keep HM3 version 7; Lden streams use HMD version 1,
+so decibels cannot be mistaken for loudness. Verification decodes both quantities and checks their
+assessment masks and Lden totals. Two writers compress and publish the bundles
 while the next squares are painted; at most six squares' cell buffers are resident (two written,
 two waiting, two painted), and a square is complete only after its bundle is durable
 (`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies

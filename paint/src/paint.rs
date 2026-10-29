@@ -19,6 +19,7 @@ use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
 use crate::flight_spectra::FlightSpectra;
 use crate::flights::{FlightSums, flights_at_corners};
 use crate::hum::Hum;
+use crate::levels::PaintedCells;
 use crate::points::PointPainter;
 use crate::quiet::QuietBlocks;
 use crate::sone::Displays;
@@ -147,14 +148,6 @@ pub struct Corners {
     pub(crate) corner_bands: Vec<PointBands>,
     corner_pairs: usize,
     seconds: f64,
-}
-
-/// Paints the square: every pixel's cells, the exact evaluations here or by `batch`.
-pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<Cells, String> {
-    match corners_of(square, grid, batch)? {
-        Some(corners) => paint_pixels(square, grid, batch, corners),
-        None => Ok(vec![[SILENCE; LAYERS + 1]; grid.pixels * grid.pixels]),
-    }
 }
 
 /// The square's point at pixel coordinates (x, y), in the square's frame.
@@ -307,7 +300,7 @@ pub fn paint_pixels(
     grid: Grid,
     batch: Option<&dyn Batch>,
     corners: Corners,
-) -> Result<Cells, String> {
+) -> Result<PaintedCells, String> {
     let n = grid.pixels;
     let metres = |x: f64, y: f64| metres_at(square, n, x, y);
     let started = std::time::Instant::now();
@@ -325,7 +318,7 @@ pub fn paint_pixels(
     if quiet.blocks.iter().all(|&quiet| quiet) {
         let cells = quiet.cells(&painter);
         report_pixels(corners_s, corner_pairs, started, painter.pairs.into_inner());
-        return Ok(cells);
+        return cells;
     }
     // Every pixel, a run of blocks at a time (four block rows, fewer where their pairs would pass
     // PASS_PAIRS): the outdoor ones painted, the indoor ones' place and building kept for their
@@ -393,13 +386,13 @@ pub fn paint_pixels(
     let candidates = facade_candidates(square, n, &pixels, &indoor)?;
     let levels = building_levels(&painter, &quiet.exact_source_counts, candidates)?;
     fill_buildings(&mut pixels, &indoor, &levels);
-    let cells = (pixels.par_iter().enumerate())
-        .map(|(at, pixel)| match pixel {
-            Some((_, ndens)) => cells_of(ndens),
-            None if quiet.has_paint(&painter, at) => cells_of(&quiet.loudness_at(&painter, at)),
-            None => [NO_LEVEL; LAYERS + 1],
-        })
-        .collect();
+    let cells = PaintedCells::from_painted(pixels.into_par_iter().enumerate().map(
+        |(at, pixel)| match pixel {
+            Some(paint) => Some(paint),
+            None if quiet.has_paint(&painter, at) => Some(quiet.paint_at(&painter, at)),
+            None => None,
+        },
+    ))?;
     report_pixels(corners_s, corner_pairs, started, painter.pairs.into_inner());
     Ok(cells)
 }

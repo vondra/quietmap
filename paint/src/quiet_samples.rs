@@ -1,8 +1,8 @@
 //! Sub-block loudness lattices checked against pixel probes, retaining exact samples and screening edges.
 //!
 //! These samples use the ordinary painter's source admission, propagation and sound model.
-//! Interpolation replaces a patch's remaining receivers only after checking each layer and total;
-//! rejected patches reuse their exact lattice and probe results. The half-phon check matches the map cell's step,
+//! Interpolation replaces a patch's remaining receivers only after checking loudness and Lden;
+//! rejected patches reuse their exact lattice and probe results. Half-phon and half-dB checks match the stored steps,
 //! an empirical safeguard verified against the independent etalon, not a bound on unsampled rays.
 
 use crate::blocks::meets;
@@ -64,7 +64,7 @@ impl QuietSamples {
         &self,
         [i, j]: [usize; 2],
         (x, y): (usize, usize),
-        heard: &[f64; LAYERS + 1],
+        heard: &Painted,
     ) -> bool {
         // A one-pixel interval has no independent interior probe.
         x > self.axis[i]
@@ -74,7 +74,11 @@ impl QuietSamples {
             && lattice_corners([i, j])
                 .iter()
                 .all(|&at| self.values[at].is_some())
-            && agrees_with_interpolation(heard, &self.at(x, y).1)
+            && {
+                let blended = self.at(x, y);
+                agrees_with_interpolation(&heard.1, &blended.1)
+                    && energies_agree_within_half_decibel(&heard.0, &blended.0)
+            }
     }
 
     fn sample_index(&self, x: usize, y: usize) -> Option<usize> {
@@ -172,9 +176,9 @@ pub(crate) fn sample_block_pixels(
                 };
                 for (cell, (&(x, y), probe)) in positions[25..].iter().zip(&heard[25..]).enumerate()
                 {
-                    let Some((_, ndens)) = probe else { continue };
+                    let Some(heard) = probe else { continue };
                     let (i, j) = (cell % 4, cell / 4);
-                    if !sampled.agrees_with_probe([i, j], (x, y), ndens) {
+                    if !sampled.agrees_with_probe([i, j], (x, y), heard) {
                         continue;
                     }
                     let (base_x, base_y) = ((at % side) * b, (at / side) * b);
@@ -234,6 +238,31 @@ const QUIET_LAYER_UNDER_SONE: f64 = 0.5;
 /// How far a quiet layer may differ from its blend (sone): what the map's hover reads stays within
 /// a tenth of a sone, never a quiet place's silence read as a few tenths.
 const QUIET_LAYER_SONE: f64 = 0.1;
+
+/// A quiet intermittent source may pass the loudness check and still change Lden substantially.
+/// Below-zero layers need no level, but their sum can cross the stored floor.
+fn energies_agree_within_half_decibel(heard: &[f64; LAYERS], blended: &[f64; LAYERS]) -> bool {
+    heard
+        .iter()
+        .copied()
+        .chain(std::iter::once(heard.iter().sum()))
+        .zip(
+            blended
+                .iter()
+                .copied()
+                .chain(std::iter::once(blended.iter().sum())),
+        )
+        .all(|(heard, blended)| {
+            heard.is_finite()
+                && blended.is_finite()
+                && heard >= 0.0
+                && blended >= 0.0
+                && (heard.max(blended) < 1.0
+                    || (heard > 0.0
+                        && blended > 0.0
+                        && (10.0 * (heard / blended).log10()).abs() <= 0.5))
+        })
+}
 
 /// One half-phon cell step in the total and in every layer not quieter than
 /// [`QUIET_LAYER_UNDER_SONE`], a tenth of a sone in the quieter; silence is already quantized.

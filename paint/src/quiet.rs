@@ -1,13 +1,15 @@
 //! Background blocks and checked sub-block fields expanded from shared loudness and exact pixel probes.
 //!
 //! The obstacle proof precedes pixel receivers, as dev1's quiet-region shortcut precedes rasters.
-//! Background blocks reuse the existing corner blend, loudness only. Source blocks check actual
+//! Background blocks blend loudness at corners and evaluate their original energy fields. Source blocks check actual
 //! pixel receivers against sampled loudness; only patches away from sources and walls that agree
 //! omit work.
 //! Candidate source lists live in bounded chunks, while the retained lattice holds only sound.
 
 use crate::exact::LAYERS;
-use crate::paint::{Cells, Painted, cells_of, corner_weights, rectangle_at};
+use crate::flights::blend_flights;
+use crate::levels::{PaintedCells, layer_energy};
+use crate::paint::{Painted, corner_weights, rectangle_at};
 use crate::points::PointPainter;
 use crate::quiet_corners::loudness_at_corners;
 use crate::quiet_samples::{QuietSamples, sample_block_pixels};
@@ -101,14 +103,14 @@ impl QuietBlocks {
                 .is_some_and(|samples| samples.has_paint(x % grid.block, y % grid.block))
     }
 
-    /// A pixel's loudness where it `has_paint`: its block's samples, else the background corners'
-    /// blend, without the energies a façade ranks by (the open proof keeps façades out of it).
-    pub fn loudness_at(&self, painter: &PointPainter, at: usize) -> [f64; LAYERS + 1] {
+    /// A known pixel: sampled source fields, or background Nden corners and the original energy grids.
+    /// The open proof keeps facade ranking out of the background path.
+    pub fn paint_at(&self, painter: &PointPainter, at: usize) -> Painted {
         let grid = painter.grid;
         let (x, y) = (at % grid.pixels, at / grid.pixels);
         let block = (y / grid.block) * (grid.pixels / grid.block) + x / grid.block;
         if let Some(samples) = &self.samples[block] {
-            return samples.known_at(x % grid.block, y % grid.block).unwrap().1;
+            return samples.known_at(x % grid.block, y % grid.block).unwrap();
         }
         let side = grid.pixels / grid.block + 1;
         let first = (y / grid.block) * side + x / grid.block;
@@ -116,18 +118,26 @@ impl QuietBlocks {
         let fx = ((x % grid.block) as f64 + 0.5) / grid.block as f64;
         let fy = ((y % grid.block) as f64 + 0.5) / grid.block as f64;
         let weights = corner_weights(fx, fy);
-        std::array::from_fn(|layer| {
+        let ndens = std::array::from_fn(|layer| {
             (0..4)
                 .map(|corner| weights[corner] * self.loudness[around[corner]][layer])
                 .sum()
-        })
+        });
+        // The open-rectangle proof excludes reflection throughout the receiver windows.
+        let steady = painter.corners.hum.energies_at(x, y);
+        let flights = blend_flights(around.map(|at| painter.corners.flights[at]), fx, fy);
+        (
+            layer_energy(painter.square, &steady, &flights[0], 1.0, &[], &[]),
+            ndens,
+        )
     }
 
-    pub fn cells(&self, painter: &PointPainter) -> Cells {
-        (0..painter.grid.pixels * painter.grid.pixels)
-            .into_par_iter()
-            .map(|at| cells_of(&self.loudness_at(painter, at)))
-            .collect()
+    pub fn cells(&self, painter: &PointPainter) -> Result<PaintedCells, String> {
+        PaintedCells::from_painted(
+            (0..painter.grid.pixels * painter.grid.pixels)
+                .into_par_iter()
+                .map(|at| Some(self.paint_at(painter, at))),
+        )
     }
 
     /// The sampled blocks' pixels with their energies, which a façade in front of one ranks by.

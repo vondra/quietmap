@@ -140,6 +140,21 @@ impl Hum {
         (energy, bands)
     }
 
+    /// The same hum energies as `at`, without constructing the unused spectral bands.
+    pub fn energies_at(&self, x: usize, y: usize) -> [[f64; PERIODS]; LAYERS] {
+        let (corners, fx, fy) = self.neighbours(x, y);
+        std::array::from_fn(|layer| {
+            std::array::from_fn(|period| {
+                let energies = corners.map(|corner| corner.0[layer][period]);
+                if energies == [0.0; 4] {
+                    0.0
+                } else {
+                    blend_in_decibels(energies, fx, fy)
+                }
+            })
+        })
+    }
+
     fn neighbours(&self, x: usize, y: usize) -> ([&HumPointSound; 4], f64, f64) {
         let last = self.side - 2;
         let (i, j) = ((x / self.spacing).min(last), (y / self.spacing).min(last));
@@ -160,6 +175,34 @@ impl Hum {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn energy_only_background_is_the_original_hum_at_every_pixel() {
+        let quiet = (0..9)
+            .map(|at| {
+                let energies = std::array::from_fn(|layer| {
+                    std::array::from_fn(|period| {
+                        if at % 3 != 2 {
+                            0.0
+                        } else {
+                            (at + layer + period + 1) as f64 * 123.45
+                        }
+                    })
+                });
+                (energies, PointBands::default())
+            })
+            .collect();
+        let hum = Hum {
+            side: 3,
+            spacing: 16,
+            quiet,
+        };
+        for y in 0..32 {
+            for x in 0..32 {
+                assert_eq!(hum.energies_at(x, y), hum.at(x, y).0);
+            }
+        }
+    }
 
     /// A point near quiet sources does not lend a pixel between it and silent points its level: the
     /// blend is exact at the points, keeps an even hum, and amid one point of 40 dB and three silent

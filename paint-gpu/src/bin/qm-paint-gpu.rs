@@ -33,7 +33,7 @@
 //! and 6 phon, presence, bias, the quiet band; a breached limit marked `!`), and the worst cell.
 
 use paint::exact::{LAYERS, PairEnergy, Point, whole_energy};
-use paint::paint::{NO_LEVEL, SILENCE, cells_of};
+use paint::paint::{NO_LEVEL, SILENCE};
 use paint::square::{Files, Square};
 use paint_gpu::device::{DeviceSquare, Gpu};
 use physics::bands::{BANDS, PERIODS, lden_energy};
@@ -418,7 +418,7 @@ fn popup_reference(
         .map(|_| (random.next_u64() % (SIDE * SIDE) as u64) as usize)
         .collect();
     let started = Instant::now();
-    let answers: Vec<Option<[u8; LAYERS + 1]>> = chosen
+    let answers: Vec<Option<paint::paint::Painted>> = chosen
         .par_iter()
         .map(|&at| {
             let (lat, lon) = Mercator {
@@ -436,23 +436,26 @@ fn popup_reference(
                 let assessed = (update.building).is_none_or(|building| building.facade.is_some());
                 if !update.partial && assessed {
                     let mut ndens = [0.0; LAYERS + 1];
-                    for (nden, layer) in ndens.iter_mut().zip(&update.layers) {
-                        *nden = layer.nden_sone.unwrap_or(0.0);
+                    let mut energy = [0.0; LAYERS];
+                    for layer in &update.layers {
+                        ndens[layer.layer as usize] = layer.nden_sone.unwrap_or(0.0);
+                        energy[layer.layer as usize] = lden_energy(&layer.energy);
                     }
                     ndens[LAYERS] = update.loudness.map_or(0.0, |loudness| loudness.nden_sone);
-                    last = Some(cells_of(&ndens));
+                    last = Some((energy, ndens));
                 }
                 Ok(())
             })?;
             Ok(last)
         })
         .collect::<Result<_, String>>()?;
-    let mut cells = vec![[NO_LEVEL; LAYERS + 1]; SIDE * SIDE];
+    let mut sampled_pixels = vec![None; SIDE * SIDE];
     for (&at, answer) in chosen.iter().zip(answers) {
         if let Some(answer) = answer {
-            cells[at] = answer;
+            sampled_pixels[at] = Some(answer);
         }
     }
+    let cells = paint::levels::PaintedCells::from_painted(sampled_pixels.into_par_iter())?;
     paint::hm3::write(out, 13, (tile.x, tile.y), &cells)?;
     eprintln!(
         "popup: {pixels} pixels answered in {:.1} s",
@@ -560,8 +563,8 @@ fn compare_maps(
             y.parse::<u32>().map_err(|_| "--squares y")?,
         );
         let (mine, theirs) = (
-            paint::hm3::read(painted, 13, square)?,
-            paint::hm3::read(reference, 13, square)?,
+            paint::hm3::read_nden(painted, 13, square)?,
+            paint::hm3::read_nden(reference, 13, square)?,
         );
         for (at, (mine, theirs)) in mine.iter().zip(&theirs).enumerate() {
             let (theirs_total, mine_total) = (theirs[LAYERS], mine[LAYERS]);

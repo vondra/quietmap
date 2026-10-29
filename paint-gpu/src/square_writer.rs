@@ -1,7 +1,7 @@
 //! Encode and publish the painted squares beside painting the next ones, two at a time.
 
 use paint::hm3::write;
-use paint::paint::Cells;
+use paint::levels::PaintedCells;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -11,7 +11,7 @@ use std::time::Instant;
 use tiles::geo::TileId;
 
 /// Painted squares that may wait for a writer: the painter goes on while a square's encoding
-/// outlasts the next one's pixels (a square's cells, 7 MB at zoom 13). Light squares 3-7 % faster
+/// outlasts the next one's pixels (both quantities' cells, 14 MiB at zoom 13). Light squares 3-7 % faster
 /// than with a rendezvous, the others the same (2026-10-14).
 const SQUARES_WAITING: usize = 2;
 
@@ -21,7 +21,7 @@ const SQUARES_WAITING: usize = 2;
 const WRITERS: usize = 2;
 
 pub struct PaintedSquareCells {
-    pub cells: Cells,
+    pub cells: PaintedCells,
     pub tile: TileId,
     pub number: usize,
     pub count: usize,
@@ -106,13 +106,12 @@ fn write_queued(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paint::exact::LAYERS;
-    use paint::hm3::{TILE_PX, painted, read};
+    use paint::hm3::{TILE_PX, painted, read_nden};
 
     #[test]
     fn writer_errors_fail_the_run_and_only_complete_bundles_can_resume() {
         let directory = tempfile::tempdir().unwrap();
-        let cells = vec![[254; LAYERS + 1]; TILE_PX * TILE_PX];
+        let cells = PaintedCells::silence(TILE_PX * TILE_PX);
         let square = |x, cells| PaintedSquareCells {
             cells,
             tile: TileId { x, y: 0 },
@@ -124,26 +123,30 @@ mod tests {
         };
         let result = write_beside_painting(directory.path(), 12, |sender| {
             sender.send(square(0, cells.clone())).unwrap();
-            sender.send(square(1, Vec::new())).unwrap();
+            sender.send(square(1, PaintedCells::silence(0))).unwrap();
             Ok(())
         });
         assert!(result.unwrap_err().contains("not a zoom-12 square's cells"));
         assert!(painted(directory.path(), 12, (0, 0)).unwrap());
         assert!(!painted(directory.path(), 12, (1, 0)).unwrap());
-        assert_eq!(read(directory.path(), 12, (0, 0)).unwrap(), cells);
+        assert_eq!(read_nden(directory.path(), 12, (0, 0)).unwrap(), cells.nden);
         let result = write_beside_painting(directory.path(), 12, |sender| {
             sender.send(square(1, cells.clone())).unwrap();
             Err("painting stopped".into())
         });
         assert_eq!(result.unwrap_err(), "painting stopped");
-        assert_eq!(read(directory.path(), 12, (1, 0)).unwrap(), cells);
+        assert_eq!(read_nden(directory.path(), 12, (1, 0)).unwrap(), cells.nden);
         // A writer's error refuses the squares a painter goes on handing over: bounded by time, so
         // any schedule of the writers lets the failing one close the queue first.
         let (mut refused, started) = (false, std::time::Instant::now());
         let result = write_beside_painting(directory.path(), 12, |sender| {
             let mut x = 2;
             while x < 4000 && started.elapsed() < std::time::Duration::from_secs(20) {
-                let cells = if x == 2 { Vec::new() } else { cells.clone() };
+                let cells = if x == 2 {
+                    PaintedCells::silence(0)
+                } else {
+                    cells.clone()
+                };
                 if sender.send(square(x, cells)).is_err() {
                     refused = true;
                     return Err("a square's writer stopped".into());

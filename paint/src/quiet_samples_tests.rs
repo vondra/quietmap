@@ -72,9 +72,35 @@ fn an_edge_interval_without_an_interior_probe_keeps_its_unsampled_pixels() {
         values: vec![Some(([1.0; LAYERS], heard)); positions.len()],
         accepted: [false; 16],
     };
-    assert!(samples.agrees_with_probe([2, 2], positions[25 + 10], &heard));
-    assert!(!samples.agrees_with_probe([3, 3], positions[25 + 15], &heard));
+    let painted = ([1.0; LAYERS], heard);
+    assert!(samples.agrees_with_probe([2, 2], positions[25 + 10], &painted));
+    assert!(!samples.agrees_with_probe([3, 3], positions[25 + 15], &painted));
     assert_eq!(samples.known_at(7, 5), None);
+}
+
+#[test]
+fn a_quiet_intermittent_source_must_also_agree_in_decibels() {
+    let loudness = [0.01; LAYERS + 1];
+    let energies = [1000.0; LAYERS];
+    let samples = QuietSamples {
+        axis: [0, 4, 8, 12, 15],
+        values: vec![Some((energies, loudness)); 41],
+        accepted: [false; 16],
+    };
+    let mut heard = (energies, loudness);
+    assert!(samples.agrees_with_probe([0, 0], (2, 2), &heard));
+    heard.0[0] *= 10.0f64.powf(0.6 / 10.0);
+    assert!(!samples.agrees_with_probe([0, 0], (2, 2), &heard));
+    heard.0[0] = f64::NAN;
+    assert!(!samples.agrees_with_probe([0, 0], (2, 2), &heard));
+    assert!(energies_agree_within_half_decibel(
+        &[0.0; LAYERS],
+        &[0.0; LAYERS]
+    ));
+    assert!(!energies_agree_within_half_decibel(
+        &[0.2; LAYERS],
+        &[0.8; LAYERS]
+    ));
 }
 
 #[test]

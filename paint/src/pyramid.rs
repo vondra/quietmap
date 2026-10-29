@@ -1,7 +1,7 @@
 //! Fold painted cells into the same assessed-pixel loudness means with memory bounded by depth.
 
 use crate::exact::LAYERS;
-use crate::hm3::{TILE_PX, encode_tile, read};
+use crate::hm3::{TILE_PX, encode_tile, read_nden};
 use crate::paint::{Cells, NO_LEVEL, SILENCE, cell};
 use crate::region::{self, REGION_ZOOM};
 use pmtiles::TileCoord;
@@ -234,7 +234,7 @@ impl<'a> Pyramid<'a> {
     ) -> Result<AssessedLoudnessMeans, String> {
         let means = if zoom == 12 {
             AssessedLoudnessMeans::from_painted(
-                &read(self.out, u32::from(self.painted_zoom), (x, y))?,
+                &read_nden(self.out, u32::from(self.painted_zoom), (x, y))?,
                 self.painted_zoom,
                 &self.loudness,
             )

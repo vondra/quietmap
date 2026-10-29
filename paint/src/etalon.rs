@@ -10,16 +10,15 @@ use crate::exact::{Batch, LAYERS, Pair, Point, add_bands, evaluate_all, whole_en
 use crate::flight_spectra::FlightSpectra;
 use crate::flights::aircraft_sums;
 use crate::hum::Hum;
-use crate::paint::{Cells, Grid, NO_LEVEL, Painted, cells_of};
+use crate::levels::PaintedCells;
+use crate::paint::{Grid, Painted};
 use crate::sone::{Displays, PixelSound, PixelSoundScratch, Rest, pixel_ndens, pixel_sound};
 use crate::square::Square;
-use physics::bands::lden_energy;
 use popup::evaluate::Scratch;
 use popup::percentiles::Resolution;
 use popup::selection::SplitMix;
 use rayon::prelude::*;
 use tiles::geo::{Mercator, TileId};
-use tiles::sources::Layer;
 
 /// Answered pixel rows one batch takes: a city row's pairs are a few hundred megabytes.
 const ETALON_PASS_ROWS: usize = 4;
@@ -37,7 +36,7 @@ pub fn etalon(
     grid: Grid,
     batch: Option<&dyn Batch>,
     sample_step: usize,
-) -> Result<Cells, String> {
+) -> Result<PaintedCells, String> {
     if sample_step == 0 {
         return Err("the etalon's sample step is at least 1".into());
     }
@@ -117,17 +116,14 @@ pub fn etalon(
                 };
                 let range = starts[k]..starts[k + 1];
                 let reflection = points[k].reflection();
-                let mut layers: [f64; LAYERS] =
-                    std::array::from_fn(|layer| lden_energy(&rest.steady[layer]));
-                for (&index, energy) in candidates[range.clone()]
-                    .iter()
-                    .zip(&evaluated.pairs[range.clone()])
-                {
-                    layers[square.candidates[index as usize].layer as usize] +=
-                        lden_energy(&energy.mixed);
-                }
-                let mut layers = layers.map(|energy| reflection * energy);
-                layers[Layer::Aircraft as usize] += lden_energy(&rest.flights[0]);
+                let layers = crate::levels::layer_energy(
+                    square,
+                    &rest.steady,
+                    &rest.flights[0],
+                    reflection,
+                    &candidates[range.clone()],
+                    &evaluated.pairs[range.clone()],
+                );
                 let ndens = pixel_ndens(
                     square,
                     &displays,
@@ -150,13 +146,7 @@ pub fn etalon(
             pixel_layers[at] = Some(layers);
         }
     }
-    Ok((pixel_layers.par_iter())
-        .map(|pixel| {
-            pixel
-                .as_ref()
-                .map_or([NO_LEVEL; LAYERS + 1], |(_, ndens)| cells_of(ndens))
-        })
-        .collect())
+    PaintedCells::from_painted(pixel_layers.into_par_iter())
 }
 
 /// What `count` outdoor pixels of the square drawn from `seed` hear (the etalon's way: every
