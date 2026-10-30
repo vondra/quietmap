@@ -14,6 +14,7 @@ import { isochronRoutes } from './routes/isochron.ts'
 import { heatmapPmtilesRoutes } from './routes/heatmap-pmtiles.ts'
 import { heatmapManifestRoutes } from './routes/heatmap-manifest.ts'
 import { rasterRoutes } from './routes/raster.ts'
+import { sourceOutlineRoutes } from './routes/source-outline.ts'
 import { stayRoutes } from './routes/stay.ts'
 import { accountRoutes } from './routes/account.ts'
 import { mediaRoutes } from './routes/media.ts'
@@ -84,6 +85,7 @@ export async function buildApp(
     timeoutMs: popupTimeoutMs,
   })
   await app.register(popupRoutes, { runner, years: config.years })
+  await app.register(sourceOutlineRoutes, { preparedDir: config.preparedDir, years: config.years })
   await app.register(searchRoutes, { photonUrl: config.photonUrl })
   await app.register(isochronRoutes, { valhallaUrl: config.valhallaUrl })
   await app.register(heatmapPmtilesRoutes, { tilesDir: config.tilesDir })

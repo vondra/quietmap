@@ -455,7 +455,9 @@ a smooth field's information is the residual of a planar prediction of its heigh
 
 Beside the squares lie the year's flight tracks, 28 GB in 256 files, read only to draw a listed
 flight, and its weather table, 16.6 MB for every half degree: a 30-year climatology, the same in
-every year.
+every year. Industrial site boundaries are kept in `source-outlines.sqlite`, indexed by the same
+source id as their sound. Opening a site's row reads its whole input boundary; sources without a
+mapped boundary keep their computed points. This display file does not enter the noise calculation.
 
 </details>
 

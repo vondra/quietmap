@@ -54,6 +54,13 @@ pub struct IndustrialRow {
     pub source_id: u16,
 }
 
+impl IndustrialRow {
+    /// The same identity for the site's sound and its display outline.
+    pub fn group_key(&self) -> u64 {
+        group_key(&["industry", &self.osm_kind, &self.osm_id.to_string()])
+    }
+}
+
 /// What a row emits: its sound power, source height, display label and its site's area.
 #[derive(Debug, PartialEq)]
 pub struct RowEmission {
@@ -271,7 +278,7 @@ fn place(
         platform_half_width_m: 0.0,
         exclusion_radius_m: 0.0,
         footprint_id: 0,
-        group_key: group_key(&["industry", &row.osm_kind, &row.osm_id.to_string()]),
+        group_key: row.group_key(),
         emission: emission.sound.band_levels_db(),
         display: fields(display),
     };
@@ -283,7 +290,7 @@ fn place(
     }
 }
 
-fn read_rows(table: &Table, rows: &mut Vec<IndustrialRow>) -> Result<(), String> {
+pub(crate) fn read_rows(table: &Table, rows: &mut Vec<IndustrialRow>) -> Result<(), String> {
     for (key, value) in [
         ("grid", "z30"),
         ("industrial_contract", "country_land_baked_v1"),

@@ -7,6 +7,7 @@ streamed popup:
 | route | answer |
 |---|---|
 | `GET /api/popup?lat=&lon=[&year=][&source=ID,...[&piece=K]]` | one click, streamed as `application/x-ndjson` (below) |
+| `GET /api/source-outline/:id[?year=]` | the site's mapped parts as a GeoJSON FeatureCollection, empty without a boundary; `id` is 16 lowercase hex digits, `year` one of `QM_YEARS` (the first by default), otherwise 400; 503 when that year's outline file was absent at startup; `no-cache` |
 | `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{build, zoom, layers}` |
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
 | `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
@@ -61,6 +62,9 @@ group ids) adds how all of it arrives and its loudest pieces with their data and
 The response is never compressed and says `Cache-Control: no-store, no-transform` and
 `X-Accel-Buffering: no`: a proxy in front must pass it through unbuffered, and it must pass the
 visitor's address in `X-Forwarded-For` (forwarding headers are trusted from loopback only).
+
+Industrial boundaries are read separately from `<QM_PREPARED_DIR>/<year>/source-outlines.sqlite`,
+opened read-only at startup. The browser asks for an outline when the site's row opens.
 
 ## Environment
 

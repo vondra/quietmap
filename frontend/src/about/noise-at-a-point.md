@@ -17,7 +17,8 @@ same answer.
 ## What the popup shows
 
 The popup leads with how loud the place sounds, then lists the sources heard there, the largest
-share first. A row opens to the source's data and how its sound arrives. At Greenwich, October 2026:
+share first. A row opens to the source's data and how its sound arrives, and highlights it on the
+map. An industrial site shows its mapped boundary where one is available. At Greenwich, October 2026:
 
 | In the popup | What it tells |
 |---|---|

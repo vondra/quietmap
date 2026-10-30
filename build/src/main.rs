@@ -42,6 +42,8 @@
 //!
 //! Roads: `qm-build traffic --prepared DIR --squares X:Y[,X:Y..] --out DIR` routes the buildings'
 //! trip ends down the local streets and grids them, one file per square, for the sources.
+//! Display: `qm-build source-outlines --prepared DIR --squares all --out FILE` indexes the same
+//! input's industrial boundaries for the popup's map highlight, without changing sound sources.
 
 mod aircraft;
 mod airport;
@@ -54,6 +56,7 @@ mod obstacles;
 mod period;
 mod rings;
 mod screening;
+mod source_outlines;
 mod sources;
 mod stage1;
 mod structures;
@@ -243,6 +246,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let options = Arguments::parse(rest)?;
     let out = PathBuf::from(options.get("out")?);
     match command.as_str() {
+        "source-outlines" => source_outlines::build(
+            &Dev4 {
+                prepared: options.get("prepared")?.into(),
+                rasters: PathBuf::new(),
+            },
+            &parse_squares(options.get("squares")?)?,
+            &out,
+        ),
         "dev4" => {
             let dev4 = Dev4 {
                 prepared: options.get("prepared")?.into(),

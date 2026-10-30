@@ -24,6 +24,7 @@ import { createMediaKeeper } from './lib/media-keeper'
 import { isSignedIn } from './lib/places-keeper'
 import { startRecording } from './lib/recorder'
 import { useIsDesktop } from './hooks/useIsDesktop'
+import { useSourceOutline } from './hooks/useSourceOutline'
 import type { DataLayerId } from './lib/data-layers'
 import { defaultStaySearch, freshSearch, type Stay, type StaySearch } from './lib/stays'
 
@@ -66,9 +67,10 @@ export default function App() {
     ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)
     : undefined
   const highlightedTrack = noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlighted)?.track
-  const highlight = highlightedSource?.geometry
+  const sourceOutline = useSourceOutline(highlightedSource)
+  const highlight = sourceOutline ?? (highlightedSource?.geometry
     ? contributorHighlight(highlightedSource)
-    : highlightedTrack ? highlightGeoJson(highlightedTrack) : null
+    : highlightedTrack ? highlightGeoJson(highlightedTrack) : null)
   const [quietClustersEnabled, setQuietClustersEnabled] = useState(initial.quietClusters)
   const [quietThreshold, setQuietThreshold] = useState(initial.quietThreshold ?? QUIET_THRESHOLD_DEFAULT)
   const [basemap, setBasemap] = useState<BasemapId>(initial.basemap ?? DEFAULT_BASEMAP)
