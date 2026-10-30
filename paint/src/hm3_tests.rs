@@ -64,7 +64,7 @@ fn one_complete_bundle_keeps_quadrants_layers_and_assessed_silence() {
         assert_eq!(
             PaintedSquare::open(directory.path(), zoom, (9, 17))
                 .unwrap()
-                .read_lden()
+                .read_cells(Metric::Lden)
                 .unwrap(),
             cells
         );
@@ -105,9 +105,12 @@ fn identical_quadrants_share_bytes_and_invalid_ranges_are_refused() {
     .unwrap();
     let square = PaintedSquare::open(directory.path(), 13, (0, 0)).unwrap();
     for layer in 0..=LAYERS {
-        let first = square.compressed_tile(layer, 0, 0).unwrap();
+        let first = square.compressed_tile(Metric::Nden, layer, 0, 0).unwrap();
         for (x, y) in [(1, 0), (0, 1), (1, 1)] {
-            assert_eq!(square.compressed_tile(layer, x, y).unwrap(), first);
+            assert_eq!(
+                square.compressed_tile(Metric::Nden, layer, x, y).unwrap(),
+                first
+            );
         }
     }
     let path = square_path(directory.path(), 13, (0, 0));
@@ -142,7 +145,7 @@ fn legacy_squares_stay_complete_and_dual_streams_keep_the_same_nden_bytes() {
     assert!(painted(old.path(), 12, (9, 17)).unwrap());
     assert!(!verify(old.path(), 12, (9, 17)).unwrap());
     let legacy = PaintedSquare::open(old.path(), 12, (9, 17)).unwrap();
-    assert!(legacy.read_lden().is_err());
+    assert!(legacy.read_cells(Metric::Lden).is_err());
     let nden = read_nden(old.path(), 12, (9, 17)).unwrap();
     let lden = nden
         .iter()
@@ -163,8 +166,8 @@ fn legacy_squares_stay_complete_and_dual_streams_keep_the_same_nden_bytes() {
     let dual = PaintedSquare::open(new.path(), 12, (9, 17)).unwrap();
     for layer in 0..=LAYERS {
         assert_eq!(
-            legacy.compressed_tile(layer, 0, 0).unwrap(),
-            dual.compressed_tile(layer, 0, 0).unwrap()
+            legacy.compressed_tile(Metric::Nden, layer, 0, 0).unwrap(),
+            dual.compressed_tile(Metric::Nden, layer, 0, 0).unwrap()
         );
     }
     assert_eq!(read_nden(new.path(), 12, (9, 17)).unwrap(), nden);

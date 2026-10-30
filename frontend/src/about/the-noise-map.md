@@ -30,6 +30,19 @@ differs from a decibel, is on [Noise at a point](/about/noise-at-a-point#what-th
 A place not yet painted is clear too, without the quiet zones' green, and its hover reads "—". The
 popup computes it all the same.
 
+### Lden
+
+The switch above the layers shows everything in Lden instead: the map, its hover, the quiet zones,
+the popup's level and its sources' shares, and the places you opened. Lden is the EU's
+day-evening-night level, the sound's energy averaged over the day with the evening 5 dB and the night
+10 dB louder. A short loud event weighs more in it than in sone: a few loud flights a day raise
+Lden far more than they raise how loud the place sounds over the day. The same colours stand at decibels the EU's noise maps and the
+WHO use: clear under 35 dB, yellow from 45 (the WHO's guideline for aircraft), orange from 55 (the
+lowest band the EU's maps report; the WHO's guideline for roads is 53), red from 65, purple from 70
+and dark purple from 75 dB, the EU's top band. The map holds Lden only where it was painted with it,
+since 30 October 2026; elsewhere the Lden map is clear until those squares are painted again. The
+popup gives Lden everywhere.
+
 <details>
 <summary>Why these colours</summary>
 
@@ -48,7 +61,7 @@ at 48 sone (`frontend/src/lib/heatmap-palette.ts`).
 The map shows any of the noise layers together: roads, railways, industry, buildings, ships and
 aircraft. All six show the painted total, one alone its own loudness, and two to five an estimate
 from each layer's own. Quiet zones wash green every place where the total stays at or below a
-chosen loudness, from 0.25 to 4 sone.
+chosen loudness, from 0.25 to 4 sone, or a chosen Lden, from 20 to 55 dB.
 
 <details>
 <summary>How two to five layers are combined</summary>
@@ -56,7 +69,7 @@ chosen loudness, from 0.25 to 4 sone.
 Loudness does not add like energy, so each layer's loudness is raised to a power that grows with
 the loudest layer's level (1.0 at 22 phon, 1.9 at 62, 3.1 at 87 phon), summed and taken back.
 Against the painted total of all six this is within 1 phon at 90 % of the places where two layers
-or more sound, and within 2 phon at 98 %.
+or more sound, and within 2 phon at 98 %. Lden adds as energy, so its layers are summed exactly.
 
 </details>
 
@@ -220,12 +233,11 @@ archives in the measured urban area shrink by 26 % against raw-cell Brotli at qu
 The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` restores the same prediction in place;
 every cell, including silence and not assessed, returns exactly.
 
-The square format supports one atomic bundle containing these Nden streams and disk-only Lden
+The square format supports one atomic bundle containing these Nden streams and Lden
 in decibels for each layer and the total. Lden comes from the same propagated energies, summed before taking
 the logarithm, and is stored in half-decibel steps from 0 to 126.5 dB, capped above that range:
 254 means below 0 dB, 255 not assessed. It is
-kept on disk with the same predictor and lossless Brotli at quality 9; the displayed map and its
-lower zooms still use Nden. In open background blocks,
+compressed with the same predictor and lossless Brotli at quality 9. In open background blocks,
 Lden uses the original hum and aircraft energy fields at each pixel, while Nden keeps its shared
 corner blend. A sampled source patch must also agree with its exact probe within half a decibel
 in each layer and the total; otherwise its remaining pixels are calculated individually.
@@ -239,12 +251,18 @@ two waiting, two painted), and a square is complete only after its bundle is dur
 (`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies
 independent painters' bundles into one tree atomically, without decoding or replacing completed
 squares. Identical completed copies are skipped on retry; conflicting squares stop the merge.
-`paint/src/pyramid.rs` reads each compressed square once and carries the assessed-pixel counts and
-unrounded loudness through the same means, the branches on all cores at once; it compresses each lower
-tile once. A region of 16 × 16 squares (a tile of zoom 8) is packed as soon as it is painted
+`paint/src/pyramid.rs` reads each compressed square once a quantity and carries the assessed-pixel counts and
+the unrounded mean through the same means, the branches on all cores at once; it compresses each lower
+tile once. A lower zoom's cell is the mean over its assessed pixels of what each quantity averages
+over the day: the loudness in sone for Nden, the energy for Lden. Lden's pyramid covers only the
+squares that hold it, so an older square stays without a level there rather than reading quiet; at
+zoom 2, where a cell spans four squares, it is the mean of those that hold Lden.
+A region of 16 × 16 squares (a tile of zoom 8) is packed as soon as it is painted
 (`qm-paint pack-region`, `paint/src/region.rs`): its tiles from zoom 12 to 8 and its exact means are
-kept, and the pack reuses them while the region's bundles are unchanged.
-`pack.rs` copies these streams into one immutable PMTiles archive per layer, zooms down to 2,
+kept for each quantity (`12_34.region`, `12_34.lden.region`), and the pack reuses them while the
+region's bundles are unchanged.
+`pack.rs` copies these streams into one immutable PMTiles archive per layer and quantity (`road`,
+`lden-road`), zooms down to 2,
 ordered by zoom and Hilbert tile id. Identical streams share an archive range; gzip compresses its
 index. An archive is read by byte range, so a tile needs no scan or server decompression, and the
 same files support object storage. The manifest appears only after every archive is complete; the

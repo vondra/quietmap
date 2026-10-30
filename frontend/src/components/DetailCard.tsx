@@ -1,6 +1,7 @@
 // The desktop popup card: its head the place's loudness, the close beside it, then the place to stay
 // whose pin opened it, and a skeleton from the click on, then the streamed answer, or the error.
 import { lazy, Suspense, useEffect, useRef } from 'react'
+import type { Metric } from '../lib/hm3-decoder'
 import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import DetailSkeleton from './DetailSkeleton'
@@ -14,6 +15,8 @@ import type { Stay } from '../lib/stays'
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
 
 interface DetailCardProps {
+  /** The quantity the popup leads with. */
+  metric: Metric
   noiseData: PopupUpdate | null
   // The position arrives at click time, before the first streamed update: the card opens at
   // once with a skeleton and the coordinate.
@@ -28,7 +31,7 @@ interface DetailCardProps {
   stay: Stay | null
 }
 
-export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: DetailCardProps) {
+export default function DetailCard({ metric, noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
@@ -57,6 +60,7 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
         ? <DetailSkeleton position={position} error={error} />
         : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
             <NoiseDetailContent
+              metric={metric}
               data={noiseData}
               onHighlight={onHighlight}
               calculationOpen={calculationOpen}

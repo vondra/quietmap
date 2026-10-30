@@ -75,19 +75,21 @@ export async function buildComposite(
         .catch(() => null)
     }),
   )
-  // An absent or failed tile stays without a level, painted transparent.
+  // An absent or failed tile stays without a level, painted transparent. One source's tiles hold
+  // one quantity.
   let grid: Uint8Array | null = null
   decoded.forEach((d, i) => {
-    if (!d?.cells) return
+    if (!d) return
     grid ??= new Uint8Array(width * height).fill(HM3_NO_LEVEL)
     blit(d.cells, grid, (jobs[i].tx - x0) * TILE_PX, (jobs[i].ty - y0) * TILE_PX, width)
   })
-  if (grid === null) return null
+  const metric = decoded.find(d => d !== null)?.metric
+  if (grid === null || metric === undefined) return null
   // A pan/zoom during the fetches supersedes this composite — bail before the
   // big compose (up to 96 tiles) so stale work never queues ahead of fresh
   // tile composes in the single worker.
   if (isStale()) return null
-  const image = await composeOffThread(grid, width, height)
+  const image = await composeOffThread(grid, metric, width, height)
   const bounds: Bounds = [tileXToLng(x0, z), tileYToLat(y1 + 1, z), tileXToLng(x1 + 1, z), tileYToLat(y0, z)]
   return { image, bounds }
 }

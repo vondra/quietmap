@@ -1,11 +1,11 @@
-//! A zoom-8 region's part of the pack kept between the painting and the archives: its compressed
-//! tiles from zoom 12 to 8, its zoom-8 means and the bundles they came from. `qm-paint pack-region`
-//! packs a region once its squares are painted; the world's pack then folds only zooms 7 to 2 and
-//! redoes a region whose bundles changed since.
+//! A zoom-8 region's part of the pack kept between the painting and the archives, one a metric:
+//! its compressed tiles from zoom 12 to 8, its zoom-8 means and the bundles they came from.
+//! `qm-paint pack-region` packs a region once its squares are painted; the world's pack then folds
+//! only zooms 7 to 2 and redoes a region whose bundles changed since.
 
 use crate::exact::LAYERS;
-use crate::hm3::square_path;
-use crate::pyramid::AssessedLoudnessMeans;
+use crate::hm3::{Metric, square_path};
+use crate::pyramid::AssessedMeans;
 use pmtiles::TileCoord;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ pub(crate) struct Bundle {
 
 pub(crate) struct Region {
     pub tiles: Vec<(TileCoord, Vec<Vec<u8>>)>,
-    pub means: AssessedLoudnessMeans,
+    pub means: AssessedMeans,
 }
 
 /// The bundles of `squares` (zoom 12) in the painted tree `out`.
@@ -54,16 +54,21 @@ pub(crate) fn bundles(
         .collect()
 }
 
-fn path(directory: &Path, x: u32, y: u32) -> PathBuf {
-    directory.join(format!("{x}_{y}.region"))
+/// `12_34.region` for Nden, `12_34.lden.region` for Lden: one directory, distinct names.
+fn path(directory: &Path, x: u32, y: u32, metric: Metric) -> PathBuf {
+    directory.join(match metric {
+        Metric::Nden => format!("{x}_{y}.region"),
+        Metric::Lden => format!("{x}_{y}.lden.region"),
+    })
 }
 
 /// Writes the region atomically: a pack that reads it sees a whole region or none.
 pub(crate) fn store(
     directory: &Path,
     (x, y): (u32, u32),
+    metric: Metric,
     tiles: &[(TileCoord, Vec<Vec<u8>>)],
-    means: &AssessedLoudnessMeans,
+    means: &AssessedMeans,
     bundles: &[Bundle],
 ) -> Result<(), String> {
     let mut bytes = MAGIC.to_vec();
@@ -97,7 +102,7 @@ pub(crate) fn store(
     let mut file = tempfile::NamedTempFile::new_in(directory).map_err(|e| e.to_string())?;
     file.write_all(&bytes).map_err(|e| e.to_string())?;
     file.as_file().sync_all().map_err(|e| e.to_string())?;
-    file.persist(path(directory, x, y))
+    file.persist(path(directory, x, y, metric))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -106,9 +111,10 @@ pub(crate) fn store(
 pub(crate) fn load(
     directory: &Path,
     (x, y): (u32, u32),
+    metric: Metric,
     bundles: &[Bundle],
 ) -> Result<Option<Region>, String> {
-    let bytes = match std::fs::read(path(directory, x, y)) {
+    let bytes = match std::fs::read(path(directory, x, y, metric)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.to_string()),
@@ -116,7 +122,7 @@ pub(crate) fn load(
     if !bytes.starts_with(MAGIC) {
         return Err(format!(
             "{}: not a region file",
-            path(directory, x, y).display()
+            path(directory, x, y, metric).display()
         ));
     }
     let mut reader = Reader {
@@ -157,7 +163,7 @@ pub(crate) fn load(
         .map_err(|e| e.to_string())?;
     Ok(Some(Region {
         tiles,
-        means: AssessedLoudnessMeans::from_bytes(&means)?,
+        means: AssessedMeans::from_bytes(&means)?,
     }))
 }
 

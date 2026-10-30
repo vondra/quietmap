@@ -9,10 +9,13 @@ import { computedPiece, FIXTURE_FLIGHTS, pieceRun, popupUpdate, roadContributor,
 import {
   FIXTURE_DB,
   POINT,
+  RAILWAY_LDEN,
   RAILWAY_SONE,
+  ROAD_LDEN,
   ROAD_SONE,
   SOURCE_DB,
   TILE_Z,
+  TOTAL_LDEN,
   TOTAL_SONE,
   abortedPopupRequests,
   afterPaint,
@@ -119,10 +122,46 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await road.click()
   for (const id of ['industrial', 'building', 'ship', 'aircraft']) await layer(id).click()
   await page.mouse.move(x, y)
-  await expect(hover).toHaveText(`${fmtSone(HM3_BYTE_SONE[combineLayerCells([soneCells(ROAD_SONE), soneCells(RAILWAY_SONE)])[0]])} sone`)
+  await expect(hover).toHaveText(`${fmtSone(HM3_BYTE_SONE[combineLayerCells([soneCells(ROAD_SONE), soneCells(RAILWAY_SONE)], 'nden')[0]])} sone`)
   for (const id of ['industrial', 'building', 'ship', 'aircraft']) await layer(id).click()
   await page.mouse.move(x + 1, y)
   await expect(hover).toHaveText(`${TOTAL_SONE} sone`)
+})
+
+test('desktop: the Lden switch shows the Lden tiles in dB, adds layers as energy, and the popup leads with Lden', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  const ldenTile = `/api/tiles/b1/lden-total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const tileLoaded = page.waitForResponse(response =>
+    new URL(response.url()).pathname === ldenTile && response.status() === 200,
+  )
+  await page.goto(mapUrl(POINT, ALL_LAYERS, TILE_Z + 2))
+  await page.getByTestId('metric-lden').filter({ visible: true }).click()
+  await tileLoaded
+  await expect(page).toHaveURL(/m=lden/)
+  const { x, y } = await canvasCenter(page)
+  const hover = page.getByTestId('heatmap-hover')
+  await page.mouse.move(x, y)
+  await expect(hover).toHaveText(`${TOTAL_LDEN.toFixed(1)} dB`)
+  const layer = (id: string) => page.getByTestId(`layer-${id}`).filter({ visible: true })
+  for (const id of ['industrial', 'building', 'ship', 'aircraft']) await layer(id).click()
+  await page.mouse.move(x + 1, y)
+  const sum = combineLayerCells([Uint8Array.of(2 * ROAD_LDEN), Uint8Array.of(2 * RAILWAY_LDEN)], 'lden')[0]
+  await expect(hover).toHaveText(`${(sum / 2).toFixed(1)} dB`)
+  await page.mouse.click(x, y)
+  await expect.poll(() => popupRequests(page)).toHaveLength(1)
+  await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB))
+  await expect(badge(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
+  await expect(page.locator('[data-testid="nden"]:visible')).toHaveText('15 sone Nden')
+  const shares = page.locator('[data-testid="detail-popup"]:visible [data-testid="row-share"]')
+  await expect(shares).toHaveText(['100 %'])
+  // Two equal streets rounded to 60.0 dB under a total rounded to 63.1: the shares come from the
+  // answer's own parts, never a phantom rest.
+  const twin = { ...roadContributor(60), id: '00000000000000bb', name: 'Twin street', share: 0.5 }
+  await sendPopupLine(page, {
+    ...popupUpdate(2, false, POINT.lat, POINT.lng, 63.1),
+    top_contributors: [{ ...roadContributor(60), share: 0.5 }, twin],
+  })
+  await expect(shares).toHaveText(['50 %', '50 %'])
 })
 
 test('desktop: an error line replaces the partial answer, a new click aborts the old request', async ({ page }) => {

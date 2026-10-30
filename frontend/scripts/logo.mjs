@@ -22,7 +22,7 @@ function logoSvg() {
   const green = '#' + QUIET_RGB.map(c => c.toString(16).padStart(2, '0')).join('')
   const span = Math.log2(RAMP.at(-1) / RAMP[0])
   const stops = [[0, '#ffffff'], [SILENCE_TO, '#ffffff'], [SILENCE_TO, green], [QUIET_TO, green],
-    ...RAMP.map(sone => [RAMP_FROM + (1 - RAMP_FROM) * Math.log2(sone / RAMP[0]) / span, paletteHex(sone)])]
+    ...RAMP.map(sone => [RAMP_FROM + (1 - RAMP_FROM) * Math.log2(sone / RAMP[0]) / span, paletteHex('nden', sone)])]
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="quietmap.org">
   <!-- Drawn by frontend/scripts/logo.mjs from the map's colours (src/lib/heatmap-palette.ts): a 0 in
        silence, ringed by the quiet zones' green, then the loudness ramp to the blob's edge. -->

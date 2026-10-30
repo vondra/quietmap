@@ -8,7 +8,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { ALLOWED_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, WORLD_BASE_ZOOM } from './heatmap-shared.ts'
+import { ALLOWED_LAYERS, LDEN_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, NDEN_LAYERS, WORLD_BASE_ZOOM } from './heatmap-shared.ts'
 import { HM3_MANIFEST_URL, HM3_VERSION } from '../../../frontend/src/lib/hm3-decoder.ts'
 
 const BUILD_ID = /^b\d+$/
@@ -55,8 +55,12 @@ export function validatePmtilesManifest(manifest: PmtilesManifest, manifestPath:
   if (!manifest.layers || typeof manifest.layers !== 'object') {
     throw new Error(`${manifestPath} has no layers object`)
   }
-  for (const layer of ALLOWED_LAYERS) {
+  for (const layer of NDEN_LAYERS) {
     if (!(layer in manifest.layers)) throw new Error(`${manifestPath} is missing layer ${layer}`)
+  }
+  const ldenLayers = LDEN_LAYERS.filter(layer => layer in manifest.layers!)
+  if (ldenLayers.length > 0 && ldenLayers.length < LDEN_LAYERS.length) {
+    throw new Error(`${manifestPath} has only some Lden layers`)
   }
   for (const [layer, entry] of Object.entries(manifest.layers)) {
     if (!ALLOWED_LAYERS.has(layer)) throw new Error(`${manifestPath} has unexpected layer ${layer}`)

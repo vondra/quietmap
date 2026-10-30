@@ -6,6 +6,7 @@
 // open place stands under the field, as the list's selected item, its name the field that renames it,
 // with its action and what that opens (App: the reachable area).
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react'
+import type { Metric } from '../lib/hm3-decoder'
 import { History, Search, UserRound } from 'lucide-react'
 import PlaceRow from './PlaceRow'
 import { FLOATING } from './ui/button'
@@ -32,8 +33,10 @@ interface SearchBarProps {
   /** The places opened, in the history's order, and the names the visitor gave places. */
   history: RecentPlace[]
   titles: PlaceTitle[]
-  /** The open place: its point, its name as known and its loudness, once known. */
-  open: { at: Point; place: string | null; sone: number | null } | null
+  /** The quantity the places' rows show. */
+  metric: Metric
+  /** The open place: its point, its name as known and its loudness and Lden, once known. */
+  open: { at: Point; place: string | null; sone: number | null; lden: number | null } | null
   /** The server did not take the last change of a signed-in visitor's places. */
   notSaved: boolean
   onOpenPlace: (place: RecentPlace) => void
@@ -53,7 +56,7 @@ interface SearchBarProps {
 const folded = (text: string) => text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 const keyOf = (at: Point) => `${at.lat},${at.lng}`
 
-export default function SearchBar({ onSelect, getMapView, history, titles, open, notSaved, onOpenPlace, onRename, onForget, onSignIn, openAction, fieldAction, children }: SearchBarProps) {
+export default function SearchBar({ onSelect, getMapView, history, titles, metric, open, notSaved, onOpenPlace, onRename, onForget, onSignIn, openAction, fieldAction, children }: SearchBarProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   // The visitor is at the field (it took the focus or the keys): the list shows what it has.
@@ -252,7 +255,9 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
                   <PlaceRow
                     listed
                     {...described(place, place.place)}
+                    metric={metric}
                     sone={place.sone}
+                    lden={place.lden}
                     highlighted={k === highlighted}
                     onOpen={() => choose(k)}
                     onForget={() => onForget(place)}
@@ -281,7 +286,9 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
                       given={false}
                       proposal={null}
                       detail={r.secondary}
+                      metric={metric}
                       sone={null}
+                      lden={null}
                       highlighted={k === highlighted}
                       onOpen={() => choose(k)}
                     >
@@ -314,7 +321,9 @@ export default function SearchBar({ onSelect, getMapView, history, titles, open,
             <div key={`open:${keyOf(open.at)}`} data-testid="open-place" className={`${FLOATING} mt-1 overflow-hidden bg-popover`}>
               <PlaceRow
                 {...described(open.at, open.place)}
+                metric={metric}
                 sone={open.sone}
+                lden={open.lden}
                 highlighted
                 onOpen={() => inputRef.current?.focus()}
                 onRename={onRename}

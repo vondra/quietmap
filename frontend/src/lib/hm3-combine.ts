@@ -1,12 +1,12 @@
-// Several noise layers' loudness at a cell from each layer's own: loudness does not add over
-// layers, so two to five layers (no tile of their own) are estimated as N = (Σ N_i^p)^(1/p) sone,
-// p rising with the loudest layer's level as fitted against the painted total of all six (sound
-// adds nearly as loudness near the threshold, nearly as energy when loud). Against the painted
-// total the estimate is within 1 phon at 90 % of cells with two layers or more and within 2 phon
-// at 98 % (1,536 painted tiles of zoom 12, October 2026). Every layer on reads the total, one alone
-// its own.
+// Several noise layers' level at a cell from each layer's own. Lden adds as energy, exactly.
+// Loudness does not add over layers, so two to five layers (no tile of their own) are estimated as
+// N = (Σ N_i^p)^(1/p) sone, p rising with the loudest layer's level as fitted against the painted
+// total of all six (sound adds nearly as loudness near the threshold, nearly as energy when loud).
+// Against the painted total the estimate is within 1 phon at 90 % of cells with two layers or more
+// and within 2 phon at 98 % (1,536 painted tiles of zoom 12, October 2026). Every layer on reads
+// the total, one alone its own.
 
-import { fetchAndDecodeHM3, HM3_NO_LEVEL, HM3_SILENCE } from './hm3-decoder.ts'
+import { fetchAndDecodeHM3, HM3_NO_LEVEL, HM3_SILENCE, type Metric } from './hm3-decoder.ts'
 import { LAYER_URL_SEPARATOR } from './tile-urls.ts'
 
 /** p at the loudest layer's loudness level (phon), linear between the fitted bands' centres. */
@@ -46,9 +46,35 @@ function powerTable(): Float64Array {
   return powers
 }
 
-/** The cells of several layers' grids combined: no level where any layer has none, silence where
- *  every layer is silent or the combination stays under 1/16 sone. */
-export function combineLayerCells(grids: readonly Uint8Array[]): Uint8Array {
+// A half-decibel cell byte's energy, 10^(byte/20).
+const ENERGY = Float64Array.from({ length: LEVELS }, (_, byte) => 10 ** (byte / 20))
+
+/** The cells of several layers' grids of `metric` combined: no level where any layer has none,
+ *  silence where every layer is silent or the combination stays under the quantity's floor. */
+export function combineLayerCells(grids: readonly Uint8Array[], metric: Metric): Uint8Array {
+  return metric === 'lden' ? combineEnergies(grids) : combineLoudness(grids)
+}
+
+function combineEnergies(grids: readonly Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(grids[0].length)
+  for (let at = 0; at < out.length; at++) {
+    let sum = 0
+    for (const grid of grids) {
+      const byte = grid[at]
+      if (byte === HM3_NO_LEVEL) {
+        sum = -1
+        break
+      }
+      if (byte !== HM3_SILENCE) sum += ENERGY[byte]
+    }
+    out[at] = sum < 0 ? HM3_NO_LEVEL
+      : sum < 1 ? HM3_SILENCE
+        : Math.min(Math.round(20 * Math.log10(sum)), HM3_SILENCE - 1)
+  }
+  return out
+}
+
+function combineLoudness(grids: readonly Uint8Array[]): Uint8Array {
   const table = powerTable()
   const out = new Uint8Array(grids[0].length)
   for (let at = 0; at < out.length; at++) {
@@ -79,6 +105,12 @@ export function combineLayerCells(grids: readonly Uint8Array[]): Uint8Array {
   return out
 }
 
+/** A source's cells at one tile and the quantity they hold. */
+export interface SourceTile {
+  cells: Uint8Array
+  metric: Metric
+}
+
 /** One tile of a source from its address (`tileUrl`): a combination's layers fetched at once and
  *  combined, a tile absent from a layer's archive read as without levels; `null` when every one
  *  is absent. */
@@ -86,12 +118,15 @@ export async function fetchSourceTile(
   url: string,
   signal?: AbortSignal,
   priority?: 'low' | 'high' | 'auto',
-): Promise<{ cells: Uint8Array } | null> {
+): Promise<SourceTile | null> {
   if (!url.includes(LAYER_URL_SEPARATOR)) return fetchAndDecodeHM3(url, signal, priority)
   const tiles = await Promise.all(
     url.split(LAYER_URL_SEPARATOR).map(part => fetchAndDecodeHM3(part, signal, priority)),
   )
-  if (tiles.every(tile => tile === null)) return null
-  const none = new Uint8Array(tiles.find(tile => tile !== null)!.cells.length).fill(HM3_NO_LEVEL)
-  return { cells: combineLayerCells(tiles.map(tile => tile?.cells ?? none)) }
+  const present = tiles.filter(tile => tile !== null)
+  if (present.length === 0) return null
+  const metric = present[0].metric
+  if (present.some(tile => tile.metric !== metric)) throw new Error(`${url}: layers of two quantities`)
+  const none = new Uint8Array(present[0].cells.length).fill(HM3_NO_LEVEL)
+  return { cells: combineLayerCells(tiles.map(tile => tile?.cells ?? none), metric), metric }
 }

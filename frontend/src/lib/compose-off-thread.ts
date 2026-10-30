@@ -10,6 +10,7 @@
 // dies mid-load — a dead worker must never strand a tile unpainted.
 
 import { composeToImageData, upsampleAncestorBlock } from './hm3-compose'
+import type { Metric } from './hm3-decoder'
 
 type ComposeReply = { id: number; pixels: ArrayBuffer; width: number; height: number }
 type Block = { x: number; y: number }
@@ -17,13 +18,14 @@ type Pending = {
   resolve: (img: ImageData) => void
   reject: (err: unknown) => void
   cells: Uint8Array
+  metric: Metric
   width: number
   height: number
   block?: Block
 }
 
-function composeSync(cells: Uint8Array, width: number, height: number, block?: Block): ImageData {
-  return composeToImageData(block ? upsampleAncestorBlock(cells, block.x, block.y) : cells, width, height)
+function composeSync(cells: Uint8Array, metric: Metric, width: number, height: number, block?: Block): ImageData {
+  return composeToImageData(block ? upsampleAncestorBlock(cells, block.x, block.y) : cells, metric, width, height)
 }
 
 // undefined = not constructed yet · null = unavailable, use the sync fallback
@@ -52,7 +54,7 @@ function getWorker(): Worker | null {
       // must reject rather than strand every later request behind it.
       for (const p of pending.values()) {
         try {
-          p.resolve(composeSync(p.cells, p.width, p.height, p.block))
+          p.resolve(composeSync(p.cells, p.metric, p.width, p.height, p.block))
         } catch (err) {
           p.reject(err)
         }
@@ -65,21 +67,22 @@ function getWorker(): Worker | null {
   return worker
 }
 
-/** Palette-map `cells` into a `width × height` ImageData off the main thread;
+/** Palette-map `cells` of `metric` into a `width × height` ImageData off the main thread;
  *  synchronous on-thread fallback when no worker is available. With `block`,
  *  `cells` are a z−PREVIEW_DELTA ancestor grid and the worker upsamples this
  *  child's sub-block of it before composing (preview). */
 export function composeOffThread(
   cells: Uint8Array,
+  metric: Metric,
   width: number,
   height: number,
   block?: Block,
 ): Promise<ImageData> {
   const w = getWorker()
-  if (!w) return Promise.resolve(composeSync(cells, width, height, block))
+  if (!w) return Promise.resolve(composeSync(cells, metric, width, height, block))
   return new Promise((resolve, reject) => {
     const id = nextId++
-    pending.set(id, { resolve, reject, cells, width, height, block })
-    w.postMessage({ id, cells, width, height, block })
+    pending.set(id, { resolve, reject, cells, metric, width, height, block })
+    w.postMessage({ id, cells, metric, width, height, block })
   })
 }

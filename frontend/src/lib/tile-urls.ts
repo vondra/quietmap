@@ -13,7 +13,7 @@
 // tiles) = `null` = the tile layers simply don't mount.
 
 import { useSyncExternalStore } from 'react'
-import { HM3_MANIFEST_URL } from './hm3-decoder.ts'
+import { HM3_MANIFEST_URL, type Metric } from './hm3-decoder.ts'
 
 // The toggleable noise layers of the heatmap, each its own tile tree. All share
 // the same HM3 format and loudness palette, so the tile fetch/decode
@@ -31,14 +31,21 @@ export const HEATMAP_LAYERS = [
 export type HeatmapLayer = (typeof HEATMAP_LAYERS)[number]
 /** Two to five layers shown together: their ids in the panel's order, joined by `+`. */
 export type LayerCombination = `${HeatmapLayer}+${string}`
-export type HeatmapSource = HeatmapLayer | 'total' | LayerCombination
+/** The archives a source reads: Nden's by the layer ids, Lden's by the same with `lden-` before
+ *  each (the packer's `Metric::archive_layer`). */
+export type HeatmapSource = HeatmapLayer | 'total' | LayerCombination | `lden-${string}`
 
-/** The source showing `layers` (in the panel's order): every layer the total, one its own tiles,
- *  several their combination; none nothing. */
-export function sourceOf(layers: readonly HeatmapLayer[]): HeatmapSource | null {
+/** The source showing `layers` (in the panel's order) in `metric`: every layer the total, one its
+ *  own tiles, several their combination; none nothing. */
+export function sourceOf(layers: readonly HeatmapLayer[], metric: Metric): HeatmapSource | null {
   if (layers.length === 0) return null
-  if (layers.length === HEATMAP_LAYERS.length) return 'total'
-  return layers.length === 1 ? layers[0] : (layers.join('+') as LayerCombination)
+  const ids: readonly string[] = layers.length === HEATMAP_LAYERS.length ? ['total'] : layers
+  return ids.map(id => (metric === 'lden' ? `lden-${id}` : id)).join('+') as HeatmapSource
+}
+
+/** Whether a build publishes `metric`: Nden always, Lden once squares were painted with it. */
+export function publishes(builds: TileBuilds, metric: Metric): boolean {
+  return metric === 'nden' || 'lden-total' in builds.byLayer
 }
 
 /** A combination's address joins its layers' tile URLs with this (no URL holds it):

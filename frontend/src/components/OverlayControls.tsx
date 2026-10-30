@@ -3,11 +3,14 @@
 import { useState, useEffect, useRef } from 'react'
 import { BedDouble, TreePine } from 'lucide-react'
 import { QUIET_THRESHOLDS } from '../hooks/useUrlState'
+import type { Metric } from '../lib/hm3-decoder'
 import type { StaySearch } from '../lib/stays'
 import StaySearchFields from './StaySearchFields'
 import { Switch } from './ui/switch'
 
 export interface OverlayControlsProps {
+  /** The quantity shown: the quiet threshold is in its unit. */
+  metric: Metric
   quietClustersEnabled: boolean
   onQuietClustersChange: (enabled: boolean) => void
   quietThreshold: number
@@ -35,10 +38,11 @@ function ToggleRow({ active, icon, label, tooltip, onClick }: {
   )
 }
 
-/** A slider over the quiet thresholds (sone). */
-function LoudnessSlider({ value, onChange, testId }: {
-  value: number; onChange: (v: number) => void; testId: string
+/** A slider over the quiet thresholds of `metric` (sone or dB). */
+function LoudnessSlider({ metric, value, onChange, testId }: {
+  metric: Metric; value: number; onChange: (v: number) => void; testId: string
 }) {
+  const thresholds = QUIET_THRESHOLDS[metric]
   const [local, setLocal] = useState(value)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -48,20 +52,20 @@ function LoudnessSlider({ value, onChange, testId }: {
     const t = setTimeout(() => onChangeRef.current(local), 300)
     return () => clearTimeout(t)
   }, [local, value])
-  const at = Math.max(0, QUIET_THRESHOLDS.findIndex((t) => t === local))
+  const at = Math.max(0, thresholds.findIndex((t) => t === local))
   return (
     <div className="flex items-center gap-2 ml-7 mt-0.5 mb-1">
       <span className="text-xs text-muted-foreground shrink-0">below</span>
       <input type="range" data-testid={testId} value={at}
-        onChange={(e) => setLocal(QUIET_THRESHOLDS[parseInt(e.target.value, 10)])} min={0} max={QUIET_THRESHOLDS.length - 1} step={1}
+        onChange={(e) => setLocal(thresholds[parseInt(e.target.value, 10)])} min={0} max={thresholds.length - 1} step={1}
         className="flex-1 h-1 accent-primary cursor-pointer" />
-      <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">{local} sone</span>
+      <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">{local} {metric === 'lden' ? 'dB' : 'sone'}</span>
     </div>
   )
 }
 
 export default function OverlayControls({
-  quietClustersEnabled, onQuietClustersChange,
+  metric, quietClustersEnabled, onQuietClustersChange,
   quietThreshold, onQuietThresholdChange,
   staysOn, onStaysChange, staySearch, onStaySearchChange,
 }: OverlayControlsProps) {
@@ -71,11 +75,12 @@ export default function OverlayControls({
         active={quietClustersEnabled}
         icon={<TreePine className="size-4" />}
         label="Quiet zones"
-        tooltip="Highlight areas where the total loudness (all sources) stays below a threshold"
+        tooltip="Highlight areas where the total noise (all sources) stays below a threshold"
         onClick={() => onQuietClustersChange(!quietClustersEnabled)}
       />
       {quietClustersEnabled && (
-        <LoudnessSlider value={quietThreshold} onChange={onQuietThresholdChange} testId="quiet-threshold" />
+        // Keyed by the quantity: a value dragged in sone must not land after the switch to dB.
+        <LoudnessSlider key={metric} metric={metric} value={quietThreshold} onChange={onQuietThresholdChange} testId="quiet-threshold" />
       )}
       <ToggleRow
         active={staysOn}

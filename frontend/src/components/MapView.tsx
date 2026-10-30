@@ -9,7 +9,7 @@ import FlightTrackLayer from './FlightTrackLayer'
 import SegmentFanLayer from './SegmentFanLayer'
 import QuietZonesLayer from './QuietZonesLayer'
 import HeatmapOverlay from './HeatmapOverlay'
-import { HEATMAP_LAYERS, sourceOf, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
+import { HEATMAP_LAYERS, publishes, sourceOf, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
 import AboutControl from './AboutControl'
 import IsochronLayer from './IsochronLayer'
@@ -21,6 +21,7 @@ import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, OSM_CREDIT, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
+import type { Metric } from '../lib/hm3-decoder'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
@@ -46,6 +47,8 @@ interface MapViewProps {
   segmentFan?: SegmentFan | null
   /** The area reachable from the open place, once drawn. */
   isochron?: GeoJSON.FeatureCollection | null
+  /** The quantity the heatmap, its hover and the quiet zones show. */
+  metric?: Metric
   quietClustersEnabled?: boolean
   quietThreshold?: number
   heatmapLayers?: Record<string, boolean>
@@ -65,7 +68,7 @@ interface MapViewProps {
 export default function MapView({
   isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
   basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, highlight, segmentFan, isochron,
-  quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers, stays,
+  metric = 'nden', quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers, stays,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
   const center = initialCenter ?? [49.8, 15.5]
@@ -114,14 +117,15 @@ export default function MapView({
   }, [onGeolocateReadyChange])
 
   const tileBuild = useTileBuild()
-  // The layers on, as one source: every layer the painted total, one its own tiles, several their
-  // combination (`hm3-combine`). A layer the manifest does not publish (no archive painted yet) has
-  // no tiles to fetch.
+  // The layers on, as one source in the chosen quantity: every layer the painted total, one its own
+  // tiles, several their combination (`hm3-combine`). A layer the manifest does not publish (no
+  // archive painted yet) has no tiles to fetch, nor has Lden before squares are painted with it.
   const heatmapSource = useMemo((): HeatmapSource | null => {
+    if (tileBuild !== null && !publishes(tileBuild, metric)) return null
     const active = HEATMAP_LAYERS.filter(s => !!heatmapLayers?.[s])
-    if (active.length === HEATMAP_LAYERS.length) return 'total'
-    return sourceOf(active.filter(s => tileBuild === null || s in tileBuild.byLayer))
-  }, [heatmapLayers, tileBuild])
+    if (active.length === HEATMAP_LAYERS.length) return sourceOf(active, metric)
+    return sourceOf(active.filter(s => tileBuild === null || s in tileBuild.byLayer), metric)
+  }, [heatmapLayers, tileBuild, metric])
 
   useEffect(() => {
     let cancelled = false
@@ -200,7 +204,7 @@ export default function MapView({
           above the basemap, on its own interleaved deck.gl canvas. */}
       <HeatmapOverlay source={heatmapSource} />
       <DataLayersOverlay layers={dataLayers ?? []} />
-      <QuietZonesLayer enabled={quietClustersEnabled ?? false} threshold={quietThreshold ?? QUIET_THRESHOLD_DEFAULT} />
+      <QuietZonesLayer enabled={quietClustersEnabled ?? false} metric={metric} threshold={quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric]} />
       <FlyToLocation location={selectedLocation ?? null} onArrived={handleArrived} />
       <HoverTooltip source={heatmapSource} />
       <DetailPopup

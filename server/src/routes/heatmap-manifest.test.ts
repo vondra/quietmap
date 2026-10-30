@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify from 'fastify'
 import { heatmapManifestRoutes } from './heatmap-manifest.ts'
-import { ALLOWED_LAYERS, MANIFEST_FILENAME, WORLD_BASE_ZOOM } from './heatmap-shared.ts'
+import { ALLOWED_LAYERS, LDEN_LAYERS, MANIFEST_FILENAME, NDEN_LAYERS, WORLD_BASE_ZOOM } from './heatmap-shared.ts'
 import { HM3_MANIFEST_URL, HM3_VERSION } from '../../../frontend/src/lib/hm3-decoder.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'tiles-manifest-route-test-'))
@@ -95,6 +95,21 @@ test('a manifest missing a layer is a 500, never served', async () => {
   const res = await app.inject(HM3_MANIFEST_URL)
   assert.equal(res.statusCode, 500)
   assert.deepEqual(res.json(), { error: 'manifest unreadable' })
+  await app.close()
+})
+
+test('a build without Lden serves its Nden layers; one with only some Lden layers is a 500', async () => {
+  clearFixture()
+  const manifest = validManifest('b546')
+  for (const layer of LDEN_LAYERS) delete manifest.layers[layer]
+  writeFileSync(pinPath, JSON.stringify(manifest))
+  const app = await buildApp()
+  const res = await app.inject(HM3_MANIFEST_URL)
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(Object.keys(res.json().layers).sort(), [...NDEN_LAYERS].sort())
+  manifest.layers['lden-total'] = { file: 'lden-total.b546.pmtiles', build: 'b546' }
+  writeFileSync(pinPath, JSON.stringify(manifest))
+  assert.equal((await app.inject(HM3_MANIFEST_URL)).statusCode, 500)
   await app.close()
 })
 

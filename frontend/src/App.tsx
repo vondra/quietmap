@@ -11,6 +11,7 @@ import LayersPanel from './components/LayersPanel'
 import MobileDetailSheet from './components/MobileDetailSheet'
 import BasemapBar from './components/BasemapBar'
 import { sameDetailPosition, useUrlState, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
+import type { Metric } from './lib/hm3-decoder'
 import type { SelectedLocation } from './components/FlyToLocation'
 import type { PopupUpdate, SegmentFan } from './types/noise'
 import { contributorHighlight, highlightGeoJson, topFlightKey } from './components/noise/top-flights'
@@ -72,7 +73,8 @@ export default function App() {
     ? contributorHighlight(highlightedSource)
     : highlightedTrack ? highlightGeoJson(highlightedTrack) : null)
   const [quietClustersEnabled, setQuietClustersEnabled] = useState(initial.quietClusters)
-  const [quietThreshold, setQuietThreshold] = useState(initial.quietThreshold ?? QUIET_THRESHOLD_DEFAULT)
+  const [metric, setMetric] = useState<Metric>(initial.metric)
+  const [quietThreshold, setQuietThreshold] = useState(initial.quietThreshold)
   const [basemap, setBasemap] = useState<BasemapId>(initial.basemap ?? DEFAULT_BASEMAP)
   // Mobile locate box lives in the BasemapBar row (one container = one
   // baseline); it fires the map's GeolocateControl through this ref.
@@ -96,6 +98,7 @@ export default function App() {
   // A pan must keep `d=` in the shared URL while the card is open.
   const detailPositionRef = useRef(detailPosition)
   detailPositionRef.current = detailPosition
+  const metricRef = useRef(metric)
   const quietClustersRef = useRef(quietClustersEnabled)
   const quietThresholdRef = useRef(quietThreshold)
   const basemapRef = useRef(basemap)
@@ -199,6 +202,7 @@ export default function App() {
     // has not committed yet (an explicit null included).
     updateUrl({
       ...mapViewRef.current,
+      metric: metricRef.current,
       quietClusters: quietClustersRef.current,
       quietThreshold: quietThresholdRef.current,
       detailPosition: detailPositionRef.current,
@@ -274,6 +278,16 @@ export default function App() {
     syncUrl({ quietThreshold: threshold })
   }, [syncUrl])
 
+  // Another quantity takes its own quiet threshold's default: a threshold in sone means nothing in dB.
+  const handleMetricChange = useCallback((next: Metric) => {
+    if (next === metricRef.current) return
+    setMetric(next)
+    metricRef.current = next
+    setQuietThreshold(QUIET_THRESHOLD_DEFAULT[next])
+    quietThresholdRef.current = QUIET_THRESHOLD_DEFAULT[next]
+    syncUrl({ metric: next, quietThreshold: QUIET_THRESHOLD_DEFAULT[next] })
+  }, [syncUrl])
+
   const closeNoiseDetail = useCallback(() => {
     setNoiseDetailData(null)
     setNoiseDetailError(null)
@@ -334,6 +348,7 @@ export default function App() {
   // applied here through the same handlers a click would use. The detail is
   // re-requested only when its point changed.
   const handleHashState = useCallback((next: UrlState) => {
+    handleMetricChange(next.metric)
     handleQuietClustersChange(next.quietClusters)
     handleQuietThresholdChange(next.quietThreshold)
     handleHeatmapLayersChange(next.heatmapLayers)
@@ -342,7 +357,7 @@ export default function App() {
     if (next.stays !== staysRef.current) handleStaysChange(next.stays)
     if (sameDetailPosition(detailPositionRef.current, next.detailPosition)) return
     handleDetailPositionChange(next.detailPosition)
-  }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleStaysChange, handleDetailPositionChange])
+  }, [handleMetricChange, handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleStaysChange, handleDetailPositionChange])
   // The area reachable from the open place: its button at the search field's end, where dev1 had it,
   // its panel under the place's row.
   const isochronButton = (
@@ -371,6 +386,7 @@ export default function App() {
     // toolbar, which put the map's own corner controls (the ⓘ) below the control row.
     <div className="fixed inset-0 overflow-hidden">
       <SearchBar
+        metric={metric}
         onSelect={result => {
           searchedName.current = {
             at: { lat: result.lat, lng: result.lon },
@@ -385,6 +401,7 @@ export default function App() {
           at: detailPosition,
           place: openEntry?.place ?? detailPlaceName,
           sone: noiseDetailData?.loudness?.nden_sone ?? openEntry?.sone ?? null,
+          lden: (noiseDetailData?.partial ? null : noiseDetailData?.total_lden) ?? openEntry?.lden ?? null,
         }}
         notSaved={notSaved}
         // A place of the history opens at once, the map moving only to keep it in sight (DetailPopup).
@@ -421,6 +438,8 @@ export default function App() {
             onDeleteAccount={deleteAccount}
             quietClustersEnabled={quietClustersEnabled}
             onQuietClustersChange={handleQuietClustersChange}
+            metric={metric}
+            onMetricChange={handleMetricChange}
             quietThreshold={quietThreshold}
             onQuietThresholdChange={handleQuietThresholdChange}
             heatmapLayers={heatmapLayers}
@@ -430,6 +449,7 @@ export default function App() {
             {...stayControls}
           />
           <DetailCard
+            metric={metric}
             noiseData={noiseDetailData}
             position={detailPosition}
             error={noiseDetailError}
@@ -469,6 +489,7 @@ export default function App() {
         segmentFan={fan}
         isochron={isochron && sameDetailPosition(isochron.at, detailPosition) ? isochron.area : null}
         quietClustersEnabled={quietClustersEnabled}
+        metric={metric}
         quietThreshold={quietThreshold}
         heatmapLayers={heatmapLayers}
         dataLayers={dataLayers}
@@ -501,6 +522,8 @@ export default function App() {
           onClose={() => setLayersOpen(false)}
           quietClustersEnabled={quietClustersEnabled}
           onQuietClustersChange={handleQuietClustersChange}
+          metric={metric}
+          onMetricChange={handleMetricChange}
           quietThreshold={quietThreshold}
           onQuietThresholdChange={handleQuietThresholdChange}
           heatmapLayers={heatmapLayers}
@@ -513,6 +536,7 @@ export default function App() {
 
       {/* Mobile: detail sheet */}
       <MobileDetailSheet
+        metric={metric}
         data={noiseDetailData}
         position={detailPosition}
         error={noiseDetailError}

@@ -90,20 +90,22 @@ impl PaintedSquare {
         read().map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    pub fn compressed_tile(&self, layer: usize, tx: usize, ty: usize) -> Result<Vec<u8>, String> {
-        if layer > LAYERS || tx >= self.per_side || ty >= self.per_side {
-            return Err("tile outside its HM3 square".into());
-        }
-        self.metric_tile(Metric::Nden, layer, tx, ty)
+    /// Whether the square holds Lden (version 8): squares painted before it hold Nden only.
+    pub fn has_lden(&self) -> bool {
+        self.has_lden
     }
 
-    fn metric_tile(
+    /// One tile's stored stream of `metric`, the bytes an archive serves.
+    pub fn compressed_tile(
         &self,
         metric: Metric,
         layer: usize,
         tx: usize,
         ty: usize,
     ) -> Result<Vec<u8>, String> {
+        if layer > LAYERS || tx >= self.per_side || ty >= self.per_side {
+            return Err("tile outside its HM3 square".into());
+        }
         if metric == Metric::Lden && !self.has_lden {
             return Err("square has no Lden".into());
         }
@@ -229,18 +231,14 @@ pub fn read_nden(out: &Path, zoom: u32, square: (u32, u32)) -> Result<Cells, Str
 }
 
 impl PaintedSquare {
-    pub fn read_lden(&self) -> Result<Cells, String> {
-        self.read_cells(Metric::Lden)
-    }
-
-    fn read_cells(&self, metric: Metric) -> Result<Cells, String> {
+    pub fn read_cells(&self, metric: Metric) -> Result<Cells, String> {
         let side = self.per_side * TILE_PX;
         let mut cells = vec![[NO_LEVEL; LAYERS + 1]; side * side];
         for layer in 0..=LAYERS {
             for ty in 0..self.per_side {
                 for tx in 0..self.per_side {
                     let tile = decode_metric_tile(
-                        &self.metric_tile(metric, layer, tx, ty)?,
+                        &self.compressed_tile(metric, layer, tx, ty)?,
                         layer,
                         metric,
                     )?;

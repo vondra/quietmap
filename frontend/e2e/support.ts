@@ -9,6 +9,10 @@ export const SOURCE_DB = 60
 export const ROAD_SONE = 8
 export const RAILWAY_SONE = 4
 export const TOTAL_SONE = 11
+/** Their Lden at the point (dB), in the `lden-` archives. */
+export const ROAD_LDEN = 60
+export const RAILWAY_LDEN = 57
+export const TOTAL_LDEN = 62
 /** The hermetic world's published zoom (a z12 world, while the served heatmap is z13: the
  *  frontend must take its tile ceiling from the manifest). */
 export const TILE_Z = 12
@@ -67,12 +71,15 @@ export function mapUrl(point: PixelCenter, layers = 'road', zoom = TILE_Z): stri
 }
 
 /** The fixture carries twice the loudness level in phon after native HTTP decompression. */
-function hm3Tile(point?: PixelCenter, sone?: number): Buffer {
+/** A tile without levels but at `point`: its loudness (`sone`), or with `lden` its Lden in dB. */
+function hm3Tile(point?: PixelCenter, level?: number, lden = false): Buffer {
   const tile = Buffer.alloc(6 + TILE_PX * TILE_PX, 255)
-  tile.write('HM3 ', 0, 'ascii')
-  tile[4] = HM3_VERSION
+  tile.write(lden ? 'HMD ' : 'HM3 ', 0, 'ascii')
+  tile[4] = lden ? 1 : HM3_VERSION
   tile[5] = 1
-  if (point && sone != null) tile[6 + point.py * TILE_PX + point.px] = Math.round(80 + 20 * Math.log2(sone))
+  if (point && level != null) {
+    tile[6 + point.py * TILE_PX + point.px] = Math.round(lden ? 2 * level : 80 + 20 * Math.log2(level))
+  }
   for (let at = TILE_PX * TILE_PX - 1; at >= 0; at--) {
     const left = at % TILE_PX ? tile[6 + at - 1] : 0
     const above = at >= TILE_PX ? tile[6 + at - TILE_PX] : 0
@@ -165,7 +172,8 @@ export async function endPopup(page: Page): Promise<void> {
   })
 }
 
-/** The road, railway and total tiles carry their fixture loudness at `point`. */
+/** The road, railway and total tiles carry their fixture loudness at `point`, their `lden-` ones
+ *  their Lden. */
 export async function installHermeticMap(page: Page, point: PixelCenter): Promise<void> {
   await mockTerrainBasemap(page)
   await installPopupSeam(page)
@@ -178,6 +186,9 @@ export async function installHermeticMap(page: Page, point: PixelCenter): Promis
       layers: {
         road: { build: 'b1', file: 'road.b1.pmtiles' },
         railway: { build: 'b1', file: 'railway.b1.pmtiles' },
+        'lden-total': { build: 'b1', file: 'lden-total.b1.pmtiles' },
+        'lden-road': { build: 'b1', file: 'lden-road.b1.pmtiles' },
+        'lden-railway': { build: 'b1', file: 'lden-railway.b1.pmtiles' },
       },
     }),
   }))
@@ -187,11 +198,14 @@ export async function installHermeticMap(page: Page, point: PixelCenter): Promis
     const source = match?.[1]
     const atPoint = match != null
       && Number(match[2]) === TILE_Z && Number(match[3]) === point.tx && Number(match[4]) === point.ty
-    const sone = { road: ROAD_SONE, railway: RAILWAY_SONE, total: TOTAL_SONE }[source ?? '']
+    const lden = source?.startsWith('lden-') ?? false
+    const level = lden
+      ? { 'lden-road': ROAD_LDEN, 'lden-railway': RAILWAY_LDEN, 'lden-total': TOTAL_LDEN }[source!]
+      : { road: ROAD_SONE, railway: RAILWAY_SONE, total: TOTAL_SONE }[source ?? '']
     return route.fulfill({
       status: 200,
       contentType: 'application/octet-stream',
-      body: atPoint && sone != null ? hm3Tile(point, sone) : hm3Tile(),
+      body: atPoint && level != null ? hm3Tile(point, level, lden) : hm3Tile(undefined, undefined, lden),
     })
   })
   await page.route('**/api/reverse?**', route => route.fulfill({

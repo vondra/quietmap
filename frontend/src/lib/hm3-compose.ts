@@ -2,26 +2,22 @@
 /// a child paints while its own tile loads. One grid a tile: the total, one layer or several layers
 /// combined (`hm3-combine`).
 
-import { HM3_SILENCE } from './hm3-decoder.ts'
-import { PALETTE_LUT } from './heatmap-palette.ts'
+import { HM3_SILENCE, type Metric } from './hm3-decoder.ts'
+import { PALETTE_LUTS } from './heatmap-palette.ts'
 
-/** Colour a cell grid into a row-major RGBA `ImageData` via the palette LUT. */
-function palette(cells: Uint8Array, width: number, height: number): ImageData {
+/** Palette-map one grid of `metric` to a row-major `width × height` RGBA `ImageData`. */
+export function composeToImageData(cells: Uint8Array, metric: Metric, width: number, height: number): ImageData {
+  const lut = PALETTE_LUTS[metric]
   const rgba = new Uint8ClampedArray(width * height * 4)
   for (let i = 0; i < cells.length; i++) {
     const lutBase = cells[i] * 4
     const off = i * 4
-    rgba[off] = PALETTE_LUT[lutBase]
-    rgba[off + 1] = PALETTE_LUT[lutBase + 1]
-    rgba[off + 2] = PALETTE_LUT[lutBase + 2]
-    rgba[off + 3] = PALETTE_LUT[lutBase + 3]
+    rgba[off] = lut[lutBase]
+    rgba[off + 1] = lut[lutBase + 1]
+    rgba[off + 2] = lut[lutBase + 2]
+    rgba[off + 3] = lut[lutBase + 3]
   }
   return new ImageData(rgba, width, height)
-}
-
-/** Palette-map one grid to a `width × height` RGBA `ImageData`. */
-export function composeToImageData(cells: Uint8Array, width: number, height: number): ImageData {
-  return palette(cells, width, height)
 }
 
 // The preview ancestor sits PREVIEW_DELTA zooms above its child: it covers
@@ -31,7 +27,7 @@ export const PREVIEW_DELTA = 3
 /**
  * Upsample one child's sub-block of its z−Δ ancestor grid to a full 512² grid
  * — the preview painted while the child's real tile loads. Bilinear in the
- * half-phon byte space so the preview reads as an out-of-focus map rather than
+ * cell byte space (half-phon or half-dB) so the preview reads as an out-of-focus map rather than
  * hard blocks; a corner without a level (silence or not assessed) falls back to
  * nearest-neighbour so transparency edges stay crisp instead of bleeding.
  */

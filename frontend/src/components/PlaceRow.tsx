@@ -9,6 +9,7 @@ import { useRef, useState, type ReactNode } from 'react'
 import { MapPin, X } from 'lucide-react'
 import { TITLE_MAX } from '../lib/place-rules'
 import { fmtSone } from '../utils/formatters'
+import type { Metric } from '../lib/hm3-decoder'
 import { ICON_BUTTON } from './ui/button'
 
 type Point = { lat: number; lng: number }
@@ -60,7 +61,7 @@ function NameField({ at, name, given, proposal, onRename }: {
   )
 }
 
-export default function PlaceRow({ at, name, given, proposal, detail, sone, highlighted, listed = false, onOpen, onRename, onForget, action, children }: {
+export default function PlaceRow({ at, name, given, proposal, detail, metric, sone, lden, highlighted, listed = false, onOpen, onRename, onForget, action, children }: {
   at: Point
   /** The name shown: the visitor's, else the geocoded one, else the coordinates. */
   name: string
@@ -70,7 +71,10 @@ export default function PlaceRow({ at, name, given, proposal, detail, sone, high
   proposal: string | null
   /** The second line: where the place is. */
   detail?: string | null
+  /** The quantity the row shows: the place's loudness (sone) or its Lden (dB), when answered. */
+  metric: Metric
   sone: number | null
+  lden: number | null
   /** The row the keys or the pointer are on, or the open place's: drawn as a dropdown's selected item. */
   highlighted: boolean
   /** An option of the search's list, which the keys move through from the field: its buttons are for
@@ -102,9 +106,14 @@ export default function PlaceRow({ at, name, given, proposal, detail, sone, high
           : <button type="button" tabIndex={listed ? -1 : undefined} className={`${NAME} block w-full truncate text-left`} onClick={onOpen}>{name}</button>}
         {detail && <span className={`${DETAIL} block truncate`}>{detail}</span>}
       </div>
-      {sone != null && sone > 0 && (
+      {metric === 'nden' && sone != null && sone > 0 && (
         <span className={`${NAME} shrink-0 px-1 font-semibold tabular-nums`}>
           {fmtSone(sone)} <span className="font-normal text-muted-foreground">sone</span>
+        </span>
+      )}
+      {metric === 'lden' && lden != null && (
+        <span className={`${NAME} shrink-0 px-1 font-semibold tabular-nums`}>
+          {lden.toFixed(1)} <span className="font-normal text-muted-foreground">dB</span>
         </span>
       )}
       <div className="flex w-8 shrink-0 justify-end pointer-coarse:w-16">

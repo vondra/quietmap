@@ -1,6 +1,6 @@
 /** Cached heatmap cell readouts from the same grid and byte decoding as rendering. */
-import { HM3_BYTE_SONE, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from './hm3-decoder.ts'
-import { fetchSourceTile } from './hm3-combine.ts'
+import { cellLevel, HM3_BYTE_SONE, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from './hm3-decoder.ts'
+import { fetchSourceTile, type SourceTile } from './hm3-combine.ts'
 import { lngLatToTileFloat } from './tile-math.ts'
 import { MIN_ZOOM, WORLD_EXTENT, type TileBuilds } from './tile-urls.ts'
 
@@ -52,7 +52,7 @@ export function hm3CellAt(lng: number, lat: number, z: number): HM3CellAddress |
 
 /** One layer's tile at a readout: its cells, absent from the archive (every
  *  cell without a level), or failed to load (level unknown, retried later). */
-export type SampledTile = Uint8Array | 'absent' | 'failed'
+export type SampledTile = SourceTile | 'absent' | 'failed'
 
 // LRU keyed by the full tile URL — the URL carries the tile build, so a
 // mid-session generation flip re-keys the cache by itself. Each entry is
@@ -78,7 +78,7 @@ export function tileCells(url: string): Promise<SampledTile> {
   }
   const entry: TileCellsEntry = {
     promise: fetchSourceTile(url, undefined, 'low')
-      .then((decoded): SampledTile => decoded?.cells ?? 'absent')
+      .then((decoded): SampledTile => decoded ?? 'absent')
       .catch((): SampledTile => {
         setTimeout(() => { if (tileCellsCache.get(url) === entry) tileCellsCache.delete(url) }, FAILED_TILE_RETRY_MS)
         return 'failed'
@@ -101,22 +101,25 @@ function evictSettledTilesBeyondLimit(): void {
   }
 }
 
-/** What a cell reads. */
+/** What a cell reads: Nden in sone, Lden in dB. */
 export type HeatmapCellReadout =
   | { kind: 'level'; sone: number }
+  | { kind: 'lden'; db: number }
   | { kind: 'silence' }
   | { kind: 'no-level' }
   | { kind: 'unavailable' }
 
 /**
- * The loudness (sone) at one cell of the shown source's tile: the byte the renderer painted. A
- * failed tile reads unavailable (its level is unknown), an absent one has no level; a cell
- * assessed under 1/16 sone is silence.
+ * The level at one cell of the shown source's tile, in its quantity: the byte the renderer
+ * painted. A failed tile reads unavailable (its level is unknown), an absent one has no level; a
+ * cell assessed under the quantity's floor (1/16 sone, 0 dB) is silence.
  */
 export function readHeatmapCell(tile: SampledTile, cell: HM3CellAddress): HeatmapCellReadout {
   if (tile === 'failed') return { kind: 'unavailable' }
-  const byte = tile === 'absent' ? HM3_NO_LEVEL : tile[cell.py * TILE_PX + cell.px]
+  const byte = tile === 'absent' ? HM3_NO_LEVEL : tile.cells[cell.py * TILE_PX + cell.px]
   if (byte === HM3_NO_LEVEL) return { kind: 'no-level' }
   if (byte === HM3_SILENCE) return { kind: 'silence' }
-  return { kind: 'level', sone: HM3_BYTE_SONE[byte] }
+  return (tile as SourceTile).metric === 'lden'
+    ? { kind: 'lden', db: cellLevel(byte) }
+    : { kind: 'level', sone: HM3_BYTE_SONE[byte] }
 }

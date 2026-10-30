@@ -1,5 +1,6 @@
 // The phone popup's bottom sheet, with a drag handle, a collapsed peek and the streamed answer.
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
+import type { Metric } from '../lib/hm3-decoder'
 import { X } from 'lucide-react'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
@@ -22,6 +23,8 @@ export function sheetTop(viewportHeight: number): number {
 }
 
 interface MobileDetailSheetProps {
+  /** The quantity the popup leads with. */
+  metric: Metric
   data: PopupUpdate | null
   // Same contract as DetailCard: the sheet springs open on click (position) with a skeleton and
   // redraws on every streamed update.
@@ -36,7 +39,7 @@ interface MobileDetailSheetProps {
   stay: Stay | null
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ metric, data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -136,6 +139,7 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
                 <NoiseDetailContent
+                  metric={metric}
                   data={data}
                   onHighlight={onHighlight}
                   calculationOpen={calculationOpen}

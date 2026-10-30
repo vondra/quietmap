@@ -1,17 +1,19 @@
-// The shareable map state in the URL hash: view, open popup point, basemap, layers, quiet zones,
-// places to stay, data layers.
+// The shareable map state in the URL hash: view, open popup point, basemap, the quantity shown,
+// layers, quiet zones, places to stay, data layers.
 import { useCallback, useRef, useMemo } from 'react'
 import { DEFAULT_BASEMAP, type BasemapId } from '../utils/basemaps'
 import { resolveInitialView } from '../utils/initial-view'
 import { HEATMAP_LAYERS } from '../lib/tile-urls'
 import { parseDataLayers, type DataLayerId } from '../lib/data-layers'
-// Quiet-zone thresholds — highlight areas whose total loudness is ≤ this (sone): from a quarter
-// of a quiet room's to four times it in readable steps of a tenth to a quarter of a doubling; one
-// sone (a quiet room, where the map's colours begin) by default.
-export const QUIET_THRESHOLDS = [
-  0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3.5, 4,
-] as const
-export const QUIET_THRESHOLD_DEFAULT = 1
+import type { Metric } from '../lib/hm3-decoder'
+// Quiet-zone thresholds — highlight areas whose total is ≤ this. In sone: from a quarter of a quiet
+// room's to four times it in readable steps of a tenth to a quarter of a doubling. In dB Lden: 20 to
+// 55 in steps of 5. By default where the map's colours begin: one sone (a quiet room), 35 dB.
+export const QUIET_THRESHOLDS: Record<Metric, readonly number[]> = {
+  nden: [0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3.5, 4],
+  lden: [20, 25, 30, 35, 40, 45, 50, 55],
+}
+export const QUIET_THRESHOLD_DEFAULT: Record<Metric, number> = { nden: 1, lden: 35 }
 
 /** The popup point's decimals in the URL: 0.1 m, so a shared link answers at the very point
  *  clicked (at four decimals, 11 m, a click inside a building could open outside it). */
@@ -33,7 +35,10 @@ export interface UrlState {
   /** True when the #hash carried explicit coordinates (a shared link) —
    *  false means lat/lng/zoom are the browser-language fallback. */
   hasExplicitView: boolean
+  /** The quantity the map, the quiet zones and the popup show (`m=lden`, Nden when absent). */
+  metric: Metric
   quietClusters: boolean
+  /** In the metric's unit: sone or dB. */
   quietThreshold: number
   detailPosition: { lat: number; lng: number } | null
   basemap: BasemapId
@@ -47,14 +52,14 @@ export interface UrlState {
 // Default view: every noise layer on (the overlay then fetches the precomputed `total` tile).
 const DEFAULT_HEATMAP_LAYERS: Record<string, boolean> = Object.fromEntries(HEATMAP_LAYERS.map(id => [id, true]))
 
-// Quiet-zone threshold: the nearest of the slider's values (by loudness ratio). A malformed or
-// non-positive `qt` falls back to the default: a NaN threshold would otherwise mask nothing, or
-// every assessed pixel, downstream.
-function parseQuietThreshold(raw: string | null): number {
+// Quiet-zone threshold: the nearest of the slider's values (by loudness ratio, or by dB). A
+// malformed or non-positive `qt` falls back to the default: a NaN threshold would otherwise mask
+// nothing, or every assessed pixel, downstream.
+function parseQuietThreshold(raw: string | null, metric: Metric): number {
   const n = raw == null ? NaN : parseFloat(raw)
-  if (!(Number.isFinite(n) && n > 0)) return QUIET_THRESHOLD_DEFAULT
-  const distance = (t: number) => Math.abs(Math.log2(t / n))
-  return QUIET_THRESHOLDS.reduce((best, t) => (distance(t) < distance(best) ? t : best))
+  if (!(Number.isFinite(n) && n > 0)) return QUIET_THRESHOLD_DEFAULT[metric]
+  const distance = (t: number) => Math.abs(metric === 'lden' ? t - n : Math.log2(t / n))
+  return QUIET_THRESHOLDS[metric].reduce((best, t) => (distance(t) < distance(best) ? t : best))
 }
 
 export function parseHash(): UrlState {
@@ -69,8 +74,9 @@ export function parseHash(): UrlState {
       lng: view.lng,
       zoom: view.zoom,
       hasExplicitView: false,
+      metric: 'nden',
       quietClusters: false,
-      quietThreshold: QUIET_THRESHOLD_DEFAULT,
+      quietThreshold: QUIET_THRESHOLD_DEFAULT.nden,
       detailPosition: null,
       basemap: DEFAULT_BASEMAP,
       heatmapLayers: { ...DEFAULT_HEATMAP_LAYERS },
@@ -101,6 +107,7 @@ export function parseHash(): UrlState {
     ? { ...DEFAULT_HEATMAP_LAYERS }
     : Object.fromEntries(HEATMAP_LAYERS.map(id => [id, ro.split(',').includes(id)]))
 
+  const metric: Metric = params.get('m') === 'lden' ? 'lden' : 'nden'
   const parsedLat = parseFloat(params.get('lat') || '')
   const parsedLng = parseFloat(params.get('lng') || '')
   const parsedZoom = parseFloat(params.get('z') || '')
@@ -110,8 +117,9 @@ export function parseHash(): UrlState {
     lng: Number.isFinite(parsedLng) ? parsedLng : view.lng,
     zoom: Number.isFinite(parsedZoom) ? parsedZoom : view.zoom,
     hasExplicitView: Number.isFinite(parsedLat) && Number.isFinite(parsedLng),
+    metric,
     quietClusters: params.get('qc') === '1',
-    quietThreshold: parseQuietThreshold(params.get('qt')),
+    quietThreshold: parseQuietThreshold(params.get('qt'), metric),
     detailPosition,
     basemap: (params.get('bm') as BasemapId) || DEFAULT_BASEMAP,
     heatmapLayers,
@@ -129,9 +137,11 @@ function buildHash(state: UrlWrite): string {
     `z=${state.zoom.toFixed(2)}`,
   ]
 
+  if (state.metric === 'lden') parts.push('m=lden')
+
   if (state.quietClusters) {
     parts.push('qc=1')
-    if (state.quietThreshold !== QUIET_THRESHOLD_DEFAULT) parts.push(`qt=${state.quietThreshold}`)
+    if (state.quietThreshold !== QUIET_THRESHOLD_DEFAULT[state.metric]) parts.push(`qt=${state.quietThreshold}`)
   }
 
   if (state.detailPosition) {

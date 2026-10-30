@@ -56,7 +56,7 @@ pub(crate) fn layer_energy(
 }
 
 /// Twice Lden in dB: half-dB steps, 254 below 0 dB, 255 reserved for unassessed pixels.
-fn lden_cell(energy: f64) -> Result<u8, String> {
+pub(crate) fn lden_cell(energy: f64) -> Result<u8, String> {
     if !energy.is_finite() || energy < 0.0 {
         return Err(format!("invalid Lden energy {energy}"));
     }

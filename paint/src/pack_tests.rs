@@ -49,21 +49,27 @@ fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
     let manifest_path = published.path().join("current.json");
     let manifest = std::fs::read(&manifest_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
-    assert_eq!(parsed["layers"].as_object().unwrap().len(), LAYERS + 1);
+    assert_eq!(
+        parsed["layers"].as_object().unwrap().len(),
+        2 * (LAYERS + 1)
+    );
     let square = PaintedSquare::open(merged.path(), 13, (2, 2)).unwrap();
-    for (number, layer) in layer_names().iter().enumerate() {
-        let archive = std::fs::read(published.path().join(format!("{layer}.b1.pmtiles"))).unwrap();
-        let header = pmtiles::Header::try_from_bytes(archive[..127].to_vec().into()).unwrap();
-        assert_eq!(header.tile_compression, Compression::Brotli);
-        assert!(header.clustered());
-        assert!(
-            header.n_tile_contents().unwrap().get() < header.n_addressed_tiles().unwrap().get()
-        );
-        let stream = square.compressed_tile(number, 0, 0).unwrap();
-        let data_offset = u64::from_le_bytes(archive[56..64].try_into().unwrap()) as usize;
-        let data_length = u64::from_le_bytes(archive[64..72].try_into().unwrap()) as usize;
-        let data = &archive[data_offset..][..data_length];
-        assert!(data.windows(stream.len()).any(|window| window == stream));
+    for metric in [Metric::Nden, Metric::Lden] {
+        for (number, layer) in layer_names().iter().enumerate() {
+            let archive =
+                std::fs::read(published.path().join(archive_name(metric, layer, "b1"))).unwrap();
+            let header = pmtiles::Header::try_from_bytes(archive[..127].to_vec().into()).unwrap();
+            assert_eq!(header.tile_compression, Compression::Brotli);
+            assert!(header.clustered());
+            assert!(
+                header.n_tile_contents().unwrap().get() < header.n_addressed_tiles().unwrap().get()
+            );
+            let stream = square.compressed_tile(metric, number, 0, 0).unwrap();
+            let data_offset = u64::from_le_bytes(archive[56..64].try_into().unwrap()) as usize;
+            let data_length = u64::from_le_bytes(archive[64..72].try_into().unwrap()) as usize;
+            let data = &archive[data_offset..][..data_length];
+            assert!(data.windows(stream.len()).any(|window| window == stream));
+        }
     }
     assert!(pack(merged.path(), 13, published.path(), "b1", None).is_err());
     assert_eq!(std::fs::read(&manifest_path).unwrap(), manifest);
@@ -93,9 +99,10 @@ fn kept_regions_pack_the_same_archives_and_a_repainted_square_refolds_its_region
         write(merged.path(), 13, square, &cells(60 + 9 * k as u8, k)).unwrap();
     }
     let archives = |directory: &Path| -> Vec<Vec<u8>> {
-        layer_names()
+        [Metric::Nden, Metric::Lden]
             .iter()
-            .map(|layer| std::fs::read(directory.join(format!("{layer}.b1.pmtiles"))).unwrap())
+            .flat_map(|&metric| layer_names().map(|layer| archive_name(metric, layer, "b1")))
+            .map(|name| std::fs::read(directory.join(name)).unwrap())
             .collect()
     };
     let plain = tempfile::tempdir().unwrap();
@@ -112,6 +119,7 @@ fn kept_regions_pack_the_same_archives_and_a_repainted_square_refolds_its_region
     pack(merged.path(), 13, kept.path(), "b1", Some(regions.path())).unwrap();
     assert_eq!(archives(kept.path()), archives(plain.path()));
     assert!(regions.path().join("1_0.region").exists());
+    assert!(regions.path().join("1_0.lden.region").exists());
     // A square repainted after its region was kept.
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::remove_file(square_path(merged.path(), 13, (3, 2))).unwrap();
@@ -121,4 +129,42 @@ fn kept_regions_pack_the_same_archives_and_a_repainted_square_refolds_its_region
     pack(merged.path(), 13, reused.path(), "b1", Some(regions.path())).unwrap();
     assert_eq!(archives(reused.path()), archives(fresh.path()));
     assert_ne!(archives(fresh.path()), archives(plain.path()));
+}
+
+/// A square painted before Lden was stored is in the Nden archives only: the Lden archives hold the
+/// squares painted with it, and a world without any has no Lden archives at all.
+#[test]
+fn squares_without_lden_stay_out_of_the_lden_archives() {
+    let merged = tempfile::tempdir().unwrap();
+    let legacy = square_path(merged.path(), 12, (9, 17));
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, include_bytes!("../tests/fixtures/square-v7.hm3")).unwrap();
+    let names = |directory: &Path| -> Vec<String> {
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("current.json")).unwrap())
+                .unwrap();
+        manifest["layers"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let alone = tempfile::tempdir().unwrap();
+    pack(merged.path(), 12, alone.path(), "b1", None).unwrap();
+    assert_eq!(names(alone.path()).len(), LAYERS + 1);
+    assert!(!alone.path().join("lden-total.b1.pmtiles").exists());
+    let cells = vec![[70; LAYERS + 1]; 512 * 512];
+    write(merged.path(), 12, (10, 17), &cells).unwrap();
+    let both = tempfile::tempdir().unwrap();
+    pack(merged.path(), 12, both.path(), "b2", None).unwrap();
+    assert_eq!(names(both.path()).len(), 2 * (LAYERS + 1));
+    let tiles = |name: &str| {
+        let archive = std::fs::read(both.path().join(name)).unwrap();
+        let header = pmtiles::Header::try_from_bytes(archive[..127].to_vec().into()).unwrap();
+        header.n_addressed_tiles().unwrap().get()
+    };
+    // Zoom 12 to 2: the Nden archive addresses both squares' tiles, the Lden one only the new one's.
+    assert_eq!(tiles("total.b2.pmtiles"), 11 + 2);
+    assert_eq!(tiles("lden-total.b2.pmtiles"), 11);
 }

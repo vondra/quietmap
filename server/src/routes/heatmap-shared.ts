@@ -10,18 +10,13 @@ export const MIN_ZOOM = 2
 export const MAX_ZOOM = WORLD_BASE_ZOOM
 
 // Each ID is its own tile tree / pmtiles archive with a distinct HM3
-// `source_id` byte in the header. `total` is the precomputed energy-sum of
-// every layer painted together — the default all-layers-on view served as one
-// tile fetch.
-export const ALLOWED_LAYERS = new Set([
-  'total',
-  'road',
-  'railway',
-  'industrial',
-  'building',
-  'ship',
-  'aircraft',
-])
+// `source_id` byte in the header. `total` is every layer painted together — the
+// default all-layers-on view served as one tile fetch. Every build has the Nden
+// archives; the Lden ones (`lden-` before the layer) hold only the squares painted
+// with Lden, so a build has all seven or none.
+export const NDEN_LAYERS = ['total', 'road', 'railway', 'industrial', 'building', 'ship', 'aircraft'] as const
+export const LDEN_LAYERS = NDEN_LAYERS.map(layer => `lden-${layer}`)
+export const ALLOWED_LAYERS = new Set<string>([...NDEN_LAYERS, ...LDEN_LAYERS])
 
 /** The manifest naming the published archives, inside the tiles directory. */
 export const MANIFEST_FILENAME = 'current.json'

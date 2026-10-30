@@ -1,14 +1,23 @@
-// Restore HM3's fixed PNG Paeth prediction after native HTTP Brotli decompression.
+// Restore HM3's fixed PNG Paeth prediction after native HTTP Brotli decompression; the header tells
+// the quantity a tile holds.
 
 export const TILE_PX = 512
 /** No level: not assessed (outside painted coverage, missing input). A tile absent from the
  *  archive is all this. */
 export const HM3_NO_LEVEL = 255
-/** Silence: assessed, under 1/16 sone. */
+/** Silence: assessed, under 1/16 sone (Nden) or under 0 dB (Lden). */
 export const HM3_SILENCE = 254
 const HEADER_BYTES = 6
-const MAGIC = 'HM3 '
 export const HM3_VERSION = 7
+
+/** The two quantities of the map: Nden (sone) in half-phon cells, Lden in half-decibel cells. */
+export type Metric = 'nden' | 'lden'
+
+/** Each quantity's tile header: its magic and version (the painter's `paint/src/hm3.rs`). */
+const HEADERS: Record<Metric, { magic: string; version: number }> = {
+  nden: { magic: 'HM3 ', version: HM3_VERSION },
+  lden: { magic: 'HMD ', version: 1 },
+}
 // A retired decoder keeps its immutable build when its manifest endpoint disappears.
 export const HM3_MANIFEST_URL = `/api/tiles-manifest/${HM3_VERSION}`
 
@@ -20,11 +29,24 @@ export const HM3_BYTE_SONE = (() => {
   return table
 })()
 
+/** A cell byte's level of its quantity: phon for Nden, dB for Lden (silence and no level none). */
+export function cellLevel(byte: number): number {
+  return byte / 2
+}
+
+/** The cell byte (unrounded) of a level of `metric`: sone for Nden (80 one sone, a doubling 20), dB
+ *  for Lden (twice the decibels). */
+export function cellByte(metric: Metric, level: number): number {
+  return metric === 'lden' ? 2 * level : 80 + 20 * Math.log2(level)
+}
+
 export interface DecodedHM3Tile {
   /** `TILE_PX * TILE_PX` cells, row-major (py * TILE_PX + px). */
   cells: Uint8Array
   /** Layer discriminator from the header (frontend palette/legend metadata). */
   sourceId: number
+  /** The quantity its header names. */
+  metric: Metric
 }
 
 /**
@@ -66,8 +88,11 @@ export function decodeHM3(buf: ArrayBuffer): DecodedHM3Tile {
   }
   const bytes = new Uint8Array(buf)
   const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3])
-  if (magic !== MAGIC) throw new Error(`not HM3 (magic = "${magic}")`)
-  if (bytes[4] !== HM3_VERSION) throw new Error(`HM3 version ${bytes[4]} is not ${HM3_VERSION}`)
+  const metric = (Object.keys(HEADERS) as Metric[]).find(each => HEADERS[each].magic === magic)
+  if (!metric) throw new Error(`not HM3 (magic = "${magic}")`)
+  if (bytes[4] !== HEADERS[metric].version) {
+    throw new Error(`${magic.trim()} version ${bytes[4]} is not ${HEADERS[metric].version}`)
+  }
   if (bytes[5] > 6) throw new Error(`unknown HM3 layer ${bytes[5]}`)
   const cells = bytes.subarray(HEADER_BYTES)
   for (let at = 0; at < cells.length; at++) {
@@ -76,5 +101,5 @@ export function decodeHM3(buf: ArrayBuffer): DecodedHM3Tile {
     const upperLeft = at >= TILE_PX && at % TILE_PX ? cells[at - TILE_PX - 1] : 0
     cells[at] += paethPrediction(left, above, upperLeft)
   }
-  return { cells, sourceId: bytes[5] }
+  return { cells, sourceId: bytes[5], metric }
 }

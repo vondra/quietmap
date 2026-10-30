@@ -1,4 +1,4 @@
-// Quiet zones: a green wash over every heatmap pixel at or below the chosen loudness threshold.
+// Quiet zones: a green wash over every heatmap pixel at or below the chosen threshold, in sone or dB.
 import { useEffect, useState } from 'react'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { TileLayer } from '@deck.gl/geo-layers'
@@ -6,8 +6,8 @@ import { BitmapLayer } from '@deck.gl/layers'
 import { useMap } from 'react-map-gl/maplibre'
 
 import { QUIET_RGB } from '../lib/heatmap-palette'
-import { fetchAndDecodeHM3, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from '../lib/hm3-decoder'
-import { buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
+import { cellByte, fetchAndDecodeHM3, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX, type Metric } from '../lib/hm3-decoder'
+import { buildKey, HEATMAP_LAYERS, publishes, sourceOf, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
 
 // Translucent green wash over pixels whose total loudness is at or below the
 // user threshold. The legacy feature traced H3 hex clusters into outlined
@@ -23,18 +23,20 @@ const MIN_ZOOM = 5
 
 interface Props {
   enabled: boolean
-  /** Quiet if the total loudness ≤ this (sone); pixels without a level are excluded. */
+  /** The quantity the threshold is in. */
+  metric: Metric
+  /** Quiet if the total ≤ this (sone for Nden, dB for Lden); pixels without a level are excluded. */
   threshold: number
 }
 
 /**
  * Highlight quiet areas: a deck.gl `TileLayer` over the precomputed `total`
- * raster that paints every pixel at or below `threshold` sone green. deck
+ * raster that paints every pixel at or below `threshold` green. deck
  * handles viewport tile loading; a threshold change re-keys the layer so the
  * mask recomputes. Its own overlay sits above the heatmap so the wash shows
  * over its faint quiet colours.
  */
-export default function QuietZonesLayer({ enabled, threshold }: Props): null {
+export default function QuietZonesLayer({ enabled, metric, threshold }: Props): null {
   const { current: mapRef } = useMap()
   // Generation snapshot — the layer id + fetch URLs are keyed by it (a flip
   // re-renders and re-keys instead of mixing generations in deck's cache).
@@ -57,22 +59,22 @@ export default function QuietZonesLayer({ enabled, threshold }: Props): null {
     if (!overlay) return
     // build === null → no published generation yet → nothing to mount.
     overlay.setProps({
-      layers: enabled && build !== null ? [makeQuietLayer(threshold, build)] : [],
+      layers: enabled && build !== null && publishes(build, metric) ? [makeQuietLayer(metric, threshold, build)] : [],
     })
-  }, [overlay, enabled, threshold, build])
+  }, [overlay, enabled, metric, threshold, build])
 
   return null
 }
 
 type QuietTile = { cells: Uint8Array }
 
-function makeQuietLayer(threshold: number, build: TileBuilds) {
-  // Decoded HM3 cells hold twice the loudness level in phon: 80 + 20 log2(sone).
-  const maxByte = 80 + 20 * Math.log2(threshold)
+function makeQuietLayer(metric: Metric, threshold: number, build: TileBuilds) {
+  const maxByte = cellByte(metric, threshold)
+  const total = sourceOf(HEATMAP_LAYERS, metric)!
   return new TileLayer<QuietTile | null>({
     // Generation snapshot in the id: a flip re-keys the layer so deck drops
     // its tile cache instead of masking stale-generation tiles.
-    id: `quiet-zones-${buildKey(build, 'total')}`,
+    id: `quiet-zones-${buildKey(build, total)}`,
     // Deliberately NO `extent` prop: without one deck renders nothing below
     // minZoom, which is exactly the z5 display floor above — an extent would
     // clamp-and-render the green wash at world zooms instead.
@@ -85,7 +87,7 @@ function makeQuietLayer(threshold: number, build: TileBuilds) {
     // wrapper is required — deck.gl's TileLayer mishandles a bare typed array
     // as tile data (it never reaches renderSubLayers as-is).
     getTileData: async ({ index, signal }) => {
-      const url = tileUrl(build, 'total', index.z, index.x, index.y)
+      const url = tileUrl(build, total, index.z, index.x, index.y)
       try {
         const decoded = await fetchAndDecodeHM3(url, signal)
         return decoded ? { cells: decoded.cells } : null
@@ -113,7 +115,7 @@ function makeQuietLayer(threshold: number, build: TileBuilds) {
 }
 
 /**
- * Paint cells with a loudness byte ≤ `maxByte` green, silence among them; leave
+ * Paint cells with a level byte ≤ `maxByte` green, silence among them; leave
  * the rest transparent. A cell not assessed stays transparent: an unknown level
  * is not a quiet one.
  */

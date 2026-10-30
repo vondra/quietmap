@@ -11,8 +11,9 @@ pub const HEADER: [u8; 5] = *b"HM3 \x07";
 
 pub use crate::hm3_square::{PaintedSquare, painted, read_nden, verify, write};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Metric {
+/// The two quantities a square holds: Nden in half-phon cells, Lden in half-decibel cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Metric {
     Nden,
     Lden,
 }
@@ -24,10 +25,18 @@ impl Metric {
             Self::Lden => *b"HMD \x01",
         }
     }
+
+    /// A layer's archive name, `lden-road` beside `road`: one manifest names both quantities.
+    pub fn archive_layer(self, layer: &str) -> String {
+        match self {
+            Self::Nden => layer.to_string(),
+            Self::Lden => format!("lden-{layer}"),
+        }
+    }
 }
 // Fixed Paeth at quality 11 meets the measured volume budget; Up and quality 10 do not.
 const NDEN_BROTLI_QUALITY: u8 = 11;
-// Disk-only Lden uses quality 9: the stored cells are unchanged, with much less encoding work.
+// Lden uses quality 9: the same cells for much less of the painter's processor, which bounds the run.
 const LDEN_BROTLI_QUALITY: u8 = 9;
 // This is the smallest window that retains every possible within-tile match.
 const BROTLI_WINDOW_LOG2: u8 = 19;

@@ -4,7 +4,7 @@
 // late swap). Timing constants live here, next to the races they govern.
 
 import { TILE_PX } from './hm3-decoder'
-import { fetchSourceTile } from './hm3-combine'
+import { fetchSourceTile, type SourceTile } from './hm3-combine'
 import { composeOffThread } from './compose-off-thread'
 
 export type HeatTile = {
@@ -36,10 +36,10 @@ const COMPLETE_SWAP_MAX_WAIT_MS = 4000
 // same URL — without this a cold wave fired a duplicate ancestor request per
 // tile. Shared resource, so deliberately NOT tied to any one tile's
 // abort; 'low' priority keeps sharp tiles ahead in the network queue.
-type AncestorEntry = { promise: Promise<{ cells: Uint8Array } | null>; done: boolean }
+type AncestorEntry = { promise: Promise<SourceTile | null>; done: boolean }
 const ancestorMemo = new Map<string, AncestorEntry>()
 const ANCESTOR_MEMO_MAX = 128
-export function fetchAncestor(url: string): Promise<{ cells: Uint8Array } | null> {
+export function fetchAncestor(url: string): Promise<SourceTile | null> {
   const hit = ancestorMemo.get(url)
   if (hit) {
     // True LRU: refresh recency on every hit.
@@ -106,15 +106,15 @@ export async function loadTileProgressively(
   ctl.signal.addEventListener('abort', () => previewCtl.abort())
   // The decoder types the outcome: empty 200 body = tile without levels →
   // null; HTTP/network error = throw.
-  let cells: Uint8Array | null = null
+  let tile = null as SourceTile | null
   let failure: unknown = null
   let settled = false
   // 'high': sharp tiles outrank basemap assets and the 'low' ancestor
   // previews in Chromium's network queue.
   const sharp = fetchSourceTile(url, ctl.signal, 'high')
     .then((d) => {
-      cells = d?.cells ?? null
-      if (cells) previewCtl.abort() // real data beats any preview from here on
+      tile = d
+      if (tile) previewCtl.abort() // real data beats any preview from here on
     })
     .catch((e) => {
       if (!ctl.signal.aborted) failure = e
@@ -129,7 +129,7 @@ export async function loadTileProgressively(
       if (previewCtl.signal.aborted || !ancestor?.cells) return
       // The worker upsamples the ancestor's sub-block AND composes — the main
       // thread only ships the raw ancestor grid.
-      previewImage = await composeOffThread(ancestor.cells, TILE_PX, TILE_PX, {
+      previewImage = await composeOffThread(ancestor.cells, ancestor.metric, TILE_PX, TILE_PX, {
         x: spec.blockX,
         y: spec.blockY,
       })
@@ -162,11 +162,11 @@ export async function loadTileProgressively(
   if (settled) {
     // Complete load (fast path): plain tile, no tail to manage.
     previewCtl.abort()
-    if (!cells) {
+    if (!tile) {
       if (failure !== null) throw failure
       return null
     }
-    const image = await composeOffThread(cells, TILE_PX, TILE_PX)
+    const image = await composeOffThread(tile.cells, tile.metric, TILE_PX, TILE_PX)
     if (ctl.signal.aborted) throw new DOMException('tile aborted', 'AbortError')
     return { image }
   }
@@ -180,7 +180,7 @@ export async function loadTileProgressively(
   void sharp.then(async () => {
     if (ctl.signal.aborted) return
     previewCtl.abort()
-    data.image = cells ? await composeOffThread(cells, TILE_PX, TILE_PX) : new ImageData(TILE_PX, TILE_PX)
+    data.image = tile ? await composeOffThread(tile.cells, tile.metric, TILE_PX, TILE_PX) : new ImageData(TILE_PX, TILE_PX)
     if (!ctl.signal.aborted) onRefined()
   }).catch(() => { /* the preview stays; a later load refetches */ })
   return data
