@@ -116,7 +116,7 @@ test('the locate button opens the popup where the visitor stands, again from a m
   await expect(sheet).toBeVisible()
 })
 
-test('the open place stands under the search field, renamed there; the search lists the places opened, the last first, then by how often', async ({ page }) => {
+test('the open place stands under the search field, renamed there; the search lists the places opened, the last first', async ({ page }) => {
   await installHermeticMap(page, POINT)
   const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
   const row = page.getByTestId('open-place')
@@ -156,8 +156,8 @@ test('the open place stands under the search field, renamed there; the search li
   await expect(field).toHaveValue('E2E fixture')
   await rename('Above the house')
 
-  // A second place, named too, then the first again from the list (at once, by the keys), then a third
-  // by a tap: the third first (opened last), the first (opened twice), the second.
+  // A second place, named too, then the first again from the list (by the keys, flown in to the
+  // search's zoom), then a third by a tap: the third first (opened last), the first, the second.
   await tapAt(0, -200)
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
   await rename('Bus stop')
@@ -170,6 +170,7 @@ test('the open place stands under the search field, renamed there; the search li
   await expect.poll(() => popupRequests(page)).toHaveLength(3)
   await expect(options).toHaveCount(0)
   await expect(field).toHaveValue('Above the house')
+  await expect(page).toHaveURL(/z=14\.00/)
   await tapAt(-60, -220)
   await expect.poll(() => popupRequests(page)).toHaveLength(4)
   const search = page.getByRole('combobox')
@@ -186,23 +187,30 @@ test('the open place stands under the search field, renamed there; the search li
   await search.fill('b')
   await expect(options).toHaveCount(2)
   await search.fill('bus')
+  await expect(options).toHaveCount(1)
+  // A tap on a row opens its place, its name the field again; the place opened once just before stands
+  // second, above the one opened twice (owner 2026-10-30: a place searched once was gone from the top
+  // after the next click).
+  await options.nth(0).getByRole('button', { name: /^Bus stop/ }).tap()
+  await expect.poll(() => popupRequests(page)).toHaveLength(5)
+  await expect(field).toHaveValue('Bus stop')
+  await search.tap()
+  await expect(options).toHaveCount(3)
   await expect(options.nth(0)).toContainText('Bus stop')
+  await expect(options.nth(1)).toContainText('E2E fixture')
+  await expect(options.nth(2)).toContainText('Above the house')
   // Escape closes the list and brings the open place's row back.
   await page.keyboard.press('Escape')
   await expect(options).toHaveCount(0)
-  await expect(field).toHaveValue('E2E fixture')
-  // From the field the keys forget a place (Shift+Delete); a row's cross, kept in its place, too.
+  await expect(field).toHaveValue('Bus stop')
+  // From the field the keys forget a place (Shift+Delete).
   await search.fill('')
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Shift+Delete')
   await expect(options).toHaveCount(2)
-  await expect(options.nth(1)).toContainText('Above the house')
-  // A tap on a row opens its place, its name the field again.
-  await options.nth(1).getByRole('button', { name: /^Above the house/ }).tap()
-  await expect.poll(() => popupRequests(page)).toHaveLength(5)
-  await expect(field).toHaveValue('Above the house')
+  await expect(options.nth(1)).toContainText('E2E fixture')
 
   // A new document (a changed, ignored query string) and the same point: the name is kept; emptied, it
   // gives the geocoded one back.

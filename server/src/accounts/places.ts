@@ -43,9 +43,8 @@ export function parseTitles(value: unknown, now: number): PlaceTitle[] | string 
   return titles
 }
 
-/** The recent places as sent, one per place (the first of two within 30 m), their counts at least
- *  one and their times capped at `now` (a missing count is one, a missing time the oldest), or what
- *  is wrong with them. */
+/** The recent places as sent, one per place (the first of two within 30 m), their times capped at
+ *  `now` (a missing time the oldest), or what is wrong with them. */
 export function parseRecent(value: unknown, now: number): RecentPlace[] | string {
   if (!Array.isArray(value) || value.length > RECENT_PLACES_MAX) return `recent must be at most ${RECENT_PLACES_MAX} places`
   const places: RecentPlace[] = []
@@ -53,13 +52,12 @@ export function parseRecent(value: unknown, now: number): RecentPlace[] | string
     const at = point(sent)
     if (!at) return 'a recent place needs lat within ±90 and lng a number'
     if (places.some(place => samePlace(place, at))) continue
-    const { place, sone, lden, count, openedAt } = sent
+    const { place, sone, lden, openedAt } = sent
     places.push({
       ...at,
       place: typeof place === 'string' ? place.slice(0, PLACE_NAME_MAX) : null,
       sone: finite(sone) ? sone : null,
       lden: finite(lden) ? lden : null,
-      count: finite(count) && count >= 1 ? Math.round(count) : 1,
       openedAt: finite(openedAt) && openedAt > 0 ? Math.min(Math.round(openedAt), now) : 0,
     })
   }

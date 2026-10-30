@@ -13,6 +13,7 @@ import BasemapBar from './components/BasemapBar'
 import { sameDetailPosition, useUrlState, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
 import type { Metric } from './lib/hm3-decoder'
 import type { SelectedLocation } from './components/FlyToLocation'
+import { SEARCH_FLIGHT_ZOOM } from './lib/search-flight'
 import type { PopupUpdate, SegmentFan } from './types/noise'
 import { contributorHighlight, highlightGeoJson, topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
@@ -149,7 +150,7 @@ export default function App() {
   }, [detailPosition, noiseDetailData, detailPlaceName, answered])
   // The open place's own name, given or taken back under the search field, and its entry of the history,
   // which knows its name before the geocoder answers (a search's result, a place opened before).
-  const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition) : null
+  const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition)?.title ?? null : null
   const openEntry = detailPosition && recentPlaces.find(place => samePlace(place, detailPosition))
   // A popup a link opened counts as an opening, once.
   const linkCounted = useRef(false)
@@ -392,7 +393,7 @@ export default function App() {
             at: { lat: result.lat, lng: result.lon },
             name: result.secondary ? `${result.display_name}, ${result.secondary}` : result.display_name,
           }
-          setSelectedLocation(result)
+          setSelectedLocation({ lat: result.lat, lon: result.lon, zoom: SEARCH_FLIGHT_ZOOM })
         }}
         getMapView={getMapView}
         history={recentPlaces}
@@ -404,8 +405,17 @@ export default function App() {
           lden: (noiseDetailData?.partial ? null : noiseDetailData?.total_lden) ?? openEntry?.lden ?? null,
         }}
         notSaved={notSaved}
-        // A place of the history opens at once, the map moving only to keep it in sight (DetailPopup).
-        onOpenPlace={place => handleDetailPositionChange({ lat: place.lat, lng: place.lng })}
+        // A place of the history flies in as a search's result does, out, across and in, to at least the
+        // search's zoom, and opens on arrival. A named place opens at the point it was named at, not where
+        // its entry was first opened up to 30 m away (owner 2026-10-30: a house named, reopened 20 m
+        // across the street; the history's move kept the zoom, far out, without the way across).
+        onOpenPlace={place => {
+          // Opened at once on its own entry: the arrival at its name's point, which may lie within 30 m
+          // of a neighbour's entry too, then finds this one first.
+          countOpening(place)
+          const at = titleAt(placeTitles, place) ?? place
+          setSelectedLocation({ lat: at.lat, lon: at.lng, zoom: Math.max(mapViewRef.current.zoom, SEARCH_FLIGHT_ZOOM) })
+        }}
         onRename={rename}
         onForget={forgetPlace}
         onSignIn={account === null ? () => (desktop ? setCardTab('account') : setAccountOpen(true)) : undefined}

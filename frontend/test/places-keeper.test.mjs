@@ -3,15 +3,15 @@
 // changes not yet sent; a sign-out comes after the changes, and nothing brings the account back; a
 // page still showing an account another tab replaced drops its change and shows the new account; a
 // map not reached at the start leaves the places this browser's; a place opened while another change
-// was on its way counts once.
+// was on its way is kept once.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { withTitle } from '../src/lib/place-rules.ts'
 import { createPlacesKeeper } from '../src/lib/places-keeper.ts'
 
-const HOME = { lat: 50, lng: 14, place: 'Home', sone: 2, lden: 44, count: 1, openedAt: 1 }
-const CAFE = { lat: 49, lng: 15, place: 'Cafe', sone: 9, lden: 60, count: 1, openedAt: 2 }
+const HOME = { lat: 50, lng: 14, place: 'Home', sone: 2, lden: 44, openedAt: 1 }
+const CAFE = { lat: 49, lng: 15, place: 'Cafe', sone: 9, lden: 60, openedAt: 2 }
 const NEW = { lat: 48, lng: 16, place: 'New', sone: 1, lden: 38 }
 
 /** This browser's storage, as localStorage. */
@@ -150,7 +150,7 @@ test("a map not reached at the start leaves the places this browser's", async (t
   assert.equal(state.requests.some(request => request.startsWith('PUT')), false)
 })
 
-test('a place opened while a name was on its way, sent with the list, counts once', async (t) => {
+test('a place opened while a name was on its way, sent with the list, is kept once', async (t) => {
   browserStorage(t)
   const state = server(t, 'a')
   state.hold()
@@ -163,13 +163,13 @@ test('a place opened while a name was on its way, sent with the list, counts onc
   await read
   while (!state.requests.includes('PUT /api/places/title')) await new Promise(resolve => setTimeout(resolve, 1))
   // The name is on its way; a read of the account waits behind it, and another place opens meanwhile:
-  // the list sent after the name carries it, and the read must not count it again.
+  // the list sent after the name carries it, and the read must not play it again.
   const again = keeper.refresh()
   keeper.open(NEW, 'New')
   state.openTitles()
   await again
   await settled(keeper)
-  const counts = list => list.map(place => [place.place, place.count])
-  assert.deepEqual(counts(state.accounts.a.recent), [['New', 1], ['Cafe', 1], ['Home', 1]])
-  assert.deepEqual(counts(keeper.shown().recent), [['New', 1], ['Cafe', 1], ['Home', 1]])
+  const names = list => list.map(place => place.place)
+  assert.deepEqual(names(state.accounts.a.recent), ['New', 'Cafe', 'Home'])
+  assert.deepEqual(keeper.shown().recent, state.accounts.a.recent)
 })

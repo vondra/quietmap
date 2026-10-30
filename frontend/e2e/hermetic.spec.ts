@@ -383,6 +383,40 @@ test('desktop: the layers and the sign-in are two tabs of the corner card, its f
   await expect(signIn).toBeVisible()
 })
 
+test.describe('animated', () => {
+  // The flight as a visitor sees it, out, across and in: the popup opens only at its real arrival.
+  test.use({ contextOptions: { reducedMotion: 'no-preference' } })
+
+  test('desktop: a named place of the history flies in to the search\'s zoom and opens at the point it was named at', async ({ page }) => {
+    await installHermeticMap(page, POINT)
+    await page.goto(mapUrl(POINT, 'road', 17))
+    const { x, y } = await canvasCenter(page)
+    // Its entry first opened 15 m east, its name given at the house; then the map far out (owner
+    // 2026-10-30: the history reopened it 20 m across the street, and at the zoom far out).
+    await page.mouse.click(x + 20, y)
+    await expect.poll(() => popupRequests(page)).toHaveLength(1)
+    await page.mouse.click(x, y)
+    await expect.poll(() => popupRequests(page)).toHaveLength(2)
+    const field = page.getByTestId('open-place').getByTestId('place-title')
+    await field.click()
+    await field.fill('Before the house')
+    await page.keyboard.press('Enter')
+    await expect(field).toHaveValue('Before the house')
+    const house = (await popupRequests(page))[1]
+    await page.goto(`/?e2e=far${mapUrl(POINT, 'road', 6).slice(1)}`)
+    await page.getByRole('combobox').click()
+    await page.getByRole('option').getByRole('button', { name: /^Before the house/ }).click()
+    await expect.poll(() => popupRequests(page)).toEqual([house])
+    await expect(page).toHaveURL(/z=14\.00/)
+    // From a link past the map's last zoom, it flies to that last zoom, and opens.
+    await page.goto(`/?e2e=close${mapUrl({ ...POINT, lat: POINT.lat + 0.1 }, 'road', 17).slice(1)}`)
+    await page.getByRole('combobox').click()
+    await page.getByRole('option').getByRole('button', { name: /^Before the house/ }).click()
+    await expect.poll(() => popupRequests(page)).toEqual([house])
+    await expect(page).toHaveURL(/z=16\.00/)
+  })
+})
+
 test("desktop: the reachable area is drawn from the open place by the button at the search field's end; folded, its panel keeps its request; another place's drops it", async ({ page }) => {
   await installHermeticMap(page, POINT)
   const asked: string[] = []

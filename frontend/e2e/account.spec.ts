@@ -120,8 +120,8 @@ test("the link's page signs in only at a press and adds the browser's places onl
   await page.waitForURL(url => url.pathname === '/')
   expect(added).toEqual([{
     titles: [{ lat: 50, lng: 14, title: 'Cabin', updatedAt: 3 }],
-    // Kept before the history counted: opened once, at no known time.
-    recent: [{ lat: 50, lng: 14, place: 'Bedřichov, Czechia', sone: 0.3, lden: 31, count: 1, openedAt: 0 }],
+    // Kept before the history kept times: opened at no known time.
+    recent: [{ lat: 50, lng: 14, place: 'Bedřichov, Czechia', sone: 0.3, lden: 31, openedAt: 0 }],
   }])
   // Added to the account, they stay in this browser's own store as well, for when it signs out.
   expect(await storedTitles(page)).toEqual([{ lat: 50, lng: 14, title: 'Cabin', updatedAt: 3 }])

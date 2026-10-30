@@ -38,8 +38,8 @@ server asks Stay22 for rooms in that area for your dates and number of guests, w
 address; the places' photos load from other sites, and an offer's link is an affiliate link.
 
 Your precise location is used only if you tap the locate button and grant your browser's
-permission prompt. While you are signed out, the places you opened (up to 50, with how often and when
-you last opened each) and the names you give places stay in your browser.
+permission prompt. While you are signed out, the places you opened (up to 50, with when you last
+opened each) and the names you give places stay in your browser.
 
 **Signing in** is optional: it keeps your named places on every device you sign in on, and the places
 you opened as the device you used last saved them. Our server then keeps your e-mail address, those

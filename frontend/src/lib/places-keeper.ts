@@ -158,9 +158,9 @@ export function createPlacesKeeper() {
     titlesStored() {
       if (shown.account !== 'unknown' && !isSignedIn(shown.account)) show({ titles: loadPlaceTitles() ?? [] })
     },
-    /** A place opened, by a click, a search, the history or a link: counted once more, the last
-     *  opened, named `place` (a search's result) until its own name comes. Its time is taken now, so a
-     *  replay over the account's places keeps it. */
+    /** A place opened, by a click, a search, the history or a link: the last opened, named `place` (a
+     *  search's result) until its own name comes. Its time is taken now, so a replay over the account's
+     *  places keeps it. */
     open: (at: { lat: number, lng: number }, place: string | null = null) => {
       const openedAt = Date.now()
       change({ recent: recent => withOpened(recent, at, openedAt, place) })

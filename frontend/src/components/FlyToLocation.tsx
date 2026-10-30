@@ -1,12 +1,13 @@
-// Flies the map to a search result and opens the popup there once the flight has arrived.
+// Flies the map to a search's result or a place of the history and opens the popup there once the
+// flight has arrived.
 import { useEffect } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
-import { searchFlightArrived, SEARCH_FLIGHT_ZOOM } from '../lib/search-flight'
+import { searchFlightArrived } from '../lib/search-flight'
 
 export interface SelectedLocation {
-  display_name: string
   lat: number
   lon: number
+  zoom: number
 }
 
 interface FlyToLocationProps {
@@ -21,9 +22,11 @@ export default function FlyToLocation({ location, onArrived }: FlyToLocationProp
     if (!location || !map) return
 
     const isMobile = window.innerWidth < 768
+    // A zoom past the map's last (a history place opened from a link's z=17) would never be arrived at.
+    const target = { ...location, zoom: Math.min(location.zoom, map.getMaxZoom()) }
     map.flyTo({
-      center: [location.lon, location.lat],
-      zoom: SEARCH_FLIGHT_ZOOM,
+      center: [target.lon, target.lat],
+      zoom: target.zoom,
       duration: 1500,
       padding: { top: 120, bottom: isMobile ? 350 : 0, left: 0, right: 0 },
     })
@@ -32,7 +35,7 @@ export default function FlyToLocation({ location, onArrived }: FlyToLocationProp
     // only a real arrival opens the popup — see searchFlightArrived.
     const arrive = () => {
       const c = map.getCenter()
-      if (searchFlightArrived({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }, location)) {
+      if (searchFlightArrived({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }, target)) {
         onArrived?.({ lat: location.lat, lng: location.lon })
       }
     }

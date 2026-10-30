@@ -1,10 +1,10 @@
-// The search field and what drops down under it, as on a web map: with nothing typed, the history of
-// places opened (clicked or searched, the one opened last first, then by how often); typed, the places
-// of the history it names, then the geocoder's suggestions leaning towards the map's view. The field
-// keeps the focus while the arrows move through the list: Enter opens, Shift+Delete forgets, Escape,
-// Tab or a press elsewhere closes it (a press on the map does nothing more). While it is closed the
-// open place stands under the field, as the list's selected item, its name the field that renames it,
-// with its action and what that opens (App: the reachable area).
+// The search field and what drops down under it, as on a web map: with nothing typed, the history
+// of places opened (clicked or searched, the one opened last first); typed, the places of the
+// history it names, then the geocoder's suggestions leaning towards the map's view. The field keeps
+// the focus while the arrows move through the list: Enter opens, Shift+Delete forgets, Escape, Tab
+// or a press elsewhere closes it (a press on the map does nothing more). While it is closed the
+// open place stands under the field, as the list's selected item, its name the field that renames
+// it, with its action and what that opens (App: the reachable area).
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react'
 import type { Metric } from '../lib/hm3-decoder'
 import { History, Search, UserRound } from 'lucide-react'
@@ -73,7 +73,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
 
   /** A place's name, and where it is: the rest of its geocoded name, or all of it under a given name. */
   const described = (at: Point, place: string | null) => {
-    const given = titleAt(titles, at)
+    const given = titleAt(titles, at)?.title ?? null
     const label = placeLabel(place)
     return {
       at,

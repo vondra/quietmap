@@ -10,10 +10,11 @@ import { sheetTop } from './MobileDetailSheet'
 import { stayAt } from './StayLayer'
 import type { Stay } from '../lib/stays'
 
-/** The popup's point in sight. Off the map (a place of the history elsewhere), the map moves to it at
- *  the same zoom. On a phone the search bar with the open place's row covers the top of the map and the
- *  popup's sheet its lower half: a point either would cover (or one brought from off the map) goes to
- *  the middle of the map left between them, where the opened rows draw their roads, segments and rays. */
+/** The popup's point in sight. Off the map (a link's point outside the link's view), the map moves to
+ *  it at the same zoom. On a phone the search bar with the open place's row covers the top of the map
+ *  and the popup's sheet its lower half: a point either would cover (or one brought from off the map)
+ *  goes to the middle of the map left between them, where the opened rows draw their roads, segments
+ *  and rays. */
 function keepInSight(map: MaplibreMap, at: { lat: number; lng: number }) {
   const { x, y } = map.project([at.lng, at.lat])
   const { clientWidth: width, clientHeight: height } = map.getContainer()
