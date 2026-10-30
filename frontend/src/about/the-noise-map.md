@@ -32,10 +32,10 @@ popup computes it all the same.
 
 ### Lden
 
-The switch above the layers shows everything in Lden instead: the map, its hover, the quiet zones,
-the popup's level and its sources' shares, and the places you opened. Lden is the EU's
-day-evening-night level, the sound's energy averaged over the day with the evening 5 dB and the night
-10 dB louder. A short loud event weighs more in it than in sone: a few loud flights a day raise
+The switch Noise in, under Advanced in the layers, shows everything in Lden instead: the map, its
+hover, the quiet zones, the popup's level and its sources' shares, and the places you opened. Lden is
+the EU's day-evening-night level, the sound's energy averaged over the day with the evening 5 dB and
+the night 10 dB louder. A short loud event weighs more in it than in sone: a few loud flights a day raise
 Lden far more than they raise how loud the place sounds over the day. The same colours stand at decibels the EU's noise maps and the
 WHO use: clear under 35 dB, yellow from 45 (the WHO's guideline for aircraft), orange from 55 (the
 lowest band the EU's maps report; the WHO's guideline for roads is 53), red from 65, purple from 70

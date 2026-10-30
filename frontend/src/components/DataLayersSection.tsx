@@ -1,8 +1,11 @@
-// The layer panel's "Advanced" group: the data layers, folded away until opened (open while any is
-// on), each on with its legend.
+// The layer panel's "Advanced" group: the quantity the map shows, then the data layers, folded away
+// until opened (open while Lden is shown or a data layer is on), each layer on with its legend. The
+// quantity stood atop the layers until the owner moved it here (2026-10-30).
 import { useState } from 'react'
 import { Building, Car, ChevronDown, Fence, Mountain, SquareDashed, TrainFront, Trees, Volume2 } from 'lucide-react'
 import { DATA_LAYERS, type DataLayerId } from '../lib/data-layers'
+import type { Metric } from '../lib/hm3-decoder'
+import MetricSwitch from './MetricSwitch'
 import LEGEND from '../lib/data-legend.json'
 import { Switch } from './ui/switch'
 
@@ -35,12 +38,14 @@ const ICONS: Record<DataLayerId, React.ReactNode> = {
 }
 
 export interface DataLayersSectionProps {
+  metric: Metric
+  onMetricChange: (metric: Metric) => void
   dataLayers: DataLayerId[]
   onDataLayersChange: (layers: DataLayerId[]) => void
 }
 
-export default function DataLayersSection({ dataLayers, onDataLayersChange }: DataLayersSectionProps) {
-  const [open, setOpen] = useState(dataLayers.length > 0)
+export default function DataLayersSection({ metric, onMetricChange, dataLayers, onDataLayersChange }: DataLayersSectionProps) {
+  const [open, setOpen] = useState(metric === 'lden' || dataLayers.length > 0)
   const toggle = (id: DataLayerId) => onDataLayersChange(
     dataLayers.includes(id)
       ? dataLayers.filter(each => each !== id)
@@ -50,7 +55,7 @@ export default function DataLayersSection({ dataLayers, onDataLayersChange }: Da
     <div>
       <button
         onClick={() => setOpen(value => !value)}
-        title="The data every click computes over: the ground's height, the forest, hard ground, buildings, road traffic, trains, the other sources and noise barriers"
+        title="The noise in sone or Lden, and the data every click computes over: the ground's height, the forest, hard ground, buildings, road traffic, trains, the other sources and noise barriers"
         aria-expanded={open}
         className="flex w-full items-center gap-2.5 py-1.5 px-1 rounded-lg hover:bg-accent transition-colors cursor-pointer text-muted-foreground hover:text-foreground"
       >
@@ -59,6 +64,7 @@ export default function DataLayersSection({ dataLayers, onDataLayersChange }: Da
       </button>
       {open && (
         <div className="ml-1 space-y-0.5 pb-1">
+          <MetricSwitch metric={metric} onChange={onMetricChange} />
           {DATA_LAYERS.map(layer => {
             const active = dataLayers.includes(layer.id)
             return (

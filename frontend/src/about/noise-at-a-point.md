@@ -47,7 +47,8 @@ map. An industrial site shows its mapped boundary where one is available. At Gre
   on a phone too. Everything else folds into Rest, which opens to the folded rows among the 30
   largest and holds the smaller ones as one sum. A share keeps its precision through the answer;
   only the display rounds it to whole percents.
-- **In Lden** (the switch above the map's layers) the popup leads with Lden, the same 30 rows are
+- **In Lden** (the switch Noise in, under Advanced in the layers) the popup leads with Lden, the same
+  30 rows are
   ranked by their Lden and each shows its share of the place's sound energy; Rest holds the energy
   of everything else. At about one place in a hundred a source of 1 to 2 % of the energy is not among
   the 30 and stays in Rest (297 of the validation points, October 2026).

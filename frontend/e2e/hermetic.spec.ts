@@ -135,6 +135,9 @@ test('desktop: the Lden switch shows the Lden tiles in dB, adds layers as energy
     new URL(response.url()).pathname === ldenTile && response.status() === 200,
   )
   await page.goto(mapUrl(POINT, ALL_LAYERS, TILE_Z + 2))
+  // The switch stands under Advanced, folded while the map shows sone.
+  await expect(page.getByTestId('metric-lden')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Advanced' }).filter({ visible: true }).click()
   await page.getByTestId('metric-lden').filter({ visible: true }).click()
   await tileLoaded
   await expect(page).toHaveURL(/m=lden/)
@@ -351,6 +354,11 @@ test('desktop: the layers and the sign-in are two tabs of the corner card, its f
   const signIn = page.getByRole('tab', { name: 'Sign in' })
   await expect(layers).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('layer-road').filter({ visible: true })).toBeVisible()
+  // The layers' tab at the card's left, the account's at its right beside the fold (owner 2026-10-30).
+  const fold = page.getByRole('button', { name: 'Fold' })
+  const [layersBox, signInBox, foldBox] = await Promise.all([layers, signIn, fold].map(each => each.boundingBox()))
+  expect(foldBox!.x - (signInBox!.x + signInBox!.width)).toBeLessThan(8)
+  expect(signInBox!.x - (layersBox!.x + layersBox!.width)).toBeGreaterThan(40)
   await signIn.click()
   await expect(signIn).toHaveAttribute('aria-selected', 'true')
   // What a browser's autofill reads: a form, a labelled e-mail field named and marked for it, a submit.
