@@ -395,3 +395,48 @@ fn the_lamax_alone_is_the_readings_lamax() {
         }
     }
 }
+
+/// Pruning may omit only a piece below the flight's maximum; every returned maximum remains exact,
+/// including a tie, for jets, propellers and helicopters before, beside and beyond the receiver.
+#[test]
+fn bounded_maxima_preserve_every_rise_and_tie() {
+    let mut state = 7_u64;
+    let mut random = || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (state >> 11) as f64 / (1_u64 << 53) as f64
+    };
+    let mut skipped = 0;
+    for designator in ["B738", "A320", "LJ35", "AT72", "C172", "EC35"] {
+        for departure in [false, true] {
+            let emission = emission(designator, &flight(departure, 160.0, 0.04), false);
+            for _ in 0..200 {
+                let mut point = || {
+                    [
+                        (random() - 0.5) * 40_000.0,
+                        (random() - 0.5) * 40_000.0,
+                        (random() - 0.1) * 12_000.0,
+                    ]
+                };
+                let closest = closest_points(point(), point());
+                let altitude_m = (random() - 0.1) * 4_000.0;
+                let exact = receiver_lmax_db(&emission, &closest, altitude_m);
+                for floor in [
+                    f64::NEG_INFINITY,
+                    exact - 2.0,
+                    exact,
+                    exact + 2.0,
+                    exact + 20.0,
+                ] {
+                    match receiver_lmax_above_db(&emission, &closest, altitude_m, floor) {
+                        Some(level) => assert_eq!(level.to_bits(), exact.to_bits()),
+                        None => {
+                            assert!(exact < floor, "{designator}: {exact} < {floor}");
+                            skipped += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(skipped > 0);
+}

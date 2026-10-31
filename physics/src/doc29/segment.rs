@@ -127,12 +127,16 @@ impl SegmentEmission {
     /// The LAmax of [`Self::read_npd`] alone (dB), the SEL and d_lambda left unread.
     pub fn lamax_db(&self, slant_m: f64) -> f64 {
         let position = NpdPosition::at(slant_m);
-        let table =
-            |slant_m: f64| read_npd_lamax_db(self.class, self.departure, self.power, slant_m);
+        let table = |position: &NpdPosition| {
+            read_npd_lamax_db(self.class, self.departure, self.power, position)
+        };
         if position.slant_m < NPD_LAST_DISTANCE_M {
-            return table(position.slant_m) + self.offset_db(&position);
+            return table(&position) + self.offset_db(&position);
         }
-        let (last, tail) = (table(NPD_LAST_DISTANCE_M), table(TAIL_ANCHOR_M));
+        let (last, tail) = (
+            table(&NpdPosition::at(NPD_LAST_DISTANCE_M)),
+            table(&NpdPosition::at(TAIL_ANCHOR_M)),
+        );
         self.beyond_last_db(&position, last, tail)
     }
 
@@ -369,6 +373,11 @@ pub fn screened_segment_sel(
 pub fn segment_lmax_db(emission: &SegmentEmission, closest: &ClosestPoints) -> f64 {
     let [east_m, north_m, up_m] = closest.on_segment_m;
     let distance_m = east_m.hypot(north_m).hypot(up_m);
+    corrected_lmax_db(emission, closest, emission.lamax_db(distance_m))
+}
+
+fn corrected_lmax_db(emission: &SegmentEmission, closest: &ClosestPoints, lamax_db: f64) -> f64 {
+    let [east_m, north_m, up_m] = closest.on_segment_m;
     let [line_east_m, line_north_m, line_up_m] = closest.on_line_m;
     let line_slant_m = line_east_m.hypot(line_north_m).hypot(line_up_m);
     let lateral_attenuation = if (0.0..=1.0).contains(&closest.along) {
@@ -376,7 +385,7 @@ pub fn segment_lmax_db(emission: &SegmentEmission, closest: &ClosestPoints) -> f
     } else {
         lateral_attenuation_db(up_m, east_m.hypot(north_m))
     };
-    emission.lamax_db(distance_m)
+    lamax_db
         + 10.0
             * installation_energy_gain(emission.installation, closest.height_m, line_slant_m)
                 .log10()
@@ -401,6 +410,24 @@ pub fn receiver_lmax_db(
     altitude_m: f64,
 ) -> f64 {
     segment_lmax_db(emission, closest) + receiver_impedance_for_db(emission, altitude_m)
+}
+
+/// The maximum level only where it can improve `floor_db`: the NPD level plus the largest
+/// installation gain bounds it, since lateral attenuation cannot add sound. A flight keeps every
+/// piece for its exposure but only a new maximum needs these corrections.
+pub fn receiver_lmax_above_db(
+    emission: &SegmentEmission,
+    closest: &ClosestPoints,
+    altitude_m: f64,
+    floor_db: f64,
+) -> Option<f64> {
+    let [east_m, north_m, up_m] = closest.on_segment_m;
+    let lamax_db = emission.lamax_db(east_m.hypot(north_m).hypot(up_m));
+    let impedance_db = receiver_impedance_for_db(emission, altitude_m);
+    if lamax_db + INSTALLATION_CORRECTION_MAX_DB + impedance_db < floor_db {
+        return None;
+    }
+    Some(corrected_lmax_db(emission, closest, lamax_db) + impedance_db)
 }
 
 /// The slant (m) within which a segment's maximum level (Eq. 4-8a) can reach `threshold_db`: its

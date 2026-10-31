@@ -213,14 +213,18 @@ pub fn read_npd(class: usize, departure: bool, power: PowerBracket, slant_m: f64
 
 /// The LAmax of [`read_npd`] alone, without the SEL and d_lambda the maximum level's readers
 /// leave unread.
-pub fn read_npd_lamax_db(class: usize, departure: bool, power: PowerBracket, slant_m: f64) -> f64 {
+pub(crate) fn read_npd_lamax_db(
+    class: usize,
+    departure: bool,
+    power: PowerBracket,
+    position: &NpdPosition,
+) -> f64 {
     let rows = &POWER_ROWS[class][usize::from(departure)];
-    let position = NpdPosition::at(slant_m);
-    let low = rows[power.row].lamax_db(&position);
+    let low = rows[power.row].lamax_db(position);
     if power.weight == 0.0 {
         return low;
     }
-    power.lerp(low, rows[power.row + 1].lamax_db(&position))
+    power.lerp(low, rows[power.row + 1].lamax_db(position))
 }
 
 /// One tabulated power setting of a class and operation.

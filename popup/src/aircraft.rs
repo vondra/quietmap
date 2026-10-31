@@ -146,12 +146,13 @@ pub fn read_loudest_in_order(
 ) {
     loop {
         let chunk: Vec<(f64, usize, usize)> = ordered.by_ref().take(SEARCH_CHUNK).collect();
-        if chunk.is_empty() || chunk[0].0 <= flights.entry_lmax_db() {
+        let entry_lmax_db = flights.entry_lmax_db();
+        if chunk.is_empty() || chunk[0].0 <= entry_lmax_db {
             break;
         }
         for &(_, tile_index, index) in &chunk {
             let (tile, boxes) = &tiles[tile_index];
-            flights.add_boxes(boxes, *tile, &[index], frame, receiver);
+            flights.add_boxes(boxes, *tile, &[index], frame, receiver, entry_lmax_db);
         }
     }
     flights.sum_listed(receiver.altitude_m, horizons);

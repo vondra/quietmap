@@ -17,8 +17,8 @@ use physics::doc29::npd::{class_anchor, is_helicopter_class};
 use physics::doc29::profiles_generated::FALLBACK_NOISE_CLASS;
 use physics::doc29::screening::ReceiverHorizons;
 use physics::doc29::segment::{
-    SegmentEmission, SegmentGeometry, closest_points, receiver_impedance_for_db, receiver_lmax_db,
-    segment_sel_at_receiver,
+    SegmentEmission, SegmentGeometry, closest_points, receiver_impedance_for_db,
+    receiver_lmax_above_db, segment_sel_at_receiver,
 };
 use physics::doc29::thrust::PowerBracket;
 use physics::loudness::{A_WEIGHTING_DB, OCTAVE_START};
@@ -204,8 +204,9 @@ impl FlightTotals {
             .expect("ten listed")
     }
 
-    /// Reads the pieces of boxes `boxes` (indices into `aircraft`) of `tile`: their Lmax, with
-    /// their screened SEL left for [`Self::sum_listed`].
+    /// Reads the pieces of boxes `boxes` (indices into `aircraft`) of `tile`: maxima that can enter
+    /// the list, with every piece's screened SEL left for [`Self::sum_listed`]. The entry level
+    /// only rises, so a piece below this chunk's entry cannot lead a flight that is listed later.
     pub fn add_boxes(
         &mut self,
         aircraft: &Aircraft<'_>,
@@ -213,6 +214,7 @@ impl FlightTotals {
         boxes: &[usize],
         frame: &LocalFrame,
         receiver: AircraftReceiver,
+        entry_lmax_db: f64,
     ) {
         for &index in boxes {
             let record = aircraft.box_place(index);
@@ -255,7 +257,14 @@ impl FlightTotals {
                         altitude_m: closest[2],
                         track: Vec::new(),
                     },
-                    receiver_lmax_db(&emission, &points, receiver.altitude_m),
+                    |floor_db| {
+                        receiver_lmax_above_db(
+                            &emission,
+                            &points,
+                            receiver.altitude_m,
+                            floor_db.max(entry_lmax_db),
+                        )
+                    },
                     (lateral, closest[2]),
                     PieceRead {
                         flight: key,
@@ -267,24 +276,27 @@ impl FlightTotals {
         }
     }
 
-    /// One piece read of its flight (made by `new` at the flight's first), its Lmax `lmax_db`
-    /// at `closest` (horizontal distance and height above the receiver).
+    /// One piece read of its flight (made by `new` at the flight's first), its maximum computed
+    /// against the flight's current maximum, at `closest` (horizontal distance and height).
     fn read_piece(
         &mut self,
         new: impl FnOnce() -> LoudFlight,
-        lmax_db: f64,
+        maximum: impl FnOnce(f64) -> Option<f64>,
         closest: (f64, f64),
         piece: PieceRead,
     ) {
         let entry = self.flights.entry(piece.flight);
         let first = matches!(entry, Entry::Vacant(_));
         let flight = entry.or_insert_with(new);
-        let rises = lmax_db > flight.lmax_db;
-        if rises {
-            (flight.lmax_db, flight.closest_m, flight.altitude_m) = (lmax_db, closest.0, closest.1);
-        }
-        if first || rises {
-            keep_listed(&mut self.listed, &self.flights, piece.flight);
+        if let Some(lmax_db) = maximum(flight.lmax_db) {
+            let rises = lmax_db > flight.lmax_db;
+            if rises {
+                (flight.lmax_db, flight.closest_m, flight.altitude_m) =
+                    (lmax_db, closest.0, closest.1);
+            }
+            if first || rises {
+                keep_listed(&mut self.listed, &self.flights, piece.flight);
+            }
         }
         self.pieces.push(piece);
     }
@@ -424,7 +436,13 @@ mod tests {
             altitude_m: 300.0,
             track: Vec::new(),
         };
-        totals.read_piece(new, lmax_db, (east_m, 300.0), piece);
+        let entry = totals.entry_lmax_db();
+        totals.read_piece(
+            new,
+            |floor| (lmax_db >= floor.max(entry)).then_some(lmax_db),
+            (east_m, 300.0),
+            piece,
+        );
     }
 
     /// The ten kept as flights are read are the first ten of all of them sorted, and the entry
@@ -432,6 +450,7 @@ mod tests {
     #[test]
     fn the_listed_ten_and_their_entry_level_follow_every_flight_read() {
         let mut totals = FlightTotals::default();
+        let mut maxima = HashMap::<(u32, u32), f64>::new();
         let mut state = 1u64;
         for _ in 0..3_000 {
             state = (state.wrapping_mul(6_364_136_223_846_793_005))
@@ -443,20 +462,26 @@ mod tests {
                 ((state >> 20) % 100) as f64 / 2.0
             };
             read(&mut totals, (icao, icao % 3), (lmax_db, 100.0));
-            let mut all: Vec<&LoudFlight> = totals.flights.values().collect();
-            all.sort_by(|a, b| listed_first(a, b));
+            let maximum = maxima.entry((icao, icao % 3)).or_insert(f64::NEG_INFINITY);
+            *maximum = maximum.max(lmax_db);
+            let mut all: Vec<_> = maxima.iter().collect();
+            all.sort_by(|(a, al), (b, bl)| {
+                bl.total_cmp(al).then(a.1.cmp(&b.1)).then(a.0.cmp(&b.0))
+            });
             all.truncate(FLIGHTS_SHOWN);
-            let keys = |flights: &[&LoudFlight]| -> Vec<(u32, u32)> {
-                flights
-                    .iter()
-                    .map(|flight| (flight.icao, flight.start_unix))
-                    .collect()
-            };
             let loudest = totals.loudest();
-            assert_eq!(keys(&loudest.iter().collect::<Vec<_>>()), keys(&all));
+            assert_eq!(
+                loudest
+                    .iter()
+                    .map(|flight| ((flight.icao, flight.start_unix), flight.lmax_db))
+                    .collect::<Vec<_>>(),
+                all.iter()
+                    .map(|(key, level)| (**key, **level))
+                    .collect::<Vec<_>>()
+            );
             let tenth = all
                 .get(FLIGHTS_SHOWN - 1)
-                .map_or(f64::NEG_INFINITY, |flight| flight.lmax_db);
+                .map_or(f64::NEG_INFINITY, |(_, level)| **level);
             assert_eq!(totals.entry_lmax_db().to_bits(), tenth.to_bits());
         }
     }
@@ -488,6 +513,8 @@ mod tests {
         totals.sum_listed(0.0, &Hill(9.0));
         assert_eq!(totals.flights[&(0, 0)].sel_db, f64::NEG_INFINITY);
         assert_eq!(totals.entry_lmax_db(), 1.0);
+        // Below the entry, this piece's maximum is pruned, but its exposure must remain.
+        read(&mut totals, (0, 0), (0.5, 200.0));
         // The next ring: flight 0 read again, nearer, passes flight 1.
         read(&mut totals, (0, 0), (1.5, 50.0));
         assert_eq!(totals.entry_lmax_db(), 1.5);
@@ -504,7 +531,7 @@ mod tests {
         };
         assert_eq!(
             totals.flights[&(0, 0)].sel_db,
-            summed(&[sel(100.0), sel(50.0)])
+            summed(&[sel(100.0), sel(200.0), sel(50.0)])
         );
         assert_eq!(totals.flights[&(2, 0)].sel_db, summed(&[sel(300.0)]));
         let order: Vec<u32> = totals.loudest().iter().map(|flight| flight.icao).collect();
