@@ -1,14 +1,10 @@
-//! AIS vessel-density cells of dev4's `ships.arrow` as area sources: each cell's ships spread over
-//! the water within one of its grid steps of its centre each way, on its grid's own axes, weighted by
-//! a tent that falls to nothing at its neighbours' centres: neighbouring cells add up to the density
-//! bilinear between their centres, with no edges, each cell keeping its ships (1 km squares aligned
-//! to north overlapped on EMODnet's grid, turned 15° at the Canary Islands, and lay side by side as
-//! squares; owner 2026-10-31). Sub-cells of about 250 m (a quay sees the nearest water
-//! at its distance, not the whole cell at its centre), each a share of the cell by its weighted
-//! water, at a wet sample (ESA WorldCover's water, `water`): a cell over a coast spread over its land
-//! put ships in the streets (a beach: the marina's cell 185 m from the promenade on its houses, 40 %
-//! of the place's loudness). A cell all on land has none. At the height of the class carrying most
-//! of the energy.
+//! AIS vessel-density cells distributed over water along their native grid axes.
+//!
+//! A cell's tent reaches its neighbours' centres; on open water, neighbouring tents interpolate
+//! density without seams. About 250 m sub-cells sample ESA WorldCover and place each source on a
+//! wet sample. Each cell retains its total power over its wet support, which can include water
+//! outside its original footprint. A support with no water emits nothing. Sources use the height
+//! of the class carrying most energy.
 
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, M_PER_DEG_LAT, M_PER_DEG_LON_EQ, SitePoint, push_site_points,

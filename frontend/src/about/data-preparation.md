@@ -246,8 +246,9 @@ spent in a cell, not where in it they sailed, so a cell's ships fade from its ce
 neighbours' centres along its own grid, which in Europe turns away from north with the distance from
 10° E (15° at the Canary Islands): neighbouring cells blend without edges, and each keeps its ships.
 They are spread over the 90 m cells of [ESA WorldCover](https://worldcover2021.esa.int/) 2021 that
-hold water, by their share of it (the open sea where it maps no land), never over a dry one; south of 60° S and north of 82.75° N it maps
-no land at all, so there the land reads as water. Speed is not modelled, so ships under way may be a
+hold water, by their share of it (the open sea where it maps no land), never over a dry one. At coasts,
+a cell's activity can move onto neighbouring water outside its original footprint. South of 60° S
+and north of 82.75° N it maps no land at all, so there the land reads as water. Speed is not modelled, so ships under way may be a
 few decibels louder. Activity is constant over the day, which overstates leisure boats at night.
 
 ## Industry
