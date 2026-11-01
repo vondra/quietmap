@@ -363,7 +363,8 @@ mod tests {
 
     /// A cell gives off its ships whole however its water lies: over open sea, and when its only
     /// water is 1 % of the tent's outer corner sample (0.016 m2, which `push_site_points` alone
-    /// would have counted as 1 m2: 64 times the cell).
+    /// would have counted as 1 m2: 64 times the cell). Power normalization must not change the
+    /// near-field radius of the 250 m sub-cell or its lone 50 m water sample.
     #[test]
     fn a_cell_gives_off_its_ships_whole() {
         let attribute = Attribute {
@@ -385,9 +386,17 @@ mod tests {
             Ok(if far { 0.01 } else { 0.0 })
         };
         let sea = |_: f64, _: f64| Ok(1.0);
-        for (points, count) in [
-            (water_points(centre, NORTH_ALIGNED_KM, sea).unwrap(), 64),
-            (water_points(centre, NORTH_ALIGNED_KM, corner).unwrap(), 1),
+        for (points, count, wet_side_m) in [
+            (
+                water_points(centre, NORTH_ALIGNED_KM, sea).unwrap(),
+                64,
+                250.0,
+            ),
+            (
+                water_points(centre, NORTH_ALIGNED_KM, corner).unwrap(),
+                1,
+                50.0,
+            ),
         ] {
             let mut out = Vec::new();
             assert!(push_cell(points, 1e6, &attribute, &mut out));
@@ -396,6 +405,11 @@ mod tests {
                 .sum();
             assert_eq!(out.len(), count);
             assert!((10.0 * energy.log10() - 90.0).abs() < 1e-6, "{energy}");
+            let radius_m = wet_side_m / std::f64::consts::PI.sqrt();
+            assert!(
+                out.iter()
+                    .all(|item| (item.attribute.exclusion_radius_m - radius_m).abs() < 1e-6)
+            );
         }
     }
 
