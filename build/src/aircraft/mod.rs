@@ -44,15 +44,15 @@ pub struct Days {
 }
 
 impl Days {
-    pub fn listed(days: &str, increments: Option<&str>) -> Result<Self, String> {
-        let parse = |list: &str| -> Result<BTreeSet<String>, String> {
-            list.split(',')
+    pub fn listed(days: &[String], increments: &[String]) -> Result<Self, String> {
+        let parse = |list: &[String]| -> Result<BTreeSet<String>, String> {
+            list.iter()
                 .map(|day| crate::period::date_id(day.trim()).map(|_| day.trim().to_string()))
                 .collect()
         };
         let days = Days {
             requested: parse(days)?,
-            increment_candidates: increments.map(parse).transpose()?.unwrap_or_default(),
+            increment_candidates: parse(increments)?,
         };
         if !days.increment_candidates.is_subset(&days.requested) {
             return Err("increment days must be requested days".into());
@@ -221,9 +221,13 @@ mod tests {
 
     #[test]
     fn listed_days_are_checked_and_increments_must_be_requested() {
-        let days = Days::listed("2025-09-02, 2025-10-01", Some("2025-10-01")).unwrap();
+        let days = Days::listed(
+            &["2025-09-02".into(), " 2025-10-01".into()],
+            &["2025-10-01".into()],
+        )
+        .unwrap();
         assert_eq!(days.requested.len(), 2);
-        assert!(Days::listed("2025-09-02", Some("2025-10-01")).is_err());
-        assert!(Days::listed("2025-02-30", None).is_err());
+        assert!(Days::listed(&["2025-09-02".into()], &["2025-10-01".into()]).is_err());
+        assert!(Days::listed(&["2025-02-30".into()], &[]).is_err());
     }
 }

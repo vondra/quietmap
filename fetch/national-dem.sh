@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Prepares a national terrain model for `qm-build`: the source tiles (already downloaded, one CRS
 # per group) mosaicked onto pixels centred on the nodes of a lattice of NODES_PER_DEGREE (3600: the
-# one arc-second terrain, `dev4 --national-dem`; 21600: the fine terrain near a ray's ends,
-# `terrain-fine --fine-dem`), float32, no data -9999. A compound SOURCE_SRS moves the heights to
+# one arc-second terrain, the manifest’s `national-dem` input; 21600: the fine terrain near a ray's ends,
+# the manifest’s `fine-dem` input), float32, no data -9999. A compound SOURCE_SRS moves the heights to
 # EGM2008 by PROJ with the geoid grids (never a ballpark: the grids must be on PROJ_DATA); a
 # horizontal one keeps the source's heights, as the fine terrain takes only a model's detail (and
 # gdalwarp transforms every pixel of a square reaching past the geoid grid exactly: a Czech border

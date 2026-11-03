@@ -132,7 +132,12 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
             encode_aircraft(&[departure_box()], &[], &[]),
         );
     }
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     root
 }
 

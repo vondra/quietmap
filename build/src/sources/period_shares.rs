@@ -43,8 +43,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_table_is_sorted_and_every_row_sums_to_one() {
+    fn every_country_period_row_sums_to_one() {
         let tables = SourceTables::test_fixture();
+        assert!(tables.period_shares.values().count() > 0);
         for groups in tables.period_shares.values() {
             for shares in groups.iter().flatten() {
                 assert!((shares.iter().sum::<f64>() - 1.0).abs() < 0.002);

@@ -1,1 +1,428 @@
-../../years/2026.json
+{
+  "year": "2000",
+  "as_of": "2026-10-31",
+  "built": false,
+  "flows": {
+    "start": "1999-01-01",
+    "end": "2000-01-01"
+  },
+  "inputs": [
+    {
+      "id": "rural-free-flow",
+      "kind": "rural-free-flow",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "tagged-speeds",
+      "kind": "tagged-speeds",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "venue-customs",
+      "kind": "venue-customs",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "road-class-priors",
+      "kind": "road-class-priors",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "hotel-trip-rate",
+      "kind": "hotel-trip-rate",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "road-class-shares",
+      "kind": "road-class-shares",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "bus-models",
+      "kind": "bus-models",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "building-road-models",
+      "kind": "building-road-models",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "subdivision-grids",
+      "kind": "subdivision-grids",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "counted-class-shares",
+      "kind": "counted-class-shares",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "building-plant",
+      "kind": "building-plant",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "train-scales",
+      "kind": "train-scales",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "church-bells",
+      "kind": "church-bells",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "heavy-speeds",
+      "kind": "heavy-speeds",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "service-cooling",
+      "kind": "service-cooling",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "freight-period-shares",
+      "kind": "freight-period-shares",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "road-period-shares",
+      "kind": "road-period-shares",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "legal-speeds",
+      "kind": "legal-speeds",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "regional-vehicle-shares",
+      "kind": "regional-vehicle-shares",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "motorcycle-share",
+      "kind": "motorcycle-share",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "dwelling-trips",
+      "kind": "dwelling-trips",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "worship-calls",
+      "kind": "worship-calls",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "road-reference-counts",
+      "kind": "road-reference-counts",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "rail-fleet-regions",
+      "kind": "rail-fleet-regions",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "venue-seating",
+      "kind": "venue-seating",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "electric-car-share",
+      "kind": "electric-car-share",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
+    }
+  ],
+  "unavailable": []
+}

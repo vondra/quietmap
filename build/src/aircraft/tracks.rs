@@ -10,7 +10,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, UInt8Type, UInt64Type};
 use arrow_array::{Array, RecordBatch};
 use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tiles::aircraft_tracks::{Part, TOLERANCE_M, TrackPoint, decode, encode};
 
 /// Stage 1's vehicle kind of an aircraft (the rest are airport vehicles).
@@ -180,18 +180,19 @@ fn split_name(split: usize) -> String {
     format!("{split:02x}.aircraft-tracks")
 }
 
-/// Writes `<out>/aircraft-tracks/<xx>.aircraft-tracks` from every day file in `segments`; the
+/// Writes `<out>/aircraft-tracks/<xx>.aircraft-tracks` from admitted flow days in `segments`; the
 /// scratch files of a day already done are kept, so a rerun resumes.
-pub fn build(segments: &Path, out: &Path) -> Result<(), String> {
-    let mut days: Vec<PathBuf> = std::fs::read_dir(segments)
-        .map_err(|error| format!("{}: {error}", segments.display()))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "arrow")
-        })
-        .collect();
-    days.sort();
+pub fn build(segments: &Path, window: &crate::boxes::Window, out: &Path) -> Result<(), String> {
+    let days = window
+        .baseline_days
+        .iter()
+        .map(|day| segments.join(format!("{day}.arrow")))
+        .collect::<Vec<_>>();
+    for day in &days {
+        if !day.is_file() {
+            return Err(format!("missing admitted track day {}", day.display()));
+        }
+    }
     let scratch = out.join("aircraft-tracks.days");
     let done = out.join("aircraft-tracks");
     std::fs::create_dir_all(&done).map_err(|error| error.to_string())?;
@@ -234,6 +235,46 @@ pub fn build(segments: &Path, out: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracks_ignore_days_outside_the_admitted_window_and_require_days_inside_it() {
+        use arrow_schema::{DataType, Field, Schema};
+        let root = std::env::temp_dir().join(format!("qm-track-window-{}", std::process::id()));
+        let segments = root.join("segments");
+        std::fs::create_dir_all(&segments).unwrap();
+        let fields = COLUMNS
+            .iter()
+            .map(|name| {
+                Field::new(
+                    *name,
+                    match *name {
+                        "flight_id" => DataType::UInt64,
+                        "veh_kind" => DataType::UInt8,
+                        _ => DataType::Float32,
+                    },
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        let schema = Schema::new(fields);
+        let file = std::fs::File::create(segments.join("2000-12-31.arrow")).unwrap();
+        let mut writer = arrow_ipc::writer::FileWriter::try_new(file, &schema).unwrap();
+        writer.finish().unwrap();
+        // The old directory scan tried to decode this later day and failed.
+        std::fs::write(segments.join("2001-01-01.arrow"), b"outside the window").unwrap();
+        let window = crate::boxes::Window {
+            baseline_days: vec!["2000-12-31".into()],
+            increment_days: vec![],
+        };
+        build(&segments, &window, &root.join("out")).unwrap();
+        std::fs::remove_file(segments.join("2000-12-31.arrow")).unwrap();
+        assert!(
+            build(&segments, &window, &root.join("missing"))
+                .unwrap_err()
+                .contains("2000-12-31")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     /// A straight run keeps its ends; a circle of 300 m radius keeps enough points to stay within
     /// the tolerance of its arcs; a point off the line by more than the tolerance stays, and so

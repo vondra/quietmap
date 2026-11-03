@@ -4,8 +4,8 @@
 //! residential one that carries a bus line, at least what its trip ends around predict for an
 //! unclassified street; a main road of the classes the counts cover takes
 //! the counted roads' relation between their traffic and the trip ends generated around them
-//! (fitted on the counted rows of 13 European countries, evidence 2026-10-01, building traffic);
-//! in 58 countries a major road likewise takes its traffic from a model of the counted major roads
+//! (the admitted building-road-models table);
+//! where a country has a major-road fit, its major roads take the model of those counts
 //! (`models.major`). Class estimates are replaced, a country's own defaults stay, and a count copied
 //! from a main road (`road_copies`) takes the model in every country. Squares whose buildings are
 //! not mapped keep dev4's guesses, and a copy carries none.
@@ -142,7 +142,7 @@ impl BuildingTraffic {
     /// split does not); a copy takes the model of its class wherever there is one.
     pub fn total(
         &self,
-        models: Option<&RoadModels>,
+        models: &RoadModels,
         row: usize,
         (class, built_up, oneway, bus_line): (u8, u8, bool, bool),
         (middle, country_iso, guess): ((i32, i32), u16, Guess),
@@ -154,11 +154,6 @@ impl BuildingTraffic {
             .get(row)
             .copied()
             .filter(|f| f.is_finite());
-        let Some(models) = models else {
-            return (TREE_CLASSES.contains(&class) || class == UNCLASSIFIED)
-                .then(|| flow.map(f64::from))
-                .flatten();
-        };
         // A residential street that carries a bus line in a town is a through street its class
         // missed: in Great Britain's random sample of counted minor roads (DfT), 592 such streets
         // carry 1,820 vehicles a day in the median, which the trips routed down them read 8.2 dB
@@ -262,7 +257,7 @@ mod tests {
 
     #[test]
     fn a_streets_bus_service_grows_with_its_trip_ends_between_its_floor_and_its_bound() {
-        let model = SourceTables::test_fixture().bus_model.as_ref().unwrap();
+        let model = &SourceTables::test_fixture().bus_model;
         assert_eq!(bus_service_share(model, 100_000.0), 1.0);
         assert!((bus_service_share(model, 4_000.0) - 0.217).abs() < 0.001);
         assert_eq!(bus_service_share(model, 0.0), model.least_service);
@@ -275,7 +270,7 @@ mod tests {
 
     #[test]
     fn major_roads_grow_with_the_buildings_and_lanes_around() {
-        let models = SourceTables::test_fixture().road_models.as_ref().unwrap();
+        let models = &SourceTables::test_fixture().road_models;
         let model = &models.major[2];
         let at = |boxes: [f64; 3], lanes: f64| {
             (model.intercept[1]
@@ -314,7 +309,7 @@ mod tests {
     /// where the model beat the priors, a country default's total never.
     #[test]
     fn a_copied_count_takes_the_major_model_everywhere() {
-        let models = SourceTables::test_fixture().road_models.as_ref().unwrap();
+        let models = &SourceTables::test_fixture().road_models;
         assert!(major_model_replaces(models, Guess::Copy, *b"CZ"));
         assert!(major_model_replaces(models, Guess::Copy, *b"TH"));
         assert!(major_model_replaces(models, Guess::ClassPrior, *b"CZ"));
@@ -324,7 +319,7 @@ mod tests {
 
     #[test]
     fn thai_rural_road_refs_are_told_from_other_refs() {
-        let models = SourceTables::test_fixture().road_models.as_ref().unwrap();
+        let models = &SourceTables::test_fixture().road_models;
         for reference in ["สฎ.6038", "กบ. 4038", "นธ.6037;3060", "อ.1234"] {
             assert!(thai_rural_road_ref(reference), "{reference}");
         }
@@ -350,7 +345,7 @@ mod tests {
 
     #[test]
     fn uncounted_tertiary_roads_shift_most_where_buildings_are_few() {
-        let models = SourceTables::test_fixture().road_models.as_ref().unwrap();
+        let models = &SourceTables::test_fixture().road_models;
         assert_eq!(unselected_tertiary_shift_db(models, 5_000.0), -5.8);
         assert!((unselected_tertiary_shift_db(models, 77_000.0) + 3.9).abs() < 1e-9);
         let between = unselected_tertiary_shift_db(models, 120_000.0);
@@ -372,7 +367,7 @@ mod tests {
     /// routed trips alone.
     #[test]
     fn a_residential_bus_street_in_a_town_takes_the_unclassified_streets_traffic() {
-        let models = SourceTables::test_fixture().road_models.as_ref().unwrap();
+        let models = &SourceTables::test_fixture().road_models;
         let square = Square { x: 276, y: 173 };
         let grids = std::collections::HashMap::from([(
             square,
@@ -391,7 +386,7 @@ mod tests {
         let total = |row, class, built_up, oneway, bus_line| {
             traffic
                 .total(
-                    Some(models),
+                    models,
                     row,
                     (class, built_up, oneway, bus_line),
                     (middle, czechia, Guess::ClassPrior),
@@ -417,7 +412,7 @@ mod tests {
 
     #[test]
     fn main_classes_scale_with_the_trip_ends_around_them() {
-        let models = SourceTables::test_fixture().road_models.as_ref().unwrap();
+        let models = &SourceTables::test_fixture().road_models;
         let tertiary = models.main.iter().find(|m| m.class == 4).unwrap();
         // Twice the trip ends around: 2^0.388 = 1.31 times the traffic.
         let at = |around: f64| (tertiary.intercept[1] + tertiary.slope * f64::ln(around)).exp();

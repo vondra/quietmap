@@ -264,12 +264,9 @@ pub fn convert(
             } else {
                 FreightRegion::World
             };
-            if region == FreightRegion::Europe
-                && GUESSED_TRAIN_SOURCES.contains(&freight_source)
-                && let Some(shares) = tables.freight_period_shares
-            {
+            if region == FreightRegion::Europe && GUESSED_TRAIN_SOURCES.contains(&freight_source) {
                 let total: f64 = freight_trains.iter().sum();
-                freight_trains = shares.map(|share| share * total);
+                freight_trains = tables.freight_period_shares.map(|share| share * total);
             }
             if tunnel.value(row)
                 || kind == RailType::Preserved
@@ -450,10 +447,10 @@ mod tests {
     #[test]
     fn eu_freight_runs_by_the_counted_split() {
         let tables = SourceTables::test_fixture();
-        assert!((tables.freight_period_shares.unwrap().iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((tables.freight_period_shares.iter().sum::<f64>() - 1.0).abs() < 1e-12);
         let (day, night) = (0.624 / 16.0, 0.376 / 8.0);
         let expected = [12.0 * day, 3.0 * day + night, 7.0 * night + day];
-        for (share, expected) in tables.freight_period_shares.unwrap().iter().zip(expected) {
+        for (share, expected) in tables.freight_period_shares.iter().zip(expected) {
             assert!((share - expected).abs() < 0.001, "{share} {expected}");
         }
     }

@@ -6,7 +6,11 @@
     "build": "tsc -b && vite build && node scripts/precompress.mjs dist",
     "watch": "vite build --watch",
     "check": "tsc -b && eslint . --max-warnings 0 && node --test test/*.test.mjs",
-    "e2e": "vite build --outDir dist.check && playwright test"
+    "e2e": "vite build --outDir dist.check && playwright test",
+    "precheck": "node scripts/generate-datasets.ts",
+    "prebuild": "node scripts/generate-datasets.ts",
+    "prewatch": "node scripts/generate-datasets.ts",
+    "pree2e": "node scripts/generate-datasets.ts"
   },
   "dependencies": {
     "@deck.gl/core": "^9.2.11",

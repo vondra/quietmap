@@ -1,16 +1,5 @@
-//! Buses on the roads nobody counted: the bus, trolleybus and coach lines of OpenStreetMap
-//! (`fetch/bus.sh`), per way the line directions they serve (a line at most two, however many of
-//! its variants are mapped). A street's buses grow with its lines less than in proportion, as where
-//! many lines meet each runs less often there, and with the trips its surroundings make (the
-//! caller's `service`, 1 where 100,000 trips a day begin or end within 2 km): 30.1 a day for one
-//! line direction, times the line directions to the power 0.667, a trolleybus line weighing 2.75
-//! bus lines. Fitted by least squares on the timetables (GTFS) of 35 cities and rural areas in 14
-//! countries whose routes match the streets, each place alike (private evidence 2026-10-26, buses):
-//! the 60 departures a route and direction this replaces read 3.4 dB over the timetables in the
-//! median place, this law 0.4 dB; in 8 German cities left out of the fit 5.0 and 2.2 dB. A line
-//! that tags its interval runs its shortest for 18 hours each direction (`fetch/bus-ways.py`); a
-//! coach line 4 a day each direction. The buses run on their timetables' day, evening and night
-//! shares. A counted road keeps its count, buses included.
+//! Buses on uncounted roads: mapped route directions and tagged intervals, with the admitted
+//! timetable fit applied to untagged service. A counted road keeps its count, buses included.
 
 use crate::source_tables::BusModel;
 use std::path::Path;
@@ -67,14 +56,11 @@ impl BusRoutes {
 
     /// Buses and coaches a day on an OSM way, its lines without an interval running `service`
     /// of the buses where 100,000 trips a day begin or end within 2 km.
-    pub fn daily(&self, model: Option<&BusModel>, way: i64, service: f64) -> (f64, f64) {
+    pub fn daily(&self, model: &BusModel, way: i64, service: f64) -> (f64, f64) {
         let Ok(index) = self.ways.binary_search(&way) else {
             return (0.0, 0.0);
         };
         let ([bus, trolleybus, coach], [departures, coach_departures]) = self.service[index];
-        let Some(model) = model else {
-            return (f64::from(departures), f64::from(coach_departures));
-        };
         let line_directions = f64::from(bus) + model.trolleybus_line_weight * f64::from(trolleybus);
         let buses = model.one_line_direction
             * line_directions.powf(model.line_directions_exponent)
@@ -93,9 +79,7 @@ mod tests {
 
     #[test]
     fn a_street_carries_its_lines_buses() {
-        let model = crate::source_tables::SourceTables::test_fixture()
-            .bus_model
-            .as_ref();
+        let model = &crate::source_tables::SourceTables::test_fixture().bus_model;
         let routes = BusRoutes::parse(
             "7 6 2 0 0.0 0.0\n9 0 0 1 108.0 0.0\n10 0 0 0 0.0 18.0\n11 2 0 0 0.0 0.0\n12 400 0 0 0.0 0.0\n",
         )

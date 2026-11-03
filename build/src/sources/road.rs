@@ -24,7 +24,7 @@ use physics::emission::road_surface::{
 };
 use tiles::sources::{
     Attribute, BUILDING_TRAFFIC_SOURCE_ID, GUESSED_SPLIT_SOURCES, Layer, PRIOR_SOURCE_ID,
-    SERVICE_TREE_SOURCE_ID, THAI_HIGHWAYS_SOURCE_ID,
+    SERVICE_TREE_SOURCE_ID,
 };
 
 /// Source height above the carriageway (CNOSSOS-EU 2.4.1).
@@ -299,11 +299,7 @@ fn electric_share(tables: &SourceTables, country_iso: u16) -> f64 {
     tables.electric_percent.get(iso).copied().unwrap_or(0.0) / 100.0
 }
 
-/// Heavy vehicles drive no faster than this (km/h): the 80 km/h most of Europe sets them, where
-/// a country lets them faster its limit or their speed limiters' setting (Australia 100,
-/// Belgium, Brazil, France, Ireland, Japan, New Zealand, Russia and Spain 90 on motorways, Canada
-/// 105 by Ontario's and Quebec's limiters, China 100 on expressways, Great Britain 90 by the
-/// limiters, the United States 105 for the 65 mph most trucks are governed to).
+/// Global truck/bus limit where the admitted table has no country row (km/h).
 const HEAVY_SPEED_CAP_KMH: f64 = 80.0;
 
 /// The speed of lorries and buses (medium and heavy) on a road of `speed_kmh` in a country.
@@ -328,12 +324,7 @@ fn with_buses(
     buses: f64,
 ) -> [f64; PERIODS] {
     std::array::from_fn(|period| {
-        ((vehicles - buses) * lorry_shares[period]
-            + buses
-                * tables
-                    .bus_model
-                    .as_ref()
-                    .map_or(lorry_shares, |model| model.period_shares)[period])
+        ((vehicles - buses) * lorry_shares[period] + buses * tables.bus_model.period_shares[period])
             / vehicles.max(f64::MIN_POSITIVE)
     })
 }
@@ -350,10 +341,6 @@ fn road_period_shares(daily: [f64; 4], shares: &[[f64; PERIODS]; 4]) -> [f64; PE
     })
 }
 
-/// Free-flowing cars on rural single carriageways at the national limit drive at 0.845 of it:
-/// DfT's automatic counters across Great Britain, 2024 (SPE0102): 50.7 mph on 60 mph single
-/// carriageways, where motorways run at 68.4 of 70 and 30 mph roads at 29.6. The counting sites
-/// are straight, free-flowing sections, so bends and junctions only lower a road's mean further.
 /// A national rural limit: this fast or faster (km/h).
 const RURAL_LIMIT_FROM_KMH: f64 = 80.0;
 
@@ -676,7 +663,7 @@ pub fn convert(
                 .filter(|_| row_guessed && !closed)
                 .and_then(|traffic| {
                     traffic.total(
-                        tables.road_models.as_ref(),
+                        &tables.road_models,
                         batch_first_row + row,
                         (
                             class.value(row),
@@ -705,7 +692,7 @@ pub fn convert(
             };
             // The department's mean is the traffic across both directions and its shares count
             // every category, motorcycles and buses among them; a one-way carriageway carries half.
-            if let Some(&(_, _, mean, shares)) = highway {
+            if let Some(&(_, _, mean, shares, _)) = highway {
                 let total = mean * if oneway.value(row) != 0 { 0.5 } else { 1.0 };
                 daily = shares.map(|share| share * total);
             }
@@ -741,14 +728,12 @@ pub fn convert(
             // Buses on an uncounted row: two-axle city buses medium, a third articulated heavy.
             let mut scheduled = [0.0; 2];
             if let Some(bus) = bus.filter(|_| row_guessed && highway.is_none()) {
-                let service = tables.bus_model.as_ref().map_or(1.0, |model| {
-                    building_traffic.as_ref().map_or(
-                        model.service_by_built_up[usize::from(built_up.value(row).min(2))],
-                        |traffic| traffic.bus_service(model, middle_z30),
-                    )
-                });
-                let (buses, coaches) =
-                    bus.daily(tables.bus_model.as_ref(), osm_id.value(row), service);
+                let model = &tables.bus_model;
+                let service = building_traffic.as_ref().map_or(
+                    model.service_by_built_up[usize::from(built_up.value(row).min(2))],
+                    |traffic| traffic.bus_service(model, middle_z30),
+                );
+                let (buses, coaches) = bus.daily(&tables.bus_model, osm_id.value(row), service);
                 scheduled = [buses * 2.0 / 3.0, buses / 3.0 + coaches];
                 daily[1] += scheduled[0];
                 daily[2] += scheduled[1];
@@ -785,10 +770,7 @@ pub fn convert(
                 base_speed,
                 f64::from(legal_speed(tables, class_index, country.value(row), 1)),
             ) {
-                (
-                    base_speed * tables.rural_free_flow.unwrap_or(1.0),
-                    "rural_free_flow",
-                )
+                (base_speed * tables.rural_free_flow, "rural_free_flow")
             } else {
                 (base_speed, base_source)
             };
@@ -881,8 +863,8 @@ pub fn convert(
                 lanes.value(row),
                 oneway.value(row) != 0,
                 bridge.value(row),
-                if highway.is_some() {
-                    THAI_HIGHWAYS_SOURCE_ID
+                if let Some(highway) = highway {
+                    highway.4
                 } else if modelled.is_some() {
                     BUILDING_TRAFFIC_SOURCE_ID
                 } else if copy {
@@ -937,11 +919,10 @@ mod tests {
         assert!(close(with_buses(tables, lorries, 300.0, 0.0), lorries));
         assert!(close(
             with_buses(tables, lorries, 300.0, 300.0),
-            tables.bus_model.as_ref().unwrap().period_shares
+            tables.bus_model.period_shares
         ));
-        let half: [f64; PERIODS] = std::array::from_fn(|p| {
-            0.5 * (lorries[p] + tables.bus_model.as_ref().unwrap().period_shares[p])
-        });
+        let half: [f64; PERIODS] =
+            std::array::from_fn(|p| 0.5 * (lorries[p] + tables.bus_model.period_shares[p]));
         assert!(close(with_buses(tables, lorries, 300.0, 150.0), half));
         assert_eq!(with_buses(tables, lorries, 0.0, 0.0), [0.0; PERIODS]);
     }
@@ -1126,8 +1107,6 @@ mod tests {
             !free_flows_below_limit(5, 1, false, 50.0, 30.0),
             "a village lane"
         );
-        assert!(
-            (90.0 * SourceTables::test_fixture().rural_free_flow.unwrap() - 76.05).abs() < 1e-9
-        );
+        assert!((90.0 * SourceTables::test_fixture().rural_free_flow - 76.05).abs() < 1e-9);
     }
 }

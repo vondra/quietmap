@@ -84,15 +84,8 @@ const SHED_UP_TO_M2: f64 = 30.0;
 const HOUSE_UP_TO_M2: f64 = 250.0;
 const HOUSE_UP_TO_STOREYS: u8 = 3;
 
-/// dev4's trip generation (`trip-rates.ts`) by building type 0-13: dwellings by gross floor area
-/// for homes, else trips per 100 m2 (gross floor area or footprint) between a floor and a cap
-/// (ITE rates damped x0.3 outside US suburbs), fixed trips for small fixtures, none for sheds;
-/// a building of unknown use is a shed, a house or flats by its size. A lodging (6) makes dev4's
-/// 2.45 trips a room (ITE 310 x occupancy 0.5 x car 0.6) over the 85.4 m2 of gross floor a room
-/// of the 49,151 hotel-typed buildings whose lodging states its rooms in OpenStreetMap
-/// (counted 2026-10-08), with no cap: the largest of them keep the rate (dev4's cap of
-/// 1,472 trips read lodgings of over 300 rooms 1.8 dB low); dev4 took a room for 25 m2 and so
-/// made 4.66 trips a room.
+/// Trips by mapped use: dwellings per household, hotels by the admitted room-density table,
+/// other uses by floor area or fixed fixtures. An unknown use is a shed, house or flats by size.
 pub(crate) fn building_load(
     tables: &SourceTables,
     building_type: u8,
@@ -118,9 +111,7 @@ pub(crate) fn building_load(
         3 => trips(gfa, 0.46, 4.0, 368.0),
         4 => trips(gfa, 33.5, 20.0, 1_104.0),
         5 => (0.0, 7.36),
-        6 => tables
-            .hotel_trip_rate
-            .map_or((0.0, 0.0), |rate| trips(gfa, rate, 8.0, f64::INFINITY)),
+        6 => trips(gfa, tables.hotel_trip_rate, 8.0, f64::INFINITY),
         7 => (0.0, 3.68),
         8 => trips(gfa, 1.84, 2.0, 184.0),
         9 => trips(gfa, 1.23, 2.0, 368.0),

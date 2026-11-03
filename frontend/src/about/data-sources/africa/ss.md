@@ -1,8 +1,26 @@
 ---
 title: South Sudan
-intro: The sources behind the map, by year. Older data and gaps are listed where they affect the calculation.
+intro: No traffic counts and no working railway; main roads use the world defaults.
 ---
 
-<!-- YEAR SOURCES -->
+## Roads
 
-The [data preparation](/about/data-preparation) and [noise calculation](/about/noise-at-a-point) explain how these inputs become a level.
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
+
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 3 % of a town street's traffic (the region's median).
+
+Unsigned roads: a primary road 45 km/h in towns, 50 outside.
+
+## Railways
+
+No working railway. Disused track towards Wau, if still tagged as a railway in OpenStreetMap, takes the world default train counts in error.
+
+## Industry
+
+Operating power plants: Global Energy Monitor, matched to OpenStreetMap industrial areas; plants without a mapped area are absent. Other sites are classified from their OpenStreetMap name, otherwise as generic industry.
+
+## Homes and places
+
+Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes (South Africa's survey). Mosques call five times a day.
+
+<!-- YEAR SOURCES -->

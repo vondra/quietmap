@@ -34,7 +34,12 @@ fn release_with_boxes(name: &str, tile: TileId, kind: Kind, boxes: &[AircraftBox
     ];
     std::fs::write(root.join("2026").join("weather"), encode_weather(&weather)).unwrap();
     write_tiles(&root.join("2026"), kind, &[(tile, encode(boxes, &[], &[]))]).unwrap();
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     root
 }
 

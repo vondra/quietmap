@@ -1,40 +1,68 @@
-// A visitor follows a region to a country, reads both years, opens the shared sources, and returns.
+// A visitor reads a country's method, follows its shared sources and returns; only built maps appear.
+import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
-import { PHONE } from './support'
+import { canvasCenter, endPopup, installHermeticMap, mapUrl, PHONE, POINT, sendPopupLine, SOURCE_DB } from './support'
+import { popupUpdate } from './answers'
 
+const years = JSON.parse(readFileSync(new URL('../.generated/years.json', import.meta.url), 'utf8')) as { name: string; manifest: { built: boolean } }[]
+const citations = JSON.parse(readFileSync(new URL('../.generated/datasets.json', import.meta.url), 'utf8')) as Record<string, [string, string, string, string]>
 for (const device of ['desktop', 'phone'] as const) {
   test.describe(device, () => {
     if (device === 'phone') test.use(PHONE)
-    for (const [region, country, code, publisher] of [
-      ['asia', 'Thailand', 'th', 'Department of Rural Roads'],
-      ['north-america', 'United States', 'us', 'FHWA'],
+    for (const [region, country, code, method, publisher] of [
+      ['asia', 'Thailand', 'th', 'vehicle-kilometres', 'Department of Rural Roads'],
+      ['north-america', 'United States', 'us', 'vehicle mix comes from FHWA', 'FHWA'],
     ]) {
-      test(`${country} lists its inputs and gaps by year`, async ({ page }, info) => {
+      test(`${country} preserves its method and publishes only built years`, async ({ page }, info) => {
         const errors: string[] = []
         page.on('pageerror', error => errors.push(error.message))
         await page.goto(`/about/data-sources/${region}`)
         await page.getByRole('link', { name: country, exact: true }).click()
-        await expect(page).toHaveURL(new RegExp(`/about/data-sources/${region}/${code}$`))
-        await expect(page.getByRole('heading', { name: country, exact: true })).toBeVisible()
-        await expect(page.getByRole('heading', { name: '2026', exact: true })).toBeVisible()
-        await expect(page.getByRole('link', { name: publisher, exact: false }).first()).toBeVisible()
-        const details = page.locator('details').first()
-        await expect(details).not.toHaveAttribute('open', '')
-        await details.locator('summary').click()
-        await expect(details).toHaveAttribute('open', '')
-        await expect(details.getByText('OpenStreetMap contributors', { exact: true }).first()).toBeVisible()
-        await details.locator('summary').click()
-        await page.getByRole('heading', { name: '2024', exact: true }).scrollIntoViewIfNeeded()
-        await expect(page.getByText('This year’s inputs are being prepared.', { exact: false })).toBeVisible()
-        await expect(page.getByText('Where an earlier source is missing', { exact: true }).first()).toBeVisible()
-        await page.screenshot({ path: info.outputPath(`${code}-${device}-earlier.png`) })
+        const countryURL = `/about/data-sources/${region}/${code}`
+        await expect(page).toHaveURL(new RegExp(`${countryURL}$`))
+        await expect(page.getByRole('heading', { name: 'Roads', exact: true })).toBeVisible()
+        await expect(page.locator('main')).toContainText(method)
+        await page.screenshot({ path: info.outputPath(`${code}-${device}-method.png`) })
+        for (const year of years) {
+          await expect(page.getByRole('heading', { name: year.name, exact: true })).toHaveCount(year.manifest.built ? 1 : 0)
+        }
+        const sources = page.getByRole('heading', { name: 'Sources by year', exact: true })
+        await sources.scrollIntoViewIfNeeded()
+        await expect(page.getByRole('link', { name: publisher, exact: false }).last()).toBeAttached()
+        await expect(page.getByRole('link', { name: 'OpenStreetMap contributors', exact: true })).toHaveCount(0)
+        await expect(page.locator('main')).not.toContainText(/enrichment|[\w-]+-cache|paged|keeps its behaviour/)
+        await page.screenshot({ path: info.outputPath(`${code}-${device}-sources.png`) })
         expect(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
-        await page.locator('main').evaluate(element => { element.scrollTop = 0 })
-        await page.screenshot({ path: info.outputPath(`${code}-${device}.png`) })
-        expect(errors).toEqual([])
+        await page.getByRole('link', { name: 'world sources', exact: true }).click()
+        await expect(page).toHaveURL(/\/about\/data-sources#sources-by-year$/)
+        await expect(page.locator('main a[href="https://planet.openstreetmap.org/"]')).toHaveCount(years.filter(year => year.manifest.built).length)
         await page.goBack()
-        await expect(page.getByRole('link', { name: country, exact: true })).toBeVisible()
+        await expect(page).toHaveURL(new RegExp(`${countryURL}$`))
+        await expect(sources).toBeVisible()
+        expect(errors).toEqual([])
       })
     }
+    test('a road cites the manifest once in its traffic detail', async ({ page }, info) => {
+      await installHermeticMap(page, POINT)
+      await page.goto(mapUrl(POINT))
+      const { x, y } = await canvasCenter(page)
+      await page.mouse.click(x, y)
+      const answer = popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB)
+      answer.top_contributors[0].metadata!.source_id = 10
+      await sendPopupLine(page, answer)
+      await endPopup(page)
+      const popup = page.locator('[data-testid="detail-popup"]:visible')
+      await popup.getByRole('button', { name: /^Fixture street/ }).click()
+      const traffic = popup.getByText('9.6k/day', { exact: true })
+      if (device === 'phone') await traffic.tap()
+      else await traffic.hover()
+      const tooltip = page.getByRole('tooltip')
+      const [publisher, observed] = citations['10']
+      await expect(tooltip).toContainText(`Data: ${publisher}, ${observed}`)
+      expect((await tooltip.innerText()).split(publisher)).toHaveLength(2)
+      const bounds = await tooltip.boundingBox()
+      expect(bounds!.height).toBeLessThan(400)
+      await page.screenshot({ path: info.outputPath(`citation-${device}.png`) })
+    })
   })
 }

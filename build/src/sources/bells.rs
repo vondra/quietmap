@@ -5,10 +5,9 @@
 //!
 //! What rings: the prayer ringing three times a day (the Angelus at 06-07, 12 and 18-19 h,
 //! Württemberg's Gebetläuten three or four times, 1-5 minutes: three minutes taken, the morning one
-//! before 07 h in the night period), the Sunday service's peal (7-8 minutes, once a week), and in
-//! Germany and Switzerland the clock's strikes, the hours and their quarters (about 25 s of
-//! striking an hour; Switzerland's also at night: the Zurich sleep study counted 23 bell events a
-//! night). Orthodox churches ring no Angelus: they ring before their services, Saturday's vespers
+//! before 07 h in the night period), the Sunday service's peal (7-8 minutes, once a week), and the
+//! clock events of the admitted national-practice table. Orthodox churches ring no Angelus:
+//! they ring before their services, Saturday's vespers
 //! and Sunday's liturgy (five minutes each, a judgment: the Russian call to service lasts a psalm's
 //! reading, no count or level was found); a church without a mapped denomination takes its
 //! country's. Sound power while ringing: a parish church's peal 114 dB(A) (110-118), a cathedral's
@@ -30,8 +29,6 @@ use physics::bands::BANDS;
 const PRAYER_RINGING_S: f64 = 180.0;
 const SUNDAY_PEAL_S: f64 = 450.0;
 const ORTHODOX_RINGING_S: f64 = 300.0;
-/// One strike of the hour or a quarter (25 s of striking an hour, four strikes heard an hour).
-const STRIKE_S: f64 = 25.0 / 4.0;
 const PEAL_LW_DBA: f64 = 114.0;
 const CATHEDRAL_PEAL_LW_DBA: f64 = 122.0;
 const LONE_BELL_LW_DBA: f64 = 109.0;
@@ -78,16 +75,21 @@ pub fn schedule(
         plan.add(
             DAY,
             12.0 * practice.strikes_per_hour,
-            STRIKE_S,
+            practice.strike_seconds,
             STRIKE_LW_DBA,
         );
         plan.add(
             EVENING,
             4.0 * practice.strikes_per_hour,
-            STRIKE_S,
+            practice.strike_seconds,
             STRIKE_LW_DBA,
         );
-        plan.add(NIGHT, practice.night_strikes, STRIKE_S, STRIKE_LW_DBA);
+        plan.add(
+            NIGHT,
+            practice.night_strikes,
+            practice.strike_seconds,
+            STRIKE_LW_DBA,
+        );
     }
     Some(plan)
 }
