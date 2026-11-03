@@ -32,16 +32,13 @@ pub fn build(
     scratch: &Path,
 ) -> Result<()> {
     let input = inputs
-        .required("prepare-osm")
+        .required(crate::year::Kind::PrepareOsm)
         .map_err(|error| anyhow!(error))?;
-    let speeds = speed_rules::SpeedRules::read(
-        inputs
-            .optional("prepare-osm-speeds")
-            .map_err(|error| anyhow!(error))?,
-    )?;
+    let speeds =
+        speed_rules::SpeedRules::read(inputs.osm_speed_table().map_err(|error| anyhow!(error))?)?;
     let regions = geography::Regions::read(
         inputs
-            .required("prepare-regions")
+            .required(crate::year::Kind::PrepareRegions)
             .map_err(|error| anyhow!(error))?,
     )?;
     output_paths::validate(output, scratch)?;

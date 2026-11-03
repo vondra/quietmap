@@ -98,18 +98,22 @@ pub fn run_extract_squares(
         r#"{"regions":[{"country":"XY","continent":1,"disputed":false,"polygons":[[[[13,49],[15,49],[15,51],[13,51],[13,49]]]]}]}"#,
     )?;
     let manifest = root.join("manifest.json");
-    let entry = |kind: &str, path: &str| {
+    let source_root = root.join("2000");
+    std::fs::create_dir_all(&source_root)?;
+    std::fs::copy(input, source_root.join("prepare-osm"))?;
+    std::fs::copy(&boundary, source_root.join("prepare-regions"))?;
+    let entry = |kind: &str| {
         serde_json::json!({
             "id":kind,"kind":kind,"region":"world","publisher":"fixture","url":"https://example.org",
-            "vintage":"2000-01-01","licence":"test","public_ok":true,"path":path,"description":"test input"
+            "observed":{"start":"2000-01-01","end":"2000-01-01"},"published":null,"depends_on":[],"licence":"test","public_ok":true,"description":"test input"
         })
     };
     std::fs::write(
         &manifest,
         serde_json::to_vec(&serde_json::json!({
-            "as_of":"2000-01-02","flows":{"start":"2000-01-01","end":"2000-01-02"},
-            "inputs":[entry("prepare-osm", input.file_name().unwrap().to_str().unwrap()),entry("prepare-regions","regions.json")],
-            "unavailable":[{"id":"speeds","kind":"prepare-osm-speeds","region":"world","reason":"test explicit OSM only"}]
+            "year":"2000","built":false,"as_of":"2000-01-02","flows":{"start":"2000-01-01","end":"2000-01-02"},
+            "inputs":[entry("prepare-osm"),entry("prepare-regions")],
+            "unavailable":[{"id":"speeds","kind":"prepare-osm-speeds","region":"world","description":"test explicit OSM only","depends_on":[]}]
         }))?,
     )?;
     let inputs = crate::year::YearInputs::read(&manifest, root).map_err(anyhow::Error::msg)?;

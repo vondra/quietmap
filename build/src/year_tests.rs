@@ -1,119 +1,178 @@
-//! Manifest admission, date boundaries, relocation and configuration errors.
-
+//! Admission edges, publication separation, dependency closure and portable input identities.
 use super::*;
+use serde_json::json;
 
 fn manifest() -> Manifest {
-    serde_json::from_value(serde_json::json!({
-        "as_of": "2001-01-01",
-        "flows": {"start":"2000-01-01", "end":"2001-01-01"},
-        "inputs": [{"id":"counts", "kind":"road-counts", "region":"CZ", "publisher":"Publisher",
-            "url":"https://example.org/counts", "vintage":"2000", "licence":"CC0",
-            "public_ok":true, "path":"roads/counts.json", "description":"Annual counts"}],
-        "unavailable": [{"id":"bus", "kind":"bus", "region":"world", "reason":"No mapped routes; no added buses."}]
-    })).unwrap()
+    serde_json::from_value(json!({"year":"2000","built":false,"as_of":"2001-01-01",
+        "flows":{"start":"2000-01-01","end":"2001-01-01"},
+        "inputs":[{"id":"counts","kind":"prepare-road-counts","region":"CZ","publisher":"Authority",
+          "url":"https://example.org/counts","observed":{"start":"2000","end":"2000"},"published":"2002",
+          "licence":"CC0","public_ok":true,"depends_on":[],"description":"Annual counts."}],
+        "unavailable":[]})).unwrap()
 }
-
 #[test]
-fn admission_uses_the_described_vintage_and_refuses_future_inputs() {
-    let mut year = manifest();
-    year.validate().unwrap();
-    year.inputs[0].vintage = year.as_of.clone();
-    year.validate().unwrap();
-    for future in ["2001-01-02", "2001"] {
-        year.inputs[0].vintage = future.into();
-        let error = year.validate().unwrap_err();
-        assert!(
-            error.contains("counts") && error.contains(future) && error.contains(&year.as_of),
-            "{error}"
-        );
-    }
-    for invalid in ["2000-02-30", "2000-1-1", "latest", ""] {
-        year.inputs[0].vintage = invalid.into();
-        assert!(year.validate().is_err());
-    }
-}
-
-#[test]
-fn a_flow_window_is_half_open_and_samples_cannot_escape_it() {
-    let mut year = manifest();
-    assert_eq!(year.window().baseline_days.len(), 366);
-    assert_eq!(year.window().baseline_days.last().unwrap(), "2000-12-31");
-    year.flows.increment_days = vec!["2001-01-01".into()];
-    assert!(year.validate().is_err());
-    year.flows.increment_days = vec!["2000-01-01".into(); 2];
-    assert!(year.validate().is_err());
-    year.flows.increment_days.clear();
-    year.flows.end = "2001-01-02".into();
-    assert!(year.validate().is_err());
-}
-
-#[test]
-fn source_paths_are_portable_and_never_escape_the_sources_root() {
-    let mut year = manifest();
-    for path in [
-        "/host/source",
-        "../source",
-        "roads/../../source",
-        "C:\\source",
-        "",
+fn observation_ranges_are_exclusive_at_the_state_cutoff_not_at_publication() {
+    let mut m = manifest();
+    m.validate().unwrap();
+    assert!(m.admitted("counts").unwrap());
+    for (start, end, admitted) in [
+        ("1999", "2000", true),
+        ("2000-11", "2000-12", true),
+        ("2000-12-31", "2000-12-31", true),
+        ("2001-01-01", "2001-01-01", false),
+        ("2000", "2001", false),
     ] {
-        year.inputs[0].path = path.into();
-        assert!(year.validate().is_err(), "{path}");
+        m.inputs[0].observed = Interval {
+            start: start.into(),
+            end: end.into(),
+        };
+        assert_eq!(m.admitted("counts").unwrap(), admitted);
     }
-    year.inputs[0].path = "roads/counts.json".into();
-    year.validate().unwrap();
+    for invalid in ["latest", "2000-02-30", "2000-1-1", ""] {
+        m.inputs[0].observed = Interval {
+            start: invalid.into(),
+            end: invalid.into(),
+        };
+        assert!(m.validate().is_err());
+    }
 }
 
 #[test]
-fn missing_inputs_are_explicit_and_cannot_also_be_available() {
-    let inputs = YearInputs {
-        manifest: manifest(),
-        paths: BTreeMap::new(),
-    };
-    assert!(inputs.optional("bus").unwrap().is_none());
-    assert!(
-        inputs
-            .optional("misspelled-kind")
-            .unwrap_err()
-            .contains("unavailable")
-    );
-    let mut year = manifest();
-    year.unavailable.push(Unavailable {
-        id: "counts".into(),
-        kind: "road-counts".into(),
-        region: "CZ".into(),
-        reason: "no counts".into(),
-    });
-    assert!(year.validate().is_err());
-}
-
-#[test]
-fn every_product_manifest_obeys_the_same_admission_rule() {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years");
-    let mut count = 0;
-    for entry in std::fs::read_dir(directory).unwrap() {
-        let path = entry.unwrap().path();
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "json")
-        {
-            Manifest::read(&path).unwrap();
-            count += 1;
+fn published_osm_manifests_admit_their_snapshot_and_region_dependencies() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years");
+    for year in ["2024", "2026"] {
+        let m = Manifest::read(&root.join(format!("{year}.json"))).unwrap();
+        for id in [
+            "osm",
+            "osm-boundaries",
+            "osm-geography-identities",
+            "osm-regions",
+        ] {
+            assert!(m.admitted(id).unwrap(), "{year}: {id}");
+        }
+        let speeds = m.inputs.iter().find(|i| i.kind == Kind::PrepareOsmSpeeds);
+        if let Some(input) = speeds {
+            assert!(m.admitted(&input.id).unwrap());
+        } else {
+            assert!(
+                m.unavailable
+                    .iter()
+                    .any(|i| i.kind == Kind::PrepareOsmSpeeds)
+            );
         }
     }
-    assert!(count > 0);
 }
-
 #[test]
-fn the_solar_cycle_uses_the_manifest_calendar_including_leap_years() {
-    let mut year = manifest();
-    let days = year.solar_days().unwrap();
-    assert_eq!(days.len(), 74);
-    assert_eq!(days[0], crate::period::day_start("2000-01-01").unwrap());
-    assert_eq!(
-        *days.last().unwrap(),
-        crate::period::day_start("2000-12-31").unwrap()
+fn fitted_tables_require_every_training_input_and_reject_cycles() {
+    let mut m = manifest();
+    let mut later:Input=serde_json::from_value(json!({"id":"later","kind":"model-observations","region":"world","publisher":"Authority","url":"https://example.org/survey","observed":{"start":"2001","end":"2001"},"published":null,"licence":"CC0","public_ok":true,"depends_on":[],"description":"Later survey."})).unwrap();
+    later.depends_on = vec![];
+    m.inputs.push(later);
+    let fitted: Input=serde_json::from_value(json!({"id":"fit","kind":"road-period-shares","region":"world","publisher":"Model","url":"https://example.org/method","observed":{"start":"1999","end":"2000"},"published":null,"licence":"CC0","public_ok":true,"depends_on":["counts","later"],"description":"Fit to both surveys."})).unwrap();
+    assert_eq!(fitted.depends_on.len(), 2);
+    m.inputs.push(fitted);
+    assert!(m.admitted("counts").unwrap());
+    assert!(!m.admitted("fit").unwrap());
+    m.inputs[1].observed = Interval {
+        start: "1999".into(),
+        end: "1999".into(),
+    };
+    assert!(m.admitted("fit").unwrap());
+    m.inputs[1].depends_on = vec!["fit".into()];
+    assert!(m.validate().unwrap_err().contains("cycle"));
+}
+#[test]
+fn practices_cover_the_instant_before_as_of() {
+    let mut m = manifest();
+    m.validity.insert(
+        "counts".into(),
+        Interval {
+            start: "2000-06-01".into(),
+            end: "2001-01-01".into(),
+        },
     );
-    year.as_of = "2002-01-01".into();
-    assert_eq!(year.solar_days().unwrap().len(), 73);
+    assert!(m.admitted("counts").unwrap());
+    m.validity.get_mut("counts").unwrap().end = "2000-12-31".into();
+    assert!(m.admitted("counts").unwrap());
+    m.validity.get_mut("counts").unwrap().end = "2000-12-30".into();
+    assert!(!m.admitted("counts").unwrap());
+    m.validity.get_mut("counts").unwrap().start = "2001-01-01".into();
+    m.validity.get_mut("counts").unwrap().end = "2002-01-01".into();
+    assert!(!m.admitted("counts").unwrap());
+}
+#[test]
+fn flow_days_are_half_open_with_explicit_exclusions() {
+    let mut m = manifest();
+    assert_eq!(m.window().baseline_days.len(), 366);
+    m.flows.excluded_days.insert("2000-01-01".into());
+    assert_eq!(m.window().baseline_days.len(), 365);
+    m.flows.increment_days.push("2000-01-01".into());
+    assert!(m.validate().is_err());
+    m.flows.increment_days = vec!["2001-01-01".into()];
+    assert!(m.validate().is_err());
+}
+#[test]
+fn a_citation_date_after_the_observation_is_flagged_independently_of_admission() {
+    let m = manifest();
+    let observed = m.inputs[0].observed.bounds().unwrap().1;
+    for url in [
+        "https://example.org/2001.04.08_Stations.pdf",
+        "roads/20010408.csv",
+        "https://example.org/2001-04-08/data",
+    ] {
+        assert!(dates::citation_dates(url).iter().any(|&day| day > observed));
+    }
+    assert!(m.admitted("counts").unwrap());
+}
+#[test]
+fn every_manifest_kind_region_and_dependency_is_valid() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years");
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.file_stem().is_some_and(|s| {
+            s.to_string_lossy().len() == 4
+                && s.to_string_lossy().bytes().all(|b| b.is_ascii_digit())
+        }) {
+            let manifest = Manifest::read(&path).unwrap();
+            for input in &manifest.inputs {
+                let observed_end = input.observed.bounds().unwrap().1;
+                let publication = input.published.as_ref().map(|day| {
+                    Interval {
+                        start: day.clone(),
+                        end: day.clone(),
+                    }
+                    .bounds()
+                    .unwrap()
+                });
+                for citation in [&input.id, &input.url] {
+                    for day in dates::citation_dates(citation) {
+                        assert!(
+                            day <= observed_end
+                                || publication
+                                    .is_some_and(|(start, end)| start <= day && day <= end),
+                            "{}: {} has citation date {day} after observation {observed_end}; record its true observation or publication",
+                            path.display(),
+                            input.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let kinds = include_str!("../../frontend/scripts/input-kinds.ts");
+    for kind in kind::ALL {
+        assert!(kinds.contains(&format!("\"{kind}\"")));
+    }
+    let mut value = serde_json::to_value(json!({"kind":"prepare-road-typo"})).unwrap();
+    assert!(serde_json::from_value::<Kind>(value["kind"].take()).is_err());
+    let mut m = manifest();
+    m.inputs[0].region = "unknown".into();
+    assert!(m.validate().is_err());
+}
+#[test]
+fn solar_geometry_is_a_calendar_cycle_including_leap_years() {
+    let mut m = manifest();
+    assert_eq!(m.solar_days().unwrap().len(), 74);
+    m.as_of = "2002-01-01".into();
+    assert_eq!(m.solar_days().unwrap().len(), 73);
 }

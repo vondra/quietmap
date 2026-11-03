@@ -18,8 +18,6 @@ pub mod square;
 pub mod terrain;
 pub mod terrain_fine;
 
-use std::path::Path;
-
 /// The kinds of tiles, one file a square and kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -53,31 +51,14 @@ impl Kind {
 }
 
 /// Written last by a builder: only a year root holding it is served, and only there does an
-/// absent square file or tile mean "empty". Its first line names the layout ([`LAYOUT`]): a year
-/// root of another layout would read as empty, so a reader refuses it.
+/// absent square file or tile mean "empty". Its JSON binds the layout, manifest hash and cutoff;
+/// another layout would read as empty, so a reader refuses it.
 pub const COMPLETION_MARKER: &str = "complete";
-/// The completion marker's first line: the year root laid out as [`square`] reads and writes it.
+/// The year-root layout recorded in the completion marker.
 pub const LAYOUT: &str = "qmsq1";
 
-/// Marks a year root complete, its layout's line before `note`.
-pub fn mark_year_complete(year_root: &Path, note: &str) -> Result<(), String> {
-    let path = year_root.join(COMPLETION_MARKER);
-    std::fs::write(&path, format!("{LAYOUT}\n{note}"))
-        .map_err(|error| format!("{}: {error}", path.display()))
-}
-
-/// Refuses a year root that is not complete or not laid out as this code reads it.
-pub fn check_year_complete(year_root: &Path) -> Result<(), String> {
-    let marker = std::fs::read_to_string(year_root.join(COMPLETION_MARKER))
-        .map_err(|_| format!("{} is not a complete release", year_root.display()))?;
-    if marker.lines().next() != Some(LAYOUT) {
-        return Err(format!(
-            "{} is not laid out as {LAYOUT}",
-            year_root.display()
-        ));
-    }
-    Ok(())
-}
+mod completion;
+pub use completion::{check_year_complete, manifest_hash, mark_year_complete};
 
 /// A tile whose bytes do not follow its kind's format: the click fails, never answers quieter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

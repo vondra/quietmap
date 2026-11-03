@@ -1,0 +1,23 @@
+{"rows": [
+  {"country":"AT","value":true},
+  {"country":"BE","value":true},
+  {"country":"CH","value":true},
+  {"country":"CY","value":true},
+  {"country":"CZ","value":true},
+  {"country":"DE","value":true},
+  {"country":"DK","value":true},
+  {"country":"ES","value":true},
+  {"country":"FI","value":true},
+  {"country":"FR","value":true},
+  {"country":"GB","value":true},
+  {"country":"GR","value":true},
+  {"country":"IE","value":true},
+  {"country":"IT","value":true},
+  {"country":"NL","value":true},
+  {"country":"NO","value":true},
+  {"country":"PL","value":true},
+  {"country":"PT","value":true},
+  {"country":"SE","value":true},
+  {"country":"SI","value":true},
+  {"country":"SK","value":true}
+]}

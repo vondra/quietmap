@@ -8,6 +8,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { splitFrontMatter } from './src/lib/about-front-matter.ts'
 import { aboutPagePath } from './src/lib/about-paths.ts'
+import { generateSourceArtifacts } from './scripts/generate-datasets.ts'
 import { expandYearSources, readYears, yearFiles } from './scripts/year-sources.ts'
 
 const ABOUT_DIR = new URL('./src/about', import.meta.url).pathname
@@ -24,7 +25,10 @@ function aboutIndex(): Record<string, { title: string }> {
 /** The About pages' index for the frontend, and their paths for the server: any other /about path
  *  is a 404. */
 function aboutPages(): Plugin {
+  let years: ReturnType<typeof readYears> = []
   return {
+    buildStart() { years = readYears() },
+    watchChange(id) { if (yearFiles().includes(id)) generateSourceArtifacts() },
     name: 'about-pages',
     enforce: 'pre',
     resolveId: id => (id === ABOUT_INDEX ? `\0${ABOUT_INDEX}` : undefined),
@@ -33,9 +37,9 @@ function aboutPages(): Plugin {
       if (!id.startsWith(`${ABOUT_DIR}/`) || !id.endsWith('.md?raw')) return
       const file = id.slice(0, -4)
       const markdown = readFileSync(file, 'utf8')
-      if (!markdown.includes('<!-- YEAR SOURCES -->')) return
+      if (!/<!-- (YEAR SOURCES|NATIONAL CLASS PRIORS|AIRCRAFT WINDOW) -->/.test(markdown)) return
       for (const year of yearFiles()) this.addWatchFile(year)
-      return `export default ${JSON.stringify(expandYearSources(file.slice(ABOUT_DIR.length + 1), markdown, readYears()))}`
+      return `export default ${JSON.stringify(expandYearSources(file.slice(ABOUT_DIR.length + 1), markdown, years))}`
     },
     generateBundle() {
       const pages = Object.keys(aboutIndex())

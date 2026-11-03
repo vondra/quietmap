@@ -144,7 +144,7 @@ fn a_buildings_places_give_its_open_and_kitchen_hours() {
 #[test]
 fn an_unmapped_building_of_restaurants_keeps_a_restaurants_hours() {
     let tables = crate::source_tables::SourceTables::test_fixture();
-    let hours = unmapped_place_hours(&customs(tables, iso(b"CZ")));
+    let hours = unmapped_place_hours(tables, &customs(tables, iso(b"CZ")));
     assert_eq!(open_hours(&hours.open, 2), [12, 13, 14, 18, 19, 20, 21]);
     assert_eq!(
         open_hours(&hours.kitchen.unwrap(), 2),

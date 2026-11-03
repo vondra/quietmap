@@ -168,7 +168,9 @@ fn run(arguments: &[String]) -> Result<Vec<u8>, String> {
         return Err(format!("no {layer:?} tile {z}/{x}/{y}"));
     }
     let year_root = PathBuf::from(required("prepared")?).join(required("year")?);
-    tiles::check_year_complete(&year_root)?;
+    if tiles::check_year_complete(&year_root)? != required("year")? {
+        return Err("completion manifest names a different year".into());
+    }
     let map_tile = MapTile::new(z, x, y);
     let tiles = map_tile.z12_tiles(layer.margin_px());
     let requests: Vec<(TileId, Kind)> = tiles.iter().map(|&tile| (tile, layer.kind())).collect();

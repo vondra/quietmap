@@ -265,7 +265,7 @@ pub fn convert(
     for row in &hospitality_rows {
         let key = group_key(&["building", &row.osm_id.to_string()]);
         let hours = hosted.get(&key).map_or_else(
-            || unmapped_place_hours(&customs),
+            || unmapped_place_hours(tables, &customs),
             |sites| place_hours(sites, &customs),
         );
         if let Some(emission) = building_emission(row, (country_iso, climate, tables), Some(&hours))

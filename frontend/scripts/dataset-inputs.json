@@ -1,0 +1,673 @@
+{
+  "10": {
+    "inputs": [
+      "eu-city-vienna",
+      "eu-city-brno",
+      "eu-city-copenhagen",
+      "eu-city-helsinki",
+      "eu-city-paris",
+      "eu-city-grenoble",
+      "eu-city-toulouse",
+      "eu-city-lyon",
+      "eu-city-lille",
+      "eu-city-bordeaux",
+      "eu-city-rennes",
+      "eu-city-marseille",
+      "eu-city-rouen",
+      "eu-city-montpellier",
+      "eu-city-berlin",
+      "eu-city-hamburg",
+      "eu-city-dublin",
+      "eu-city-milan",
+      "eu-city-luxembourg",
+      "eu-city-amsterdam",
+      "eu-city-oslo",
+      "eu-city-lisbon",
+      "eu-city-valencia",
+      "eu-city-barcelona",
+      "eu-city-madrid",
+      "eu-city-malmo",
+      "eu-city-stockholm",
+      "eu-city-zurich",
+      "eu-city-geneva",
+      "eu-city-london",
+      "eu-city-birmingham",
+      "eu-city-manchester",
+      "eu-city-glasgow",
+      "eu-city-edinburgh",
+      "eu-city-cardiff"
+    ],
+    "measurement": "counted"
+  },
+  "11": {
+    "inputs": [
+      "road-traffic"
+    ],
+    "measurement": "derived"
+  },
+  "12": {
+    "model": "continuity"
+  },
+  "20": {
+    "inputs": [
+      "cz-rsd-celostatni-scitani-dopravy"
+    ],
+    "measurement": "counted"
+  },
+  "21": {
+    "inputs": [
+      "us-fhwa-hpms"
+    ],
+    "measurement": "counted"
+  },
+  "22": {
+    "inputs": [
+      "de-bast-svz-autobahnen-bundesstraen",
+      "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
+      "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3"
+    ],
+    "measurement": "counted"
+  },
+  "23": {
+    "inputs": [
+      "de-bast-svz-autobahnen-bundesstraen",
+      "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
+      "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3"
+    ],
+    "measurement": "counted"
+  },
+  "24": {
+    "inputs": [
+      "fr-cerema-tmja-reseau-routier-national",
+      "fr-cerema-tmja-reseau-routier-national-2019"
+    ],
+    "measurement": "counted"
+  },
+  "30": {
+    "inputs": [
+      "building-road-models"
+    ],
+    "measurement": "derived"
+  },
+  "31": {
+    "inputs": [
+      "th-doh-highways"
+    ],
+    "measurement": "counted"
+  },
+  "100": {
+    "inputs": [
+      "at-timetable-at-austria-obb",
+      "au-timetable-au-qld-queensland-translink",
+      "au-timetable-au-vic-victoria-ptv",
+      "be-timetable-be-belgium-sncb",
+      "bg-timetable-bg-sofia-sofia-traffic",
+      "ca-timetable-ca-via-rail",
+      "ch-timetable-ch-switzerland-opentransportdata",
+      "de-timetable-de-germany-delfi",
+      "ee-timetable-ee-estonia-peatus",
+      "fi-timetable-fi-finland-digitraffic",
+      "fr-timetable-fr-idf-sncf-transilien",
+      "fr-timetable-fr-sncf-national",
+      "gr-timetable-gr-hellenic-train-community-timetable",
+      "hr-timetable-hr-croatia-hz",
+      "hu-timetable-hu-hungary-mav",
+      "in-timetable-in-indian-railways-unofficial",
+      "lu-timetable-lu-luxembourg-atp-open-data",
+      "lv-timetable-lv-pv-latvia-vivi",
+      "nl-timetable-nl-netherlands",
+      "no-timetable-no-norway",
+      "se-timetable-se-sweden",
+      "sk-timetable-sk-slovakia-zsr",
+      "us-timetable-us-amtrak"
+    ],
+    "measurement": ""
+  },
+  "110": {
+    "inputs": [
+      "cz-czptt-timetable-train-sequences-osm-stations",
+      "cz-czptt-timetable-train-sequences-osm-stations-jr2026"
+    ],
+    "measurement": ""
+  },
+  "111": {
+    "inputs": [
+      "us-fra-highway-rail-crossing-inventory"
+    ],
+    "measurement": ""
+  },
+  "112": {
+    "inputs": [
+      "ca-transport-canada-grade-crossings-inventory"
+    ],
+    "measurement": ""
+  },
+  "1004": {
+    "inputs": [
+      "ar-dnv-national-provincial-roads-tmda",
+      "ar-dnv-national-provincial-roads-tmda-ows",
+      "ar-dnv-national-provincial-roads-tmda-ows-3"
+    ],
+    "measurement": "derived"
+  },
+  "1013": {
+    "inputs": [
+      "bo-abc-red-vial-fundamental",
+      "bo-abc-red-vial-fundamental-0"
+    ],
+    "measurement": "proxy"
+  },
+  "1019": {
+    "inputs": [
+      "ca-quebec-mtq-djma"
+    ],
+    "measurement": "counted"
+  },
+  "1023": {
+    "inputs": [
+      "cl-mop-red-vial-plan-nacional-de-censos-tmda",
+      "cl-mop-red-vial-plan-nacional-de-censos-tmda-0"
+    ],
+    "measurement": "derived"
+  },
+  "1025": {
+    "inputs": [
+      "cn-china-highway-network"
+    ],
+    "measurement": "proxy"
+  },
+  "1026": {
+    "inputs": [
+      "co-invias-red-vial-tpds-nube-tpda",
+      "co-invias-red-vial-tpds-nube-tpda-0"
+    ],
+    "measurement": "derived"
+  },
+  "1031": {
+    "inputs": [
+      "dk-vejdirektoratet-mastra-ngletal"
+    ],
+    "measurement": "counted"
+  },
+  "1034": {
+    "inputs": [
+      "ec-congope-red-vial-ecuador",
+      "ec-congope-red-vial-ecuador-pyn2f4v1aeszqj1u",
+      "ec-congope-red-vial-ecuador-pyn2f4v1aeszqj1u-3"
+    ],
+    "measurement": "proxy"
+  },
+  "1037": {
+    "inputs": [
+      "es-mitma-mapa-de-trafico"
+    ],
+    "measurement": "counted"
+  },
+  "1039": {
+    "inputs": [
+      "fi-vaylavirasto-liikennemaarat"
+    ],
+    "measurement": "counted"
+  },
+  "1041": {
+    "inputs": [
+      "gb-dft-aadf-by-count-point"
+    ],
+    "measurement": "counted"
+  },
+  "1048": {
+    "inputs": [
+      "id-bina-marga-toll-regional-lhrt-national-roads",
+      "id-bina-marga-toll-regional-lhrt-national-roads-0",
+      "id-bina-marga-toll-regional-lhrt-national-roads-0-3"
+    ],
+    "measurement": "derived"
+  },
+  "1049": {
+    "inputs": [
+      "ie-tii-counter-sites-daily-class-aggregate",
+      "ie-tii-counter-sites-daily-class-aggregate-per-site-class-aggr-2019-06-19"
+    ],
+    "measurement": "counted"
+  },
+  "1050": {
+    "inputs": [
+      "in-bharatmala-road-network"
+    ],
+    "measurement": "proxy"
+  },
+  "1054": {
+    "inputs": [
+      "it-anas-traffic-2015-11"
+    ],
+    "measurement": "counted"
+  },
+  "1088": {
+    "inputs": [
+      "no-nvdb-trafikkmengde"
+    ],
+    "measurement": "counted"
+  },
+  "1090": {
+    "inputs": [
+      "nz-nzta-carriageway-auckland-transport-aadt",
+      "nz-nzta-carriageway-auckland-transport-aadt-0"
+    ],
+    "measurement": "counted"
+  },
+  "1093": {
+    "inputs": [
+      "pe-mtc-provias-red-vial-nacional-departamental",
+      "pe-mtc-provias-red-vial-nacional-departamental-0"
+    ],
+    "measurement": "derived"
+  },
+  "1095": {
+    "inputs": [
+      "ph-dpwh-road-classification"
+    ],
+    "measurement": "proxy"
+  },
+  "1097": {
+    "inputs": [
+      "pl-gddkia-generalny-pomiar-ruchu"
+    ],
+    "measurement": "counted"
+  },
+  "1098": {
+    "inputs": [
+      "py-mopc-rutas-nacionales"
+    ],
+    "measurement": "proxy"
+  },
+  "1102": {
+    "inputs": [
+      "sa-mot-traffic-density-riyadh-pms-road-atlas",
+      "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads",
+      "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads-3"
+    ],
+    "measurement": "derived"
+  },
+  "1103": {
+    "inputs": [
+      "eu-city-amsterdam"
+    ],
+    "measurement": "proxy"
+  },
+  "1113": {
+    "inputs": [
+      "th-drr-rural-roads-aadt"
+    ],
+    "measurement": "derived"
+  },
+  "1124": {
+    "inputs": [
+      "ve-ve360-vialidad"
+    ],
+    "measurement": "proxy"
+  },
+  "2000": {
+    "inputs": [
+      "ae-timetable-rta-dubai"
+    ],
+    "measurement": ""
+  },
+  "2004": {
+    "inputs": [
+      "ar-timetable-subte-buenos-aires"
+    ],
+    "measurement": ""
+  },
+  "2005": {
+    "inputs": [
+      "au-timetable-adelaide-metro",
+      "au-timetable-nsw-sydney",
+      "au-timetable-transperth-wa"
+    ],
+    "measurement": ""
+  },
+  "2009": {
+    "inputs": [
+      "be-timetable-delijn-flanders",
+      "be-timetable-stib-brussels",
+      "be-timetable-tec-wallonia"
+    ],
+    "measurement": ""
+  },
+  "2015": {
+    "inputs": [
+      "ca-timetable-calgary-transit",
+      "ca-timetable-edmonton-ets",
+      "ca-timetable-go-transit",
+      "ca-timetable-oc-transpo",
+      "ca-timetable-stm-montreal",
+      "ca-timetable-translink-vancouver",
+      "ca-timetable-ttc-toronto",
+      "ca-timetable-via-rail"
+    ],
+    "measurement": ""
+  },
+  "2021": {
+    "inputs": [
+      "cn-mainland-cr-metros",
+      "cn-mainland-cr-metros-4"
+    ],
+    "measurement": "proxy"
+  },
+  "2024": {
+    "inputs": [
+      "dk-timetable-rejseplanen"
+    ],
+    "measurement": ""
+  },
+  "2028": {
+    "inputs": [
+      "es-timetable-fgc-catalunya",
+      "es-timetable-renfe-av-ld-md",
+      "es-timetable-renfe-cercanias"
+    ],
+    "measurement": ""
+  },
+  "2030": {
+    "inputs": [
+      "fi-timetable-fintraffic-vr",
+      "fi-timetable-foli-turku",
+      "fi-timetable-hsl-helsinki",
+      "fi-timetable-tampere"
+    ],
+    "measurement": ""
+  },
+  "2035": {
+    "inputs": [
+      "ie-timetable-nta-unified"
+    ],
+    "measurement": ""
+  },
+  "2036": {
+    "inputs": [
+      "il-timetable-mot-unified"
+    ],
+    "measurement": ""
+  },
+  "2037": {
+    "inputs": [
+      "in-living-atlas-in-railway-metro",
+      "in-living-atlas-in-railway-metro-1"
+    ],
+    "measurement": "proxy"
+  },
+  "2040": {
+    "inputs": [
+      "it-timetable-ferrotramviaria-puglia",
+      "it-timetable-gtt-piemonte",
+      "it-timetable-toscana-trenitalia",
+      "it-timetable-trenitalia-sardegna",
+      "it-timetable-trenord-lombardia"
+    ],
+    "measurement": ""
+  },
+  "2044": {
+    "model": "rail"
+  },
+  "2057": {
+    "inputs": [
+      "mx-timetable-cdmx-semovi",
+      "mx-timetable-toluca-movimex"
+    ],
+    "measurement": ""
+  },
+  "2066": {
+    "inputs": [
+      "pl-timetable-krakow-tram",
+      "pl-timetable-polish-trains",
+      "pl-timetable-silesia-gzm",
+      "pl-timetable-warsaw-ztm",
+      "pl-timetable-wkd-warszawa"
+    ],
+    "measurement": ""
+  },
+  "2067": {
+    "inputs": [
+      "pt-timetable-carris-metropolitana",
+      "pt-timetable-cp-comboios",
+      "pt-timetable-metro-porto",
+      "pt-timetable-metro-sul-tejo"
+    ],
+    "measurement": ""
+  },
+  "2073": {
+    "inputs": [
+      "se-timetable-gtfs-sverige-2"
+    ],
+    "measurement": ""
+  },
+  "2075": {
+    "inputs": [
+      "th-timetable-namtang"
+    ],
+    "measurement": ""
+  },
+  "9003": {
+    "inputs": [
+      "cz-prague-tsk-praha-intenzity-dopravy"
+    ],
+    "measurement": "derived"
+  },
+  "9004": {
+    "inputs": [
+      "at-vienna-stadt-wien-ma46-dauerzahlstellen",
+      "at-vienna-stadt-wien-ma46-dauerzahlstellen-stadt-wien-verkehrszhlstellenzhlwertewien"
+    ],
+    "measurement": "counted"
+  },
+  "9005": {
+    "inputs": [
+      "cz-brno-brno-bkom-pentlogram"
+    ],
+    "measurement": "derived"
+  },
+  "9012": {
+    "model": "road"
+  },
+  "9013": {
+    "model": "rail"
+  },
+  "9180": {
+    "model": "road"
+  },
+  "9181": {
+    "model": "rail"
+  },
+  "9231": {
+    "model": "road"
+  },
+  "9232": {
+    "model": "rail"
+  },
+  "9263": {
+    "model": "rail"
+  },
+  "9364": {
+    "model": "road"
+  },
+  "9365": {
+    "model": "rail"
+  },
+  "9368": {
+    "model": "road"
+  },
+  "9369": {
+    "model": "rail"
+  },
+  "9392": {
+    "inputs": [
+      "jp-mlit-road-traffic-census-r3"
+    ],
+    "measurement": "counted"
+  },
+  "9398": {
+    "model": "road"
+  },
+  "9399": {
+    "model": "rail"
+  },
+  "9404": {
+    "model": "road"
+  },
+  "9405": {
+    "model": "rail"
+  },
+  "9484": {
+    "inputs": [
+      "mx-sict-imt-datos-viales-u1-segments",
+      "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict"
+    ],
+    "measurement": "counted"
+  },
+  "9504": {
+    "model": "road"
+  },
+  "9505": {
+    "model": "rail"
+  },
+  "9528": {
+    "inputs": [
+      "nl-rws-inweva-weekdag-gemiddelde-intensiteiten"
+    ],
+    "measurement": "counted"
+  },
+  "9566": {
+    "model": "road"
+  },
+  "9567": {
+    "model": "rail"
+  },
+  "9643": {
+    "model": "road"
+  },
+  "9644": {
+    "model": "rail"
+  },
+  "9705": {
+    "inputs": [
+      "si-drsi-pldp-counting-sites",
+      "si-drsi-pldp-counting-sites-pldp2024noo"
+    ],
+    "measurement": "counted"
+  },
+  "9729": {
+    "model": "road"
+  },
+  "9730": {
+    "model": "rail"
+  },
+  "9752": {
+    "inputs": [
+      "se-trafikverket-nvdb-trafik-adt"
+    ],
+    "measurement": "counted"
+  },
+  "9756": {
+    "inputs": [
+      "ch-astra-sasvz-jahresergebnisse-station-list",
+      "ch-astra-sasvz-jahresergebnisse-station-list-jahres-ergebnisse-2024"
+    ],
+    "measurement": "counted"
+  },
+  "9792": {
+    "model": "road"
+  },
+  "9793": {
+    "model": "rail"
+  },
+  "9804": {
+    "model": "road"
+  },
+  "9805": {
+    "model": "rail"
+  },
+  "9818": {
+    "model": "road"
+  },
+  "9819": {
+    "model": "rail"
+  },
+  "9834": {
+    "model": "road"
+  },
+  "9835": {
+    "model": "rail"
+  },
+  "9860": {
+    "model": "road"
+  },
+  "9861": {
+    "model": "rail"
+  },
+  "9862": {
+    "model": "transition"
+  },
+  "9863": {
+    "model": "timetable-residual"
+  },
+  "9864": {
+    "inputs": [
+      "de-timetable-de-full"
+    ],
+    "measurement": "counted"
+  },
+  "9865": {
+    "inputs": [
+      "jp-mlit-road-traffic-census-r3"
+    ],
+    "measurement": "proxy"
+  },
+  "9870": {
+    "inputs": [
+      "ar-dnv-national-provincial-roads-tmda",
+      "ar-dnv-national-provincial-roads-tmda-ows",
+      "ar-dnv-national-provincial-roads-tmda-ows-3"
+    ],
+    "measurement": "proxy"
+  },
+  "9871": {
+    "inputs": [
+      "cl-mop-red-vial-plan-nacional-de-censos-tmda",
+      "cl-mop-red-vial-plan-nacional-de-censos-tmda-0"
+    ],
+    "measurement": "proxy"
+  },
+  "9872": {
+    "inputs": [
+      "co-invias-red-vial-tpds-nube-tpda",
+      "co-invias-red-vial-tpds-nube-tpda-0"
+    ],
+    "measurement": "proxy"
+  },
+  "9873": {
+    "inputs": [
+      "id-bina-marga-toll-regional-lhrt-national-roads",
+      "id-bina-marga-toll-regional-lhrt-national-roads-0",
+      "id-bina-marga-toll-regional-lhrt-national-roads-0-3"
+    ],
+    "measurement": "proxy"
+  },
+  "9874": {
+    "inputs": [
+      "pe-mtc-provias-red-vial-nacional-departamental",
+      "pe-mtc-provias-red-vial-nacional-departamental-0"
+    ],
+    "measurement": "proxy"
+  },
+  "9875": {
+    "inputs": [
+      "sa-mot-traffic-density-riyadh-pms-road-atlas",
+      "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads",
+      "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads-3"
+    ],
+    "measurement": "proxy"
+  },
+  "9876": {
+    "model": "road"
+  }
+}

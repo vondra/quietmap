@@ -172,7 +172,12 @@ fn the_fast_answer_is_within_a_tenth_of_a_decibel_of_the_exact_one() {
         .filter(|d| *d < 2_900.0)
         .collect();
     write_roads(&root, &distances, false);
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (exact, exact_count, contributors) = road_answer(&release, true);
     let (fast, fast_count, _) = road_answer(&release, false);
@@ -195,7 +200,12 @@ fn the_last_row_counts_the_sources_the_list_leaves_out() {
     let root = release_root("rest");
     let distances: Vec<f64> = (0..40).map(|i| 30.0 + 20.0 * f64::from(i)).collect();
     write_roads(&root, &distances, true);
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (lat, lon) = TILE.centre().to_degrees();
     let mut last = None;
@@ -231,7 +241,12 @@ fn a_road_on_a_bridge_emits_from_its_deck() {
     for (name, deck_m) in [("ground", None), ("deck", Some([30.0, 50.0]))] {
         let root = release_root(name);
         write_roads_on(&root, &[30.0], false, deck_m);
-        tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+        tiles::mark_year_complete(
+            &root.join("2026"),
+            br#"{"year":"2026","as_of":"2026-10-31"}"#,
+            "test",
+        )
+        .unwrap();
         let release = Release::open(&root, "2026").unwrap();
         let (lat, lon) = TILE.centre().to_degrees();
         let mut pieces = Vec::new();
@@ -273,7 +288,12 @@ fn a_road_on_a_bridge_emits_from_its_deck() {
 fn an_asked_source_lists_every_piece_of_it() {
     let root = release_root("listed");
     write_roads(&root, &[30.0, 60.0, 90.0, 120.0], false);
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (lat, lon) = TILE.centre().to_degrees();
     let mut last = None;
@@ -323,7 +343,12 @@ fn a_click_inside_a_building_answers_at_the_facade_facing_the_road() {
     let root = release_root("building");
     write_roads(&root, &[40.0], false);
     write_building(&root);
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (inside, bearing) = click(&release, 0.0);
     let bearing = bearing.expect("the click stands in the building");
@@ -373,7 +398,12 @@ fn a_source_on_the_edge_of_the_read_block_is_answered() {
         &[(north, encode(&pieces, &attributes, &[]))],
     )
     .unwrap();
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let mut building_energy = 0.0;
     answer(
@@ -441,7 +471,12 @@ fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
         &[(TILE, encode(&pieces, &attributes, &[]))],
     )
     .unwrap();
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let industry = |exact: bool| {
         let (lat, lon) = TILE.centre().to_degrees();
@@ -537,7 +572,12 @@ fn a_sampled_layer_sounds_as_the_exact_one() {
         &[(TILE, encode(&pieces, &attributes, &[]))],
     )
     .unwrap();
-    tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let sone = |exact: bool| {
         let (lat, lon) = TILE.centre().to_degrees();

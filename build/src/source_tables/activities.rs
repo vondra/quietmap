@@ -7,6 +7,7 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct VenueSeating {
     pub beer_garden_m2: f64,
+    pub unmapped_kind: crate::sources::venues::VenueKind,
     pub seats: [[f64; 2]; 6],
 }
 
@@ -29,5 +30,6 @@ pub struct WorshipCalls {
 pub struct ChurchBells {
     pub orthodox: bool,
     pub strikes_per_hour: f64,
+    pub strike_seconds: f64,
     pub night_strikes: f64,
 }

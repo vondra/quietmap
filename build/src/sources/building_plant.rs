@@ -13,6 +13,7 @@ const COOLING_SHAPE: [f64; 3] = [1.1, 1.5, 0.6];
 const SPLIT_LW_DBA: f64 = 62.0;
 const CENTRAL_LW_DBA: f64 = 68.0;
 
+// HRE D3.2: US hot-climate saturation, also reached by Cyprus and Malta.
 pub fn cooled_service_share(tables: &SourceTables, country_iso: u16) -> f64 {
     tables
         .service_cooling
@@ -123,5 +124,47 @@ mod tests {
             },
         );
         assert!(houston[2].units_per_dwelling > 0.6 && houston[2].lw_dba == 68.0);
+    }
+}
+
+#[cfg(test)]
+mod regional_defaults_tests {
+    use super::*;
+    use crate::source_tables::CountryTable;
+    #[test]
+    fn missing_country_uses_its_region_before_the_world_default() {
+        let tables = SourceTables {
+            plants: CountryTable::fixture(
+                r#"[
+                {"country":"GB","value":{"heating_units":0.02,"cooling_units":0.04,"central_share":0,"cooling_hours":null}},
+                {"countries":["GB","NO"],"value":{"heating_units":0.32,"cooling_units":0.04,"central_share":0,"cooling_hours":null}}
+            ]"#,
+            ),
+            service_cooling: CountryTable::fixture(
+                r#"[{"country":"GB","value":0.225},{"countries":["GB","NO"],"value":0.0815}]"#,
+            ),
+            ..SourceTables::fixture_owned()
+        };
+        assert_eq!(
+            country_plant(&tables, u16::from_le_bytes(*b"GB")).heating_units,
+            0.02
+        );
+        assert_eq!(
+            country_plant(&tables, u16::from_le_bytes(*b"NO")).heating_units,
+            0.32
+        );
+        assert_eq!(
+            cooled_service_share(&tables, u16::from_le_bytes(*b"NO")),
+            0.0815
+        );
+        assert_eq!(
+            country_plant(&tables, u16::from_le_bytes(*b"ZZ")).cooling_units,
+            0.16
+        );
+        assert_eq!(
+            cooled_service_share(&tables, u16::from_le_bytes(*b"ZZ")),
+            0.847
+        );
+        assert_eq!(country_plant(&tables, 0).heating_units, 0.0);
     }
 }

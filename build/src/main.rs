@@ -2,7 +2,7 @@
 //! `qm-build COMMAND --year years/YEAR.json --sources ROOT --out OUTPUT`.
 //! Spatial steps take `--squares X:Y,X:Y` (or `all`, or `@FILE`); `dev4` also takes
 //! `--kinds terrain,obstacles,sources`. The source inventory and flow dates live only in the
-//! manifest. `complete --out DIR --note TEXT` writes the last marker without reading inputs.
+//! manifest. Completion verifies the required model inputs and binds the output to its manifest.
 
 mod aircraft;
 mod airport;
@@ -98,9 +98,9 @@ impl Arguments {
     /// not complete yet) or a complete one of this layout; one of another layout would read as
     /// all ocean.
     fn terrain<'a>(&self, inputs: &'a year::YearInputs, out: &Path) -> Result<&'a Path, String> {
-        let terrain = inputs.required("terrain")?;
+        let terrain = inputs.required(crate::year::Kind::Terrain)?;
         if terrain != out {
-            tiles::check_year_complete(terrain)?;
+            inputs.check_complete(terrain)?;
         }
         Ok(terrain)
     }
@@ -141,7 +141,7 @@ fn national_models(
     inputs: &year::YearInputs,
 ) -> Result<Vec<terrain::national::NationalHeights>, String> {
     inputs
-        .paths("national-dem")?
+        .national_dem_paths()?
         .iter()
         .map(|path| terrain::national::NationalHeights::read(path))
         .collect()
@@ -224,8 +224,39 @@ fn run(arguments: &[String]) -> Result<(), String> {
         .ok_or("usage: qm-build osm|osm-regions|dev4|weather|complete|geoid|aircraft-segments|airport-traffic --key value ..")?;
     let options = Arguments::parse(rest)?;
     let out = PathBuf::from(options.get("out")?);
+    if command == "manifest" {
+        let path = Path::new(options.get("year")?);
+        let manifest = year::Manifest::read(path)?;
+        let mut projection: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        let admitted = manifest
+            .inputs
+            .iter()
+            .filter_map(|input| match manifest.admitted(&input.id) {
+                Ok(true) => Some(Ok(input.id.as_str())),
+                Ok(false) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<HashSet<_>, _>>()?;
+        projection["inputs"]
+            .as_array_mut()
+            .ok_or("manifest inputs must be an array")?
+            .retain(|input| input["id"].as_str().is_some_and(|id| admitted.contains(id)));
+        let json = serde_json::to_string(&projection).map_err(|e| e.to_string())?;
+        if out == Path::new("-") {
+            println!("{json}");
+            return Ok(());
+        }
+        return std::fs::write(out, json).map_err(|e| e.to_string());
+    }
     if command == "complete" {
-        return tiles::mark_year_complete(&out, options.get("note")?);
+        let path = Path::new(options.get("year")?);
+        let inputs = year::YearInputs::read(path, Path::new(options.get("sources")?))?;
+        source_tables::SourceTables::read(&inputs)?;
+        inputs.check_published_tables()?;
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        return tiles::mark_year_complete(&out, &bytes, options.get("note")?);
     }
     let inputs = year::YearInputs::read(
         Path::new(options.get("year")?),
@@ -242,7 +273,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         .map_err(|error| error.to_string()),
         "source-outlines" => source_outlines::build(
             &Dev4 {
-                prepared: inputs.required("prepared")?.into(),
+                prepared: inputs.required(crate::year::Kind::Prepared)?.into(),
                 rasters: PathBuf::new(),
             },
             &parse_squares(options.get("squares")?)?,
@@ -250,8 +281,8 @@ fn run(arguments: &[String]) -> Result<(), String> {
         ),
         "dev4" => {
             let dev4 = Dev4 {
-                prepared: inputs.required("prepared")?.into(),
-                rasters: inputs.required("rasters")?.into(),
+                prepared: inputs.required(crate::year::Kind::Prepared)?.into(),
+                rasters: inputs.required(crate::year::Kind::Rasters)?.into(),
             };
             let squares = parse_squares(options.get("squares")?)?;
             let kinds = options.optional("kinds").unwrap_or("terrain");
@@ -261,42 +292,38 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     "terrain" => terrain::build(&dev4, &squares, &national_models(&inputs)?, &out)?,
                     "obstacles" => obstacles::build(
                         &dev4,
-                        &inputs
-                            .optional("barriers")?
-                            .map(barriers::Barriers::load)
-                            .transpose()?
-                            .unwrap_or_default(),
+                        &barriers::Barriers::load(inputs.required(crate::year::Kind::Barriers)?)?,
                         &squares,
                         &out,
                     )?,
                     "sources" => sources::build(
                         (
                             &dev4,
-                            &climate::Climate::load(inputs.required("climate")?)?,
-                            &sources::tent::FreightNetwork::load(inputs.required("tent")?)?,
-                            &sources::turbines::Turbines::load(inputs.required("turbines")?)?,
-                            &sources::water::Water::open(inputs.required("water")?)?,
+                            &climate::Climate::load(inputs.required(crate::year::Kind::Climate)?)?,
+                            &sources::tent::FreightNetwork::load(
+                                inputs.required(crate::year::Kind::Tent)?,
+                            )?,
+                            &sources::turbines::Turbines::load(
+                                inputs.required(crate::year::Kind::Turbines)?,
+                            )?,
+                            &sources::water::Water::open(
+                                inputs.required(crate::year::Kind::Water)?,
+                            )?,
                             &source_tables::SourceTables::read(&inputs)?,
                         ),
                         (
-                            inputs.required("airport-traffic")?,
-                            inputs.optional("road-traffic")?,
-                            inputs
-                                .optional("bus")?
-                                .map(sources::bus::BusRoutes::load)
-                                .transpose()?
-                                .as_ref(),
+                            inputs.required(crate::year::Kind::AirportTraffic)?,
+                            Some(inputs.required(crate::year::Kind::RoadTraffic)?),
+                            Some(&sources::bus::BusRoutes::load(
+                                inputs.required(crate::year::Kind::Bus)?,
+                            )?),
                             sources::Places {
-                                worship: inputs
-                                    .optional("worship")?
-                                    .map(sources::worship::WorshipSites::load)
-                                    .transpose()?
-                                    .as_ref(),
-                                venues: inputs
-                                    .optional("venues")?
-                                    .map(sources::venues::Venues::load)
-                                    .transpose()?
-                                    .as_ref(),
+                                worship: Some(&sources::worship::WorshipSites::load(
+                                    inputs.required(crate::year::Kind::Worship)?,
+                                )?),
+                                venues: Some(&sources::venues::Venues::load(
+                                    inputs.required(crate::year::Kind::Venues)?,
+                                )?),
                             },
                         ),
                         &squares,
@@ -314,14 +341,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
         "weather" => {
             let dev4 = Dev4 {
                 prepared: PathBuf::new(),
-                rasters: inputs.required("rasters")?.into(),
+                rasters: inputs.required(crate::year::Kind::Rasters)?.into(),
             };
             weather::build(&dev4, &out)
         }
         "terrain-fine" => {
             let started = std::time::Instant::now();
             let models: Vec<&Path> = inputs
-                .paths("fine-dem")?
+                .paths(crate::year::Kind::FineDem)?
                 .iter()
                 .map(PathBuf::as_path)
                 .collect();
@@ -337,7 +364,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             );
             Ok(())
         }
-        "geoid" => aircraft::geoid::build(inputs.required("tiff")?, &out),
+        "geoid" => aircraft::geoid::build(inputs.required(crate::year::Kind::Tiff)?, &out),
         "aircraft-segments" => {
             if let Some(threads) = options.optional("threads") {
                 let threads = threads
@@ -349,18 +376,17 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     .map_err(|error| error.to_string())?;
             }
             let window = inputs.manifest.window();
-            let days = aircraft::Days::listed(
-                &window.baseline_days.join(","),
-                (!window.increment_days.is_empty())
-                    .then(|| window.increment_days.join(","))
-                    .as_deref(),
-            )?;
+            let days = aircraft::Days::listed(&window.baseline_days, &window.increment_days)?;
             aircraft::run(aircraft::Run {
                 days,
-                primary: inputs.required("primary")?,
-                secondary: inputs.optional("secondary")?,
-                rasters: inputs.required("rasters")?,
-                geoid: inputs.required("geoid")?,
+                primary: inputs.required(crate::year::Kind::Primary)?,
+                secondary: if window.increment_days.is_empty() {
+                    None
+                } else {
+                    Some(inputs.required(crate::year::Kind::Secondary)?)
+                },
+                rasters: inputs.required(crate::year::Kind::Rasters)?,
+                geoid: inputs.required(crate::year::Kind::Geoid)?,
                 boxes: options.optional("boxes"),
                 out: &out,
                 national: national_models(&inputs)?,
@@ -374,18 +400,22 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 squares = boxes::events::halo(&squares);
             }
             let scope = squares.into_iter().collect();
-            let left =
-                boxes::shuffle::shuffle(inputs.required("segments")?, &window, &scope, &out)?;
+            let left = boxes::shuffle::shuffle(
+                inputs.required(crate::year::Kind::Segments)?,
+                &window,
+                &scope,
+                &out,
+            )?;
             eprintln!("aircraft shuffle: {left} days not written yet");
             Ok(())
         }
         "aircraft-boxes" => {
             let rules = box_rules(&options)?;
-            let shuffled = inputs.required("shuffled")?;
+            let shuffled = inputs.required(crate::year::Kind::Shuffled)?;
             let days = boxes::shuffle::window_days(shuffled, &inputs.manifest.window())?;
             let squares = parse_squares(options.get("squares")?)?;
             boxes::shuffle::holds(shuffled, &squares)?;
-            let weather = WeatherTable::read(inputs.required("weather")?)?;
+            let weather = WeatherTable::read(inputs.required(crate::year::Kind::Weather)?)?;
             let terrain = options.terrain(&inputs, &out)?;
             let progress = progress_markers(&options)?;
             eprintln!("aircraft boxes: {} days", days.len());
@@ -446,11 +476,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
             })
         }
         "aircraft-events" => {
-            let shuffled = inputs.required("shuffled")?;
+            let shuffled = inputs.required(crate::year::Kind::Shuffled)?;
             let days = boxes::shuffle::window_days(shuffled, &inputs.manifest.window())?;
             let squares = parse_squares(options.get("squares")?)?;
             boxes::shuffle::holds(shuffled, &boxes::events::halo(&squares))?;
-            let weather = WeatherTable::read(inputs.required("weather")?)?;
+            let weather = WeatherTable::read(inputs.required(crate::year::Kind::Weather)?)?;
             let terrain = options.terrain(&inputs, &out)?;
             let progress = progress_markers(&options)?;
             let marker = |square: Square| {
@@ -502,9 +532,13 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 ))
             })
         }
-        "aircraft-tracks" => {
-            aircraft::tracks::build(&inputs.required("segments")?.join("segments"), &out)
-        }
+        "aircraft-tracks" => aircraft::tracks::build(
+            &inputs
+                .required(crate::year::Kind::Segments)?
+                .join("segments"),
+            &inputs.manifest.window(),
+            &out,
+        ),
         "aircraft-check" => {
             let window = inputs.manifest.window();
             let points: Vec<serde_json::Value> = serde_json::from_str(
@@ -537,9 +571,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 ),
                 None => None,
             };
-            let weather = WeatherTable::read(inputs.required("weather")?)?;
+            let weather = WeatherTable::read(inputs.required(crate::year::Kind::Weather)?)?;
             let compared = boxes::check::compare(
-                (inputs.required("segments")?, &weather),
+                (inputs.required(crate::year::Kind::Segments)?, &weather),
                 &window,
                 (&out, box_rules(&options)?[0].level_step_db),
                 terrain,
@@ -622,7 +656,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         }
         "traffic" => {
             let dev4 = Dev4 {
-                prepared: inputs.required("prepared")?.into(),
+                prepared: inputs.required(crate::year::Kind::Prepared)?.into(),
                 rasters: PathBuf::new(),
             };
             let started = std::time::Instant::now();
@@ -640,12 +674,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
         }
         "airport-traffic" => {
             let dev4 = Dev4 {
-                prepared: inputs.required("prepared")?.into(),
+                prepared: inputs.required(crate::year::Kind::Prepared)?.into(),
                 rasters: PathBuf::new(),
             };
             let written = airport::build(
                 &dev4,
-                inputs.required("segments")?,
+                inputs.required(crate::year::Kind::Segments)?,
                 &inputs.manifest.window(),
                 &parse_squares(options.get("squares")?)?,
                 (options.terrain(&inputs, &out)?, &out),

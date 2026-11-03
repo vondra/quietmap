@@ -2,6 +2,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { readYears } from '../scripts/year-sources.ts'
+import { datasetCitations } from '../scripts/dataset-citations.ts'
+const built = readYears().find(year => year.manifest.built).manifest
+const citation = code => { const [name, observed, measurement] = datasetCitations(built)[code]; return [name, observed, measurement].filter(Boolean).join(', ') }
+
 import {
   datasetLine,
   railDatasetLines,
@@ -57,15 +62,15 @@ test('the estimated bitmask marks per-category priors without touching values', 
 })
 
 test('a record names the dataset behind its traffic; a class prior or an unknown id names none', () => {
-  assert.equal(datasetLine(20), 'ŘSD Celostátní sčítání dopravy, 2020, counted')
-  assert.equal(datasetLine(30), 'Trips from the buildings along the street network (this map\'s model), 2026, derived')
+  assert.equal(datasetLine(20), citation(20))
+  assert.equal(datasetLine(30), citation(30))
   assert.equal(datasetLine(0), null)
   assert.equal(datasetLine(null), null)
   assert.equal(datasetLine(65535), null)
 })
 
 test('a level crossing names the dataset of its soundings, never passenger trains or freight', () => {
-  assert.deepEqual(railDatasetLines(111, 20, true), ['Soundings: FRA Highway-Rail Crossing Inventory (Form 6180.71), 2026'])
-  assert.deepEqual(railDatasetLines(20, 0, false), ['Passenger trains: ŘSD Celostátní sčítání dopravy, 2020, counted'])
+  assert.deepEqual(railDatasetLines(111, 20, true), [`Soundings: ${citation(111)}`])
+  assert.deepEqual(railDatasetLines(20, 0, false), [`Passenger trains: ${citation(20)}`])
 })
 

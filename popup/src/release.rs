@@ -21,7 +21,12 @@ impl Release {
     /// Opens `<prepared>/<year>`; refuses a year root that is not complete in this layout.
     pub fn open(prepared: &Path, year: &str) -> Result<Self, String> {
         let year_root = prepared.join(year);
-        tiles::check_year_complete(&year_root)?;
+        let manifest_year = tiles::check_year_complete(&year_root)?;
+        if manifest_year != year {
+            return Err(format!(
+                "requested year {year}, completion manifest names {manifest_year}"
+            ));
+        }
         Ok(Release {
             weather_path: year_root.join(WEATHER_FILE),
             year_root,

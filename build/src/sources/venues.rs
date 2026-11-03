@@ -11,7 +11,8 @@ use physics::emission::plant::kitchen_hours;
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum VenueKind {
     Bar,
     Pub,
@@ -164,14 +165,11 @@ fn merge_nodes_into_outlines(sites: &mut Vec<VenueSite>) {
 /// Seats a m2 of an outdoor area (Austria's experience value, Forum Schall 2008).
 const SEATS_PER_M2: f64 = 0.7;
 
-/// Seats outside: a tagged terrace's median (Madrid's census 2026: bars 28, restaurants and cafés
-/// 24, fast food 23, nightclubs 38; Melbourne's pubs 40), an untagged place the share with a
-/// terrace times its mean (Madrid: bars 13.5, restaurants 9.0, cafés 8.8, fast food 8.4,
-/// nightclubs 1.9; Melbourne's pubs 0.56 x 40), a beer garden 0.7 a m2 of its outline (else of the
-/// median mapped one).
+/// Expected outdoor seats from the admitted seating survey; a mapped beer garden's area
+/// overrides its survey median, and an explicit no-terrace tag gives zero.
 pub fn seats(tables: &SourceTables, site: &VenueSite) -> f64 {
     use VenueKind::*;
-    let model = tables.venue_seating.as_ref();
+    let model = &tables.venue_seating;
     let index = match site.kind {
         Bar => 0,
         Pub => 1,
@@ -183,12 +181,12 @@ pub fn seats(tables: &SourceTables, site: &VenueSite) -> f64 {
             let area = if site.area_m2 > 0.0 {
                 site.area_m2
             } else {
-                model.map_or(0.0, |model| model.beer_garden_m2)
+                model.beer_garden_m2
             };
             return SEATS_PER_M2 * area;
         }
     };
-    let [tagged, expected] = model.map_or([0.0; 2], |model| model.seats[index]);
+    let [tagged, expected] = model.seats[index];
     match site.seating {
         Seating::Yes => tagged,
         Seating::No => 0.0,
@@ -208,15 +206,8 @@ pub fn cluster_weight(kind: VenueKind) -> f64 {
     }
 }
 
-/// A country's customs where a place maps no hours (hours; past 24 after midnight; Sunday to
-/// Thursday nights, Friday and Saturday nights): when bars close and terraces empty, and when
-/// dinner is eaten. Legal hours where the research found them (Catalonia's bars 03:00 in summer,
-/// Madrid's 02:00/02:30 and terraces 01:00/01:30, Barcelona's terraces 24:00/01:00, Paris 02:00,
-/// Ireland 23:30/00:30, the UK's 23:00, Norway's and Sweden's 01:00, the US's 02:00 last call,
-/// Bavaria's beer gardens 23:00); dinner at Eurostat HETUS's evening peaks (Spain 21:20, Italy
-/// 20:20, France 20:00, Germany 18:30, the UK 18:20). Elsewhere judgments: bars to 01:00 (02:00 at
-/// weekends), terraces to 23:00, dinner 19-23 h; open-fronted places of the warm south-east of
-/// Asia keep their terraces as long as they are open.
+/// Opening, terrace and meal times where a place maps no hours, admitted by their validity.
+/// Pairs are Sunday–Thursday and Friday–Saturday; hours past midnight exceed 24.
 #[derive(Clone, Copy, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Customs {
@@ -346,12 +337,12 @@ pub fn place_hours(sites: &[&VenueSite], customs: &Customs) -> PlaceHours {
 }
 
 /// The hours of a building of bars and restaurants with no place mapped in it: a restaurant's in its
-/// country, as most hold one (69 % of those with a place, 227 squares counted on 2026-10-19).
-pub fn unmapped_place_hours(customs: &Customs) -> PlaceHours {
+/// country, using the predominant mapped use recorded by the seating survey.
+pub fn unmapped_place_hours(tables: &SourceTables, customs: &Customs) -> PlaceHours {
     let restaurant = VenueSite {
         lat: 0.0,
         lon: 0.0,
-        kind: VenueKind::Restaurant,
+        kind: tables.venue_seating.unmapped_kind,
         seating: Seating::Unknown,
         area_m2: 0.0,
         hours: None,

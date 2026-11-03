@@ -8,7 +8,7 @@ public traffic counts, timetables, flight tracks, ship positions, terrain models
 what they carry and how they stand. Where nobody counted, a documented model or default stands in; the region
 and country pages below say which is which.
 
-Each version of the map is built once for the whole world. The current one, built in October 2026,
+Each version of the map is built once for the whole world. The 2026 map, built in October 2026,
 uses the OpenStreetMap planet of September 2026 and flights from September 2025 to August 2026.
 
 ## By region and country
@@ -16,6 +16,8 @@ uses the OpenStreetMap planet of September 2026 and flights from September 2025 
 What is counted, what is estimated and what is missing in each place:
 
 <!-- SUBPAGES -->
+
+<!-- YEAR SOURCES -->
 
 ## Credits
 
@@ -28,7 +30,7 @@ the national and regional publishers credited on the region and country pages.
   worship, bars and restaurants: © [OpenStreetMap](https://www.openstreetmap.org/) contributors
   (ODbL)
 - Building outlines OpenStreetMap lacks: [Overture Maps](https://overturemaps.org/), release
-  2026-08-19.0
+  2026-08-19.0 for the 2026 map
 - Measured building heights and floor counts: national and city registers, credited on the pages
   of [Czechia](/about/data-sources/europe/cz), [Germany](/about/data-sources/europe/de),
   [the Netherlands](/about/data-sources/europe/nl) and [Spain](/about/data-sources/europe/es)
@@ -80,7 +82,7 @@ the European Union and ESA; all rights reserved).
 - Level-crossing horns: the national inventories of [the United States](/about/data-sources/north-america/us)
   and [Canada](/about/data-sources/north-america/ca)
 - Flights: [adsb.lol](https://adsb.lol/) for the year, [ADSBExchange](https://www.adsbexchange.com/)
-  for the flights only it received on 11 sample days — both made possible by volunteers who run
+  for the flights only it received on the 2026 map’s 11 sample days — both made possible by volunteers who run
   receivers at home. Aircraft noise tables: [EASA ANP](https://www.easa.europa.eu/en/domains/environment/policy-support-and-research/aircraft-noise-and-performance-anp-data);
   helicopters: EASA Certification Noise Levels – Helicopters, Issue 52 (source acknowledged as its
   terms require)

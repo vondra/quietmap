@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 type RoadKey = ([u8; 2], u16, u8);
 type VehicleKey = ([u8; 2], u8, usize);
-pub type ReferenceCount = (u16, u8, f64, [f64; 4]);
+pub type ReferenceCount = (u16, u8, f64, [f64; 4], u16);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,6 +75,7 @@ impl RegionalRoads {
             number: u16,
             subdivision: u8,
             daily: f64,
+            source_id: u16,
             shares: [f64; 4],
         }
         #[derive(Deserialize)]
@@ -86,7 +87,7 @@ impl RegionalRoads {
             shares: [[f64; 4]; 2],
         }
         let mut table = Self::default();
-        for grid in read_rows::<SubdivisionGrid>(inputs, "subdivision-grids")? {
+        for grid in read_rows::<SubdivisionGrid>(inputs, crate::year::Kind::SubdivisionGrids)? {
             grid.validate()?;
             if table
                 .grids
@@ -96,10 +97,12 @@ impl RegionalRoads {
                 return Err("repeated subdivision grid".into());
             }
         }
-        for row in read_rows::<Count>(inputs, "road-reference-counts")? {
+        for row in read_rows::<Count>(inputs, crate::year::Kind::RoadReferenceCounts)? {
             let country = country_code(&row.country)?;
             let key = (country, row.number, row.subdivision);
-            if row.daily <= 0.0
+            if row.subdivision == 0
+                || row.source_id == 0
+                || row.daily <= 0.0
                 || row.shares.iter().any(|share| !(0.0..=1.0).contains(share))
                 || (row.shares.iter().sum::<f64>() - 1.0).abs() >= 0.003
             {
@@ -107,14 +110,26 @@ impl RegionalRoads {
             }
             if table
                 .counts
-                .insert(key, (row.number, row.subdivision, row.daily, row.shares))
+                .insert(
+                    key,
+                    (
+                        row.number,
+                        row.subdivision,
+                        row.daily,
+                        row.shares,
+                        row.source_id,
+                    ),
+                )
                 .is_some()
             {
                 return Err(format!("duplicate road-reference count {key:?}"));
             }
         }
-        for row in read_rows::<Vehicles>(inputs, "regional-vehicle-shares")? {
+        for row in read_rows::<Vehicles>(inputs, crate::year::Kind::RegionalVehicleShares)? {
             let country = country_code(&row.country)?;
+            if row.subdivision == 0 {
+                return Err("regional-vehicle-shares: subdivision zero is outside the grid".into());
+            }
             for shares in row.shares {
                 if shares.iter().any(|share| !(0.0..=1.0).contains(share))
                     || (shares.iter().sum::<f64>() - 1.0).abs() > 1e-6
@@ -182,11 +197,11 @@ impl RegionalRoads {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source_tables::SourceTables;
+    use crate::year::YearInputs;
 
     #[test]
     fn the_admitted_grid_joins_the_right_counts_and_vehicle_mixes() {
-        let tables = &SourceTables::test_fixture().regional_roads;
+        let tables = RegionalRoads::read(&YearInputs::product_tables()).unwrap();
         for (country, latitude, longitude, subdivision) in [
             (*b"TH", 13.75, 100.50, 10),
             (*b"TH", 9.47, 99.95, 84),
@@ -196,6 +211,7 @@ mod tests {
             (*b"US", 34.05, -118.24, 6),
             (*b"US", 33.52, -86.80, 1),
             (*b"US", 19.43, -99.13, 0),
+            (*b"TH", 19.0, 102.5, 0),
         ] {
             assert_eq!(
                 tables.subdivision(country, latitude, longitude),
@@ -220,6 +236,30 @@ mod tests {
             tables
                 .reference_count(*b"TH", "336", 13.79, 100.59)
                 .is_none()
+        );
+        assert!(
+            tables
+                .reference_count(*b"TH", "Sukhumvit", 13.75, 100.50)
+                .is_none()
+        );
+        assert!(tables.reference_count(*b"TH", "1", 13.75, 100.50).is_none());
+        assert_eq!(
+            tables.reference_count(*b"TH", "7", 13.38, 101.0).unwrap().3[3],
+            0.0
+        );
+        assert!(
+            tables
+                .reference_count(*b"TH", "1", 14.03, 100.62)
+                .unwrap()
+                .2
+                > 100_000.0
+        );
+        assert!(
+            tables
+                .reference_count(*b"TH", "1", 14.80, 100.65)
+                .unwrap()
+                .2
+                < 15_000.0
         );
         let wyoming = tables.vehicle_shares(*b"US", 41.14, -104.82, 0, 1).unwrap();
         let california = tables.vehicle_shares(*b"US", 34.05, -118.24, 0, 2).unwrap();

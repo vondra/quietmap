@@ -23,10 +23,10 @@ struct CountryIdentity {
 
 pub fn convert(inputs: &crate::year::YearInputs, output: &Path) -> Result<()> {
     let boundaries = inputs
-        .required("prepare-boundaries")
+        .required(crate::year::Kind::PrepareOsmBoundaries)
         .map_err(|error| anyhow!(error))?;
     let identities = inputs
-        .required("prepare-geography")
+        .required(crate::year::Kind::PrepareGeography)
         .map_err(|error| anyhow!(error))?;
     let source: serde_json::Value = serde_json::from_slice(&std::fs::read(boundaries)?)?;
     let identities: CountryIdentities = serde_json::from_slice(&std::fs::read(identities)?)?;

@@ -12,26 +12,32 @@ Transport's count of 42,783 vehicles a day. Where nobody counted, an estimate st
 
 ## A map year
 
-A year names the state of the map and the period over which movement is averaged. A source may
-be older than the map; its own date stays visible on the [country and region pages](/about/data-sources).
-A source describing a later date is refused. Where an earlier source is missing, the page says
-which mapped information or model default remains. A year still being prepared is labelled as such.
+A map year names the state immediately before its cutoff and the interval over which movements
+are averaged. An input's observed interval describes the data; its publication date says when
+it was released. A count for 2024 published in 2025 remains a 2024 observation. A snapshot at
+the cutoff itself belongs to the next state. Movement intervals include their first day and
+exclude their last.
 
-Each year has one manifest in `years/`. It records the as-of date, the half-open flow window,
-each input's kind, region, publisher, link, observation date, licence, public status and relative
-path, and each missing input. Derived rates must be dated by the newest data they depend on:
-a count divided by the length of a newer mapped network is not an earlier year's rate.
+A fitted table is admitted only when every input used to derive it is admitted. For example,
+traffic counts divided by a newer mapped road length cannot supply an earlier year's rate.
+Laws and practices apply over their documented validity intervals. A required model table
+that is missing stops the build. Where a country has no counts, the documented world model
+still applies. Source lists appear only for maps that have been built.
 
-The builder reads `--year years/YEAR.json --sources ROOT`; the root holds the named files,
-including the distributable `tables/` from `years/tables/`. It never selects a year or a latest
-file itself. The JSON tables use one envelope, `{"rows": [...]}`, with the row shape determined
-by the input kind. Changing a stock, count, survey or fitted coefficient changes an input.
-Source lists on these pages are generated from the same manifests when the website is built;
-local file paths and inputs not cleared for public display are excluded.
+<details>
+<summary>The year manifest and input tables</summary>
 
-The map still reads a prepared tree. Preparing that tree from these raw inputs is a separate
-step; a manifest for a new year does not make that year's prepared files exist. An older
-admissible source is never substituted silently for a missing file that a manifest names.
+Each manifest in `years/` records the state cutoff, movement window and public source metadata.
+Inputs are resolved by id below the year's own source root; public manifests contain no local
+file paths. Tables in `years/tables/` use one JSON row format and record their derivation beside
+the data. The completed output carries its manifest, its hash and its cutoff; readers verify
+them before accepting the year. The website and popup read their citations from the same
+manifest, using the builder's admission result.
+
+Preparing the source data remains a separate step. A manifest does not establish that a map or
+its derived tables already exist.
+
+</details>
 
 <details>
 <summary>Preparing the mapped geography</summary>
@@ -144,8 +150,8 @@ junctions and the place's yearly air temperature.
 <details>
 <summary>Default traffic by road class</summary>
 
-Defaults are length-weighted medians of counted public roads, fitted in September 2026 by class,
-direction and surroundings; local counts, the models above and national tables come first.
+The 2026 map uses these global class priors. Local counts, the fitted traffic models and
+national class medians come first; these global priors are not the September 2026 national fit.
 Motorways, trunk and primary roads with 1 to 6 lanes take these vehicles a day per lane (a
 three-lane urban one-way motorway: 3 × 12,543 = 37,629):
 
@@ -176,6 +182,8 @@ these vehicles a day:
 
 In squares with too few mapped buildings, uncounted roads keep the fixed estimate for their class or
 country, and local streets the estimate of the prepared road tables.
+
+<!-- NATIONAL CLASS PRIORS -->
 Directional counts are kept as published; counts of both directions are shared between
 carriageways, and a divided main road whose other carriageway is missing takes half.
 
@@ -187,7 +195,7 @@ A railway is as loud as its trains: how many pass, how long and heavy they are a
 run. Passenger trains come from public timetables. Freight, which almost no country publishes,
 is estimated, and much of it runs at night.
 
-Train counts come from <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
+For the 2026 map, train counts come from <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
 feeds and national timetables, every trip routed along the track network. Freight comes from
 defaults, scaled in 28 European countries and Turkey to the country's official goods
 train-kilometres ([Eurostat](https://ec.europa.eu/eurostat/web/transport/database) 2024; the United
@@ -250,9 +258,9 @@ Aircraft noise comes from a year of real flights, recorded by volunteers' receiv
 signal aircraft send. Each flight is as loud as its type at its height, its thrust and its flaps
 and gear. Where no receiver is near, low flights are missing and the map reads too quiet.
 
-The flights are [adsb.lol](https://adsb.lol)'s from September 2025 to August 2026, with the flights
-only [ADSBExchange](https://www.adsbexchange.com) received added from 11 sample days. Each type
-flies on its noise tables from the
+<!-- AIRCRAFT WINDOW -->
+
+Each type flies on its noise tables from the
 <abbr title="European Union Aviation Safety Agency">EASA</abbr>
 [<abbr title="Aircraft Noise and Performance">ANP</abbr> database](https://www.aircraftnoisemodel.org)
 by <abbr title="the European Civil Aviation Conference's method for noise around airports">ECAC</abbr>
@@ -292,7 +300,7 @@ signals are: at sea, on rivers and in harbours. A large ship gives off 108 dB(A)
 and a leisure boat 88 ([Fredianelli et al. 2020](https://doi.org/10.3390/su12051740),
 [Schiavoni et al. 2022](https://pmc.ncbi.nlm.nih.gov/articles/PMC9518360/)).
 
-Vessel density comes from [EMODnet](https://emodnet.ec.europa.eu/en/human-activities) 2024 in
+For the 2026 map, vessel density comes from [EMODnet](https://emodnet.ec.europa.eu/en/human-activities) 2024 in
 European seas (a 1 km grid) and [Global Fishing Watch](https://globalfishingwatch.org) elsewhere
 (a grid of 0.01°). Leisure boats are counted only in European seas. The data say how many hours ships
 spent in a cell, not where in it they sailed, so a cell's ships fade from its centre to its
@@ -338,7 +346,7 @@ maps of 2022.
 
 ## Buildings and places
 
-Homes, shops and schools hum too: heat pumps and air conditioners, a car park's cars, the guests
+In the 2026 map, homes, shops and schools hum too: heat pumps and air conditioners, a car park's cars, the guests
 on a bar's terrace, church bells. Each is modelled from what its country owns and uses, at the hours
 it runs; a Bangkok home gives off 51 dB(A) by day. These are estimates, not measurements.
 
@@ -447,7 +455,7 @@ The datasets are credited on [Data sources](/about/data-sources).
 
 ## The files
 
-Everything the popup and the painter read is one tree of files: 1.07 TB for the world, in 377,082
+For the 2026 map, everything the popup and the painter read is one tree of files: 1.07 TB for the world, in 377,082
 files.
 
 <details>
@@ -469,7 +477,7 @@ three of flights. The popup reads only the tiles around its point, each with one
 <rect x="198" y="83" width="192" height="106" rx="4" fill="#2f7fd8" fill-opacity=".13"/>
 <g fill="currentColor" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
 <text x="160" y="22">release/</text>
-<text x="176" y="40">2026/</text>
+<text x="176" y="40">YEAR/</text>
 <text x="192" y="58">weather</text>
 <text x="192" y="76">255/170/</text>
 <g font-size="11.5">

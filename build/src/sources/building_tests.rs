@@ -359,6 +359,6 @@ fn shops_and_the_buildings_of_bars_and_restaurants_run_their_plant_in_its_hours(
         emission(HOSPITALITY, 3, Some(&cafes)),
         [("restaurant_bar", *cooling)]
     );
-    let unmapped = unmapped_place_hours(&crate::sources::venues::customs(tables, CZ));
+    let unmapped = unmapped_place_hours(tables, &crate::sources::venues::customs(tables, CZ));
     assert_eq!(emission(HOSPITALITY, 3, Some(&unmapped)).len(), 2);
 }
