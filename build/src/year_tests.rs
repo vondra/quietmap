@@ -36,6 +36,32 @@ fn observation_ranges_are_exclusive_at_the_state_cutoff_not_at_publication() {
         assert!(m.validate().is_err());
     }
 }
+
+#[test]
+fn published_osm_manifests_admit_their_snapshot_and_region_dependencies() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years");
+    for year in ["2024", "2026"] {
+        let m = Manifest::read(&root.join(format!("{year}.json"))).unwrap();
+        for id in [
+            "osm",
+            "osm-boundaries",
+            "osm-geography-identities",
+            "osm-regions",
+        ] {
+            assert!(m.admitted(id).unwrap(), "{year}: {id}");
+        }
+        let speeds = m.inputs.iter().find(|i| i.kind == Kind::PrepareOsmSpeeds);
+        if let Some(input) = speeds {
+            assert!(m.admitted(&input.id).unwrap());
+        } else {
+            assert!(
+                m.unavailable
+                    .iter()
+                    .any(|i| i.kind == Kind::PrepareOsmSpeeds)
+            );
+        }
+    }
+}
 #[test]
 fn fitted_tables_require_every_training_input_and_reject_cycles() {
     let mut m = manifest();

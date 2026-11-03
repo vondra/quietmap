@@ -443,7 +443,9 @@
         "turbine-register-clm",
         "turbine-register-rivm",
         "es-timetable-renfe-av-ld-md",
-        "es-timetable-renfe-cercanias"
+        "es-timetable-renfe-cercanias",
+        "osm-regions",
+        "osm-implicit-speeds"
       ],
       "description": "Roads, railways, buildings, industrial sites, airports and ship activity; converted from the source inventories below."
     },
@@ -1409,7 +1411,7 @@
     },
     {
       "id": "prague-heights",
-      "kind": "prepare-building-heights",
+      "kind": "structure-height-raster",
       "region": "CZ:Prague",
       "publisher": "IPR Praha",
       "url": "https://geoportalpraha.cz/",
@@ -8082,6 +8084,178 @@
       "published": null,
       "depends_on": [],
       "description": "Scheduled rail or tram service sampled on 2026-10-07."
+    },
+    {
+      "region": "world",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "id": "osm-geography-identities",
+      "kind": "prepare-geography",
+      "publisher": "Quiet Map",
+      "url": "https://www.iso.org/iso-3166-country-codes.html",
+      "description": "ISO country and continent identities for the CGAZ v6.0.0 country boundaries.",
+      "observed": {
+        "start": "2023-09-14",
+        "end": "2023-09-14"
+      },
+      "published": null,
+      "depends_on": []
+    },
+    {
+      "region": "world",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "id": "osm-regions",
+      "kind": "prepare-regions",
+      "publisher": "geoBoundaries",
+      "url": "https://www.geoboundaries.org/",
+      "description": "Normalized CGAZ v6.0.0 polygons, ISO identities and disputed-land flags; produced from the two declared geography inputs.",
+      "observed": {
+        "start": "2023-09-14",
+        "end": "2023-09-14"
+      },
+      "published": null,
+      "depends_on": [
+        "osm-boundaries",
+        "osm-geography-identities"
+      ]
+    },
+    {
+      "region": "world",
+      "licence": "CC BY-SA 2.0",
+      "public_ok": true,
+      "id": "osm-implicit-speeds",
+      "kind": "prepare-osm-speeds",
+      "publisher": "OpenStreetMap wiki contributors",
+      "url": "https://wiki.openstreetmap.org/wiki/Key:maxspeed#Implicit_maxspeed_values",
+      "description": "Legal meaning of implicit maxspeed tokens, numeric zone units and lane-conditioned limits; transcribed from the frozen extractor. Explicit limits take precedence.",
+      "observed": {
+        "start": "2026-09-24",
+        "end": "2026-09-24"
+      },
+      "published": null,
+      "depends_on": []
+    },
+    {
+      "id": "osm-boundaries",
+      "kind": "prepare-osm-boundaries",
+      "region": "world",
+      "publisher": "geoBoundaries",
+      "url": "https://www.geoboundaries.org/",
+      "observed": {
+        "start": "2023-09-14",
+        "end": "2023-09-14"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [
+        "boundaries"
+      ],
+      "description": "CGAZ ADM0 simplified country polygons selected from the declared boundary edition; one GeoJSON FeatureCollection."
+    },
+    {
+      "id": "osm-geography",
+      "kind": "osm-geography",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "osm",
+        "osm-regions",
+        "osm-implicit-speeds"
+      ],
+      "description": "OSM building attributes and barriers with country identity, prepared from the admitted state."
+    },
+    {
+      "id": "structure-observations",
+      "kind": "structure-observations",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "barriers-nl",
+        "barriers-fl",
+        "barriers-va",
+        "overture",
+        "barriers-wa",
+        "nrw-heights",
+        "3dbag",
+        "cz-cuzk-ruian-vfr-buildings",
+        "es-catastro-inspire-buildings"
+      ],
+      "description": "Normalized footprints, measured building heights, noise walls and registry attributes; publisher objects retain their source order."
+    },
+    {
+      "id": "structure-height-model",
+      "kind": "structure-height-model",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2022",
+        "end": "2026-09-25"
+      },
+      "published": "2026-09-25",
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "structure-height-fit-observations",
+        "wall-height-fit-observations"
+      ],
+      "description": "Frozen roof-height ladder, area bins, floor-to-roof coefficients, inverse storeys and national wall means. The table reproduces the pinned prepared producer; derivation and limitations are recorded beside the published table."
+    },
+    {
+      "id": "structure-height-fit-observations",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2026",
+        "end": "2026-09-25"
+      },
+      "published": "2026-09-25",
+      "licence": "Derived statistics; original survey licences apply",
+      "public_ok": true,
+      "depends_on": [
+        "osm-geography",
+        "prague-heights",
+        "nrw-heights",
+        "3dbag",
+        "overture"
+      ],
+      "description": "Frozen mean-roof comparison: NRW LoD1, IGN BD TOPO eave/ridge means, 3DBAG roof percentiles and IPR Prague zonal means. The retained comparison is dated September 25; the French edition is not pinned, so this compilation cannot establish an earlier vintage. Floor and inverse-storey fits include the retained registry comparisons."
+    },
+    {
+      "id": "wall-height-fit-observations",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2022",
+        "end": "2022"
+      },
+      "published": "2026-09-25",
+      "licence": "Derived statistics; original survey licences apply",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "National noise-wall means retained from BMDV/FBA Lärmschutz an Bundesfernstraßen 2022 (Germany), FHWA Noise Barrier Inventory 2022 (US, length-weighted) and ASFINAG end-2022 inventory (Austria). Rounded published aggregates reproduce the original prepared model; this port has not re-derived their unrounded underlying statistics."
     }
   ],
   "unavailable": [],

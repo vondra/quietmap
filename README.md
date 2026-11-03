@@ -22,6 +22,9 @@ Their text is in [`frontend/src/about/`](frontend/src/about/).
 
 ## Build and test
 
+The Rust structures preparer links GEOS 3.12 or later and GDAL; install their development
+libraries and `pkg-config` before building. Publisher GeoParquet input is read in Rust.
+
     npm ci --prefix frontend && npm --prefix frontend run build
     npm ci --prefix server
     PORT=... QM_POPUP_BIN=... QM_RASTER_BIN=... QM_PREPARED_DIR=... QM_YEARS=... QM_TILES_DIR=... npm --prefix server start

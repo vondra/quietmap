@@ -425,7 +425,7 @@
     },
     {
       "id": "prague-heights",
-      "kind": "prepare-building-heights",
+      "kind": "structure-height-raster",
       "region": "CZ:Prague",
       "publisher": "IPR Praha",
       "url": "https://geoportalpraha.cz/",
@@ -494,14 +494,14 @@
       "publisher": "OpenStreetMap contributors",
       "url": "https://planet.openstreetmap.org/",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2024-12-31",
+        "end": "2024-12-31"
       },
       "published": null,
       "licence": "ODbL-1.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Roads, tracks, buildings, airports, mapped activities and barriers. The state is frozen at the date shown."
+      "description": "OpenStreetMap state immediately before 2025-01-01T00:00:00Z: the replication cutoff is exclusive. The last admitted edit is 2024-12-31T23:59:11Z; all 48 applied hourly diffs contain no edit at or after the cutoff."
     },
     {
       "id": "overture",
@@ -4216,6 +4216,118 @@
       "public_ok": true,
       "depends_on": [],
       "description": "Freight fleet and hourly train counts from German railway noise monitoring."
+    },
+    {
+      "region": "world",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "id": "osm-geography-identities",
+      "kind": "prepare-geography",
+      "publisher": "Quiet Map",
+      "url": "https://www.iso.org/iso-3166-country-codes.html",
+      "description": "ISO country and continent identities for the CGAZ v6.0.0 country boundaries.",
+      "observed": {
+        "start": "2023-09-14",
+        "end": "2023-09-14"
+      },
+      "published": null,
+      "depends_on": []
+    },
+    {
+      "region": "world",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "id": "osm-regions",
+      "kind": "prepare-regions",
+      "publisher": "geoBoundaries",
+      "url": "https://www.geoboundaries.org/",
+      "description": "Normalized CGAZ v6.0.0 polygons, ISO identities and disputed-land flags; produced from the two declared geography inputs.",
+      "observed": {
+        "start": "2023-09-14",
+        "end": "2023-09-14"
+      },
+      "published": null,
+      "depends_on": [
+        "osm-boundaries",
+        "osm-geography-identities"
+      ]
+    },
+    {
+      "id": "osm-boundaries",
+      "kind": "prepare-osm-boundaries",
+      "region": "world",
+      "publisher": "geoBoundaries",
+      "url": "https://www.geoboundaries.org/",
+      "observed": {
+        "start": "2023-09-14",
+        "end": "2023-09-14"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [
+        "boundaries"
+      ],
+      "description": "CGAZ ADM0 simplified country polygons selected from the declared boundary edition; one GeoJSON FeatureCollection."
+    },
+    {
+      "id": "osm-geography",
+      "kind": "osm-geography",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "osm",
+        "osm-regions"
+      ],
+      "description": "OSM building attributes and barriers with country identity, prepared from the admitted state."
+    },
+    {
+      "id": "structure-observations",
+      "kind": "structure-observations",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "barriers-nl",
+        "barriers-fl",
+        "barriers-va",
+        "overture"
+      ],
+      "description": "Normalized footprints, measured building heights, noise walls and registry attributes; publisher objects retain their source order."
+    },
+    {
+      "id": "structure-height-model",
+      "kind": "structure-height-model",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2023",
+        "end": "2024-12-31"
+      },
+      "published": "2026-11-03",
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "osm-geography",
+        "prague-heights"
+      ],
+      "description": "Historical height table fitted only to the admitted OSM state and IPR survey: 158467 measured footprints, 104952 mapped floor counts and 570 mapped wall heights. Area medians use 53132 footprints without mapped height or floors. Prototype calibration; the historical map remains unbuilt."
     }
   ],
   "unavailable": [
@@ -5996,6 +6108,13 @@
       "depends_on": [
         "railway-monitoring"
       ]
+    },
+    {
+      "id": "osm-implicit-speeds",
+      "kind": "prepare-osm-speeds",
+      "region": "world",
+      "description": "The frozen implicit-limit and zone-unit table was checked after this state. Until an earlier table is supplied, country defaults and jurisdiction-qualified numeric zones remain unknown. Standalone numbers and explicitly named units remain usable; unknown limits use the downstream road model’s declared fallback.",
+      "depends_on": []
     }
   ],
   "validity": {},

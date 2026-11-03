@@ -120,3 +120,10 @@ the 28 measured EU countries and four regional medians. Unmeasured countries use
 directly; the same regional value is not copied into individual country rows. The regional
 service medians are checked against their measured members, and all road period shares are
 checked for non-negative values summing to one when loaded.
+
+OSM preparation uses `prepare-geography.json` and, where admitted,
+`prepare-osm-speeds.json` in the same year directories. Stage their bytes at the
+manifest's `osm-geography-identities` and `osm-implicit-speeds` ids below the
+external year source root; completion checks these published copies too.
+The `osm-boundaries` id is the boundary edition's ADM0 FeatureCollection;
+`boundaries` continues to identify the whole administrative edition.

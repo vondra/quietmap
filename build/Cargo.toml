@@ -27,3 +27,17 @@ tzf-rs = { version = "=1.2.0", default-features = false }
 rusqlite = { version = "0.37", features = ["bundled"] }
 libc = "0.2"
 tiff = { version = "0.11", default-features = false, features = ["deflate"] }
+
+osmpbf = "0.3"
+memmap2 = "0.9"
+anyhow = "1"
+arrow-buffer = "60"
+geo = { version = "0.33.1", default-features = false }
+rstar = "0.12"
+
+geos = { version = "11", features = ["v3_12_0"] }
+gdal = "0.19"
+parquet = "60"
+
+[dev-dependencies]
+arrow-select = "60"
