@@ -26,6 +26,8 @@ pub struct Manifest {
     pub validity: BTreeMap<String, Interval>,
     #[serde(default)]
     pub shared: BTreeSet<String>,
+    #[serde(default)]
+    pub rasters: Option<crate::rasters::config::RasterPlan>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,6 +89,9 @@ impl Manifest {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(rasters) = &self.rasters {
+            rasters.validate(self)?;
+        }
         if self.year.len() != 4 || !self.year.bytes().all(|b| b.is_ascii_digit()) {
             return Err("year must have four digits".into());
         }

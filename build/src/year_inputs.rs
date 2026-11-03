@@ -7,6 +7,7 @@ pub struct YearInputs {
     pub manifest: Manifest,
     pub manifest_path: PathBuf,
     paths: BTreeMap<Kind, Vec<PathBuf>>,
+    root: PathBuf,
 }
 
 impl YearInputs {
@@ -22,10 +23,25 @@ impl YearInputs {
             }
         }
         Ok(Self {
+            root: sources.join(&manifest.year),
             manifest,
             manifest_path: manifest_path.into(),
             paths,
         })
+    }
+
+    pub fn by_id(&self, id: &str) -> Result<PathBuf, String> {
+        if !self.manifest.admitted(id)? {
+            return Err(format!(
+                "year {}: raster input {id} is not admitted",
+                self.manifest.year
+            ));
+        }
+        let path = self.root.join(id);
+        if !path.exists() {
+            return Err(format!("missing raster input {}", path.display()));
+        }
+        Ok(path)
     }
 
     /// A model requiring a kind must have admitted input, even if the inventory explains its absence.

@@ -384,7 +384,6 @@
         "raster-gb-os-terrain50",
         "raster-ie-gsi-lidar",
         "raster-us-3dep-1-conus",
-        "raster-gedtm30-v1.2-seafill",
         "raster-fr-rgealti",
         "raster-fr-rgealti-corse",
         "raster-be-wa-mnt",
@@ -463,13 +462,42 @@
       "licence": "Mixed; see the individual sources",
       "public_ok": true,
       "depends_on": [
-        "worldcover",
-        "glad-canopy",
-        "hansen-cover",
+        "cci-land-cover",
         "copernicus-imperviousness",
         "copernicus-tree-cover",
-        "era5",
-        "raster-gedtm30-v1.2",
+        "cz-imperviousness",
+        "glad-canopy",
+        "hansen-cover",
+        "hansen-cover-antimeridian",
+        "hansen-loss",
+        "hansen-loss-antimeridian",
+        "raster-aq-glo30-s61-70",
+        "raster-aq-glo30-s71-80",
+        "raster-aq-glo30-s81-85",
+        "raster-aq-glo30-s86-90",
+        "raster-at-dgm10",
+        "raster-be-vl-dhmvii",
+        "raster-be-wa-mnt",
+        "raster-ca-mrdem-30",
+        "raster-ch-alti3d",
+        "raster-datum-grids",
+        "raster-de-bb-dgm1",
+        "raster-de-bw-dgm1",
+        "raster-de-by-dgm5",
+        "raster-de-hb-dgm5",
+        "raster-de-he-dgm1",
+        "raster-de-hh-dgm1",
+        "raster-de-mv-dgm5-400",
+        "raster-de-mv-dgm5-401",
+        "raster-de-ni-dgm1",
+        "raster-de-nw-dgm1",
+        "raster-de-rp-dgm1",
+        "raster-de-sh-dgm1",
+        "raster-de-sl-dgm1",
+        "raster-de-sn-dgm1",
+        "raster-de-st-dgm5",
+        "raster-de-th-dgm1",
+        "raster-dk-dhm",
         "raster-es-mdt05-10352",
         "raster-es-mdt05-5782",
         "raster-es-mdt05-9392",
@@ -485,33 +513,26 @@
         "raster-es-mdt05-w-10354",
         "raster-es-mdt05-w-5782",
         "raster-es-mdt05-w-9393",
-        "raster-it-tinitaly",
-        "raster-aq-glo30-s61-70",
-        "raster-aq-glo30-s71-80",
-        "raster-aq-glo30-s81-85",
-        "raster-aq-glo30-s86-90",
-        "raster-us-3dep-1-ak",
-        "raster-ca-mrdem-30",
-        "raster-gb-os-terrain50",
-        "raster-ie-gsi-lidar",
-        "raster-us-3dep-1-conus",
-        "raster-gedtm30-v1.2-seafill",
         "raster-fr-rgealti",
         "raster-fr-rgealti-corse",
-        "raster-be-wa-mnt",
-        "raster-at-dgm10",
-        "raster-ch-alti3d",
-        "raster-nl-ahn4",
-        "raster-be-vl-dhmvii",
-        "raster-dk-dhm",
-        "raster-se-mhm",
-        "raster-pt-mdt2m",
-        "raster-pl-nmt-10",
         "raster-gb-glo30-n00-49",
         "raster-gb-glo30-n50-59",
-        "raster-gb-glo30-n60-70"
+        "raster-gb-glo30-n60-70",
+        "raster-gb-os-terrain50",
+        "raster-gedtm30-v1.2",
+        "raster-ie-gsi-lidar",
+        "raster-it-tinitaly",
+        "raster-land-coverage",
+        "raster-nl-ahn4",
+        "raster-pl-nmt-10",
+        "raster-pt-mdt2m",
+        "raster-se-mhm",
+        "raster-us-3dep-1-ak",
+        "raster-us-3dep-1-conus",
+        "worldcover",
+        "worldcover-antimeridian"
       ],
-      "description": "Terrain, tree cover, tree height, hard ground and weather, prepared on the map grid."
+      "description": "Prepared native ground height, hard ground, forest density and canopy height; weather is built separately."
     },
     {
       "id": "climate",
@@ -1229,7 +1250,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "National ground-height model, resampled to one arc-second in the EGM2008 height datum."
+      "description": "National ground-height model, resampled to one arc-second in the EGM2008 height datum. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "national-dem-de",
@@ -1245,7 +1266,7 @@
       "licence": "DL-DE BY 2.0; state terms apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "Ground-height model state archived on the stated date; individual survey dates vary by tile and are not recorded in this aggregate."
+      "description": "Ground-height model state archived on the stated date; individual survey dates vary by tile and are not recorded in this aggregate. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "geoid",
@@ -1320,14 +1341,14 @@
       "publisher": "University of Maryland; Global Forest Watch",
       "url": "https://glad.earthengine.app/view/global-forest-change",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2000",
+        "end": "2000"
       },
       "published": null,
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Tree cover and loss through 2024."
+      "description": "Tree cover in 2000; annual losses are a separate input. Distributed in Global Forest Change v1.12."
     },
     {
       "id": "copernicus-imperviousness",
@@ -1352,14 +1373,14 @@
       "publisher": "Copernicus Land Monitoring Service",
       "url": "https://land.copernicus.eu/en/products/high-resolution-layer-tree-cover-density",
       "observed": {
-        "start": "2021",
-        "end": "2021"
+        "start": "2023",
+        "end": "2023"
       },
       "published": null,
       "licence": "Copernicus data licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "Tree-cover density in Europe."
+      "description": "Copernicus HRL tree-cover density survey of 2023 at ten metres."
     },
     {
       "id": "era5",
@@ -6369,7 +6390,7 @@
       "licence": "CC BY 4.0; © ČÚZK",
       "public_ok": true,
       "depends_on": [],
-      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown."
+      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "fine-dem-de",
@@ -6385,7 +6406,7 @@
       "licence": "CC BY 4.0; Datenlizenz Deutschland – Namensnennung 2.0 or Zero 2.0, by Land",
       "public_ok": true,
       "depends_on": [],
-      "description": "Ground-height model state archived on the stated date; individual survey dates vary by tile and are not recorded in this aggregate."
+      "description": "Ground-height model state archived on the stated date; individual survey dates vary by tile and are not recorded in this aggregate. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "fine-dem-ch",
@@ -6401,7 +6422,7 @@
       "licence": "swisstopo OGD; source indication required",
       "public_ok": true,
       "depends_on": [],
-      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown."
+      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "fine-dem-nl",
@@ -6417,7 +6438,7 @@
       "licence": "CC0 1.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown."
+      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "fine-dem-be",
@@ -6433,7 +6454,7 @@
       "licence": "Modellicentie gratis hergebruik v1.0 (Flanders); CC BY 4.0 (Wallonia)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown."
+      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "fine-dem-pt",
@@ -6449,7 +6470,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown."
+      "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-gedtm30-v1.2",
@@ -6465,7 +6486,7 @@
       "licence": "Source open-geodata terms; see publisher",
       "public_ok": true,
       "depends_on": [],
-      "description": "GEDTM30-v1.2: 2006-2015."
+      "description": "GEDTM30-v1.2: 2006-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-10352",
@@ -6481,7 +6502,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-10352: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-10352: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-5782",
@@ -6497,7 +6518,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-5782: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-5782: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-9392",
@@ -6513,7 +6534,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-9392: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-9392: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-9394",
@@ -6529,7 +6550,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-9394: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-9394: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-9402",
@@ -6545,7 +6566,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-9402: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-9402: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-can-9395",
@@ -6561,7 +6582,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-CAN-9395: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-CAN-9395: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-can-9396",
@@ -6577,7 +6598,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-CAN-9396: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-CAN-9396: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-can-9397",
@@ -6593,7 +6614,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-CAN-9397: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-CAN-9397: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-can-9398",
@@ -6609,7 +6630,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-CAN-9398: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-CAN-9398: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-can-9399",
@@ -6625,7 +6646,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-CAN-9399: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-CAN-9399: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-can-9400",
@@ -6641,7 +6662,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-CAN-9400: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-CAN-9400: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-can-9401",
@@ -6657,7 +6678,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-CAN-9401: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-CAN-9401: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-w-10354",
@@ -6673,7 +6694,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-W-10354: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-W-10354: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-w-5782",
@@ -6689,7 +6710,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-W-5782: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-W-5782: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-es-mdt05-w-9393",
@@ -6705,7 +6726,7 @@
       "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
       "public_ok": true,
       "depends_on": [],
-      "description": "ES-MDT05-W-9393: mixed 2008-2022 (PNOA-LiDAR flights)."
+      "description": "ES-MDT05-W-9393: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-it-tinitaly",
@@ -6721,7 +6742,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "IT-TINITALY: 1950-2023."
+      "description": "IT-TINITALY: 1950-2023. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-aq-glo30-s61-70",
@@ -6737,7 +6758,7 @@
       "licence": "Copernicus DEM licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "AQ-GLO30-S61-70: 2011-2015."
+      "description": "AQ-GLO30-S61-70: 2011-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-aq-glo30-s71-80",
@@ -6753,7 +6774,7 @@
       "licence": "Copernicus DEM licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "AQ-GLO30-S71-80: 2011-2015."
+      "description": "AQ-GLO30-S71-80: 2011-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-aq-glo30-s81-85",
@@ -6769,7 +6790,7 @@
       "licence": "Copernicus DEM licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "AQ-GLO30-S81-85: 2011-2015."
+      "description": "AQ-GLO30-S81-85: 2011-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-aq-glo30-s86-90",
@@ -6785,7 +6806,7 @@
       "licence": "Copernicus DEM licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "AQ-GLO30-S86-90: 2011-2015."
+      "description": "AQ-GLO30-S86-90: 2011-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-us-3dep-1-ak",
@@ -6801,7 +6822,7 @@
       "licence": "Public domain",
       "public_ok": true,
       "depends_on": [],
-      "description": "US-3DEP-1-AK: rolling mosaic (per-tile upstream date in file provenance)."
+      "description": "US-3DEP-1-AK: rolling mosaic (per-tile upstream date in file provenance). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-ca-mrdem-30",
@@ -6817,7 +6838,7 @@
       "licence": "Open Government Licence – Canada",
       "public_ok": true,
       "depends_on": [],
-      "description": "CA-MRDEM-30: 2006-2026."
+      "description": "CA-MRDEM-30: 2006-2026. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-gb-os-terrain50",
@@ -6833,7 +6854,7 @@
       "licence": "Open Government Licence 3.0; © Ordnance Survey",
       "public_ok": true,
       "depends_on": [],
-      "description": "GB-OS-TERRAIN50: 2026-05 (per-tile OS revision)."
+      "description": "GB-OS-TERRAIN50: 2026-05 (per-tile OS revision). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-ie-gsi-lidar",
@@ -6849,7 +6870,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "IE-GSI-LIDAR: mixed 2006-2024 (GSI national LiDAR program; survey dates vary by tile)."
+      "description": "IE-GSI-LIDAR: mixed 2006-2024 (GSI national LiDAR program; survey dates vary by tile). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-us-3dep-1-conus",
@@ -6865,23 +6886,7 @@
       "licence": "Public domain",
       "public_ok": true,
       "depends_on": [],
-      "description": "US-3DEP-1-CONUS: rolling mosaic (per-tile upstream date in file provenance)."
-    },
-    {
-      "id": "raster-gedtm30-v1.2-seafill",
-      "kind": "prepare-ground-height",
-      "region": "world",
-      "publisher": "OpenLandMap / GEDTM30",
-      "url": "https://zenodo.org/records/13865799",
-      "observed": {
-        "start": "2015",
-        "end": "2015"
-      },
-      "published": null,
-      "licence": "Source open-geodata terms; see publisher",
-      "public_ok": true,
-      "depends_on": [],
-      "description": "GEDTM30-v1.2-seafill: 2006-2015."
+      "description": "US-3DEP-1-CONUS: rolling mosaic (per-tile upstream date in file provenance). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-fr-rgealti",
@@ -6897,7 +6902,7 @@
       "licence": "Licence Ouverte 2.0; © IGN",
       "public_ok": true,
       "depends_on": [],
-      "description": "FR-RGEALTI: RGE ALTI 2009-2021 mosaic."
+      "description": "FR-RGEALTI: RGE ALTI 2009-2021 mosaic. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-fr-rgealti-corse",
@@ -6913,7 +6918,7 @@
       "licence": "Licence Ouverte 2.0; © IGN",
       "public_ok": true,
       "depends_on": [],
-      "description": "FR-RGEALTI-CORSE: RGE ALTI 2009-2021 mosaic."
+      "description": "FR-RGEALTI-CORSE: RGE ALTI 2009-2021 mosaic. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-be-wa-mnt",
@@ -6929,7 +6934,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "BE-WA-MNT: ALS 2021-2022."
+      "description": "BE-WA-MNT: ALS 2021-2022. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-at-dgm10",
@@ -6945,7 +6950,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "AT-DGM10: ALS composite to 2018."
+      "description": "AT-DGM10: ALS composite to 2018. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-ch-alti3d",
@@ -6961,7 +6966,7 @@
       "licence": "swisstopo OGD; source indication required",
       "public_ok": true,
       "depends_on": [],
-      "description": "CH-ALTI3D: 2019-2025 swissALTI3D 6-year update cycle."
+      "description": "CH-ALTI3D: 2019-2025 swissALTI3D 6-year update cycle. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-nl-ahn4",
@@ -6977,7 +6982,7 @@
       "licence": "CC0 1.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "NL-AHN4: AHN4 2020-2022."
+      "description": "NL-AHN4: AHN4 2020-2022. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-be-vl-dhmvii",
@@ -6993,7 +6998,7 @@
       "licence": "Modellicentie gratis hergebruik v1.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "BE-VL-DHMVII: ALS 2013-2015."
+      "description": "BE-VL-DHMVII: ALS 2013-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-dk-dhm",
@@ -7009,7 +7014,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "DK-DHM: ALS 2014-2015."
+      "description": "DK-DHM: ALS 2014-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-se-mhm",
@@ -7025,7 +7030,7 @@
       "licence": "CC BY 4.0; © Lantmäteriet",
       "public_ok": true,
       "depends_on": [],
-      "description": "SE-MHM: Markhoejdmodell rolling ALS (2009-ongoing)."
+      "description": "SE-MHM: Markhoejdmodell rolling ALS (2009-ongoing). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-pt-mdt2m",
@@ -7041,7 +7046,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "PT-MDT2M: ALS 2024."
+      "description": "PT-MDT2M: ALS 2024. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-pl-nmt-10",
@@ -7057,7 +7062,7 @@
       "licence": "Free access and reuse under Polish geodetic law",
       "public_ok": true,
       "depends_on": [],
-      "description": "PL-NMT-10: mixed 2010-2026 (NMT sheet flights)."
+      "description": "PL-NMT-10: mixed 2010-2026 (NMT sheet flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-gb-glo30-n00-49",
@@ -7073,7 +7078,7 @@
       "licence": "Copernicus DEM licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "GB-GLO30-N00-49: 2011-2015."
+      "description": "GB-GLO30-N00-49: 2011-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-gb-glo30-n50-59",
@@ -7089,7 +7094,7 @@
       "licence": "Copernicus DEM licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "GB-GLO30-N50-59: 2011-2015."
+      "description": "GB-GLO30-N50-59: 2011-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "raster-gb-glo30-n60-70",
@@ -7105,7 +7110,7 @@
       "licence": "Copernicus DEM licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "GB-GLO30-N60-70: 2011-2015."
+      "description": "GB-GLO30-N60-70: 2011-2015. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
       "id": "eu-city-vienna",
@@ -8256,6 +8261,396 @@
       "public_ok": true,
       "depends_on": [],
       "description": "National noise-wall means retained from BMDV/FBA Lärmschutz an Bundesfernstraßen 2022 (Germany), FHWA Noise Barrier Inventory 2022 (US, length-weighted) and ASFINAG end-2022 inventory (Austria). Rounded published aggregates reproduce the original prepared model; this port has not re-derived their unrounded underlying statistics."
+    },
+    {
+      "id": "raster-land-coverage",
+      "kind": "prepare-land-cover",
+      "region": "world",
+      "publisher": "Copernicus",
+      "url": "https://copernicus-dem-90m.s3.amazonaws.com/tileList.txt",
+      "observed": {
+        "start": "2015",
+        "end": "2015"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "GLO-90 published geographic coverage; a degree without land defines the ocean marker."
+    },
+    {
+      "id": "cci-land-cover",
+      "kind": "prepare-land-cover",
+      "region": "world",
+      "publisher": "C3S / ESA",
+      "url": "https://data.naturalcapitalalliance.stanford.edu/download/global/esa_CCI/ESA-CCI-LULC-300m-P1Y-2022-v2.1.1.tif",
+      "observed": {
+        "start": "2022",
+        "end": "2022"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Land-cover classes used where WorldCover has no classification."
+    },
+    {
+      "id": "hansen-loss",
+      "kind": "prepare-tree-cover",
+      "region": "world",
+      "publisher": "University of Maryland",
+      "url": "https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/download.html",
+      "observed": {
+        "start": "2001",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Annual tree-cover loss codes, applied only through the map year."
+    },
+    {
+      "id": "raster-datum-grids",
+      "kind": "prepare-ground-height",
+      "region": "world",
+      "publisher": "PROJ contributors",
+      "url": "https://cdn.proj.org/",
+      "observed": {
+        "start": "2019",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "National vertical-datum grids and EGM2008, converted in 2019 to 2024 according to the grids’ metadata; used to transform each averaged terrain node."
+    },
+    {
+      "id": "cz-imperviousness",
+      "kind": "prepare-sealing",
+      "region": "CZ",
+      "publisher": "Copernicus",
+      "url": "https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness",
+      "observed": {
+        "start": "2018",
+        "end": "2018"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Earlier imperviousness coverage where the later European survey has no valid measurement."
+    },
+    {
+      "id": "raster-de-bb-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-bw-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-by-dgm5",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-hb-dgm5",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-he-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-hh-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-mv-dgm5-400",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-mv-dgm5-401",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-ni-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-nw-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-rp-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-sh-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-sl-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-sn-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-st-dgm5",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "raster-de-th-dgm1",
+      "kind": "prepare-ground-height",
+      "region": "DE",
+      "publisher": "German state surveying authorities",
+      "url": "https://www.geoportal.de/",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See publisher terms",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived national DTM; survey epochs vary by tile and are not established by the archive date. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "worldcover-antimeridian",
+      "kind": "raster-mosaic",
+      "region": "world",
+      "publisher": "ESA",
+      "url": "https://esa-worldcover.org/en/data-access",
+      "observed": {
+        "start": "2021",
+        "end": "2021"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [
+        "worldcover"
+      ],
+      "description": "Native pixels of the same observation, relocated in longitude for continuous reads across the antimeridian."
+    },
+    {
+      "id": "hansen-cover-antimeridian",
+      "kind": "raster-mosaic",
+      "region": "world",
+      "publisher": "University of Maryland; Global Forest Watch",
+      "url": "https://glad.earthengine.app/view/global-forest-change",
+      "observed": {
+        "start": "2000",
+        "end": "2000"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [
+        "hansen-cover"
+      ],
+      "description": "Native pixels of the same observation, relocated in longitude for continuous reads across the antimeridian."
+    },
+    {
+      "id": "hansen-loss-antimeridian",
+      "kind": "raster-mosaic",
+      "region": "world",
+      "publisher": "University of Maryland",
+      "url": "https://storage.googleapis.com/earthenginepartners-hansen/GFC-2024-v1.12/download.html",
+      "observed": {
+        "start": "2001",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [
+        "hansen-loss"
+      ],
+      "description": "Native pixels of the same observation, relocated in longitude for continuous reads across the antimeridian."
     }
   ],
   "unavailable": [],
@@ -8279,16 +8674,1099 @@
     "church-bells": {
       "start": "2026-10-04",
       "end": "9999-12-31"
+    },
+    "raster-de-nw-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-9394": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-can-9400": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-us-3dep-1-ak": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-gb-glo30-n00-49": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-sh-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-aq-glo30-s61-70": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-dk-dhm": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-sn-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-us-3dep-1-conus": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-gb-glo30-n50-59": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-fr-rgealti-corse": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-can-9395": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-can-9399": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-se-mhm": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-it-tinitaly": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-nl-ahn4": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-aq-glo30-s71-80": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-hb-dgm5": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-be-wa-mnt": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-ni-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-w-5782": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-gedtm30-v1.2": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-can-9398": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-aq-glo30-s86-90": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-bw-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-mv-dgm5-401": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-sl-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-w-9393": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-ie-gsi-lidar": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-pl-nmt-10": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-st-dgm5": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-gb-glo30-n60-70": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-mv-dgm5-400": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-5782": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-bb-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-can-9396": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-ca-mrdem-30": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-hh-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-can-9401": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-aq-glo30-s81-85": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-pt-mdt2m": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-10352": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-can-9397": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-9392": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-fr-rgealti": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-at-dgm10": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-w-10354": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-be-vl-dhmvii": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-es-mdt05-9402": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-gb-os-terrain50": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-ch-alti3d": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-he-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-rp-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-by-dgm5": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "raster-de-th-dgm1": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "national-dem-cz": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "national-dem-de": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "fine-dem-cz": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "fine-dem-de": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "fine-dem-ch": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "fine-dem-nl": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "fine-dem-be": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "fine-dem-pt": {
+      "start": "2024",
+      "end": "2026"
     }
   },
   "shared": [
+    "cci-land-cover",
     "climate",
+    "copernicus-imperviousness",
+    "copernicus-tree-cover",
+    "cz-imperviousness",
     "era5",
+    "fine-dem-be",
+    "fine-dem-ch",
+    "fine-dem-cz",
+    "fine-dem-de",
+    "fine-dem-nl",
+    "fine-dem-pt",
     "geoid",
     "geoid-tiff",
     "glad-canopy",
+    "hansen-cover",
+    "hansen-cover-antimeridian",
+    "hansen-loss",
+    "hansen-loss-antimeridian",
+    "national-dem-cz",
+    "national-dem-de",
+    "raster-aq-glo30-s61-70",
+    "raster-aq-glo30-s71-80",
+    "raster-aq-glo30-s81-85",
+    "raster-aq-glo30-s86-90",
+    "raster-at-dgm10",
+    "raster-be-vl-dhmvii",
+    "raster-be-wa-mnt",
+    "raster-ca-mrdem-30",
+    "raster-ch-alti3d",
+    "raster-datum-grids",
+    "raster-de-bb-dgm1",
+    "raster-de-bw-dgm1",
+    "raster-de-by-dgm5",
+    "raster-de-hb-dgm5",
+    "raster-de-he-dgm1",
+    "raster-de-hh-dgm1",
+    "raster-de-mv-dgm5-400",
+    "raster-de-mv-dgm5-401",
+    "raster-de-ni-dgm1",
+    "raster-de-nw-dgm1",
+    "raster-de-rp-dgm1",
+    "raster-de-sh-dgm1",
+    "raster-de-sl-dgm1",
+    "raster-de-sn-dgm1",
+    "raster-de-st-dgm5",
+    "raster-de-th-dgm1",
+    "raster-dk-dhm",
+    "raster-es-mdt05-10352",
+    "raster-es-mdt05-5782",
+    "raster-es-mdt05-9392",
+    "raster-es-mdt05-9394",
+    "raster-es-mdt05-9402",
+    "raster-es-mdt05-can-9395",
+    "raster-es-mdt05-can-9396",
+    "raster-es-mdt05-can-9397",
+    "raster-es-mdt05-can-9398",
+    "raster-es-mdt05-can-9399",
+    "raster-es-mdt05-can-9400",
+    "raster-es-mdt05-can-9401",
+    "raster-es-mdt05-w-10354",
+    "raster-es-mdt05-w-5782",
+    "raster-es-mdt05-w-9393",
+    "raster-fr-rgealti",
+    "raster-fr-rgealti-corse",
+    "raster-gb-glo30-n00-49",
+    "raster-gb-glo30-n50-59",
+    "raster-gb-glo30-n60-70",
+    "raster-gb-os-terrain50",
+    "raster-gedtm30-v1.2",
+    "raster-ie-gsi-lidar",
+    "raster-it-tinitaly",
+    "raster-land-coverage",
+    "raster-nl-ahn4",
+    "raster-pl-nmt-10",
+    "raster-pt-mdt2m",
+    "raster-se-mhm",
+    "raster-us-3dep-1-ak",
+    "raster-us-3dep-1-conus",
     "water",
     "weather",
-    "worldcover"
-  ]
+    "worldcover",
+    "worldcover-antimeridian"
+  ],
+  "rasters": {
+    "sources": [
+      {
+        "input": "raster-land-coverage",
+        "band": "coverage",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": null,
+        "nodata": null,
+        "priority": 0
+      },
+      {
+        "input": "cci-land-cover",
+        "band": "hardness",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": null,
+        "nodata": 0,
+        "priority": 0,
+        "classes": {
+          "10": 10,
+          "11": 10,
+          "12": 10,
+          "20": 10,
+          "30": 10,
+          "40": 5,
+          "100": 5,
+          "110": 5,
+          "120": 5,
+          "121": 5,
+          "122": 5,
+          "130": 5,
+          "50": 2,
+          "60": 2,
+          "61": 2,
+          "62": 2,
+          "70": 2,
+          "71": 2,
+          "72": 2,
+          "80": 2,
+          "81": 2,
+          "82": 2,
+          "90": 2,
+          "160": 2,
+          "150": 15,
+          "151": 15,
+          "152": 15,
+          "153": 15,
+          "200": 15,
+          "201": 15,
+          "202": 15,
+          "140": 5,
+          "170": 2,
+          "180": 5,
+          "190": 85,
+          "210": 100,
+          "220": 0
+        },
+        "global_nearest": true
+      },
+      {
+        "input": "worldcover",
+        "band": "hardness",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": null,
+        "nodata": 0,
+        "priority": 1,
+        "classes": {
+          "10": 2,
+          "20": 5,
+          "30": 5,
+          "40": 10,
+          "50": 85,
+          "60": 15,
+          "70": 0,
+          "80": 100,
+          "90": 5,
+          "95": 2,
+          "100": 5
+        },
+        "antimeridian_input": "worldcover-antimeridian"
+      },
+      {
+        "input": "cz-imperviousness",
+        "band": "sealing",
+        "horizontal_crs": "EPSG:3857",
+        "vertical_crs": null,
+        "nodata": 255,
+        "priority": 0
+      },
+      {
+        "input": "copernicus-imperviousness",
+        "band": "sealing",
+        "horizontal_crs": "EPSG:3035",
+        "vertical_crs": null,
+        "nodata": 255,
+        "priority": 1
+      },
+      {
+        "input": "hansen-cover",
+        "band": "tree-cover",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": null,
+        "nodata": null,
+        "priority": 0,
+        "loss_input": "hansen-loss",
+        "antimeridian_input": "hansen-cover-antimeridian"
+      },
+      {
+        "input": "hansen-loss",
+        "band": "tree-loss",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": null,
+        "nodata": null,
+        "priority": 0,
+        "loss_base_year": 2000,
+        "antimeridian_input": "hansen-loss-antimeridian"
+      },
+      {
+        "input": "copernicus-tree-cover",
+        "band": "tree-cover",
+        "horizontal_crs": "EPSG:3035",
+        "vertical_crs": null,
+        "nodata": 255,
+        "priority": 1,
+        "loss_input": "hansen-loss"
+      },
+      {
+        "input": "glad-canopy",
+        "band": "tree-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": null,
+        "nodata": 255,
+        "priority": 0
+      },
+      {
+        "input": "raster-gedtm30-v1.2",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": 3855,
+        "nodata": 3.4028234663852886e+38,
+        "priority": 0,
+        "feather_nodes": 0
+      },
+      {
+        "input": "raster-es-mdt05-10352",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25830",
+        "vertical_crs": 10352,
+        "nodata": -9999.0,
+        "priority": 8,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-5782",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25830",
+        "vertical_crs": 5782,
+        "nodata": -9999.0,
+        "priority": 9,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-9392",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25830",
+        "vertical_crs": 9392,
+        "nodata": -9999.0,
+        "priority": 10,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-9394",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25830",
+        "vertical_crs": 9394,
+        "nodata": -9999.0,
+        "priority": 11,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-9402",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25830",
+        "vertical_crs": 9402,
+        "nodata": -9999.0,
+        "priority": 12,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-can-9395",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4083",
+        "vertical_crs": 9395,
+        "nodata": -9999.0,
+        "priority": 13,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-can-9396",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4083",
+        "vertical_crs": 9396,
+        "nodata": -9999.0,
+        "priority": 14,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-can-9397",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4083",
+        "vertical_crs": 9397,
+        "nodata": -9999.0,
+        "priority": 15,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-can-9398",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4083",
+        "vertical_crs": 9398,
+        "nodata": -9999.0,
+        "priority": 16,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-can-9399",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4083",
+        "vertical_crs": 9399,
+        "nodata": -9999.0,
+        "priority": 17,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-can-9400",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4083",
+        "vertical_crs": 9400,
+        "nodata": -9999.0,
+        "priority": 18,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-can-9401",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4083",
+        "vertical_crs": 9401,
+        "nodata": -9999.0,
+        "priority": 19,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-w-10354",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4258",
+        "vertical_crs": 10354,
+        "nodata": -9999.0,
+        "priority": 20,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-w-5782",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4258",
+        "vertical_crs": 5782,
+        "nodata": -9999.0,
+        "priority": 21,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-es-mdt05-w-9393",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4258",
+        "vertical_crs": 9393,
+        "nodata": -9999.0,
+        "priority": 22,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-it-tinitaly",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:32632",
+        "vertical_crs": 3855,
+        "nodata": -9999,
+        "priority": 23,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-aq-glo30-s61-70",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": 3855,
+        "nodata": null,
+        "priority": 1,
+        "feather_nodes": 0
+      },
+      {
+        "input": "raster-aq-glo30-s71-80",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": 3855,
+        "nodata": null,
+        "priority": 2,
+        "feather_nodes": 0
+      },
+      {
+        "input": "raster-aq-glo30-s81-85",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": 3855,
+        "nodata": null,
+        "priority": 3,
+        "feather_nodes": 0
+      },
+      {
+        "input": "raster-aq-glo30-s86-90",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": 3855,
+        "nodata": null,
+        "priority": 4,
+        "feather_nodes": 0
+      },
+      {
+        "input": "raster-gb-os-terrain50",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:27700",
+        "vertical_crs": 5701,
+        "nodata": null,
+        "priority": 24,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-ie-gsi-lidar",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:2157",
+        "vertical_crs": 5731,
+        "nodata": -9999.0,
+        "priority": 25,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-us-3dep-1-ak",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4269",
+        "vertical_crs": 5703,
+        "nodata": -999999.0,
+        "priority": 26,
+        "feather_nodes": 224,
+        "datum_area": [
+          -180,
+          50,
+          -126,
+          72
+        ],
+        "datum_horizontal_crs": "EPSG:6318"
+      },
+      {
+        "input": "raster-us-3dep-1-conus",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4269",
+        "vertical_crs": 5703,
+        "nodata": -999999.0,
+        "priority": 27,
+        "feather_nodes": 224,
+        "datum_area": [
+          -126,
+          24,
+          -66,
+          50
+        ],
+        "datum_horizontal_crs": "EPSG:6318"
+      },
+      {
+        "input": "raster-ca-mrdem-30",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:3979",
+        "vertical_crs": 6647,
+        "nodata": -32767.0,
+        "priority": 28,
+        "feather_nodes": 224
+      },
+      {
+        "input": "raster-fr-rgealti",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:2154",
+        "vertical_crs": 5720,
+        "nodata": -99999.0,
+        "priority": 34,
+        "feather_nodes": 256,
+        "datum_area": [
+          -5.2,
+          41.3,
+          10.0,
+          51.2
+        ]
+      },
+      {
+        "input": "raster-fr-rgealti-corse",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:2154",
+        "vertical_crs": 5721,
+        "nodata": -99999.0,
+        "priority": 35,
+        "feather_nodes": 256,
+        "datum_area": [
+          8.1,
+          41.3,
+          9.9,
+          43.1
+        ]
+      },
+      {
+        "input": "raster-be-wa-mnt",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:3812",
+        "vertical_crs": 5710,
+        "nodata": -9999.0,
+        "priority": 33,
+        "feather_nodes": 256,
+        "datum_area": [
+          2.5,
+          49.4,
+          6.5,
+          51.6
+        ]
+      },
+      {
+        "input": "raster-at-dgm10",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:31287",
+        "vertical_crs": 5778,
+        "nodata": -3.4028234663852886e+38,
+        "priority": 29,
+        "feather_nodes": 256,
+        "datum_area": [
+          9.3,
+          46.2,
+          17.2,
+          49.2
+        ]
+      },
+      {
+        "input": "raster-ch-alti3d",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:2056",
+        "vertical_crs": 5728,
+        "nodata": -9999,
+        "priority": 30,
+        "feather_nodes": 256,
+        "datum_area": [
+          5.9,
+          45.8,
+          10.6,
+          47.9
+        ]
+      },
+      {
+        "input": "raster-nl-ahn4",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:28992",
+        "vertical_crs": 5709,
+        "nodata": 3.4028234663852886e+38,
+        "priority": 31,
+        "feather_nodes": 256,
+        "datum_area": [
+          3.0,
+          50.7,
+          7.3,
+          53.7
+        ]
+      },
+      {
+        "input": "raster-be-vl-dhmvii",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:31370",
+        "vertical_crs": 5710,
+        "nodata": -9999.0,
+        "priority": 32,
+        "feather_nodes": 256,
+        "datum_area": [
+          2.5,
+          49.4,
+          6.5,
+          51.6
+        ]
+      },
+      {
+        "input": "raster-dk-dhm",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 10484,
+        "nodata": -9999.0,
+        "priority": 36,
+        "feather_nodes": 256,
+        "datum_area": [
+          7.9,
+          54.4,
+          15.7,
+          57.8
+        ]
+      },
+      {
+        "input": "raster-se-mhm",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:3006",
+        "vertical_crs": 5613,
+        "nodata": -9999,
+        "priority": 37,
+        "feather_nodes": 256,
+        "datum_area": [
+          9.0,
+          55.1,
+          25.6,
+          69.1
+        ]
+      },
+      {
+        "input": "raster-pt-mdt2m",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:3763",
+        "vertical_crs": 5780,
+        "nodata": -999,
+        "priority": 38,
+        "feather_nodes": 256,
+        "datum_area": [
+          -9.6,
+          36.8,
+          -6.0,
+          42.2
+        ]
+      },
+      {
+        "input": "raster-pl-nmt-10",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:2180",
+        "vertical_crs": 9651,
+        "nodata": null,
+        "priority": 39,
+        "feather_nodes": 256,
+        "datum_area": [
+          14.0,
+          48.9,
+          24.2,
+          54.9
+        ]
+      },
+      {
+        "input": "raster-gb-glo30-n00-49",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": 3855,
+        "nodata": null,
+        "priority": 5,
+        "feather_nodes": 0
+      },
+      {
+        "input": "raster-gb-glo30-n50-59",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": 3855,
+        "nodata": null,
+        "priority": 6,
+        "feather_nodes": 0
+      },
+      {
+        "input": "raster-gb-glo30-n60-70",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4326",
+        "vertical_crs": 3855,
+        "nodata": null,
+        "priority": 7,
+        "feather_nodes": 0
+      },
+      {
+        "input": "raster-de-bb-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25833",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 40,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-bw-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 41,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-by-dgm5",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": "nan",
+        "priority": 42,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-hb-dgm5",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 43,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-he-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 44,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-hh-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 45,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-mv-dgm5-400",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25833",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 46,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-mv-dgm5-401",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25833",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 47,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-ni-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 48,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-nw-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 49,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-rp-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 50,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-sh-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 51,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-sl-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 52,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-sn-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25833",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 53,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-st-dgm5",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 54,
+        "feather_nodes": 256
+      },
+      {
+        "input": "raster-de-th-dgm1",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:25832",
+        "vertical_crs": 7837,
+        "nodata": -9999.0,
+        "priority": 55,
+        "feather_nodes": 256
+      }
+    ],
+    "runtime": {
+      "gdal_version": "3.8.4",
+      "proj_version": "9.4.0",
+      "datum_input": "raster-datum-grids",
+      "files": {
+        "at_bev_GEOID_GRS80_Oesterreich.tif": "68682d850399d8d21a606a1b56b9d7372c06aa71c0de55379a48dff57f810377",
+        "at_bev_GV_Hoehengrid_V1.tif": "f4623c0d37f6dddf0fbfe6230ebd42b40a8744bec94b240075f4f97b90e5dae0",
+        "at_bev_GV_Hoehengrid_plus_Geoid_V2.tif": "334fa70a877b0fa66026bb52540e7776669bedce58fb6050794f37a4ae0e7f3e",
+        "be_ign_hBG18.tif": "882340af95eaf5dbd46f7988092fbb84cde8dcbb712ce9764c667e64ead6aa4c",
+        "ca_nrc_CGG2013i08.tif": "266184106409b014995080eb65996883defbbf24e6992d95574bddeb58f7943d",
+        "ca_nrc_CGG2013n83.tif": "9c3e31dceb26b999131d55d396c46af0b153489e3b42a4273f565d1bdefd059c",
+        "ch_swisstopo_chgeo2004_ETRS89_LN02.tif": "ec9638c152f4519278b3e7a781d1a7c2769bd54de39accec099bd5036f4fd214",
+        "cz_cuzk_CR-2005.tif": "2fba4e5bcd3e48f737b3655d5a7c196de1c56e199967f7e12311710646d4f0a1",
+        "de_bkg_gcg2016.tif": "598f18324dea7f8e72421d18add7ac6228259adf91eeb335cc9c27d98484f7ac",
+        "dk_sdfi_dvr90_2013.tif": "e1230b6642b85f866e6ac05cf3925c71618955a9ab30dd5c1619150e1eee695e",
+        "es_ign_egm08-rednap-canarias.tif": "ef545116102c73860fe364061b75f17caf15431a992dc9b3ed2fbe250619373f",
+        "es_ign_egm08-rednap.tif": "d1758a580c2acc7cddcb814c2aebe1e5ab83f74dfaed8c1a885355bb3f85df58",
+        "fr_ign_RAC23.tif": "075c061558c091f0e188256d62523e95b00deb90e2436550581f041b60811bab",
+        "fr_ign_RAF18.tif": "7001e9140f266e0ddcaffa6e5c2feb77bf9444fa229cf46d1ce3172c15fec79b",
+        "fr_ign_RAF18b.tif": "59522db6682a42dd0fa25edd7b6b18c92ae3224324809051d80ab960a76b67e9",
+        "nl_nsgi_nlgeo2018.tif": "f8e32c56bf8940fc3fefbc0e413eb4546633ed598b669c63856cddf8328992c0",
+        "pl_gugik_geoid2021-PL-EVRF2007-NH.tif": "8b806d084296c0b8070a9cc9ad6d28218141e089e3ff0573254870447f361788",
+        "proj.db": "153ec8cd6041a94c5dda34bc517e0c6c7dda341720c467f3d157619a62527322",
+        "pt_dgt_GeodPT08.tif": "8c006ae3afa037c214d30e7ec97736452705773ccb663274e003ced1d08ccaa0",
+        "se_lantmateriet_SWEN17_RH2000.tif": "c5160019c9d2f64e0379e7725be795952b5005759e6f51e5322f6607af92a5a3",
+        "uk_os_OSGM15_GB.tif": "bf0ac81f1c0c33332693d7d606f335b793c3c2995b8e69eeb1350bd94adcde3b",
+        "uk_os_OSGM15_Malin.tif": "97db4aede0707ca91721a7d43973a4d27df6b50b96568b901bd56e441818c508",
+        "uk_os_OSTN15_NTv2_OSGBtoETRS.tif": "5d6ed64d2119952c4c559fa1fccbc594b6520fc3ec3ef2fc10be13202c4384fa",
+        "us_nga_egm08_25.tif": "4191d471eefebf24091b56dbc604353cb3b8cf8cc70e448bb9ae56a272bef17a",
+        "us_noaa_g2012ba0.tif": "3b854ebf5aac8442426665a033bea918249c570cd355d99b812e3ec59b4b9e41",
+        "us_noaa_g2018u0.tif": "fa9a407ac7ee3f5a3694008e4bcd09ce9cc250452f0c3b11700a4960340abce2"
+      }
+    }
+  }
 }
