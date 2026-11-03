@@ -1,22 +1,18 @@
 //! Road pieces of the dev4 prepared tree as sources: the speed cascade, CNOSSOS-EU emission per
 //! period computed here once, and the display record of the road group.
 
-use super::bus::{BUS_PERIOD_SHARES, BusRoutes};
-use super::country_speeds::COUNTRY_SPEEDS;
+use super::bus::BusRoutes;
 use super::decks::Decks;
 use super::motorcycles::{LocalMotorcycles, country_share};
 use super::period_shares::period_shares;
 use super::road_junctions::{Junctions, row_junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, chains, row_slopes};
-use super::road_traffic::{
-    BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, Guess, local_km, thai_rural_road_ref,
-};
+use super::road_traffic::{BuildingTraffic, Guess, local_km, thai_rural_road_ref};
 use super::tagged_speeds::tagged_speed_kmh;
-use super::thai_highways::thai_highway;
-use super::us_trucks::us_vehicle_shares;
 use super::{Converted, Reach, fields, group_key, metres, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
+use crate::source_tables::SourceTables;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
 use arrow_array::{Array, RecordBatch};
@@ -84,63 +80,14 @@ const SURFACES: [RoadSurface; 5] = [
 /// which counts every state road, reads them 5.7 dB high, and an uncounted Czech III-class road
 /// through a village took 2,562 vehicles a day where its counted neighbour carries 1,252.
 const DEV4_CLASS_PRIORS: [[f64; 3]; 2] = [[3_000.0, 2_061.0, 6_445.0], [1_506.0, 1_002.0, 2_562.0]];
-/// The same cells from roads counted without selection, for the countries whose counts give them
-/// (evidence 2026-09-30, traffic priors; unknown built-up is the geometric mean of rural and
-/// urban): Sweden (NVDB counts every state road), Great Britain (the DfT counts A and B roads whole
-/// and minor roads by a random sample), Czechia (the census counts II-class roads whole; its
-/// III-class roads are the II-class medians times the Swedish and British tertiary-to-secondary
-/// ratios, 0.24 rural and 0.37 urban). Countries differ fivefold on the same class, so no country
-/// lends its cells to another: elsewhere dev4's priors stay until counts represent the country.
-const COUNTRY_CLASS_PRIORS: [([u8; 2], [[f64; 3]; 2]); 3] = [
-    (*b"CZ", [[2_126.0, 1_739.0, 2_600.0], [632.0, 415.0, 962.0]]),
-    (
-        *b"GB",
-        [[3_794.0, 2_369.0, 6_076.0], [1_585.0, 753.0, 3_337.0]],
-    ),
-    (*b"SE", [[1_294.0, 844.0, 1_983.0], [273.0, 151.0, 494.0]]),
-];
-/// Their medium and heavy vehicle shares (% of the flow; rural, urban; median counted rows of the
-/// same classes): the prior's world split read 4.0 % and 6.0 % on Czech secondary roads and 3.2 %
-/// and 4.8 % on tertiary ones, where the census counts 3.4 % and 2.9-3.2 %, 3.4 % and 1.9-2.1 %
-/// (+0.7 dB).
-/// Per class (secondary, tertiary), per built-up (rural, urban): medium and heavy shares (%).
-type ClassShares = [[[f64; 2]; 2]; 2];
-const COUNTRY_CLASS_SHARES: [([u8; 2], ClassShares); 3] = [
-    (
-        *b"CZ",
-        [[[3.48, 3.20], [3.41, 2.91]], [[3.42, 2.08], [3.38, 1.92]]],
-    ),
-    (
-        *b"GB",
-        [[[0.42, 2.19], [0.59, 1.39]], [[0.18, 1.98], [0.65, 0.73]]],
-    ),
-    (
-        *b"SE",
-        [[[1.32, 4.95], [1.17, 3.43]], [[3.85, 2.51], [3.85, 2.22]]],
-    ),
-];
-/// Thailand's ISO code as the prepared rows store it.
-const THAI_ISO: u16 = u16::from_le_bytes(*b"TH");
-const US_ISO: u16 = u16::from_le_bytes(*b"US");
 /// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
 const ALL_CATEGORIES_ESTIMATED: u8 = 15;
-/// Medium and heavy shares (%) of counted roads (motorway, trunk, primary, secondary, tertiary;
-/// rural, urban): the medians over the counts of 16 countries (CZ, DE, GB, FR, IE, PL, ES, IT, NO,
-/// SE, FI, DK, NL, US, CA, NZ; evidence 2026-10-01, road shares), links as their roads. Urban
-/// primaries carry 7.5 % where the world prior put 15 %.
-const COUNTED_CLASS_SHARES: [[[f64; 2]; 2]; 5] = [
-    [[1.4, 10.2], [1.1, 8.7]],
-    [[1.4, 9.5], [1.5, 6.8]],
-    [[1.6, 7.9], [1.2, 6.3]],
-    [[1.5, 6.4], [1.3, 5.5]],
-    [[1.0, 5.0], [1.0, 4.4]],
-];
 /// The medium and heavy shares (%) of local streets, as dev4's service tree splits them.
 const LOCAL_SHARES: [f64; 2] = [1.0, 2.0];
 
 /// The medium and heavy shares (fractions) of a class at a built-up code (1 rural, 2 urban,
 /// unknown the mean of both).
-fn counted_shares(class: usize, built_up: u8) -> [f64; 2] {
+fn counted_shares(tables: &SourceTables, class: usize, built_up: u8) -> [f64; 2] {
     let road = match class {
         10 => 0,
         11 => 1,
@@ -148,7 +95,9 @@ fn counted_shares(class: usize, built_up: u8) -> [f64; 2] {
         main if main < 5 => main,
         _ => return LOCAL_SHARES.map(|percent| percent / 100.0),
     };
-    let [rural, urban] = COUNTED_CLASS_SHARES[road];
+    let Some(&[rural, urban]) = tables.counted_class_shares.get(road) else {
+        return LOCAL_SHARES.map(|percent| percent / 100.0);
+    };
     std::array::from_fn(|k| {
         let percent = match built_up {
             1 => rural[k],
@@ -165,6 +114,7 @@ fn counted_shares(class: usize, built_up: u8) -> [f64; 2] {
 /// (motorcycles scaled with the flow); any other keeps its flow and motorcycles and takes the
 /// counted medium and heavy shares of its class. Every other row keeps `prior`.
 fn country_flows(
+    tables: &SourceTables,
     prior: [f64; 4],
     class: usize,
     built_up: u8,
@@ -187,14 +137,10 @@ fn country_flows(
     let total = prior.iter().sum::<f64>();
     let row = class.checked_sub(3).filter(|row| *row < 2);
     let iso = country_iso.to_le_bytes();
-    let country = (
-        COUNTRY_CLASS_PRIORS.iter().find(|(code, _)| *code == iso),
-        COUNTRY_CLASS_SHARES.iter().find(|(code, _)| *code == iso),
-    );
-    let (Some(row), PRIOR_SOURCE_ID, (Some((_, cells)), Some((_, shares)))) =
-        (row, source_id, country)
+    let country = (tables.class_priors.get(iso), tables.class_shares.get(iso));
+    let (Some(row), PRIOR_SOURCE_ID, (Some(cells), Some(shares))) = (row, source_id, country)
     else {
-        return split(total, prior[3], counted_shares(class, built_up));
+        return split(total, prior[3], counted_shares(tables, class, built_up));
     };
     let cell = usize::from(built_up.min(2));
     let scale = cells[row][cell] / DEV4_CLASS_PRIORS[row][cell];
@@ -213,8 +159,8 @@ fn country_flows(
 
 /// The daily flows (light, medium, heavy, motorcycles) of a modelled `total`: the counted
 /// medium and heavy shares of the class; the motorcycles are set by [`with_motorcycles`].
-fn modelled_flows(total: f64, class: usize, built_up: u8) -> [f64; 4] {
-    let [medium, heavy] = counted_shares(class, built_up).map(|share| share * total);
+fn modelled_flows(tables: &SourceTables, total: f64, class: usize, built_up: u8) -> [f64; 4] {
+    let [medium, heavy] = counted_shares(tables, class, built_up).map(|share| share * total);
     [(total - medium - heavy).max(0.0), medium, heavy, 0.0]
 }
 
@@ -347,63 +293,10 @@ fn guessed(source_id: u16, estimated: u8) -> bool {
         && (GUESSED_SPLIT_SOURCES.contains(&source_id) || source_id == SERVICE_TREE_SOURCE_ID)
 }
 
-/// Battery-electric cars in each country's car fleet (% of the stock, IEA Global EV Data Explorer
-/// 2025, 2024 stock: EV stock share times the battery-electric part of the EV stock; CC BY 4.0).
-/// Countries the explorer does not list take none. Their tyres roll as any car's, their drive
-/// adds no propulsion noise: Norway's 27.6 % takes 0.23 dB off a 50 km/h car flow.
-const BATTERY_ELECTRIC_PERCENT: [([u8; 2], f64); 44] = [
-    (*b"AE", 2.33),
-    (*b"AT", 3.85),
-    (*b"AU", 1.56),
-    (*b"BE", 4.09),
-    (*b"BR", 0.31),
-    (*b"CA", 2.35),
-    (*b"CH", 4.60),
-    (*b"CL", 0.19),
-    (*b"CN", 6.87),
-    (*b"CO", 0.45),
-    (*b"CR", 1.96),
-    (*b"DE", 3.37),
-    (*b"DK", 12.56),
-    (*b"ES", 0.84),
-    (*b"FI", 3.81),
-    (*b"FR", 3.08),
-    (*b"GB", 3.79),
-    (*b"GR", 0.44),
-    (*b"ID", 0.59),
-    (*b"IL", 4.21),
-    (*b"IN", 0.48),
-    (*b"IS", 9.69),
-    (*b"IT", 0.69),
-    (*b"JO", 0.84),
-    (*b"JP", 0.54),
-    (*b"KH", 0.47),
-    (*b"KR", 2.32),
-    (*b"LA", 1.58),
-    (*b"MX", 0.20),
-    (*b"MY", 0.27),
-    (*b"NL", 6.02),
-    (*b"NO", 27.64),
-    (*b"NZ", 2.28),
-    (*b"PH", 0.14),
-    (*b"PL", 0.67),
-    (*b"PT", 2.27),
-    (*b"SE", 7.52),
-    (*b"SG", 4.48),
-    (*b"TH", 0.85),
-    (*b"TR", 1.29),
-    (*b"US", 1.86),
-    (*b"UY", 0.97),
-    (*b"UZ", 0.17),
-    (*b"VN", 4.39),
-];
-
 /// The battery-electric share (fraction) of a country's cars.
-fn electric_share(country_iso: u16) -> f64 {
+fn electric_share(tables: &SourceTables, country_iso: u16) -> f64 {
     let iso = country_iso.to_le_bytes();
-    BATTERY_ELECTRIC_PERCENT
-        .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
-        .map_or(0.0, |index| BATTERY_ELECTRIC_PERCENT[index].1 / 100.0)
+    tables.electric_percent.get(iso).copied().unwrap_or(0.0) / 100.0
 }
 
 /// Heavy vehicles drive no faster than this (km/h): the 80 km/h most of Europe sets them, where
@@ -412,30 +305,15 @@ fn electric_share(country_iso: u16) -> f64 {
 /// 105 by Ontario's and Quebec's limiters, China 100 on expressways, Great Britain 90 by the
 /// limiters, the United States 105 for the 65 mph most trucks are governed to).
 const HEAVY_SPEED_CAP_KMH: f64 = 80.0;
-const COUNTRY_HEAVY_SPEED_CAP_KMH: [([u8; 2], f64); 13] = [
-    (*b"AU", 100.0),
-    (*b"BE", 90.0),
-    (*b"BR", 90.0),
-    (*b"CA", 105.0),
-    (*b"CN", 100.0),
-    (*b"ES", 90.0),
-    (*b"FR", 90.0),
-    (*b"GB", 90.0),
-    (*b"IE", 90.0),
-    (*b"JP", 90.0),
-    (*b"NZ", 90.0),
-    (*b"RU", 90.0),
-    (*b"US", 105.0),
-];
 
 /// The speed of lorries and buses (medium and heavy) on a road of `speed_kmh` in a country.
-fn heavy_speed(speed_kmh: f64, country_iso: u16) -> f64 {
+fn heavy_speed(tables: &SourceTables, speed_kmh: f64, country_iso: u16) -> f64 {
     let iso = country_iso.to_le_bytes();
-    let cap = COUNTRY_HEAVY_SPEED_CAP_KMH
-        .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
-        .map_or(HEAVY_SPEED_CAP_KMH, |index| {
-            COUNTRY_HEAVY_SPEED_CAP_KMH[index].1
-        });
+    let cap = tables
+        .heavy_speeds
+        .get(iso)
+        .copied()
+        .unwrap_or(HEAVY_SPEED_CAP_KMH);
     speed_kmh.min(cap)
 }
 
@@ -443,9 +321,19 @@ fn heavy_speed(speed_kmh: f64, country_iso: u16) -> f64 {
 /// popup's passes per hour), to three decimals.
 /// The day, evening and night shares of a category's `vehicles` a day of which `buses` are a row's
 /// buses: they run on their timetables' shares, the rest (lorries) on `lorry_shares`.
-fn with_buses(lorry_shares: [f64; PERIODS], vehicles: f64, buses: f64) -> [f64; PERIODS] {
+fn with_buses(
+    tables: &SourceTables,
+    lorry_shares: [f64; PERIODS],
+    vehicles: f64,
+    buses: f64,
+) -> [f64; PERIODS] {
     std::array::from_fn(|period| {
-        ((vehicles - buses) * lorry_shares[period] + buses * BUS_PERIOD_SHARES[period])
+        ((vehicles - buses) * lorry_shares[period]
+            + buses
+                * tables
+                    .bus_model
+                    .as_ref()
+                    .map_or(lorry_shares, |model| model.period_shares)[period])
             / vehicles.max(f64::MIN_POSITIVE)
     })
 }
@@ -466,7 +354,6 @@ fn road_period_shares(daily: [f64; 4], shares: &[[f64; PERIODS]; 4]) -> [f64; PE
 /// DfT's automatic counters across Great Britain, 2024 (SPE0102): 50.7 mph on 60 mph single
 /// carriageways, where motorways run at 68.4 of 70 and 30 mph roads at 29.6. The counting sites
 /// are straight, free-flowing sections, so bends and junctions only lower a road's mean further.
-const RURAL_FREE_FLOW_OF_LIMIT: f64 = 0.845;
 /// A national rural limit: this fast or faster (km/h).
 const RURAL_LIMIT_FROM_KMH: f64 = 80.0;
 
@@ -490,12 +377,9 @@ fn free_flows_below_limit(
 /// for unknown density, other classes and countries without a table). A trunk in a built-up area
 /// takes the urban limit like any street there; elsewhere the country's motorroad limit where it
 /// has one.
-fn legal_speed(class: usize, country_iso: u16, built_up: u8) -> u8 {
+fn legal_speed(tables: &SourceTables, class: usize, country_iso: u16, built_up: u8) -> u8 {
     let iso = country_iso.to_le_bytes();
-    let legal = COUNTRY_SPEEDS
-        .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
-        .ok()
-        .map(|i| COUNTRY_SPEEDS[i].1);
+    let legal = tables.legal_speeds.get(iso).copied();
     legal.map_or(0, |[urban, rural, motorway, motorroad]| match class {
         0 => motorway,
         1 if built_up == 2 => urban,
@@ -515,14 +399,19 @@ fn legal_speed(class: usize, country_iso: u16, built_up: u8) -> u8 {
 /// limit the country's table lacks (the United States, Canada, Brazil's towns) takes the median
 /// sign either way: half of the United States' rural primary rows are unsigned, driven at the
 /// class's 50 km/h where the signed ones' median is 89 (55 mph).
-pub(crate) fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static str) {
-    let value = legal_speed(class, country_iso, built_up);
+pub(crate) fn default_speed(
+    tables: &SourceTables,
+    class: usize,
+    country_iso: u16,
+    built_up: u8,
+) -> (f64, &'static str) {
+    let value = legal_speed(tables, class, country_iso, built_up);
     let (speed, source) = if value > 0 {
         (f64::from(value), "country_legal_default")
     } else {
         (CLASS_DEFAULT_SPEED_KMH[class], "default_by_class")
     };
-    match tagged_speed_kmh(class, country_iso, built_up) {
+    match tagged_speed_kmh(tables, class, country_iso, built_up) {
         Some(tagged) if tagged < speed || (value == 0 && matches!(class, 2 | 3 | 4 | 9)) => {
             (tagged, "tagged_median")
         }
@@ -593,11 +482,12 @@ fn way_rows(
 /// the buses of `bus` added to it, a row on a bridge on its deck from `decks`; returns whether
 /// the square's buildings are mapped (its building traffic modelled), which bounds its parking.
 pub fn convert(
-    (dev4, temperature, traffic, bus): (
+    (dev4, temperature, traffic, bus, tables): (
         &Dev4,
         &Temperature,
         Option<&std::path::Path>,
         Option<&BusRoutes>,
+        &SourceTables,
     ),
     square: Square,
     reach: Option<Reach>,
@@ -770,21 +660,23 @@ pub fn convert(
             // streets carrying its number are not the highway, nor a way carrying its count beside
             // it) take the department's traffic of the highway in the row's province: its
             // vehicle-km there over these rows' length.
-            let highway = (row_guessed
-                && !closed
-                && !copy
-                && country.value(row) == THAI_ISO
-                && matches!(class_index, 0..=4 | 9))
-            .then(|| {
-                let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
-                thai_highway(refs.value(row), lat, lon)
-            })
-            .flatten();
+            let highway = (row_guessed && !closed && !copy && matches!(class_index, 0..=4 | 9))
+                .then(|| {
+                    let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
+                    tables.regional_roads.reference_count(
+                        country.value(row).to_le_bytes(),
+                        refs.value(row),
+                        lat,
+                        lon,
+                    )
+                })
+                .flatten();
             let modelled = building_traffic
                 .as_ref()
                 .filter(|_| row_guessed && !closed)
                 .and_then(|traffic| {
                     traffic.total(
+                        tables.road_models.as_ref(),
                         batch_first_row + row,
                         (
                             class.value(row),
@@ -797,11 +689,12 @@ pub fn convert(
                     )
                 });
             let mut daily = match modelled {
-                Some(total) => modelled_flows(total, class_index, built_up.value(row)),
+                Some(total) => modelled_flows(tables, total, class_index, built_up.value(row)),
                 // A copy has no count of its own: where no model gives it one it carries none, its
                 // main road beside it carrying the count.
                 None if copy => [0.0; 4],
                 None => country_flows(
+                    tables,
                     prior,
                     class_index,
                     built_up.value(row),
@@ -818,14 +711,19 @@ pub fn convert(
             }
             // A US road whose vehicle types nobody counted (HPMS's national layer counts the total
             // only) carries its state's mix on its road group in its area (VM-4).
-            let us_mix = (country.value(row) == US_ISO
-                && estimated_categories == ALL_CATEGORIES_ESTIMATED)
+            let regional_mix = (estimated_categories == ALL_CATEGORIES_ESTIMATED)
                 .then(|| {
                     let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
-                    us_vehicle_shares(lat, lon, class_index, built_up.value(row))
+                    tables.regional_roads.vehicle_shares(
+                        country.value(row).to_le_bytes(),
+                        lat,
+                        lon,
+                        class_index,
+                        built_up.value(row),
+                    )
                 })
                 .flatten();
-            if let Some(shares) = us_mix {
+            if let Some(shares) = regional_mix {
                 let total: f64 = daily.iter().sum();
                 daily = shares.map(|share| share * total);
             }
@@ -834,20 +732,23 @@ pub fn convert(
             }
             // Guessed traffic takes the motorcycles of the square's counted roads, else of the
             // country's fleet (dev4 put 2 % on Vietnam's and 15 % on Thailand's class priors).
-            if row_guessed && highway.is_none() && us_mix.is_none() {
+            if row_guessed && highway.is_none() && regional_mix.is_none() {
                 let share = motorcycles
-                    .share(class_index, country.value(row))
-                    .unwrap_or_else(|| country_share(country.value(row), class_index));
+                    .share(tables, class_index, country.value(row))
+                    .unwrap_or_else(|| country_share(tables, country.value(row), class_index));
                 daily = with_motorcycles(daily, share);
             }
             // Buses on an uncounted row: two-axle city buses medium, a third articulated heavy.
             let mut scheduled = [0.0; 2];
             if let Some(bus) = bus.filter(|_| row_guessed && highway.is_none()) {
-                let service = building_traffic.as_ref().map_or(
-                    BUS_SERVICE_BY_BUILT_UP[usize::from(built_up.value(row).min(2))],
-                    |traffic| traffic.bus_service(middle_z30),
-                );
-                let (buses, coaches) = bus.daily(osm_id.value(row), service);
+                let service = tables.bus_model.as_ref().map_or(1.0, |model| {
+                    building_traffic.as_ref().map_or(
+                        model.service_by_built_up[usize::from(built_up.value(row).min(2))],
+                        |traffic| traffic.bus_service(model, middle_z30),
+                    )
+                });
+                let (buses, coaches) =
+                    bus.daily(tables.bus_model.as_ref(), osm_id.value(row), service);
                 scheduled = [buses * 2.0 / 3.0, buses / 3.0 + coaches];
                 daily[1] += scheduled[0];
                 daily[2] += scheduled[1];
@@ -868,7 +769,7 @@ pub fn convert(
                 0 if taper > 0 => (f64::from(taper), "graded_transition", None),
                 0 => {
                     let (speed, source) =
-                        default_speed(class_index, country.value(row), built_up.value(row));
+                        default_speed(tables, class_index, country.value(row), built_up.value(row));
                     (speed, source, None)
                 }
                 posted => (f64::from(posted), "osm_posted", Some(posted)),
@@ -882,9 +783,12 @@ pub fn convert(
                 built_up.value(row),
                 oneway.value(row) != 0,
                 base_speed,
-                f64::from(legal_speed(class_index, country.value(row), 1)),
+                f64::from(legal_speed(tables, class_index, country.value(row), 1)),
             ) {
-                (base_speed * RURAL_FREE_FLOW_OF_LIMIT, "rural_free_flow")
+                (
+                    base_speed * tables.rural_free_flow.unwrap_or(1.0),
+                    "rural_free_flow",
+                )
             } else {
                 (base_speed, base_source)
             };
@@ -905,12 +809,12 @@ pub fn convert(
             // Each category's day, evening and night shares of its daily flow, by country and road
             // group: light vehicles and motorcycles, medium and heavy vehicles (lorries run more of
             // their day at night).
-            let [light_shares, heavy_shares] =
-                [false, true].map(|heavy| period_shares(country.value(row), class_index, heavy));
+            let [light_shares, heavy_shares] = [false, true]
+                .map(|heavy| period_shares(tables, country.value(row), class_index, heavy));
             let shares = [
                 light_shares,
-                with_buses(heavy_shares, daily[1], scheduled[0]),
-                with_buses(heavy_shares, daily[2], scheduled[1]),
+                with_buses(tables, heavy_shares, daily[1], scheduled[0]),
+                with_buses(tables, heavy_shares, daily[2], scheduled[1]),
                 light_shares,
             ];
             let categories = [
@@ -926,10 +830,10 @@ pub fn convert(
                 2 => &[(1.0, -1.0)],
                 _ => &[(1.0, 1.0)],
             };
-            let electric = electric_share(country.value(row));
+            let electric = electric_share(tables, country.value(row));
             // The free-flow share is the cars' (DfT's counters); lorries and buses keep their own
             // limit on the road's.
-            let heavy_speed = heavy_speed(base_speed, country.value(row));
+            let heavy_speed = heavy_speed(tables, base_speed, country.value(row));
             let emission: [[f64; BANDS]; PERIODS] = std::array::from_fn(|period| {
                 let flows: Vec<CategoryFlow> = directions
                     .iter()
@@ -1025,16 +929,21 @@ mod tests {
 
     #[test]
     fn a_rows_buses_keep_their_timetables_shares_beside_its_lorries() {
+        let tables = SourceTables::test_fixture();
         let lorries = [0.793, 0.064, 0.143];
         let close = |a: [f64; PERIODS], b: [f64; PERIODS]| {
             (0..PERIODS).all(|p| (a[p] - b[p]).abs() < 1e-12)
         };
-        assert!(close(with_buses(lorries, 300.0, 0.0), lorries));
-        assert!(close(with_buses(lorries, 300.0, 300.0), BUS_PERIOD_SHARES));
-        let half: [f64; PERIODS] =
-            std::array::from_fn(|p| 0.5 * (lorries[p] + BUS_PERIOD_SHARES[p]));
-        assert!(close(with_buses(lorries, 300.0, 150.0), half));
-        assert_eq!(with_buses(lorries, 0.0, 0.0), [0.0; PERIODS]);
+        assert!(close(with_buses(tables, lorries, 300.0, 0.0), lorries));
+        assert!(close(
+            with_buses(tables, lorries, 300.0, 300.0),
+            tables.bus_model.as_ref().unwrap().period_shares
+        ));
+        let half: [f64; PERIODS] = std::array::from_fn(|p| {
+            0.5 * (lorries[p] + tables.bus_model.as_ref().unwrap().period_shares[p])
+        });
+        assert!(close(with_buses(tables, lorries, 300.0, 150.0), half));
+        assert_eq!(with_buses(tables, lorries, 0.0, 0.0), [0.0; PERIODS]);
     }
 
     /// A prior secondary or tertiary row in a country with representative counts takes its
@@ -1042,11 +951,12 @@ mod tests {
     /// countries keep their flows.
     #[test]
     fn class_priors_of_secondary_and_tertiary_roads_take_their_countrys_cell() {
+        let tables = SourceTables::test_fixture();
         let cz = u16::from_le_bytes(*b"CZ");
         let estimated = ALL_CATEGORIES_ESTIMATED;
         // dev4's urban tertiary prior: 2,562 a day, 3.2 % medium, 4.8 % heavy, 1 % motorcycles.
         let prior = [2_331.4, 82.0, 123.0, 25.6];
-        let village = country_flows(prior, 4, 2, cz, PRIOR_SOURCE_ID, estimated);
+        let village = country_flows(tables, prior, 4, 2, cz, PRIOR_SOURCE_ID, estimated);
         assert!(
             (village.iter().sum::<f64>() - 962.0).abs() < 1e-6,
             "{village:?}"
@@ -1055,16 +965,20 @@ mod tests {
         assert!((village[2] - 962.0 * 0.0192).abs() < 1e-6);
         assert!((village[3] - 25.6 * 962.0 / 2_562.0).abs() < 1e-6);
         let se = u16::from_le_bytes(*b"SE");
-        let rural = country_flows(prior, 3, 1, se, PRIOR_SOURCE_ID, estimated);
+        let rural = country_flows(tables, prior, 3, 1, se, PRIOR_SOURCE_ID, estimated);
         assert!((rural.iter().sum::<f64>() - 2_562.0 * 844.0 / 2_061.0).abs() < 1e-6);
-        assert_eq!(country_flows(prior, 4, 2, cz, 20, 0), prior, "counted");
         assert_eq!(
-            country_flows(prior, 4, 2, cz, 11, estimated),
+            country_flows(tables, prior, 4, 2, cz, 20, 0),
+            prior,
+            "counted"
+        );
+        assert_eq!(
+            country_flows(tables, prior, 4, 2, cz, 11, estimated),
             prior,
             "service tree"
         );
         assert_eq!(
-            country_flows(prior, 4, 2, cz, 1041, estimated),
+            country_flows(tables, prior, 4, 2, cz, 1041, estimated),
             prior,
             "a dataset's split"
         );
@@ -1075,24 +989,25 @@ mod tests {
     /// from 37 % to the service tree's 3 %, a rural motorway link reads its motorway.
     #[test]
     fn guessed_splits_take_the_counted_shares_of_their_class() {
+        let tables = SourceTables::test_fixture();
         let de = u16::from_le_bytes(*b"DE");
         let estimated = ALL_CATEGORIES_ESTIMATED;
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
         let primary = [8_486.0, 610.0, 910.0, 200.0];
-        let urban = country_flows(primary, 2, 2, de, PRIOR_SOURCE_ID, estimated);
+        let urban = country_flows(tables, primary, 2, 2, de, PRIOR_SOURCE_ID, estimated);
         let total: f64 = primary.iter().sum();
         assert!(close(urban.iter().sum::<f64>(), total), "{urban:?}");
         assert!(close(urban[1], total * 0.012) && close(urban[2], total * 0.063));
         assert!(close(urban[3], 200.0));
         let kz = u16::from_le_bytes(*b"KZ");
         let street = [600.0, 40.0, 330.0, 30.0];
-        let local = country_flows(street, 5, 2, kz, 9398, estimated);
+        let local = country_flows(tables, street, 5, 2, kz, 9398, estimated);
         assert!(close(local[1], 10.0) && close(local[2], 20.0), "{local:?}");
-        let link = country_flows(primary, 10, 1, de, PRIOR_SOURCE_ID, estimated);
+        let link = country_flows(tables, primary, 10, 1, de, PRIOR_SOURCE_ID, estimated);
         assert!(close(link[2], total * 0.102));
-        let unknown = country_flows(primary, 2, 0, de, PRIOR_SOURCE_ID, estimated);
+        let unknown = country_flows(tables, primary, 2, 0, de, PRIOR_SOURCE_ID, estimated);
         assert!(close(unknown[2], total * 0.071));
-        let mopeds = country_flows([10.0, 0.0, 0.0, 990.0], 2, 2, de, 9873, estimated);
+        let mopeds = country_flows(tables, [10.0, 0.0, 0.0, 990.0], 2, 2, de, 9873, estimated);
         assert!(
             close(mopeds[0], 0.0) && close(mopeds[3], 990.0),
             "{mopeds:?}"
@@ -1103,62 +1018,69 @@ mod tests {
     /// country lets them faster.
     #[test]
     fn heavy_vehicles_keep_their_countrys_limit() {
+        let tables = SourceTables::test_fixture();
         let code = |iso: &[u8; 2]| u16::from_le_bytes(*iso);
-        assert_eq!(heavy_speed(130.0, code(b"DE")), 80.0);
-        assert_eq!(heavy_speed(113.0, code(b"US")), 105.0);
-        assert_eq!(heavy_speed(60.0, code(b"US")), 60.0);
-        assert_eq!(heavy_speed(130.0, code(b"FR")), 90.0);
+        assert_eq!(heavy_speed(tables, 130.0, code(b"DE")), 80.0);
+        assert_eq!(heavy_speed(tables, 113.0, code(b"US")), 105.0);
+        assert_eq!(heavy_speed(tables, 60.0, code(b"US")), 60.0);
+        assert_eq!(heavy_speed(tables, 130.0, code(b"FR")), 90.0);
     }
 
     #[test]
     fn countries_drive_their_battery_electric_shares() {
+        let tables = SourceTables::test_fixture();
         let code = |iso: &[u8; 2]| u16::from_le_bytes(*iso);
-        assert!((electric_share(code(b"NO")) - 0.2764).abs() < 1e-12);
-        assert!((electric_share(code(b"DE")) - 0.0337).abs() < 1e-12);
-        assert_eq!(electric_share(code(b"CZ")), 0.0, "not listed");
+        assert!((electric_share(tables, code(b"NO")) - 0.2764).abs() < 1e-12);
+        assert!((electric_share(tables, code(b"DE")) - 0.0337).abs() < 1e-12);
+        assert_eq!(electric_share(tables, code(b"CZ")), 0.0, "not listed");
     }
 
     #[test]
     fn untagged_speeds_follow_the_country_and_built_up_density() {
+        let tables = SourceTables::test_fixture();
         let cz = u16::from_le_bytes(*b"CZ");
-        assert_eq!(default_speed(0, cz, 0).0, 130.0);
-        assert_eq!(default_speed(1, cz, 0).0, 110.0, "Czech motorroads");
+        assert_eq!(default_speed(tables, 0, cz, 0).0, 130.0);
+        assert_eq!(default_speed(tables, 1, cz, 0).0, 110.0, "Czech motorroads");
         assert_eq!(
-            default_speed(1, cz, 2),
+            default_speed(tables, 1, cz, 2),
             (50.0, "country_legal_default"),
             "a trunk through a town"
         );
-        assert_eq!(default_speed(1, cz, 1).0, 110.0);
-        assert_eq!(default_speed(3, cz, 2), (50.0, "country_legal_default"));
-        assert_eq!(default_speed(3, cz, 1).0, 90.0);
+        assert_eq!(default_speed(tables, 1, cz, 1).0, 110.0);
         assert_eq!(
-            default_speed(3, cz, 0),
+            default_speed(tables, 3, cz, 2),
+            (50.0, "country_legal_default")
+        );
+        assert_eq!(default_speed(tables, 3, cz, 1).0, 90.0);
+        assert_eq!(
+            default_speed(tables, 3, cz, 0),
             (50.0, "default_by_class"),
             "unknown density keeps the class default"
         );
         assert_eq!(
-            default_speed(5, cz, 2),
+            default_speed(tables, 5, cz, 2),
             (30.0, "default_by_class"),
             "local streets keep the class default"
         );
-        assert_eq!(default_speed(0, 0, 0), (100.0, "default_by_class"));
+        assert_eq!(default_speed(tables, 0, 0, 0), (100.0, "default_by_class"));
         // Without a legal limit a main class takes its signs: the United States' rural primary
         // roads 89 km/h (55 mph), Brazil's urban ones 60; its local streets keep the class default.
         let us = u16::from_le_bytes(*b"US");
-        assert_eq!(default_speed(2, us, 1), (89.0, "tagged_median"));
-        assert_eq!(default_speed(9, us, 1), (80.0, "tagged_median"));
-        assert_eq!(default_speed(5, us, 2), (30.0, "default_by_class"));
+        assert_eq!(default_speed(tables, 2, us, 1), (89.0, "tagged_median"));
+        assert_eq!(default_speed(tables, 9, us, 1), (80.0, "tagged_median"));
+        assert_eq!(default_speed(tables, 5, us, 2), (30.0, "default_by_class"));
         let br = u16::from_le_bytes(*b"BR");
-        assert_eq!(default_speed(2, br, 2), (60.0, "tagged_median"));
-        assert_eq!(default_speed(2, br, 1), (80.0, "tagged_median"));
+        assert_eq!(default_speed(tables, 2, br, 2), (60.0, "tagged_median"));
+        assert_eq!(default_speed(tables, 2, br, 1), (80.0, "tagged_median"));
     }
 
     /// A road's shares for the popup weigh each category's by its vehicles: a German Landesstrasse
     /// with one lorry in ten runs between its cars' night and its lorries'.
     #[test]
     fn a_roads_period_shares_weigh_its_categories_by_their_vehicles() {
+        let tables = SourceTables::test_fixture();
         let de = u16::from_le_bytes(*b"DE");
-        let [cars, lorries] = [false, true].map(|heavy| period_shares(de, 3, heavy));
+        let [cars, lorries] = [false, true].map(|heavy| period_shares(tables, de, 3, heavy));
         let shares = [cars, lorries, lorries, cars];
         let mixed = road_period_shares([900.0, 0.0, 100.0, 0.0], &shares);
         assert!(mixed[2] > cars[2] && mixed[2] < lorries[2], "{mixed:?}");
@@ -1174,6 +1096,7 @@ mod tests {
     /// their limit.
     #[test]
     fn rural_roads_run_below_their_national_limit() {
+        let tables = SourceTables::test_fixture();
         assert!(free_flows_below_limit(4, 1, false, 90.0, 90.0));
         assert!(
             !free_flows_below_limit(4, 1, false, 80.0, 100.0),
@@ -1183,13 +1106,13 @@ mod tests {
         // Spain's rural limit is 90 while its primaries are signed 80 at the median: a primary
         // signed 80 is driven at 80, as the national limit is the law's, not the median sign.
         let es = u16::from_le_bytes(*b"ES");
-        assert_eq!(default_speed(2, es, 1), (80.0, "tagged_median"));
+        assert_eq!(default_speed(tables, 2, es, 1), (80.0, "tagged_median"));
         assert!(!free_flows_below_limit(
             2,
             1,
             false,
             80.0,
-            f64::from(legal_speed(2, es, 1))
+            f64::from(legal_speed(tables, 2, es, 1))
         ));
         assert!(
             !free_flows_below_limit(0, 1, false, 130.0, 130.0),
@@ -1203,6 +1126,8 @@ mod tests {
             !free_flows_below_limit(5, 1, false, 50.0, 30.0),
             "a village lane"
         );
-        assert!((90.0 * RURAL_FREE_FLOW_OF_LIMIT - 76.05).abs() < 1e-9);
+        assert!(
+            (90.0 * SourceTables::test_fixture().rural_free_flow.unwrap() - 76.05).abs() < 1e-9
+        );
     }
 }

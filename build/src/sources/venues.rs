@@ -5,6 +5,7 @@
 
 use super::opening_hours::parse;
 use crate::dev4::degrees_to_z30;
+use crate::source_tables::SourceTables;
 use physics::bands::WeekHours;
 use physics::emission::plant::kitchen_hours;
 use std::collections::HashMap;
@@ -160,8 +161,6 @@ fn merge_nodes_into_outlines(sites: &mut Vec<VenueSite>) {
     sites.retain(|_| keep.next().unwrap_or(true));
 }
 
-/// The median mapped beer garden's outline (m2; 4,767 outlines in the planet of 2026-09-21).
-const BEER_GARDEN_M2: f64 = 222.0;
 /// Seats a m2 of an outdoor area (Austria's experience value, Forum Schall 2008).
 const SEATS_PER_M2: f64 = 0.7;
 
@@ -170,24 +169,26 @@ const SEATS_PER_M2: f64 = 0.7;
 /// terrace times its mean (Madrid: bars 13.5, restaurants 9.0, cafés 8.8, fast food 8.4,
 /// nightclubs 1.9; Melbourne's pubs 0.56 x 40), a beer garden 0.7 a m2 of its outline (else of the
 /// median mapped one).
-pub fn seats(site: &VenueSite) -> f64 {
+pub fn seats(tables: &SourceTables, site: &VenueSite) -> f64 {
     use VenueKind::*;
-    let (tagged, expected) = match site.kind {
-        Bar => (28.0, 13.5),
-        Pub => (40.0, 0.56 * 40.0),
-        Nightclub => (38.0, 1.9),
-        Restaurant => (24.0, 9.0),
-        Cafe => (24.0, 8.8),
-        FastFood => (23.0, 8.4),
+    let model = tables.venue_seating.as_ref();
+    let index = match site.kind {
+        Bar => 0,
+        Pub => 1,
+        Nightclub => 2,
+        Restaurant => 3,
+        Cafe => 4,
+        FastFood => 5,
         Biergarten => {
             let area = if site.area_m2 > 0.0 {
                 site.area_m2
             } else {
-                BEER_GARDEN_M2
+                model.map_or(0.0, |model| model.beer_garden_m2)
             };
             return SEATS_PER_M2 * area;
         }
     };
+    let [tagged, expected] = model.map_or([0.0; 2], |model| model.seats[index]);
     match site.seating {
         Seating::Yes => tagged,
         Seating::No => 0.0,
@@ -216,6 +217,8 @@ pub fn cluster_weight(kind: VenueKind) -> f64 {
 /// 20:20, France 20:00, Germany 18:30, the UK 18:20). Elsewhere judgments: bars to 01:00 (02:00 at
 /// weekends), terraces to 23:00, dinner 19-23 h; open-fronted places of the warm south-east of
 /// Asia keep their terraces as long as they are open.
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Customs {
     pub bar_close: (f64, f64),
     pub terrace_close: Option<(f64, f64)>,
@@ -223,44 +226,17 @@ pub struct Customs {
     pub late: bool,
 }
 
-const LATE: &str = "ES PT IT GR CY MT";
-const EARLY_DINNER: &str = "DE AT CH NL BE LU DK NO SE FI IS GB IE PL CZ SK HU US CA AU NZ";
-const OPEN_FRONTED: &str = "TH VN KH LA MM ID MY PH LK BN TL SG";
-
-fn member(list: &str, code: [u8; 2]) -> bool {
-    list.split_ascii_whitespace().any(|m| m.as_bytes() == code)
-}
-
-pub fn customs(country_iso: u16) -> Customs {
-    let code = country_iso.to_le_bytes();
-    let late = member(LATE, code);
-    let bar_close = match &code {
-        _ if late => (26.0, 27.0),
-        b"FR" | b"US" | b"CA" => (26.0, 26.0),
-        b"GB" => (23.0, 24.0),
-        b"IE" => (23.5, 24.5),
-        _ => (25.0, 26.0),
-    };
-    let terrace_close = if member(OPEN_FRONTED, code) {
-        None
-    } else if late {
-        Some((24.0, 25.0))
-    } else {
-        Some((23.0, 23.0))
-    };
-    let dinner = if late {
-        (20.0, 24.0)
-    } else if member(EARLY_DINNER, code) {
-        (18.0, 22.0)
-    } else {
-        (19.0, 23.0)
-    };
-    Customs {
-        bar_close,
-        terrace_close,
-        dinner,
-        late,
-    }
+pub fn customs(tables: &SourceTables, country_iso: u16) -> Customs {
+    tables
+        .venue_customs
+        .get(country_iso.to_le_bytes())
+        .copied()
+        .unwrap_or(Customs {
+            bar_close: (25.0, 26.0),
+            terrace_close: Some((23.0, 23.0)),
+            dinner: (19.0, 23.0),
+            late: false,
+        })
 }
 
 fn is_weekend_night(day: usize) -> bool {

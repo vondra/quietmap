@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The places of worship, bell towers and minarets of an OpenStreetMap planet file (ODbL) for the
 # bells and calls to prayer: the features alone (osmium tags-filter), then each as a point with
-# its religion, kind, mapped height and denomination (`qm-build dev4 --kinds sources --worship
-# OUT_DIR/worship.txt`). Needs osmium-tool and Python 3.
+# its religion, kind, mapped height and denomination (the manifest's `worship` input). Needs osmium-tool and Python 3.
 #
 #   worship.sh PLANET.osm.pbf OUT_DIR
 set -euo pipefail

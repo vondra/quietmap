@@ -10,7 +10,6 @@ pub mod building_rows;
 pub mod bus;
 pub mod calls;
 pub mod cells;
-pub mod country_speeds;
 pub mod decks;
 pub mod events;
 pub mod facilities;
@@ -31,15 +30,14 @@ pub mod road_traffic;
 pub mod ship;
 pub mod tagged_speeds;
 pub mod tent;
-pub mod thai_highways;
 pub mod turbines;
-pub mod us_trucks;
 pub mod venues;
 pub mod water;
 pub mod worship;
 
 use crate::climate::Climate;
 use crate::dev4::{Dev4, Square};
+use crate::source_tables::SourceTables;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -219,12 +217,13 @@ pub struct Places<'a> {
 /// square also converts its neighbours and keeps the sources its own tiles own (industry reads the
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
-    (dev4, climate, network, turbines, water): (
+    (dev4, climate, network, turbines, water, tables): (
         &Dev4,
         &Climate,
         &FreightNetwork,
         &turbines::Turbines,
         &water::Water,
+        &SourceTables,
     ),
     (airport_traffic, road_traffic, bus, places): (
         &Path,
@@ -245,7 +244,7 @@ pub fn build(
         .par_iter()
         .map(|&square| {
             build_square(
-                (dev4, climate, network, turbines, water),
+                (dev4, climate, network, turbines, water, tables),
                 (airport_traffic, road_traffic, bus, places),
                 square,
                 out,
@@ -271,12 +270,13 @@ pub fn build(
 /// The sources of one square as its file (the squares build in parallel, each within its own
 /// memory): the tiles written and the count of its decks.
 fn build_square(
-    (dev4, climate, network, turbines, water): (
+    (dev4, climate, network, turbines, water, tables): (
         &Dev4,
         &Climate,
         &FreightNetwork,
         &turbines::Turbines,
         &water::Water,
+        &SourceTables,
     ),
     (airport_traffic, road_traffic, bus, places): (
         &Path,
@@ -302,22 +302,26 @@ fn build_square(
     for neighbour in square.with_neighbours() {
         let road_reach = (neighbour != square).then_some(reach);
         let buildings_mapped = road::convert(
-            (dev4, &climate.mean, road_traffic, bus),
+            (dev4, &climate.mean, road_traffic, bus, tables),
             neighbour,
             road_reach,
             &decks,
             &mut converted,
         )?;
-        rail::convert((dev4, network), neighbour, &decks, &mut converted)?;
+        rail::convert((dev4, network, tables), neighbour, &decks, &mut converted)?;
         leisure::convert(
             dev4,
             neighbour,
-            (road_traffic.filter(|_| buildings_mapped), places.venues),
+            (
+                road_traffic.filter(|_| buildings_mapped),
+                places.venues,
+                tables,
+            ),
             &mut converted,
         )?;
         building::convert(
             dev4,
-            (climate, places),
+            (climate, places, tables),
             (neighbour, &industrial_sites),
             &mut converted,
         )?;

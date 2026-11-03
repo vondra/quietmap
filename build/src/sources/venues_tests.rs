@@ -10,6 +10,7 @@ fn open_hours(week: &WeekHours, day: usize) -> Vec<usize> {
 
 #[test]
 fn places_are_read_and_filed_by_square() {
+    let tables = crate::source_tables::SourceTables::test_fixture();
     let venues = Venues::parse(
         "41.38\t2.17\tbar\tyes\t0\tMo-Su 18:00-02:00\tBar Marsella\n\
          41.3801\t2.1701\tfood_court\tno\t300\t\tMercat\n\
@@ -26,9 +27,9 @@ fn places_are_read_and_filed_by_square() {
         open_hours(&barcelona[0].hours.unwrap(), 2),
         [0, 1, 18, 19, 20, 21, 22, 23]
     );
-    assert_eq!(seats(&barcelona[0]), 28.0);
+    assert_eq!(seats(tables, &barcelona[0]), 28.0);
     assert!(
-        (seats(&barcelona[1]) - 280.0).abs() < 1e-9,
+        (seats(tables, &barcelona[1]) - 280.0).abs() < 1e-9,
         "a beer garden of 400 m2"
     );
     assert!(Venues::parse("1\t2\tbar\n").is_err());
@@ -39,6 +40,7 @@ fn places_are_read_and_filed_by_square() {
 /// its garden at 23:00; a Thai bar keeps its open front as long as it is open.
 #[test]
 fn places_without_hours_keep_their_countrys_customs() {
+    let tables = crate::source_tables::SourceTables::test_fixture();
     let bar = |kind| VenueSite {
         lat: 0.0,
         lon: 0.0,
@@ -48,7 +50,7 @@ fn places_without_hours_keep_their_countrys_customs() {
         hours: None,
         name: String::new(),
     };
-    let (open, terrace) = hours(&bar(VenueKind::Bar), &customs(iso(b"ES")));
+    let (open, terrace) = hours(&bar(VenueKind::Bar), &customs(tables, iso(b"ES")));
     assert_eq!(
         open_hours(&open, 1),
         [0, 1, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
@@ -62,12 +64,12 @@ fn places_without_hours_keep_their_countrys_customs() {
         !terrace[1][0] && terrace[5][0] && !terrace[5][1],
         "the terrace closes at 24/01 h"
     );
-    let (pub_open, garden) = hours(&bar(VenueKind::Pub), &customs(iso(b"GB")));
+    let (pub_open, garden) = hours(&bar(VenueKind::Pub), &customs(tables, iso(b"GB")));
     assert_eq!(*open_hours(&pub_open, 2).last().unwrap(), 22);
     assert!(pub_open[5][23] && !garden[5][23]);
-    let (thai, front) = hours(&bar(VenueKind::Bar), &customs(iso(b"TH")));
+    let (thai, front) = hours(&bar(VenueKind::Bar), &customs(tables, iso(b"TH")));
     assert_eq!(thai, front);
-    assert_eq!(seats(&bar(VenueKind::Bar)), 13.5);
+    assert_eq!(seats(tables, &bar(VenueKind::Bar)), 13.5);
 }
 
 /// A bar mapped as a node and as its 200 m2 outline 3 m away is one place, the outline's with the
@@ -110,6 +112,7 @@ fn a_node_on_its_outline_is_one_place() {
 /// restaurant's hours; without a place that cooks it has none.
 #[test]
 fn a_buildings_places_give_its_open_and_kitchen_hours() {
+    let tables = crate::source_tables::SourceTables::test_fixture();
     let place = |kind: VenueKind, hours: &str| VenueSite {
         lat: 50.08,
         lon: 14.42,
@@ -119,7 +122,7 @@ fn a_buildings_places_give_its_open_and_kitchen_hours() {
         hours: parse(hours),
         name: String::new(),
     };
-    let customs = customs(iso(b"CZ"));
+    let customs = customs(tables, iso(b"CZ"));
     let restaurant = place(VenueKind::Restaurant, "Mo-Su 11:00-22:00");
     let cafe = place(VenueKind::Cafe, "Mo-Su 07:00-19:00");
     let both = place_hours(&[&cafe, &restaurant], &customs);
@@ -140,7 +143,8 @@ fn a_buildings_places_give_its_open_and_kitchen_hours() {
 /// country, its kitchen among them.
 #[test]
 fn an_unmapped_building_of_restaurants_keeps_a_restaurants_hours() {
-    let hours = unmapped_place_hours(&customs(iso(b"CZ")));
+    let tables = crate::source_tables::SourceTables::test_fixture();
+    let hours = unmapped_place_hours(&customs(tables, iso(b"CZ")));
     assert_eq!(open_hours(&hours.open, 2), [12, 13, 14, 18, 19, 20, 21]);
     assert_eq!(
         open_hours(&hours.kitchen.unwrap(), 2),

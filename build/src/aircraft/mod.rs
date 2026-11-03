@@ -30,7 +30,6 @@ pub use filters::MIN_SEGMENT_LENGTH_M;
 pub use segments::{HELICOPTER_DESCENT, IS_DEPARTURE, ON_GROUND, SECONDARY_ONLY};
 
 use crate::dev4::Dev4;
-use chrono::Datelike;
 use day::{Inputs, extract_day, read_receipt, write_receipt};
 use receipt::{DayReceipt, admit};
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,29 +44,6 @@ pub struct Days {
 }
 
 impl Days {
-    /// Every day of [anchor - 1 year, anchor) and its month-firsts (`YYYY-MM`).
-    pub fn anchor(month: &str) -> Result<Self, String> {
-        let anchor = chrono::NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
-            .map_err(|_| format!("anchor {month:?} is not YYYY-MM"))?;
-        let first = anchor
-            .with_year(anchor.year() - 1)
-            .ok_or("anchor out of range")?;
-        let requested: BTreeSet<String> = first
-            .iter_days()
-            .take_while(|day| *day < anchor)
-            .map(|day| day.format("%Y-%m-%d").to_string())
-            .collect();
-        let increment_candidates = requested
-            .iter()
-            .filter(|d| d.ends_with("-01"))
-            .cloned()
-            .collect();
-        Ok(Days {
-            requested,
-            increment_candidates,
-        })
-    }
-
     pub fn listed(days: &str, increments: Option<&str>) -> Result<Self, String> {
         let parse = |list: &str| -> Result<BTreeSet<String>, String> {
             list.split(',')
@@ -242,18 +218,6 @@ pub fn run(run: Run) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_anchor_month_is_the_year_before_it_with_its_month_firsts() {
-        let days = Days::anchor("2026-09").unwrap();
-        assert_eq!(days.requested.len(), 365);
-        assert_eq!(days.requested.first().unwrap(), "2025-09-01");
-        assert_eq!(days.requested.last().unwrap(), "2026-08-31");
-        assert_eq!(days.increment_candidates.len(), 12);
-        assert!(days.increment_candidates.contains("2026-08-01"));
-        assert_eq!(Days::anchor("2024-03").unwrap().requested.len(), 366);
-        assert!(Days::anchor("2026-13").is_err());
-    }
 
     #[test]
     fn listed_days_are_checked_and_increments_must_be_requested() {

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# The wind turbines standing today for the sources (`qm-build dev4 --kinds sources --turbines
-# OUT_DIR/turbines.txt`): OpenStreetMap's (ODbL; osmium tags-filter of a planet file), and the
+# The wind turbines standing today for the sources (the manifest's `turbines` input): OpenStreetMap's (ODbL; osmium tags-filter of a planet file), and the
 # national registers with turbine positions and states, each turbine once (`turbines.py`):
 # USWTDB (US, public domain), NRCan (Canada, OGL-Canada), the Marktstammdatenregister (Germany,
 # dl-de/by-2-0, "Marktstammdatenregister, Bundesnetzagentur"), Energistyrelsen (Denmark),

@@ -11,6 +11,7 @@ use super::venues::{VenueKind, VenueSite, cluster_weight, customs, hours, seats}
 use super::{displayed_duty, fields, group_key, metres, object_key};
 use crate::climate::Climate;
 use crate::dev4::{degrees_to_z30, z30_corner_degrees};
+use crate::source_tables::SourceTables;
 use physics::emission::people::{
     EATING_DBA, LEAST_SEASON_SHARE, LIVELY_DBA, STANDING_DBA, TERRACE_SEASON_C, Venue,
     street_crowd_dba, venue_duty, venue_sound_power,
@@ -77,10 +78,10 @@ fn crowd_shares(sites: &[VenueSite]) -> Vec<Option<f64>> {
 pub fn convert_people(
     sites: &[VenueSite],
     (positions, hosts): (&[(i32, i32)], &[Option<u64>]),
-    (country_iso, climate): (u16, &Climate),
+    (country_iso, climate, tables): (u16, &Climate, &SourceTables),
     out: &mut Vec<Converted>,
 ) -> usize {
-    let customs = customs(country_iso);
+    let customs = customs(tables, country_iso);
     let crowds = crowd_shares(sites);
     let mut emitting = 0;
     for (((site, &position), crowd), host) in sites.iter().zip(positions).zip(crowds).zip(hosts) {
@@ -95,7 +96,7 @@ pub fn convert_people(
             _ => (LIVELY_DBA, LIVELY_DBA),
         };
         let venue = Venue {
-            seats: seats(site),
+            seats: seats(tables, site),
             season_share: climate
                 .share_of_year_above(site.lat, site.lon, TERRACE_SEASON_C)
                 .max(LEAST_SEASON_SHARE),

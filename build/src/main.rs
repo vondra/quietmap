@@ -1,49 +1,8 @@
-//! `qm-build`: builds the prepared z12 tiles of a release, one builder per kind.
-//!
-//! For visitors, down to this code: the About page Data preparation
-//! (`frontend/src/about/data-preparation.md`).
-//!
-//! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
-//! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
-//! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--climate DIR] [--tent FILE]
-//! [--turbines FILE] [--water DIR] [--barriers FILE] [--road-traffic DIR] [--bus FILE]
-//! [--worship FILE] [--venues FILE] [--national-dem FILE,..]` (obstacles need the noise screens of
-//! `fetch/barriers.sh`; sources need the airport traffic, the climate grids of
-//! `fetch/worldclim.sh`, the TEN-T freight lines of `fetch/tent.sh`, the standing wind turbines
-//! of `fetch/turbines.sh` and the water of `fetch/water.py`, and take the roads' building traffic of `qm-build traffic`,
-//! the bus routes of `fetch/bus.sh`, the places of worship of `fetch/worship.sh` and the bars,
-//! restaurants and cafés of `fetch/venues.sh` when given; terrain lays the national models over
-//! dev4's heights);
-//! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build
-//! terrain-fine --terrain DIR --fine-dem DIR,.. --squares .. --out DIR` adds the national models'
-//! 1/6" detail to the served terrain of DIR (a directory of z9 squares' rasters a model,
-//! `fetch/national-dem.sh`); `qm-build complete --out DIR --note TEXT` writes the completion
-//! marker last.
-//!
-//! Aircraft: `qm-build geoid --tiff FILE --out FILE` converts the EGM2008 GeoTIFF once;
-//! `qm-build aircraft-segments (--days D,D.. [--increment-days D,..] | --anchor YYYY-MM)
-//! --primary DIR [--secondary DIR] --rasters DIR --geoid FILE --out DIR [--boxes S,W,N,E;..]
-//! [--threads N] [--national-dem FILE,..]` writes per-day segments, flight tables and receipts
-//! into a scratch directory;
-//! `qm-build airport-traffic --prepared DIR --segments DIR --days D,.. [--increment-days D,..]
-//! --squares X:Y[,X:Y..] --terrain DIR --out DIR` projects the window's ground legs onto the
-//! aeroway lines of the squares (and their neighbours) once, one traffic file per square, and
-//! writes the runways' rolls as `aircraft-rolls` square files under `DIR/rolls` on the terrain of
-//! the year root `--terrain`;
-//! `qm-build aircraft-shuffle --segments DIR --days D,.. [--increment-days D,..] --squares
-//! X:Y[,X:Y..] [--halo yes] --out DIR` sorts the window's segments into squares (with the squares
-//! within the events' reach of them), and `qm-build aircraft-boxes
-//! --shuffled DIR --days D,.. [--increment-days D,..] --squares .. --terrain DIR --weather FILE
-//! [--kind aircraft,aircraft-far] [--memory-gb N] [--progress DIR] --out DIR` boxes them, each
-//! square's day files read once for the kinds, refusing a shuffle that is not exactly that window;
-//! `qm-build aircraft-events` with the same arguments (no kind) writes what flies over each cell
-//! of the squares, reading the shuffle of the squares within reach of each (`boxes::events`).
-//! Both build many squares at once, the largest first, within `--memory-gb` (`boxes::run`).
-//!
-//! Roads: `qm-build traffic --prepared DIR --squares X:Y[,X:Y..] --out DIR` routes the buildings'
-//! trip ends down the local streets and grids them, one file per square, for the sources.
-//! Display: `qm-build source-outlines --prepared DIR --squares all --out FILE` indexes the same
-//! input's industrial boundaries for the popup's map highlight, without changing sound sources.
+//! Builds one manifest's inputs into the popup and painter's files.
+//! `qm-build COMMAND --year years/YEAR.json --sources ROOT --out OUTPUT`.
+//! Spatial steps take `--squares X:Y,X:Y` (or `all`, or `@FILE`); `dev4` also takes
+//! `--kinds terrain,obstacles,sources`. The source inventory and flow dates live only in the
+//! manifest. `complete --out DIR --note TEXT` writes the last marker without reading inputs.
 
 mod aircraft;
 mod airport;
@@ -57,6 +16,7 @@ mod period;
 mod rings;
 mod screening;
 mod source_outlines;
+mod source_tables;
 mod sources;
 mod stage1;
 mod structures;
@@ -64,6 +24,7 @@ mod terrain;
 mod terrain_fine;
 mod traffic;
 mod weather;
+mod year;
 
 use dev4::{Dev4, Square};
 use physics::weather::WeatherTable;
@@ -81,7 +42,36 @@ impl Arguments {
         for pair in arguments.chunks(2) {
             match pair {
                 [key, value] if key.starts_with("--") => {
-                    values.push((key[2..].to_string(), value.clone()))
+                    let key = &key[2..];
+                    if ![
+                        "year",
+                        "sources",
+                        "out",
+                        "squares",
+                        "kinds",
+                        "kind",
+                        "threads",
+                        "boxes",
+                        "halo",
+                        "memory-gb",
+                        "progress",
+                        "level-step-db",
+                        "pieces",
+                        "points",
+                        "only",
+                        "diagnose",
+                        "note",
+                    ]
+                    .contains(&key)
+                    {
+                        return Err(format!(
+                            "unknown option --{key}; input files and flow dates belong in --year"
+                        ));
+                    }
+                    if values.iter().any(|(name, _)| name == key) {
+                        return Err(format!("repeated option --{key}"));
+                    }
+                    values.push((key.to_string(), value.clone()))
                 }
                 _ => return Err(format!("expected --key value pairs, got {pair:?}")),
             }
@@ -100,11 +90,11 @@ impl Arguments {
             .map(|(_, value)| value.as_str())
     }
 
-    /// `--terrain`, the year root a builder reads the ground from: the tree it builds (`--out`,
+    /// The terrain input, the year root a builder reads the ground from: the tree it builds (`--out`,
     /// not complete yet) or a complete one of this layout; one of another layout would read as
     /// all ocean.
-    fn terrain(&self, out: &Path) -> Result<&Path, String> {
-        let terrain = Path::new(self.get("terrain")?);
+    fn terrain<'a>(&self, inputs: &'a year::YearInputs, out: &Path) -> Result<&'a Path, String> {
+        let terrain = inputs.required("terrain")?;
         if terrain != out {
             tiles::check_year_complete(terrain)?;
         }
@@ -142,30 +132,15 @@ fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
         .collect()
 }
 
-/// The sampling window: `--days` (baseline) and `--increment-days`, comma separated.
-/// The national terrain models of `--national-dem FILE,..` (none without it).
-fn national_models(options: &Arguments) -> Result<Vec<terrain::national::NationalHeights>, String> {
-    options
-        .optional("national-dem")
-        .map_or(Ok(Vec::new()), |paths| {
-            paths
-                .split(',')
-                .map(|path| terrain::national::NationalHeights::read(Path::new(path)))
-                .collect()
-        })
-}
-
-fn sampling_window(options: &Arguments) -> boxes::Window {
-    let listed = |key: &str| {
-        options
-            .optional(key)
-            .map(|days| days.split(',').map(str::to_string).collect())
-            .unwrap_or_default()
-    };
-    boxes::Window {
-        baseline_days: listed("days"),
-        increment_days: listed("increment-days"),
-    }
+/// Every national terrain model admitted by the manifest, in its declared precedence.
+fn national_models(
+    inputs: &year::YearInputs,
+) -> Result<Vec<terrain::national::NationalHeights>, String> {
+    inputs
+        .paths("national-dem")?
+        .iter()
+        .map(|path| terrain::national::NationalHeights::read(path))
+        .collect()
 }
 
 /// The aircraft box rule: `--kind aircraft|aircraft-far`, `--level-step-db` (D) and `--pieces`
@@ -245,10 +220,17 @@ fn run(arguments: &[String]) -> Result<(), String> {
         .ok_or("usage: qm-build dev4|weather|complete|geoid|aircraft-segments|airport-traffic --key value ..")?;
     let options = Arguments::parse(rest)?;
     let out = PathBuf::from(options.get("out")?);
+    if command == "complete" {
+        return tiles::mark_year_complete(&out, options.get("note")?);
+    }
+    let inputs = year::YearInputs::read(
+        Path::new(options.get("year")?),
+        Path::new(options.get("sources")?),
+    )?;
     match command.as_str() {
         "source-outlines" => source_outlines::build(
             &Dev4 {
-                prepared: options.get("prepared")?.into(),
+                prepared: inputs.required("prepared")?.into(),
                 rasters: PathBuf::new(),
             },
             &parse_squares(options.get("squares")?)?,
@@ -256,52 +238,51 @@ fn run(arguments: &[String]) -> Result<(), String> {
         ),
         "dev4" => {
             let dev4 = Dev4 {
-                prepared: options.get("prepared")?.into(),
-                rasters: options.get("rasters")?.into(),
+                prepared: inputs.required("prepared")?.into(),
+                rasters: inputs.required("rasters")?.into(),
             };
             let squares = parse_squares(options.get("squares")?)?;
             let kinds = options.optional("kinds").unwrap_or("terrain");
             for kind in kinds.split(',') {
                 let started = std::time::Instant::now();
                 let written = match kind {
-                    "terrain" => {
-                        terrain::build(&dev4, &squares, &national_models(&options)?, &out)?
-                    }
+                    "terrain" => terrain::build(&dev4, &squares, &national_models(&inputs)?, &out)?,
                     "obstacles" => obstacles::build(
                         &dev4,
-                        &barriers::Barriers::load(Path::new(options.get("barriers")?))?,
+                        &inputs
+                            .optional("barriers")?
+                            .map(barriers::Barriers::load)
+                            .transpose()?
+                            .unwrap_or_default(),
                         &squares,
                         &out,
                     )?,
                     "sources" => sources::build(
                         (
                             &dev4,
-                            &climate::Climate::load(Path::new(options.get("climate")?))?,
-                            &sources::tent::FreightNetwork::load(Path::new(options.get("tent")?))?,
-                            &sources::turbines::Turbines::load(Path::new(
-                                options.get("turbines")?,
-                            ))?,
-                            &sources::water::Water::open(Path::new(options.get("water")?))?,
+                            &climate::Climate::load(inputs.required("climate")?)?,
+                            &sources::tent::FreightNetwork::load(inputs.required("tent")?)?,
+                            &sources::turbines::Turbines::load(inputs.required("turbines")?)?,
+                            &sources::water::Water::open(inputs.required("water")?)?,
+                            &source_tables::SourceTables::read(&inputs)?,
                         ),
                         (
-                            Path::new(options.get("airport-traffic")?),
-                            options.optional("road-traffic").map(Path::new),
-                            options
-                                .optional("bus")
-                                .map(|path| sources::bus::BusRoutes::load(Path::new(path)))
+                            inputs.required("airport-traffic")?,
+                            inputs.optional("road-traffic")?,
+                            inputs
+                                .optional("bus")?
+                                .map(sources::bus::BusRoutes::load)
                                 .transpose()?
                                 .as_ref(),
                             sources::Places {
-                                worship: options
-                                    .optional("worship")
-                                    .map(|path| {
-                                        sources::worship::WorshipSites::load(Path::new(path))
-                                    })
+                                worship: inputs
+                                    .optional("worship")?
+                                    .map(sources::worship::WorshipSites::load)
                                     .transpose()?
                                     .as_ref(),
-                                venues: options
-                                    .optional("venues")
-                                    .map(|path| sources::venues::Venues::load(Path::new(path)))
+                                venues: inputs
+                                    .optional("venues")?
+                                    .map(sources::venues::Venues::load)
                                     .transpose()?
                                     .as_ref(),
                             },
@@ -321,17 +302,21 @@ fn run(arguments: &[String]) -> Result<(), String> {
         "weather" => {
             let dev4 = Dev4 {
                 prepared: PathBuf::new(),
-                rasters: options.get("rasters")?.into(),
+                rasters: inputs.required("rasters")?.into(),
             };
             weather::build(&dev4, &out)
         }
         "terrain-fine" => {
             let started = std::time::Instant::now();
-            let models: Vec<&Path> = options.get("fine-dem")?.split(',').map(Path::new).collect();
+            let models: Vec<&Path> = inputs
+                .paths("fine-dem")?
+                .iter()
+                .map(PathBuf::as_path)
+                .collect();
             let written = terrain_fine::build(
                 &parse_squares(options.get("squares")?)?,
                 &models,
-                options.terrain(&out)?,
+                options.terrain(&inputs, &out)?,
                 &out,
             )?;
             eprintln!(
@@ -340,8 +325,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             );
             Ok(())
         }
-        "complete" => tiles::mark_year_complete(&out, options.get("note")?),
-        "geoid" => aircraft::geoid::build(Path::new(options.get("tiff")?), &out),
+        "geoid" => aircraft::geoid::build(inputs.required("tiff")?, &out),
         "aircraft-segments" => {
             if let Some(threads) = options.optional("threads") {
                 let threads = threads
@@ -352,49 +336,45 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     .build_global()
                     .map_err(|error| error.to_string())?;
             }
-            let days = match (options.optional("days"), options.optional("anchor")) {
-                (Some(days), None) => {
-                    aircraft::Days::listed(days, options.optional("increment-days"))?
-                }
-                (None, Some(anchor)) => aircraft::Days::anchor(anchor)?,
-                _ => return Err("give --days or --anchor".into()),
-            };
+            let window = inputs.manifest.window();
+            let days = aircraft::Days::listed(
+                &window.baseline_days.join(","),
+                (!window.increment_days.is_empty())
+                    .then(|| window.increment_days.join(","))
+                    .as_deref(),
+            )?;
             aircraft::run(aircraft::Run {
                 days,
-                primary: Path::new(options.get("primary")?),
-                secondary: options.optional("secondary").map(Path::new),
-                rasters: Path::new(options.get("rasters")?),
-                geoid: Path::new(options.get("geoid")?),
+                primary: inputs.required("primary")?,
+                secondary: inputs.optional("secondary")?,
+                rasters: inputs.required("rasters")?,
+                geoid: inputs.required("geoid")?,
                 boxes: options.optional("boxes"),
                 out: &out,
-                national: national_models(&options)?,
+                national: national_models(&inputs)?,
             })
         }
         "aircraft-shuffle" => {
-            let window = sampling_window(&options);
+            let window = inputs.manifest.window();
             let mut squares = parse_squares(options.get("squares")?)?;
             // `--halo`: with the squares the events of these read (within their reach).
             if options.optional("halo").is_some() {
                 squares = boxes::events::halo(&squares);
             }
             let scope = squares.into_iter().collect();
-            let left = boxes::shuffle::shuffle(
-                Path::new(options.get("segments")?),
-                &window,
-                &scope,
-                &out,
-            )?;
+            let left =
+                boxes::shuffle::shuffle(inputs.required("segments")?, &window, &scope, &out)?;
             eprintln!("aircraft shuffle: {left} days not written yet");
             Ok(())
         }
         "aircraft-boxes" => {
             let rules = box_rules(&options)?;
-            let shuffled = Path::new(options.get("shuffled")?);
-            let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
+            let shuffled = inputs.required("shuffled")?;
+            let days = boxes::shuffle::window_days(shuffled, &inputs.manifest.window())?;
             let squares = parse_squares(options.get("squares")?)?;
             boxes::shuffle::holds(shuffled, &squares)?;
-            let weather = WeatherTable::read(Path::new(options.get("weather")?))?;
-            let terrain = options.terrain(&out)?;
+            let weather = WeatherTable::read(inputs.required("weather")?)?;
+            let terrain = options.terrain(&inputs, &out)?;
             let progress = progress_markers(&options)?;
             eprintln!("aircraft boxes: {} days", days.len());
             let marker = |rule: &boxes::BoxRule, square: Square| {
@@ -454,12 +434,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
             })
         }
         "aircraft-events" => {
-            let shuffled = Path::new(options.get("shuffled")?);
-            let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
+            let shuffled = inputs.required("shuffled")?;
+            let days = boxes::shuffle::window_days(shuffled, &inputs.manifest.window())?;
             let squares = parse_squares(options.get("squares")?)?;
             boxes::shuffle::holds(shuffled, &boxes::events::halo(&squares))?;
-            let weather = WeatherTable::read(Path::new(options.get("weather")?))?;
-            let terrain = options.terrain(&out)?;
+            let weather = WeatherTable::read(inputs.required("weather")?)?;
+            let terrain = options.terrain(&inputs, &out)?;
             let progress = progress_markers(&options)?;
             let marker = |square: Square| {
                 progress
@@ -510,9 +490,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 ))
             })
         }
-        "aircraft-tracks" => aircraft::tracks::build(Path::new(options.get("segments")?), &out),
+        "aircraft-tracks" => {
+            aircraft::tracks::build(&inputs.required("segments")?.join("segments"), &out)
+        }
         "aircraft-check" => {
-            let window = sampling_window(&options);
+            let window = inputs.manifest.window();
             let points: Vec<serde_json::Value> = serde_json::from_str(
                 &std::fs::read_to_string(options.get("points")?).map_err(|e| e.to_string())?,
             )
@@ -520,7 +502,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let only: Vec<&str> = options
                 .optional("only")
                 .map_or(Vec::new(), |names| names.split(',').collect());
-            let terrain = options.terrain(&out)?;
+            let terrain = options.terrain(&inputs, &out)?;
             let chosen: Vec<(&str, boxes::check::CheckPoint)> = points
                 .iter()
                 .map(|point| {
@@ -543,9 +525,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 ),
                 None => None,
             };
-            let weather = WeatherTable::read(Path::new(options.get("weather")?))?;
+            let weather = WeatherTable::read(inputs.required("weather")?)?;
             let compared = boxes::check::compare(
-                (Path::new(options.get("segments")?), &weather),
+                (inputs.required("segments")?, &weather),
                 &window,
                 (&out, box_rules(&options)?[0].level_step_db),
                 terrain,
@@ -628,11 +610,16 @@ fn run(arguments: &[String]) -> Result<(), String> {
         }
         "traffic" => {
             let dev4 = Dev4 {
-                prepared: options.get("prepared")?.into(),
+                prepared: inputs.required("prepared")?.into(),
                 rasters: PathBuf::new(),
             };
             let started = std::time::Instant::now();
-            let written = traffic::build(&dev4, &parse_squares(options.get("squares")?)?, &out)?;
+            let written = traffic::build(
+                &source_tables::SourceTables::read(&inputs)?,
+                &dev4,
+                &parse_squares(options.get("squares")?)?,
+                &out,
+            )?;
             eprintln!(
                 "traffic: {written} squares in {:.1} s",
                 started.elapsed().as_secs_f64()
@@ -641,15 +628,15 @@ fn run(arguments: &[String]) -> Result<(), String> {
         }
         "airport-traffic" => {
             let dev4 = Dev4 {
-                prepared: options.get("prepared")?.into(),
+                prepared: inputs.required("prepared")?.into(),
                 rasters: PathBuf::new(),
             };
             let written = airport::build(
                 &dev4,
-                Path::new(options.get("segments")?),
-                &sampling_window(&options),
+                inputs.required("segments")?,
+                &inputs.manifest.window(),
                 &parse_squares(options.get("squares")?)?,
-                (options.terrain(&out)?, &out),
+                (options.terrain(&inputs, &out)?, &out),
             )?;
             eprintln!("airport traffic: {written} squares with traffic");
             Ok(())

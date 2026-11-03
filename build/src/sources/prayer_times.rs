@@ -12,7 +12,7 @@ use chrono_tz::Tz;
 
 /// How a country's authority sets Fajr and Isha, its Asr shadow factor and the margins (minutes)
 /// its tables add to the astronomical times (Fajr, Dhuhr, Asr, Maghrib, Isha).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
 pub struct Method {
     pub fajr_angle: f64,
     pub isha: Isha,
@@ -20,13 +20,14 @@ pub struct Method {
     pub margins_min: [f64; 5],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
 pub enum Isha {
     Angle(f64),
     MinutesAfterMaghrib(f64),
 }
 
 /// The Muslim World League's 18 and 17 degrees, Asr at one shadow.
+#[cfg(test)]
 pub const WORLD_LEAGUE: Method = Method {
     fajr_angle: 18.0,
     isha: Isha::Angle(17.0),
@@ -127,24 +128,20 @@ pub fn prayer_hours(day_unix: i64, lat: f64, lon: f64, method: &Method) -> Optio
     ])
 }
 
-/// Days of 2026 sampled for the year's shares (every fifth day).
-const SAMPLE_DAYS: std::ops::Range<i64> = 0..73;
-const YEAR_2026_UNIX: i64 = 1_767_225_600;
-
 /// Each call's events a day and seconds sounding a day in the day, evening and night period on
 /// the clocks of `zone` over the year (Fajr, Dhuhr, Asr, Maghrib, Isha): the event in the period
 /// its prayer time falls in, its sound from `sounding.0` seconds before the prayer time for
 /// `sounding.1` seconds (a recitation before the call); a day the sun neither rises nor sets has no
 /// calls.
 pub fn call_periods(
+    days: &[i64],
     (lat, lon): (f64, f64),
     zone: &Tz,
     method: &Method,
     sounding: [(f64, f64); 5],
 ) -> [([f64; 3], [f64; 3]); 5] {
     let mut periods = [([0.0; 3], [0.0; 3]); 5];
-    for sample in SAMPLE_DAYS {
-        let day_unix = YEAR_2026_UNIX + sample * 5 * 86_400;
+    for &day_unix in days {
         let Some(hours) = prayer_hours(day_unix, lat, lon, method) else {
             continue;
         };
@@ -162,7 +159,7 @@ pub fn call_periods(
             }
         }
     }
-    let days = SAMPLE_DAYS.end as f64;
+    let days = days.len().max(1) as f64;
     periods.map(|(events, seconds)| (events.map(|e| e / days), seconds.map(|s| s / days)))
 }
 
@@ -212,7 +209,14 @@ mod tests {
             margins_min: [2.5, 3.5, 2.4, 3.1, 2.4],
         };
         let calls = [(0.0, 180.0); 5];
-        let shares = call_periods((-6.2, 106.85), &jakarta, &kemenag, calls).map(|(e, _)| e);
+        let shares = call_periods(
+            &crate::source_tables::SourceTables::test_fixture().solar_days,
+            (-6.2, 106.85),
+            &jakarta,
+            &kemenag,
+            calls,
+        )
+        .map(|(e, _)| e);
         assert_eq!(shares[0], [0.0, 0.0, 1.0]);
         assert_eq!(shares[3], [1.0, 0.0, 0.0]);
         assert!(
@@ -221,7 +225,14 @@ mod tests {
             shares[4]
         );
         let berlin: Tz = "Europe/Berlin".parse().unwrap();
-        let cologne = call_periods((50.94, 6.96), &berlin, &WORLD_LEAGUE, calls).map(|(e, _)| e);
+        let cologne = call_periods(
+            &crate::source_tables::SourceTables::test_fixture().solar_days,
+            (50.94, 6.96),
+            &berlin,
+            &WORLD_LEAGUE,
+            calls,
+        )
+        .map(|(e, _)| e);
         assert_eq!(cologne[0], [0.0, 0.0, 1.0]);
         assert!(
             cologne[4][2] > 0.2 && cologne[4][2] < 0.4,

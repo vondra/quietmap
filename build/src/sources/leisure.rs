@@ -197,7 +197,11 @@ impl ParkingBudget {
 pub fn convert(
     dev4: &Dev4,
     square: Square,
-    (traffic, venues): (Option<&std::path::Path>, Option<&Venues>),
+    (traffic, venues, tables): (
+        Option<&std::path::Path>,
+        Option<&Venues>,
+        &crate::source_tables::SourceTables,
+    ),
     out: &mut Vec<Converted>,
 ) -> Result<usize, String> {
     let Some(table) = dev4.table(square, "leisure.arrow")? else {
@@ -218,7 +222,7 @@ pub fn convert(
     let budgets = match traffic.filter(|_| parking) {
         Some(dir) => crate::traffic::read_grid(dir, square)?.map(|grid| -> Result<_, String> {
             let (mut street, mut lots) =
-                ParkingBudget::street_and_lots(&grid, &parking_shares(dev4, square)?);
+                ParkingBudget::street_and_lots(&grid, &parking_shares(tables, dev4, square)?);
             for row in &rows {
                 let budget = match row.class {
                     CAR_PARK_STREET => &mut street,

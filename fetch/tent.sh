@@ -4,8 +4,7 @@
 # for Railways republishes it, and keeps every line but the high-speed passenger lines (a line
 # the maps call passenger may carry heavy freight: the left Rhine line, 76 freight trains a day at
 # the EBA monitor) as one line per line string: `<tier> x0 y0 x1 y1 ...` in Web Mercator metres,
-# tier 2 on a core network corridor, 1 elsewhere (`qm-build dev4 --kinds sources --tent
-# OUT_DIR/tent-freight.txt`). Needs GDAL's ogr2ogr.
+# tier 2 on a core network corridor, 1 elsewhere (the manifest's `tent` input). Needs GDAL's ogr2ogr.
 #
 #   tent.sh OUT_DIR
 set -euo pipefail

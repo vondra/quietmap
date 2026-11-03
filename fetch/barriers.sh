@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# The noise screens of national topographic databases for the obstacles (`qm-build dev4 --kinds
-# obstacles --barriers OUT_DIR/barriers.txt`), one per line: `source height_m lat lon lat lon ...`
+# The noise screens of national topographic databases for the obstacles (the manifest's `barriers` input), one per line: `source height_m lat lon lat lon ...`
 # (tab-separated; height 0 when the database gives none). Poland's BDOT10k (GUGiK; "dostępna
 # bezpłatnie i możliwa do dowolnego wykorzystania"): every county's package, found by trying each
 # TERYT code, and of it the lines of class OT_OIKM_L of kind "ekran akustyczny" (a screen's axis).

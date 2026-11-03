@@ -4,7 +4,7 @@
 # CNOSSOS-EU temperature correction (2.2.2, Eq. 2.2.10), and `bio_10` and `bio_11`, the mean
 # temperatures of the warmest and the coldest quarter, for the homes' heating and cooling degree
 # days; each written as raw little-endian f32, 2,160 x 1,080 cells from 90 N and 180 W, the sea
-# -3.4e38 (`qm-build dev4 --kinds sources --climate OUT_DIR`).
+# -3.4e38 (the manifest's `climate` input).
 #
 #   worldclim.sh OUT_DIR
 set -euo pipefail

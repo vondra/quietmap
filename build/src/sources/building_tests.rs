@@ -84,7 +84,9 @@ fn row(class: u8, height_tag_m: f64, floors: u8, ground_activity: bool) -> Build
 fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
     // The rows stand at sea, beyond the climate's cells.
     let climate = climate_around(50.0, 14.5);
-    let emission = |row: &BuildingRow| building_emission(row, (CZ, &climate), None);
+    let emission = |row: &BuildingRow| {
+        building_emission(row, (CZ, &climate, SourceTables::test_fixture()), None)
+    };
     for class in [3, 7, 9] {
         let ground = emission(&row(class, 0.0, 0, true)).unwrap();
         assert_eq!(ground, emission(&row(class, 24.0, 8, true)).unwrap());
@@ -112,9 +114,13 @@ fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
 fn source_height_is_half_the_laddered_height_under_the_tallest_building() {
     let climate = climate_around(50.0, 14.5);
     let source = |height_tag_m: f64, floors: u8| {
-        building_emission(&row(1, height_tag_m, floors, false), (CZ, &climate), None)
-            .unwrap()
-            .source_height_m
+        building_emission(
+            &row(1, height_tag_m, floors, false),
+            (CZ, &climate, SourceTables::test_fixture()),
+            None,
+        )
+        .unwrap()
+        .source_height_m
     };
     assert_eq!((source(31_231.0, 2), source(0.0, u8::MAX)), (414.0, 382.5));
     assert!((source(827.8, 0) - 413.9).abs() < 1e-9);
@@ -273,7 +279,8 @@ fn homes_emit_their_dwellings_units_by_country_and_climate() {
     let home = |class: u8, storeys: u8, area: f64| {
         let mut home = row(class, 0.0, storeys, false);
         (home.storeys, home.area_m2, home.centroid) = (storeys, Some(area), at);
-        building_emission(&home, (CZ, &climate), None).map(|emission| steady(&emission).day_dba)
+        building_emission(&home, (CZ, &climate, SourceTables::test_fixture()), None)
+            .map(|emission| steady(&emission).day_dba)
     };
     let house = home(0, 1, 120.0).unwrap();
     assert!((house - 45.0).abs() < 0.2, "{house}");
@@ -292,6 +299,7 @@ fn homes_emit_their_dwellings_units_by_country_and_climate() {
 /// restaurant's.
 #[test]
 fn shops_and_the_buildings_of_bars_and_restaurants_run_their_plant_in_its_hours() {
+    let tables = crate::source_tables::SourceTables::test_fixture();
     let (lat, lon) = (50.0, 14.5);
     let climate = climate_around(lat, lon);
     let at = crate::dev4::degrees_to_z30(lat, lon);
@@ -303,7 +311,7 @@ fn shops_and_the_buildings_of_bars_and_restaurants_run_their_plant_in_its_hours(
     let emission = |class: u8, floors: u8, hosted: Option<&PlaceHours>| {
         in_use(building_emission(
             &building(class, floors),
-            (CZ, &climate),
+            (CZ, &climate, SourceTables::test_fixture()),
             hosted,
         ))
     };
@@ -351,6 +359,6 @@ fn shops_and_the_buildings_of_bars_and_restaurants_run_their_plant_in_its_hours(
         emission(HOSPITALITY, 3, Some(&cafes)),
         [("restaurant_bar", *cooling)]
     );
-    let unmapped = unmapped_place_hours(&crate::sources::venues::customs(CZ));
+    let unmapped = unmapped_place_hours(&crate::sources::venues::customs(tables, CZ));
     assert_eq!(emission(HOSPITALITY, 3, Some(&unmapped)).len(), 2);
 }

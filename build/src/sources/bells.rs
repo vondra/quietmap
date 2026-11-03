@@ -24,33 +24,14 @@ use super::worship::{
     Denomination, Host, Religion, SiteKind, WorshipSite, first, groups, nearest_host,
 };
 use crate::dev4::Square;
+use crate::source_tables::SourceTables;
 use physics::bands::BANDS;
-
-/// European countries (UN M49) and Cyprus, where the research describes what the bells ring.
-const EUROPE: [[u8; 2]; 52] = [
-    *b"AD", *b"AL", *b"AT", *b"AX", *b"BA", *b"BE", *b"BG", *b"BY", *b"CH", *b"CY", *b"CZ", *b"DE",
-    *b"DK", *b"EE", *b"ES", *b"FI", *b"FO", *b"FR", *b"GB", *b"GG", *b"GI", *b"GR", *b"HR", *b"HU",
-    *b"IE", *b"IM", *b"IS", *b"IT", *b"JE", *b"LI", *b"LT", *b"LU", *b"LV", *b"MC", *b"MD", *b"ME",
-    *b"MK", *b"MT", *b"NL", *b"NO", *b"PL", *b"PT", *b"RO", *b"RS", *b"RU", *b"SE", *b"SI", *b"SK",
-    *b"SM", *b"UA", *b"VA", *b"XK",
-];
-/// Countries whose church clocks strike the hours and quarters by day (the research's Germany and
-/// Switzerland), and those that strike at night too.
-const STRIKING: [[u8; 2]; 2] = [*b"CH", *b"DE"];
-const STRIKING_AT_NIGHT: [[u8; 2]; 1] = [*b"CH"];
-/// European countries whose churches are Orthodox where no denomination is mapped.
-const ORTHODOX_COUNTRIES: [[u8; 2]; 11] = [
-    *b"BG", *b"BY", *b"CY", *b"GR", *b"MD", *b"ME", *b"MK", *b"RO", *b"RS", *b"RU", *b"UA",
-];
 
 const PRAYER_RINGING_S: f64 = 180.0;
 const SUNDAY_PEAL_S: f64 = 450.0;
 const ORTHODOX_RINGING_S: f64 = 300.0;
 /// One strike of the hour or a quarter (25 s of striking an hour, four strikes heard an hour).
 const STRIKE_S: f64 = 25.0 / 4.0;
-const STRIKES_PER_HOUR: f64 = 4.0;
-/// The Zurich study's 23 bell events a night.
-const NIGHT_STRIKES: f64 = 23.0;
 const PEAL_LW_DBA: f64 = 114.0;
 const CATHEDRAL_PEAL_LW_DBA: f64 = 122.0;
 const LONE_BELL_LW_DBA: f64 = 109.0;
@@ -75,12 +56,14 @@ impl WorshipSite {
 
 /// What a church's bells ring in a country at `peal_lw_dba`, the Orthodox ones before their
 /// services and the others the Angelus, the Sunday peal and the clock where the country's strike;
-/// `None` outside Europe.
-pub fn schedule(country_iso: u16, peal_lw_dba: f64, orthodox: bool) -> Option<EventSchedule> {
-    let code = country_iso.to_le_bytes();
-    if !EUROPE.contains(&code) {
-        return None;
-    }
+/// `None` without an admitted country practice.
+pub fn schedule(
+    tables: &SourceTables,
+    country_iso: u16,
+    peal_lw_dba: f64,
+    orthodox: bool,
+) -> Option<EventSchedule> {
+    let practice = tables.church_bells.get(country_iso.to_le_bytes())?;
     let mut plan = EventSchedule::default();
     if orthodox {
         plan.add(DAY, 2.0 / 7.0, ORTHODOX_RINGING_S, peal_lw_dba);
@@ -91,12 +74,20 @@ pub fn schedule(country_iso: u16, peal_lw_dba: f64, orthodox: bool) -> Option<Ev
     plan.add(DAY, 2.0, PRAYER_RINGING_S, peal_lw_dba);
     plan.add(DAY, 1.0 / 7.0, SUNDAY_PEAL_S, peal_lw_dba);
     plan.add(NIGHT, 1.0, PRAYER_RINGING_S, peal_lw_dba);
-    if STRIKING.contains(&code) {
-        plan.add(DAY, 12.0 * STRIKES_PER_HOUR, STRIKE_S, STRIKE_LW_DBA);
-        plan.add(EVENING, 4.0 * STRIKES_PER_HOUR, STRIKE_S, STRIKE_LW_DBA);
-        if STRIKING_AT_NIGHT.contains(&code) {
-            plan.add(NIGHT, NIGHT_STRIKES, STRIKE_S, STRIKE_LW_DBA);
-        }
+    if practice.strikes_per_hour > 0.0 {
+        plan.add(
+            DAY,
+            12.0 * practice.strikes_per_hour,
+            STRIKE_S,
+            STRIKE_LW_DBA,
+        );
+        plan.add(
+            EVENING,
+            4.0 * practice.strikes_per_hour,
+            STRIKE_S,
+            STRIKE_LW_DBA,
+        );
+        plan.add(NIGHT, practice.night_strikes, STRIKE_S, STRIKE_LW_DBA);
     }
     Some(plan)
 }
@@ -117,6 +108,7 @@ pub fn bell_height_m(kind: SiteKind, building_height_m: f64) -> f64 {
 /// nearest them (a place of worship first), screened by everything but that building. Returns how
 /// many ring.
 pub fn convert_bells(
+    tables: &SourceTables,
     (sites, square): (&[&WorshipSite], Square),
     hosts: &[Host],
     country_iso: u16,
@@ -135,13 +127,16 @@ pub fn convert_bells(
         };
         let orthodox = members().any(|site| site.denomination == Denomination::Orthodox)
             || (members().all(|site| site.denomination == Denomination::Untagged)
-                && ORTHODOX_COUNTRIES.contains(&country_iso.to_le_bytes()));
+                && tables
+                    .church_bells
+                    .get(country_iso.to_le_bytes())
+                    .is_some_and(|practice| practice.orthodox));
         let peal = match kind {
             SiteKind::Cathedral => CATHEDRAL_PEAL_LW_DBA,
             SiteKind::BellTower => LONE_BELL_LW_DBA,
             _ => PEAL_LW_DBA,
         };
-        let Some(plan) = schedule(country_iso, peal, orthodox) else {
+        let Some(plan) = schedule(tables, country_iso, peal, orthodox) else {
             continue;
         };
         // The bells hang in a mapped tower where there is one, else in the church; the square of
@@ -186,8 +181,9 @@ mod tests {
     /// outside Europe nothing is known.
     #[test]
     fn bells_ring_their_countrys_schedule() {
+        let tables = SourceTables::test_fixture();
         let iso = |code: &[u8; 2]| u16::from_le_bytes(*code);
-        let czech = schedule(iso(b"CZ"), PEAL_LW_DBA, false).unwrap();
+        let czech = schedule(tables, iso(b"CZ"), PEAL_LW_DBA, false).unwrap();
         assert!((czech.events_per_day[0] - (2.0 + 1.0 / 7.0)).abs() < 1e-12);
         assert_eq!(czech.events_per_day[1..], [0.0, 1.0]);
         let (sound, duty, ringing) = event_emission(&czech, BELL_SPECTRUM);
@@ -196,18 +192,18 @@ mod tests {
         // 424 s of a 114 dB(A) peal in 12 hours: a mean of 114 + 10 lg(424.3 / 43,200) = 93.9.
         assert!((sound.day_dba - 93.92).abs() < 0.01, "{}", sound.day_dba);
         assert_eq!(sound.evening_offset_db, f64::NEG_INFINITY);
-        let german = schedule(iso(b"DE"), PEAL_LW_DBA, false).unwrap();
+        let german = schedule(tables, iso(b"DE"), PEAL_LW_DBA, false).unwrap();
         assert!((german.events_per_day[1] - 16.0).abs() < 1e-12 && german.events_per_day[2] == 1.0);
-        let swiss = schedule(iso(b"CH"), PEAL_LW_DBA, false).unwrap();
+        let swiss = schedule(tables, iso(b"CH"), PEAL_LW_DBA, false).unwrap();
         assert!((swiss.events_per_day[2] - 24.0).abs() < 1e-12);
-        let serbian = schedule(iso(b"RS"), PEAL_LW_DBA, true).unwrap();
+        let serbian = schedule(tables, iso(b"RS"), PEAL_LW_DBA, true).unwrap();
         assert_eq!(serbian.events_per_day, [2.0 / 7.0, 0.0, 0.0]);
-        let cypriot = schedule(iso(b"CY"), PEAL_LW_DBA, true).unwrap();
+        let cypriot = schedule(tables, iso(b"CY"), PEAL_LW_DBA, true).unwrap();
         assert_eq!(
             cypriot.events_per_day, serbian.events_per_day,
             "Cyprus rings, Orthodox"
         );
-        assert!(schedule(iso(b"US"), PEAL_LW_DBA, false).is_none());
+        assert!(schedule(tables, iso(b"US"), PEAL_LW_DBA, false).is_none());
         assert_eq!(bell_height_m(SiteKind::Church, 8.0), 15.0);
         assert_eq!(bell_height_m(SiteKind::BellTower, 0.0), 6.0);
     }
@@ -238,11 +234,12 @@ mod tests {
             worship: true,
             group_key: 70,
         }];
+        let tables = SourceTables::test_fixture();
         let iso = |code: &[u8; 2]| u16::from_le_bytes(*code);
         let refs: Vec<&WorshipSite> = sites.iter().collect();
         let here = (&refs[..], sites[0].square());
         let mut out = Vec::new();
-        assert_eq!(convert_bells(here, &hosts, iso(b"CZ"), &mut out), 1);
+        assert_eq!(convert_bells(tables, here, &hosts, iso(b"CZ"), &mut out), 1);
         let display = serde_json::Value::from(out[0].attribute.display.clone()).to_string();
         assert!(
             display.starts_with(r#"["St Nicholas","church_bells",15.0"#),
@@ -250,7 +247,7 @@ mod tests {
         );
         assert!(display.contains("[2.14,0.0,1.0]"), "{display}");
         out.clear();
-        assert_eq!(convert_bells(here, &hosts, iso(b"GR"), &mut out), 1);
+        assert_eq!(convert_bells(tables, here, &hosts, iso(b"GR"), &mut out), 1);
         let display = serde_json::Value::from(out[0].attribute.display.clone()).to_string();
         assert!(display.contains("[0.29,0.0,0.0]"), "{display}");
         // A church and its tower 1.4 m apart across a square's edge (14.0625 E) ring once, from
@@ -263,7 +260,13 @@ mod tests {
         let (west, east) = (edge[0].square(), edge[1].square());
         assert_ne!(west, east);
         out.clear();
-        assert_eq!(convert_bells((&refs, west), &[], iso(b"CZ"), &mut out), 0);
-        assert_eq!(convert_bells((&refs, east), &[], iso(b"CZ"), &mut out), 1);
+        assert_eq!(
+            convert_bells(tables, (&refs, west), &[], iso(b"CZ"), &mut out),
+            0
+        );
+        assert_eq!(
+            convert_bells(tables, (&refs, east), &[], iso(b"CZ"), &mut out),
+            1
+        );
     }
 }

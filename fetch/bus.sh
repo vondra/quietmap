@@ -2,7 +2,7 @@
 # The bus, trolleybus and coach routes of an OpenStreetMap planet file (ODbL) for the road
 # converter: the route relations alone (osmium tags-filter), then per way the directions the
 # routes serve and the departures of those that tag their interval
-# (`qm-build dev4 --kinds sources --bus OUT_DIR/bus-ways.txt`). Needs osmium-tool and Python 3.
+# (the manifest's `bus` input). Needs osmium-tool and Python 3.
 #
 #   bus.sh PLANET.osm.pbf OUT_DIR
 set -euo pipefail

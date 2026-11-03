@@ -29,6 +29,7 @@ pub struct Barrier {
 }
 
 /// The screens by the z9 square of their first point.
+#[derive(Default)]
 pub struct Barriers {
     by_square: HashMap<(u32, u32), Vec<Barrier>>,
 }

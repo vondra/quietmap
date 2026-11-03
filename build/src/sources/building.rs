@@ -22,6 +22,7 @@ use crate::climate::Climate;
 use crate::dev4::{Dev4, Square, degrees_to_z30, require_stamp, z30_corner_degrees};
 use crate::rings::RingIndex;
 use crate::screening::BUILDING_HEIGHT_MAX_M;
+use crate::source_tables::SourceTables;
 use crate::traffic::building_load;
 use physics::bands::WeekHours;
 use physics::emission::plant::{BUSINESS_HOURS, Running, cooling_plant, kitchen_extract};
@@ -74,7 +75,7 @@ pub struct BuildingEmission {
 /// class's area law. `None` for silent classes and inaudible levels.
 pub fn building_emission(
     row: &BuildingRow,
-    (country_iso, climate): (u16, &Climate),
+    (country_iso, climate, tables): (u16, &Climate, &SourceTables),
     hosted: Option<&PlaceHours>,
 ) -> Option<BuildingEmission> {
     let (height_m, floors) = if row.ground_activity {
@@ -99,8 +100,9 @@ pub fn building_emission(
     let (lat, lon) = z30_corner_degrees(row.centroid.0, row.centroid.1);
     let emitted = match row.class {
         class if is_home(class) => {
-            let (dwellings, _) = building_load(row.class, row.storeys.max(1), Some(area_m2));
-            let uses = dwelling_plant(country_iso, climate.degree_days(lat, lon));
+            let (dwellings, _) =
+                building_load(tables, row.class, row.storeys.max(1), Some(area_m2));
+            let uses = dwelling_plant(tables, country_iso, climate.degree_days(lat, lon));
             Emitted::Steady(plant_sound_power(&uses, dwellings)?)
         }
         COMMERCIAL | HOSPITALITY => {
@@ -112,7 +114,7 @@ pub fn building_emission(
             };
             let cooling = |open: &WeekHours| {
                 let cooling_degree_days = climate.degree_days(lat, lon).cooling;
-                let cooled_share = cooled_service_share(country_iso);
+                let cooled_share = cooled_service_share(tables, country_iso);
                 cooling_plant(floor_area_m2, cooling_degree_days, cooled_share, open)
             };
             let extract = (hosted.and_then(|places| places.kitchen.as_ref()))
@@ -179,7 +181,7 @@ fn class_label(class: u8) -> &'static str {
 /// Converts the building rows of one dev4 square; returns how many rows emit.
 pub fn convert(
     dev4: &Dev4,
-    (climate, places): (&Climate, Places),
+    (climate, places, tables): (&Climate, Places, &SourceTables),
     (square, industrial_sites): (Square, &RingIndex),
     out: &mut Vec<Converted>,
 ) -> Result<usize, String> {
@@ -231,7 +233,9 @@ pub fn convert(
                     hospitality.insert(row.footprint_id, key);
                 }
                 hospitality_rows.push(row);
-            } else if let Some(emission) = building_emission(&row, (country_iso, climate), None) {
+            } else if let Some(emission) =
+                building_emission(&row, (country_iso, climate, tables), None)
+            {
                 emitting += emit(&row, &emission, out);
             }
         }
@@ -257,27 +261,28 @@ pub fn convert(
             hosted.entry(*key).or_default().push(site);
         }
     }
-    let customs = customs(country_iso);
+    let customs = customs(tables, country_iso);
     for row in &hospitality_rows {
         let key = group_key(&["building", &row.osm_id.to_string()]);
         let hours = hosted.get(&key).map_or_else(
             || unmapped_place_hours(&customs),
             |sites| place_hours(sites, &customs),
         );
-        if let Some(emission) = building_emission(row, (country_iso, climate), Some(&hours)) {
+        if let Some(emission) = building_emission(row, (country_iso, climate, tables), Some(&hours))
+        {
             emitting += emit(row, &emission, out);
         }
     }
     if let Some(worship) = places.worship {
         let sites = worship.around(square);
-        emitting += convert_bells((&sites, square), &hosts, country_iso, out);
-        emitting += convert_calls((&sites, square), &hosts, country_iso, out);
+        emitting += convert_bells(tables, (&sites, square), &hosts, country_iso, out);
+        emitting += convert_calls(tables, (&sites, square), &hosts, country_iso, out);
     }
     if !venues.is_empty() {
         emitting += convert_people(
             venues,
             (&placer.positions(), placer.hosts()),
-            (country_iso, climate),
+            (country_iso, climate, tables),
             out,
         );
     }

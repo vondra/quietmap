@@ -10,6 +10,29 @@ night. Where somebody counted, the count is used. London's Marylebone Road carri
 Transport's count of 42,783 vehicles a day. Where nobody counted, an estimate stands in, and the
 [country pages](/about/data-sources) say which is which.
 
+## A map year
+
+A year names the state of the map and the period over which movement is averaged. A source may
+be older than the map; its own date stays visible on the [country and region pages](/about/data-sources).
+A source describing a later date is refused. Where an earlier source is missing, the page says
+which mapped information or model default remains. A year still being prepared is labelled as such.
+
+Each year has one manifest in `years/`. It records the as-of date, the half-open flow window,
+each input's kind, region, publisher, link, observation date, licence, public status and relative
+path, and each missing input. Derived rates must be dated by the newest data they depend on:
+a count divided by the length of a newer mapped network is not an earlier year's rate.
+
+The builder reads `--year years/YEAR.json --sources ROOT`; the root holds the named files,
+including the distributable `tables/` from `years/tables/`. It never selects a year or a latest
+file itself. The JSON tables use one envelope, `{"rows": [...]}`, with the row shape determined
+by the input kind. Changing a stock, count, survey or fitted coefficient changes an input.
+Source lists on these pages are generated from the same manifests when the website is built;
+local file paths and inputs not cleared for public display are excluded.
+
+The map still reads a prepared tree. Preparing that tree from these raw inputs is a separate
+step; a manifest for a new year does not make that year's prepared files exist. An older
+admissible source is never substituted silently for a missing file that a manifest names.
+
 ## Roads
 
 A road gets louder with more vehicles, more lorries and higher speed: twice the traffic adds about
@@ -512,6 +535,8 @@ described under Aircraft, and the runways' rolls.
 </details>
 
 ## In the code
+
+Year admission and paths: `build/src/year.rs`; dated tables: `build/src/source_tables/`; source-page generation: `frontend/scripts/year-sources.ts`.
 
 <details>
 <summary>The builder's code: fetch/, build/, physics/ and tiles/</summary>

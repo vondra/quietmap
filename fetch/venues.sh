@@ -3,7 +3,7 @@
 # OpenStreetMap planet file (ODbL) for the people converter: the features and the mapped terraces
 # alone (osmium tags-filter), then each venue as a point with its kind, terrace tag (yes with a
 # terrace mapped beside it), area, opening hours and name
-# (`qm-build dev4 --kinds sources --venues OUT_DIR/venues.txt`). Needs osmium-tool and Python 3.
+# (the manifest's `venues` input). Needs osmium-tool and Python 3.
 #
 #   venues.sh PLANET.osm.pbf OUT_DIR
 set -euo pipefail

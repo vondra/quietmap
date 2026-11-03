@@ -12,6 +12,7 @@
 //! grid of trip ends.
 
 use crate::dev4::{Dev4, SQUARES_PER_AXIS, Square, Z30_QUANTUM_M, cell, column, require_stamp};
+use crate::source_tables::SourceTables;
 use crate::structures::footprint_area_m2;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int32Type, UInt8Type, UInt16Type};
@@ -36,248 +37,6 @@ const TRACK_CLASS: u8 = 8;
 /// dev4 access codes closed to motor vehicles (no, and dev4's other excluded code).
 pub(crate) const CLOSED_ACCESS: [u8; 2] = [2, 4];
 
-/// Vehicle trip ends per occupied dwelling and day (dev4's country fleet table: MiD 2017, UK NTS,
-/// NHTS 2022 and household surveys by continent, times 0.92 occupancy, clamped to 0.8-6).
-const TRIPS_PER_DWELLING: [([u8; 2], f64); 238] = [
-    (*b"AD", 3.40),
-    (*b"AE", 2.30),
-    (*b"AF", 2.30),
-    (*b"AG", 3.22),
-    (*b"AI", 3.22),
-    (*b"AL", 3.40),
-    (*b"AM", 2.30),
-    (*b"AO", 1.38),
-    (*b"AQ", 3.68),
-    (*b"AR", 2.02),
-    (*b"AS", 3.40),
-    (*b"AT", 3.40),
-    (*b"AU", 3.40),
-    (*b"AW", 3.22),
-    (*b"AX", 3.40),
-    (*b"AZ", 2.30),
-    (*b"BA", 3.40),
-    (*b"BB", 3.22),
-    (*b"BD", 2.30),
-    (*b"BE", 3.40),
-    (*b"BF", 1.38),
-    (*b"BG", 3.40),
-    (*b"BH", 2.30),
-    (*b"BI", 1.38),
-    (*b"BJ", 1.38),
-    (*b"BL", 3.22),
-    (*b"BM", 3.22),
-    (*b"BN", 2.30),
-    (*b"BO", 2.02),
-    (*b"BR", 2.02),
-    (*b"BS", 3.22),
-    (*b"BT", 2.30),
-    (*b"BW", 1.38),
-    (*b"BY", 3.40),
-    (*b"BZ", 3.22),
-    (*b"CA", 3.22),
-    (*b"CD", 1.38),
-    (*b"CF", 1.38),
-    (*b"CG", 1.38),
-    (*b"CH", 3.40),
-    (*b"CI", 1.38),
-    (*b"CK", 3.40),
-    (*b"CL", 2.02),
-    (*b"CM", 1.38),
-    (*b"CN", 1.38),
-    (*b"CO", 2.02),
-    (*b"CR", 3.22),
-    (*b"CU", 3.22),
-    (*b"CV", 1.38),
-    (*b"CW", 3.22),
-    (*b"CY", 2.30),
-    (*b"CZ", 3.40),
-    (*b"DE", 3.59),
-    (*b"DJ", 1.38),
-    (*b"DK", 3.40),
-    (*b"DM", 3.22),
-    (*b"DO", 3.22),
-    (*b"DZ", 1.38),
-    (*b"EC", 2.02),
-    (*b"EE", 3.40),
-    (*b"EG", 1.84),
-    (*b"EH", 1.38),
-    (*b"ER", 1.38),
-    (*b"ES", 3.40),
-    (*b"ET", 1.38),
-    (*b"FI", 3.40),
-    (*b"FJ", 3.40),
-    (*b"FK", 2.02),
-    (*b"FM", 3.40),
-    (*b"FO", 3.40),
-    (*b"FR", 3.40),
-    (*b"GA", 1.38),
-    (*b"GB", 3.40),
-    (*b"GD", 3.22),
-    (*b"GE", 2.30),
-    (*b"GG", 3.40),
-    (*b"GH", 1.38),
-    (*b"GI", 3.40),
-    (*b"GL", 3.22),
-    (*b"GM", 1.38),
-    (*b"GN", 1.38),
-    (*b"GQ", 1.38),
-    (*b"GR", 3.40),
-    (*b"GS", 3.68),
-    (*b"GT", 3.22),
-    (*b"GU", 3.40),
-    (*b"GW", 1.38),
-    (*b"GY", 2.02),
-    (*b"HK", 2.30),
-    (*b"HM", 3.68),
-    (*b"HN", 3.22),
-    (*b"HR", 3.40),
-    (*b"HT", 3.22),
-    (*b"HU", 3.40),
-    (*b"ID", 2.30),
-    (*b"IE", 3.40),
-    (*b"IL", 2.30),
-    (*b"IM", 3.40),
-    (*b"IN", 0.92),
-    (*b"IO", 2.30),
-    (*b"IQ", 2.30),
-    (*b"IR", 2.30),
-    (*b"IS", 3.40),
-    (*b"IT", 3.40),
-    (*b"JE", 3.40),
-    (*b"JM", 3.22),
-    (*b"JO", 2.30),
-    (*b"JP", 2.30),
-    (*b"KE", 1.38),
-    (*b"KG", 2.30),
-    (*b"KH", 2.30),
-    (*b"KI", 3.40),
-    (*b"KM", 1.38),
-    (*b"KN", 3.22),
-    (*b"KP", 2.30),
-    (*b"KR", 2.67),
-    (*b"KW", 2.30),
-    (*b"KY", 3.22),
-    (*b"KZ", 2.30),
-    (*b"LA", 2.30),
-    (*b"LB", 2.30),
-    (*b"LC", 3.22),
-    (*b"LI", 3.40),
-    (*b"LK", 2.30),
-    (*b"LR", 1.38),
-    (*b"LS", 1.38),
-    (*b"LT", 3.40),
-    (*b"LU", 3.40),
-    (*b"LV", 3.40),
-    (*b"LY", 1.38),
-    (*b"MA", 1.38),
-    (*b"MC", 3.40),
-    (*b"MD", 3.40),
-    (*b"ME", 3.40),
-    (*b"MF", 3.22),
-    (*b"MG", 1.38),
-    (*b"MH", 3.40),
-    (*b"MK", 3.40),
-    (*b"ML", 1.38),
-    (*b"MM", 2.30),
-    (*b"MN", 2.30),
-    (*b"MO", 2.30),
-    (*b"MP", 3.40),
-    (*b"MR", 1.38),
-    (*b"MS", 3.22),
-    (*b"MT", 3.40),
-    (*b"MU", 1.38),
-    (*b"MV", 2.30),
-    (*b"MW", 1.38),
-    (*b"MX", 3.22),
-    (*b"MY", 2.30),
-    (*b"MZ", 1.38),
-    (*b"NA", 1.38),
-    (*b"NC", 3.40),
-    (*b"NE", 1.38),
-    (*b"NF", 3.40),
-    (*b"NG", 1.38),
-    (*b"NI", 3.22),
-    (*b"NL", 3.40),
-    (*b"NO", 3.40),
-    (*b"NP", 2.30),
-    (*b"NR", 3.40),
-    (*b"NU", 3.40),
-    (*b"NZ", 3.40),
-    (*b"OM", 2.30),
-    (*b"PA", 3.22),
-    (*b"PE", 2.02),
-    (*b"PF", 3.40),
-    (*b"PG", 3.40),
-    (*b"PH", 2.30),
-    (*b"PK", 2.30),
-    (*b"PL", 3.40),
-    (*b"PM", 3.22),
-    (*b"PN", 3.40),
-    (*b"PR", 3.22),
-    (*b"PS", 2.30),
-    (*b"PT", 3.40),
-    (*b"PW", 3.40),
-    (*b"PY", 2.02),
-    (*b"QA", 2.30),
-    (*b"RO", 3.40),
-    (*b"RS", 3.40),
-    (*b"RU", 3.40),
-    (*b"RW", 1.38),
-    (*b"SA", 2.30),
-    (*b"SB", 3.40),
-    (*b"SC", 1.38),
-    (*b"SD", 1.38),
-    (*b"SE", 3.40),
-    (*b"SG", 2.30),
-    (*b"SH", 1.38),
-    (*b"SI", 3.40),
-    (*b"SK", 3.40),
-    (*b"SL", 1.38),
-    (*b"SM", 3.40),
-    (*b"SN", 1.38),
-    (*b"SO", 1.38),
-    (*b"SR", 2.02),
-    (*b"SS", 1.38),
-    (*b"ST", 1.38),
-    (*b"SV", 3.22),
-    (*b"SX", 3.22),
-    (*b"SY", 2.30),
-    (*b"SZ", 1.38),
-    (*b"TC", 3.22),
-    (*b"TD", 1.38),
-    (*b"TF", 1.38),
-    (*b"TG", 1.38),
-    (*b"TH", 2.30),
-    (*b"TJ", 2.30),
-    (*b"TL", 2.30),
-    (*b"TM", 2.30),
-    (*b"TN", 1.38),
-    (*b"TO", 3.40),
-    (*b"TR", 2.30),
-    (*b"TT", 3.22),
-    (*b"TV", 3.40),
-    (*b"TW", 2.30),
-    (*b"TZ", 1.38),
-    (*b"UA", 3.40),
-    (*b"UG", 1.38),
-    (*b"UM", 3.22),
-    (*b"US", 3.22),
-    (*b"UY", 2.02),
-    (*b"UZ", 2.30),
-    (*b"VA", 3.40),
-    (*b"VC", 3.22),
-    (*b"VE", 2.02),
-    (*b"VG", 3.22),
-    (*b"VI", 3.22),
-    (*b"VN", 2.30),
-    (*b"VU", 3.40),
-    (*b"WF", 3.40),
-    (*b"WS", 3.40),
-    (*b"YE", 2.30),
-    (*b"ZA", 1.38),
-    (*b"ZM", 1.38),
-    (*b"ZW", 1.38),
-];
 /// Countries the table does not list.
 const WORLD_TRIPS_PER_DWELLING: f64 = 3.68;
 
@@ -334,7 +93,12 @@ const HOUSE_UP_TO_STOREYS: u8 = 3;
 /// (counted 2026-10-08), with no cap: the largest of them keep the rate (dev4's cap of
 /// 1,472 trips read lodgings of over 300 rooms 1.8 dB low); dev4 took a room for 25 m2 and so
 /// made 4.66 trips a room.
-pub(crate) fn building_load(building_type: u8, storeys: u8, area_m2: Option<f64>) -> (f64, f64) {
+pub(crate) fn building_load(
+    tables: &SourceTables,
+    building_type: u8,
+    storeys: u8,
+    area_m2: Option<f64>,
+) -> (f64, f64) {
     let footprint = area_m2.unwrap_or(100.0);
     let gfa = footprint * f64::from(storeys.max(1));
     let dwellings =
@@ -354,7 +118,9 @@ pub(crate) fn building_load(building_type: u8, storeys: u8, area_m2: Option<f64>
         3 => trips(gfa, 0.46, 4.0, 368.0),
         4 => trips(gfa, 33.5, 20.0, 1_104.0),
         5 => (0.0, 7.36),
-        6 => trips(gfa, 2.87, 8.0, f64::INFINITY),
+        6 => tables
+            .hotel_trip_rate
+            .map_or((0.0, 0.0), |rate| trips(gfa, rate, 8.0, f64::INFINITY)),
         7 => (0.0, 3.68),
         8 => trips(gfa, 1.84, 2.0, 184.0),
         9 => trips(gfa, 1.23, 2.0, 368.0),
@@ -366,13 +132,12 @@ pub(crate) fn building_load(building_type: u8, storeys: u8, area_m2: Option<f64>
     }
 }
 
-fn trips_per_dwelling(country_iso: u16) -> f64 {
-    let iso = country_iso.to_le_bytes();
-    TRIPS_PER_DWELLING
-        .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
-        .map_or(WORLD_TRIPS_PER_DWELLING, |index| {
-            TRIPS_PER_DWELLING[index].1
-        })
+fn trips_per_dwelling(tables: &SourceTables, country_iso: u16) -> f64 {
+    tables
+        .dwelling_trips
+        .get(country_iso.to_le_bytes())
+        .copied()
+        .unwrap_or(WORLD_TRIPS_PER_DWELLING)
 }
 
 /// A square's traffic file.
@@ -474,7 +239,12 @@ pub fn read_grid(out: &Path, square: Square) -> Result<Option<Vec<f32>>, String>
 
 /// Builds the traffic files of `squares` (a square already written is kept, so a rerun
 /// resumes); returns how many it wrote.
-pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, String> {
+pub fn build(
+    tables: &SourceTables,
+    dev4: &Dev4,
+    squares: &[Square],
+    out: &Path,
+) -> Result<usize, String> {
     let written = squares
         .par_iter()
         .map(|&square| -> Result<usize, String> {
@@ -482,7 +252,7 @@ pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, Strin
             if target.exists() {
                 return Ok(0);
             }
-            let Some(traffic) = square_traffic(dev4, square)? else {
+            let Some(traffic) = square_traffic(tables, dev4, square)? else {
                 return Ok(0);
             };
             std::fs::create_dir_all(target.parent().expect("a square's directory"))
@@ -543,7 +313,11 @@ fn read_roads(dev4: &Dev4, square: Square) -> Result<Option<Vec<RoadRow>>, Strin
 /// OSM id, type or area) as buildings of unknown use of their outline's area. dev4's trip
 /// generation skipped those: 2.1 of Bangkok's 2.3 million footprints, 2.5 of Mexico City's 2.7
 /// million, against 3 % of Prague's floor (counted 2026-10-03).
-fn read_buildings(dev4: &Dev4, square: Square) -> Result<Vec<BuildingLoad>, String> {
+fn read_buildings(
+    tables: &SourceTables,
+    dev4: &Dev4,
+    square: Square,
+) -> Result<Vec<BuildingLoad>, String> {
     let Some(table) = dev4.table(square, "structures.arrow")? else {
         return Ok(Vec::new());
     };
@@ -591,7 +365,7 @@ fn read_buildings(dev4: &Dev4, square: Square) -> Result<Vec<BuildingLoad>, Stri
             } else {
                 (0, footprint_area_m2(outlines.value(row)))
             };
-            let (dwellings, trips) = building_load(building_type, storey_count, area);
+            let (dwellings, trips) = building_load(tables, building_type, storey_count, area);
             if dwellings > 0.0 || trips > 0.0 {
                 buildings.push(BuildingLoad {
                     at: (x.value(row), y.value(row)),
@@ -640,10 +414,14 @@ fn parking_trip_ends(building: &BuildingLoad, trips_per_dwelling: f64) -> [f64; 
 /// Per grid cell of a square: the shares of its buildings' trip ends made by cars that park on the
 /// street and in a lot, its dwellings' at its country's trips per dwelling as the grid's (the
 /// square's country, `Dev4::square_country`); the flats' in a cell without buildings.
-pub fn parking_shares(dev4: &Dev4, square: Square) -> Result<Vec<[f32; 2]>, String> {
-    let trips_per_dwelling = trips_per_dwelling(dev4.square_country(square)?);
+pub fn parking_shares(
+    tables: &SourceTables,
+    dev4: &Dev4,
+    square: Square,
+) -> Result<Vec<[f32; 2]>, String> {
+    let trips_per_dwelling = trips_per_dwelling(tables, dev4.square_country(square)?);
     let mut cells = vec![[0.0f64; 3]; GRID_SIDE * GRID_SIDE];
-    for building in read_buildings(dev4, square)? {
+    for building in read_buildings(tables, dev4, square)? {
         let (row, column) = grid_cell(square, building.at);
         let cell = &mut cells[row * GRID_SIDE + column];
         for (sum, ends) in cell
@@ -684,21 +462,25 @@ fn metres_per_z30(gy: i32) -> f64 {
     Z30_QUANTUM_M * latitude.cos()
 }
 
-fn square_traffic(dev4: &Dev4, square: Square) -> Result<Option<SquareTraffic>, String> {
+fn square_traffic(
+    tables: &SourceTables,
+    dev4: &Dev4,
+    square: Square,
+) -> Result<Option<SquareTraffic>, String> {
     let Some(roads) = read_roads(dev4, square)? else {
         return Ok(None);
     };
-    let buildings = read_buildings(dev4, square)?;
+    let buildings = read_buildings(tables, dev4, square)?;
     // Local metres: the square's mean scale is exact to 1 % across it.
     let scale = metres_per_z30(roads.first().map_or(1 << 29, |row| row.ends[0].1));
     let metres = |(gx, gy): (i32, i32)| [f64::from(gx) * scale, f64::from(gy) * scale];
-    let loads = assign(&roads, &buildings, scale, &metres);
+    let loads = assign(tables, &roads, &buildings, scale, &metres);
     let flows = trees(&roads, &loads);
     // The grid: every building's trip ends in its cell (rows from the north).
     let mut grid = vec![0f32; GRID_SIDE * GRID_SIDE];
     for building in &buildings {
         let country = loads.country_of(building);
-        let trip_ends = building.dwellings * trips_per_dwelling(country) + building.trips;
+        let trip_ends = building.dwellings * trips_per_dwelling(tables, country) + building.trips;
         let (row, column) = grid_cell(square, building.at);
         grid[row * GRID_SIDE + column] += trip_ends as f32;
     }
@@ -723,6 +505,7 @@ impl Loads {
 }
 
 fn assign(
+    tables: &SourceTables,
     roads: &[RoadRow],
     buildings: &[BuildingLoad],
     scale: f64,
@@ -770,7 +553,7 @@ fn assign(
             let country = roads[index].country;
             loads.country.insert(building.at, country);
             loads.per_row[index] +=
-                building.dwellings * trips_per_dwelling(country) + building.trips;
+                building.dwellings * trips_per_dwelling(tables, country) + building.trips;
         }
     }
     loads
@@ -1101,19 +884,32 @@ mod tests {
 
     #[test]
     fn homes_and_shops_make_dev4s_trips() {
-        assert_eq!(building_load(11, 2, Some(150.0)), (2.0, 0.0));
-        assert_eq!(building_load(0, 4, Some(400.0)), (20.0, 0.0));
-        assert_eq!(building_load(0, 3, Some(200.0)), (2.0, 0.0), "a villa");
-        assert_eq!(building_load(0, 1, Some(120.0)), (1.0, 0.0), "a house");
-        assert_eq!(building_load(0, 1, Some(18.0)), (0.0, 0.0), "a garage");
-        assert_eq!(building_load(1, 2, Some(500.0)), (0.0, 120.0));
+        let tables = SourceTables::test_fixture();
+        assert_eq!(building_load(tables, 11, 2, Some(150.0)), (2.0, 0.0));
+        assert_eq!(building_load(tables, 0, 4, Some(400.0)), (20.0, 0.0));
+        assert_eq!(
+            building_load(tables, 0, 3, Some(200.0)),
+            (2.0, 0.0),
+            "a villa"
+        );
+        assert_eq!(
+            building_load(tables, 0, 1, Some(120.0)),
+            (1.0, 0.0),
+            "a house"
+        );
+        assert_eq!(
+            building_load(tables, 0, 1, Some(18.0)),
+            (0.0, 0.0),
+            "a garage"
+        );
+        assert_eq!(building_load(tables, 1, 2, Some(500.0)), (0.0, 120.0));
         // A hotel of 3,000 m2 has 35 rooms of 85.4 m2: 2.45 trips each; one of 90,000 m2 its 1,054.
-        let (_, hotel) = building_load(6, 3, Some(1_000.0));
+        let (_, hotel) = building_load(tables, 6, 3, Some(1_000.0));
         assert!((hotel - 3_000.0 / 85.4 * 2.45).abs() < 0.1, "{hotel}");
-        let (_, resort) = building_load(6, 9, Some(10_000.0));
+        let (_, resort) = building_load(tables, 6, 9, Some(10_000.0));
         assert!((resort - 90_000.0 / 85.4 * 2.45).abs() < 3.0, "{resort}");
-        assert_eq!(building_load(10, 1, Some(20.0)), (0.0, 0.0));
-        assert_eq!(trips_per_dwelling(u16::from_le_bytes(*b"AT")), 3.4);
+        assert_eq!(building_load(tables, 10, 1, Some(20.0)), (0.0, 0.0));
+        assert_eq!(trips_per_dwelling(tables, u16::from_le_bytes(*b"AT")), 3.4);
     }
 
     /// The neighbourhood's box sums match adding the cells one by one, across the square edges
@@ -1174,6 +970,7 @@ mod tests {
     /// dwelling's trips at its country's rate, Czechia's 3.4 a day as China's 1.38.
     #[test]
     fn houses_park_on_their_plots_and_flats_on_the_street() {
+        let tables = SourceTables::test_fixture();
         let load = |(dwellings, trips)| BuildingLoad {
             at: (0, 0),
             dwellings,
@@ -1185,16 +982,16 @@ mod tests {
                 "{got:?} {want:?}"
             )
         };
-        let villa = load(building_load(0, 3, Some(200.0)));
+        let villa = load(building_load(tables, 0, 3, Some(200.0)));
         assert_eq!((villa.dwellings, villa.trips), (2.0, 0.0));
         close(parking_trip_ends(&villa, 3.4), [6.8, 6.8 * 0.15, 0.0]);
-        let flats = load(building_load(0, 5, Some(600.0)));
+        let flats = load(building_load(tables, 0, 5, Some(600.0)));
         assert_eq!(flats.dwellings, 37.0);
         close(
             parking_trip_ends(&flats, 1.38),
             [37.0 * 1.38, 37.0 * 1.38 * 0.55, 37.0 * 1.38 * 0.45],
         );
-        let shop = load(building_load(1, 2, Some(500.0)));
+        let shop = load(building_load(tables, 1, 2, Some(500.0)));
         assert_eq!((shop.dwellings, shop.trips), (0.0, 120.0));
         close(parking_trip_ends(&shop, 1.38), [120.0, 66.0, 54.0]);
     }
@@ -1222,6 +1019,7 @@ mod tests {
     /// A building over a tunnel joins the street beside it, not the road under the ground.
     #[test]
     fn a_building_over_a_tunnel_joins_its_street() {
+        let tables = SourceTables::test_fixture();
         let tunnel = RoadRow {
             tunnel: true,
             ..row((0, 0), (1_000, 0), 2)
@@ -1233,7 +1031,7 @@ mod tests {
             trips: 0.0,
         }];
         let metres = |(x, y): (i32, i32)| [f64::from(x) * 0.1, f64::from(y) * 0.1];
-        let loads = assign(&roads, &buildings, 0.1, &metres);
+        let loads = assign(tables, &roads, &buildings, 0.1, &metres);
         assert_eq!(loads.per_row[0], 0.0);
         assert!(loads.per_row[1] > 0.0);
     }
