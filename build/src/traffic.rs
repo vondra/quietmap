@@ -11,6 +11,10 @@
 //! trip ends routed through it (NaN where the row is no local street of a tree), then the square's
 //! grid of trip ends.
 
+pub(crate) mod preparation;
+mod preparation_buildings;
+pub(crate) mod preparation_model;
+
 use crate::dev4::{Dev4, SQUARES_PER_AXIS, Square, Z30_QUANTUM_M, cell, column, require_stamp};
 use crate::source_tables::SourceTables;
 use crate::structures::footprint_area_m2;

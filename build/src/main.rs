@@ -21,6 +21,9 @@ mod osm_regions;
 mod period;
 mod rasters;
 mod rings;
+#[path = "../../fetch/road_counts.rs"]
+mod road_counts;
+mod roads;
 mod screening;
 mod source_outlines;
 mod source_tables;
@@ -267,6 +270,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
         Path::new(options.get("sources")?),
     )?;
     match command.as_str() {
+        "road-observations" => road_counts::convert(&inputs, &out).map_err(|e| e.to_string()),
+        "roads" => roads::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
+            .map_err(|e| e.to_string()),
         "structure-height-model" => structures::height_calibration::fit(
             &inputs,
             &parse_squares(options.get("squares")?)?,

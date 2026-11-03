@@ -43,5 +43,4 @@ gdal-sys = "0.12"
 tempfile = "3"
 sha2 = "0.10"
 
-[dev-dependencies]
 arrow-select = "60"
