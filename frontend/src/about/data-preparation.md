@@ -33,6 +33,36 @@ The map still reads a prepared tree. Preparing that tree from these raw inputs i
 step; a manifest for a new year does not make that year's prepared files exist. An older
 admissible source is never substituted silently for a missing file that a manifest names.
 
+<details>
+<summary>Preparing the mapped geography</summary>
+
+`qm-build osm` reads the manifest's OSM snapshot and normalized country polygons. It first
+records relation membership and shared transport nodes, then loads the coordinates needed by
+the selected features, including untagged relation-member ways. A final pass assembles the
+footprints and transport chains. Original node identities, route-member order and each split
+piece's position on its source way remain available to the traffic builders. Missing nodes
+break transport chains; they never create an invented connecting transport segment. Footprints
+retain the original outer-ring assembly, which can omit missing vertices or incomplete relations.
+
+The output contains the OSM-derived roads, railways, industrial sites, leisure features,
+transport controls, airports, buildings and barriers for the requested squares. Country
+ownership follows the declared polygons, including their holes; a coastal transport point is
+assigned only when exactly one country boundary is within 2 km. Where country interiors disagree,
+the identity remains unknown instead of depending on polygon order. Industrial sites use their
+original centroid on land. `qm-build osm-regions` converts the declared boundary edition and
+country identities into this common polygon format. Explicit speed tags are decoded directly;
+implicit legal tokens need a dated table in the manifest and remain unknown without it. Numeric
+zone tokens also need the admitted unit convention; a standalone number or an explicit unit
+remains usable without that table. Country columns and the country record are retained; the old
+metro lookup and unused row-level city and continent columns are not produced. A selected square
+gets its geographic record even when it contains no OSM features. The global topology files
+`<out>.railway-ways.arrow` and `<out>.train-routes.arrow` are written beside the square tree.
+Building merging, measured heights, traffic counts and facility observations are later steps.
+
+The implementation is in `build/src/osm/`; the boundary converter is in `fetch/osm_regions.rs`.
+
+</details>
+
 ## Roads
 
 A road gets louder with more vehicles, more lorries and higher speed: twice the traffic adds about

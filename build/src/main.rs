@@ -12,6 +12,9 @@ mod climate;
 mod dev4;
 mod low_profile;
 mod obstacles;
+mod osm;
+#[path = "../../fetch/osm_regions.rs"]
+mod osm_regions;
 mod period;
 mod rings;
 mod screening;
@@ -61,6 +64,7 @@ impl Arguments {
                         "only",
                         "diagnose",
                         "note",
+                        "scratch",
                     ]
                     .contains(&key)
                     {
@@ -217,7 +221,7 @@ fn events_json(events: &boxes::events::EventCounts) -> serde_json::Value {
 fn run(arguments: &[String]) -> Result<(), String> {
     let (command, rest) = arguments
         .split_first()
-        .ok_or("usage: qm-build dev4|weather|complete|geoid|aircraft-segments|airport-traffic --key value ..")?;
+        .ok_or("usage: qm-build osm|osm-regions|dev4|weather|complete|geoid|aircraft-segments|airport-traffic --key value ..")?;
     let options = Arguments::parse(rest)?;
     let out = PathBuf::from(options.get("out")?);
     if command == "complete" {
@@ -228,6 +232,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
         Path::new(options.get("sources")?),
     )?;
     match command.as_str() {
+        "osm-regions" => osm_regions::convert(&inputs, &out).map_err(|error| error.to_string()),
+        "osm" => osm::build(
+            &inputs,
+            &parse_squares(options.get("squares")?)?,
+            &out,
+            Path::new(options.get("scratch")?),
+        )
+        .map_err(|error| error.to_string()),
         "source-outlines" => source_outlines::build(
             &Dev4 {
                 prepared: inputs.required("prepared")?.into(),
