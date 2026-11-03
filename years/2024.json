@@ -376,8 +376,8 @@
       "vintage": "2023-09-14",
       "licence": "CC BY 4.0",
       "public_ok": true,
-      "path": "admin/cgaz-v6.0.0",
-      "description": "CGAZ v6.0.0 country and administrative boundaries."
+      "path": "admin/geoBoundariesCGAZ_ADM0_s0005.geojson",
+      "description": "CGAZ v6.0.0 country boundaries; converted to the common polygon input before the country join."
     },
     {
       "id": "emodnet",
@@ -3090,6 +3090,30 @@
       "public_ok": true,
       "path": "tables/rail-fleet-regions-2023.json",
       "description": "Networks using the European freight fleet model based on the EBA 2023 observations. Other networks keep the world freight model."
+    },
+    {
+      "region": "world",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "id": "osm-geography-identities",
+      "kind": "prepare-geography",
+      "publisher": "Quiet Map",
+      "url": "https://www.iso.org/iso-3166-country-codes.html",
+      "vintage": "2023-09-14",
+      "path": "tables/osm-geography-cgaz-v6.json",
+      "description": "ISO country and continent identities for the CGAZ v6.0.0 country boundaries."
+    },
+    {
+      "region": "world",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "id": "osm-regions",
+      "kind": "prepare-regions",
+      "publisher": "geoBoundaries",
+      "url": "https://www.geoboundaries.org/",
+      "vintage": "2023-09-14",
+      "path": "admin/osm-regions.json",
+      "description": "Normalized CGAZ v6.0.0 polygons, ISO identities and disputed-land flags; produced from the two declared geography inputs."
     }
   ],
   "unavailable": [
@@ -4478,6 +4502,12 @@
       "kind": "church-bells",
       "region": "europe",
       "reason": "The bell schedules were checked in 2026. No earlier country practices are admitted; bell events are omitted."
+    },
+    {
+      "id": "osm-implicit-speeds",
+      "kind": "prepare-osm-speeds",
+      "region": "world",
+      "reason": "The frozen implicit-limit and zone-unit table was checked after this state. Until an earlier table is supplied, country defaults and jurisdiction-qualified numeric zones remain unknown. Standalone numbers and explicitly named units remain usable; unknown limits use the downstream road model’s declared fallback."
     }
   ],
   "note": "This year’s inputs are being prepared. A completed map is not yet available. Newer observations are excluded; the gaps below describe the remaining defaults."

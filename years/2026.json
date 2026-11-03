@@ -971,8 +971,8 @@
       "vintage": "2023-09-14",
       "licence": "CC BY 4.0",
       "public_ok": true,
-      "path": "admin/cgaz-v6.0.0",
-      "description": "CGAZ v6.0.0 country and administrative boundaries."
+      "path": "admin/geoBoundariesCGAZ_ADM0_s0005.geojson",
+      "description": "CGAZ v6.0.0 country boundaries; converted to the common polygon input before the country join."
     },
     {
       "id": "emodnet",
@@ -5821,6 +5821,42 @@
       "public_ok": true,
       "path": "tables/rail-fleet-regions-2023.json",
       "description": "Networks using the European freight fleet model based on the EBA 2023 observations. Other networks keep the world freight model."
+    },
+    {
+      "region": "world",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "id": "osm-geography-identities",
+      "kind": "prepare-geography",
+      "publisher": "Quiet Map",
+      "url": "https://www.iso.org/iso-3166-country-codes.html",
+      "vintage": "2023-09-14",
+      "path": "tables/osm-geography-cgaz-v6.json",
+      "description": "ISO country and continent identities for the CGAZ v6.0.0 country boundaries."
+    },
+    {
+      "region": "world",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "id": "osm-regions",
+      "kind": "prepare-regions",
+      "publisher": "geoBoundaries",
+      "url": "https://www.geoboundaries.org/",
+      "vintage": "2023-09-14",
+      "path": "admin/osm-regions.json",
+      "description": "Normalized CGAZ v6.0.0 polygons, ISO identities and disputed-land flags; produced from the two declared geography inputs."
+    },
+    {
+      "region": "world",
+      "licence": "CC BY-SA 2.0",
+      "public_ok": true,
+      "id": "osm-implicit-speeds",
+      "kind": "prepare-osm-speeds",
+      "publisher": "OpenStreetMap wiki contributors",
+      "url": "https://wiki.openstreetmap.org/wiki/Key:maxspeed#Implicit_maxspeed_values",
+      "vintage": "2026-09-24",
+      "path": "tables/osm-speed-rules-2026.json",
+      "description": "Legal meaning of implicit maxspeed tokens, numeric zone units and lane-conditioned limits; transcribed from the frozen extractor. Explicit limits take precedence."
     }
   ],
   "unavailable": [],
