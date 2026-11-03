@@ -41,6 +41,7 @@ export const INPUT_KINDS = [
   "prepare-tree-height",
   "prepare-turbines",
   "prepare-weather",
+  "prepare-weather-statistics",
   "prepared",
   "primary",
   "rail-fleet-regions",

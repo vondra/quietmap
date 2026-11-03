@@ -10,6 +10,8 @@ mod barriers;
 mod boxes;
 mod climate;
 mod dev4;
+#[path = "../../fetch/era5.rs"]
+mod era5;
 mod low_profile;
 mod obstacles;
 mod period;
@@ -326,13 +328,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             }
             Ok(())
         }
-        "weather" => {
-            let dev4 = Dev4 {
-                prepared: PathBuf::new(),
-                rasters: inputs.required(crate::year::Kind::Rasters)?.into(),
-            };
-            weather::build(&dev4, &out)
-        }
+        "weather" => weather::build(&inputs, &out),
         "terrain-fine" => {
             let started = std::time::Instant::now();
             let models: Vec<&Path> = inputs

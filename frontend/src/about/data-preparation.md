@@ -34,8 +34,9 @@ the data. The completed output carries its manifest, its hash and its cutoff; re
 them before accepting the year. The website and popup read their citations from the same
 manifest, using the builder's admission result.
 
-Preparing the source data remains a separate step. A manifest does not establish that a map or
-its derived tables already exist.
+Weather is built from the admitted climatology’s completed occurrence counts and absorption
+means. Its statistics object is pinned by its digest in the manifest. Preparing the other source
+data remains a separate step. A manifest does not establish that a map or its derived tables already exist.
 
 </details>
 

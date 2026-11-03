@@ -54,6 +54,9 @@ pub struct Input {
     pub _public_ok: bool,
     pub depends_on: Vec<String>,
     pub description: String,
+    /// Publisher decoding parameters travel with the selected object, never with the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversion: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

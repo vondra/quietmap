@@ -16,6 +16,7 @@ export interface SourceInput {
   public_ok: boolean
   depends_on: string[]
   description: string
+  conversion?: Record<string, unknown>
 }
 export interface YearManifest {
   year: string
@@ -43,7 +44,7 @@ export function validatePublicManifest(manifest: YearManifest): void {
     if (!REGIONS[input.region.split(':')[0]]) throw new Error(`Unknown About region ${input.region}`)
     if (Object.values(input).some(value => typeof value === 'string' && PRIVATE_SOURCE_TEXT.test(value))) throw new Error(`Private or unpinned source text in ${input.id}`)
   }
-  const fields = ['id', 'kind', 'region', 'publisher', 'url', 'observed', 'published', 'licence', 'public_ok', 'depends_on', 'description']
+  const fields = ['id', 'kind', 'region', 'publisher', 'url', 'observed', 'published', 'licence', 'public_ok', 'depends_on', 'description', 'conversion']
   for (const input of manifest.inputs) {
     if (Object.keys(input).some(key => !fields.includes(key))) throw new Error(`Non-public field in ${input.id}`)
     if (!input.observed?.start || !input.observed.end) throw new Error(`Missing observation interval in ${input.id}`)
@@ -90,7 +91,7 @@ export function renderYearSources(page: string, years: NamedYear[]): string {
     scope.length === 2 && path.split('/').length > 2 ? `The [regional sources](/about/${path.split('/').slice(0, -1).join('/')}#sources-by-year) apply too.` : '',
   ].filter(Boolean).join(' ')
   const sections = [...years].filter(year => year.manifest.built).sort((a, b) => b.name.localeCompare(a.name)).map(({ name, manifest }) => {
-    const intermediate = new Set<InputKind>(['prepared', 'rasters', 'airport-traffic', 'road-traffic', 'segments', 'shuffled', 'terrain', 'weather', 'bus', 'worship', 'venues', 'water', 'turbines', 'barriers', 'geoid'])
+    const intermediate = new Set<InputKind>(['prepare-weather-statistics', 'prepared', 'rasters', 'airport-traffic', 'road-traffic', 'segments', 'shuffled', 'terrain', 'weather', 'bus', 'worship', 'venues', 'water', 'turbines', 'barriers', 'geoid'])
     const inputs = manifest.inputs.filter(input => local(input.region) && !intermediate.has(input.kind))
     // public_ok governs redistribution of records, not attribution of their publisher.
     const lines = inputs.map(inputLine)

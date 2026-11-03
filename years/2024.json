@@ -239,7 +239,7 @@
       "licence": "CC BY 4.0; contains modified Copernicus Climate Change Service information",
       "public_ok": true,
       "depends_on": [
-        "era5"
+        "era5-statistics"
       ],
       "description": "Propagation weather derived from the ERA5 1991–2020 climatology."
     },
@@ -4216,6 +4216,32 @@
       "public_ok": true,
       "depends_on": [],
       "description": "Freight fleet and hourly train counts from German railway noise monitoring."
+    },
+    {
+      "id": "era5-statistics",
+      "kind": "prepare-weather-statistics",
+      "region": "world",
+      "publisher": "ECMWF; Copernicus Climate Change Service",
+      "url": "https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels",
+      "observed": {
+        "start": "1991",
+        "end": "2020"
+      },
+      "published": null,
+      "licence": "Copernicus data licence",
+      "public_ok": true,
+      "depends_on": [
+        "era5"
+      ],
+      "description": "Completed occurrence counts and absorption means of the admitted ERA5 climate normal.",
+      "conversion": {
+        "sha256": "0a595f7fb4367a212e46ad23296e14f311cbc4735477e5d8015648ce6e78594f",
+        "sampling_hours": 3,
+        "counts": "counts.npy",
+        "favourable": "favourable_counts.npy",
+        "means": "means.npy",
+        "receipt": "receipt.json"
+      }
     }
   ],
   "unavailable": [
@@ -6002,6 +6028,7 @@
   "shared": [
     "climate",
     "era5",
+    "era5-statistics",
     "geoid",
     "geoid-tiff",
     "glad-canopy",

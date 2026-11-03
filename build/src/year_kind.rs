@@ -56,6 +56,7 @@ kinds! {
     PrepareTreeHeight => "prepare-tree-height",
     PrepareTurbines => "prepare-turbines",
     PrepareWeather => "prepare-weather",
+    PrepareWeatherStatistics => "prepare-weather-statistics",
     Prepared => "prepared",
     Primary => "primary",
     RailFleetRegions => "rail-fleet-regions",
