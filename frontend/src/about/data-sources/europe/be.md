@@ -1,33 +1,8 @@
 ---
 title: Belgium
-intro: Passenger timetables for SNCB/NMBS and three regional tram and metro networks. Roads are estimated from the buildings around them. Rail freight from class defaults.
+intro: The sources behind the map, by year. Older data and gaps are listed where they affect the calculation.
 ---
 
-## Roads
+<!-- YEAR SOURCES -->
 
-No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
-
-Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.2 % of a town street's traffic (WHO 2023); electric cars 4.1 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
-
-Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a two-way one).
-
-## Railways
-
-Train counts, one busy Wednesday:
-
-- National railway: [SNCB/NMBS](https://gtfs.irail.be/).
-- Trams, metro and light rail: [STIB/MIVB](https://stibmivb.opendatasoft.com/) (Brussels), [De Lijn](http://gtfs.irail.be/de-lijn/de_lijn-gtfs.zip) (Antwerp, Ghent, coast tram), [TEC](http://opendata.tec-wl.be/Current%20GTFS/TEC-GTFS.zip) (Charleroi).
-
-Lines without a count take the class defaults. No Belgian timetable includes freight, and Belgium publishes no goods train-kilometres: freight keeps the class defaults' national total, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
-
-## Industry
-
-Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium.
-
-## Buildings and terrain
-
-Terrain from Flanders' [DHMV II](https://metadata.vlaanderen.be/srv/api/records/f52b1a13-86bc-4b64-8256-88cc0d1a8735) (Digitaal Vlaanderen; Modellicentie gratis hergebruik v1.0) and Wallonia's laser survey ([MNT](https://geoportail.wallonie.be), SPW; CC BY 4.0).
-
-## Homes and places
-
-Homes mapped in OpenStreetMap: 6 heat pumps and 12 air conditioners per 100 homes. Church bells ring three times a day, with a Sunday peal. Mosques: only those with a mapped minaret call, once on Fridays.
+The [data preparation](/about/data-preparation) and [noise calculation](/about/noise-at-a-point) explain how these inputs become a level.

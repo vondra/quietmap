@@ -1,28 +1,8 @@
 ---
 title: South Africa
-intro: World defaults for main roads and railways; power stations and coal mines come from Eskom and Global Energy Monitor.
+intro: The sources behind the map, by year. Older data and gaps are listed where they affect the calculation.
 ---
 
-## Roads
+<!-- YEAR SOURCES -->
 
-Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
-
-Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.5 % of a town street's traffic (the world median).
-
-Unsigned roads: a primary road 60 km/h in towns, 100 outside (cars drive 84 on a two-way one), a motorway 120.
-
-## Railways
-
-Train counts: no timetable. Mapped active railways use the [world railway defaults](/about/data-preparation). This may be close for commuter lines such as Metrorail in Cape Town and the Gautrain. The heavy-haul ore line to Saldanha and the coal line to Richards Bay run few, very long trains but are modelled as ordinary freight trains.
-
-## Industry
-
-Power stations come from Eskom's station list, which distinguishes coal, nuclear, gas, hydro and solar, and from the operating plants in Global Energy Monitor. Operating coal mines come from Global Energy Monitor's coal mine tracker. Each is matched to an OpenStreetMap industrial area within 2 km. Wind farms in these lists are skipped. Other sites have no register and depend on their OpenStreetMap tagging.
-
-## Ships
-
-Coastal traffic: Global Fishing Watch AIS vessel hours.
-
-## Homes and places
-
-Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes. Mosques call five times a day.
+The [data preparation](/about/data-preparation) and [noise calculation](/about/noise-at-a-point) explain how these inputs become a level.

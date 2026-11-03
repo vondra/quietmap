@@ -8,6 +8,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { splitFrontMatter } from './src/lib/about-front-matter.ts'
 import { aboutPagePath } from './src/lib/about-paths.ts'
+import { expandYearSources, readYears, yearFiles } from './scripts/year-sources.ts'
 
 const ABOUT_DIR = new URL('./src/about', import.meta.url).pathname
 const ABOUT_INDEX = 'virtual:about-index'
@@ -25,8 +26,17 @@ function aboutIndex(): Record<string, { title: string }> {
 function aboutPages(): Plugin {
   return {
     name: 'about-pages',
+    enforce: 'pre',
     resolveId: id => (id === ABOUT_INDEX ? `\0${ABOUT_INDEX}` : undefined),
-    load: id => (id === `\0${ABOUT_INDEX}` ? `export default ${JSON.stringify(aboutIndex())}` : undefined),
+    load(id) {
+      if (id === `\0${ABOUT_INDEX}`) return `export default ${JSON.stringify(aboutIndex())}`
+      if (!id.startsWith(`${ABOUT_DIR}/`) || !id.endsWith('.md?raw')) return
+      const file = id.slice(0, -4)
+      const markdown = readFileSync(file, 'utf8')
+      if (!markdown.includes('<!-- YEAR SOURCES -->')) return
+      for (const year of yearFiles()) this.addWatchFile(year)
+      return `export default ${JSON.stringify(expandYearSources(file.slice(ABOUT_DIR.length + 1), markdown, readYears()))}`
+    },
     generateBundle() {
       const pages = Object.keys(aboutIndex())
       this.emitFile({ type: 'asset', fileName: 'about-pages.json', source: JSON.stringify(pages) })

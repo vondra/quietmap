@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { expandYearSources, readYears } from '../scripts/year-sources.ts'
 import { splitFrontMatter } from '../src/lib/about-front-matter.ts'
 import { ABOUT_WEATHER, aboutPageOf, aboutPagePath } from '../src/lib/about-paths.ts'
 import { ABOUT_REHYPE_PLUGINS, sectionId } from '../src/lib/about-sections.ts'
@@ -17,7 +18,7 @@ const ABOUT_DIR = new URL('../src/about', import.meta.url).pathname
 
 /** Every About page's HTML as the page renders its markdown. */
 const PAGES = Object.fromEntries(globSync('**/*.md', { cwd: ABOUT_DIR }).map(file => {
-  const { body } = splitFrontMatter(readFileSync(join(ABOUT_DIR, file), 'utf8'))
+  const { body } = splitFrontMatter(expandYearSources(file, readFileSync(join(ABOUT_DIR, file), 'utf8'), readYears()))
   const markdown = createElement(Markdown, { remarkPlugins: [remarkGfm], rehypePlugins: ABOUT_REHYPE_PLUGINS }, body)
   return [aboutPagePath(file), renderToStaticMarkup(markdown)]
 }))
