@@ -546,6 +546,17 @@ described under Aircraft, and the runways' rolls.
 
 Year admission and paths: `build/src/year.rs`; dated tables: `build/src/source_tables/`; source-page generation: `frontend/scripts/year-sources.ts`.
 
+Raster preparation: `build/src/rasters/` reads the year's named GDAL rasters. The manifest gives
+each band's projection, vertical datum, missing-data value and overlap priority. Terrain is
+averaged before conversion to EGM2008; coverage edges blend continuously. Tree density is
+area-averaged; a newer survey takes precedence over the older baseline where available. Each
+survey loses only forest cleared after its observation year and before the map's cutoff.
+A missing loss observation leaves that survey unchanged; it does not establish that no loss occurred. Crown height averages only
+positive native heights. `fetch/rasters.py` converts explicitly listed publisher files into
+these inputs, preserving their native grids and longitude continuity across the antimeridian.
+The builder links GDAL. Raster preparation verifies the manifest's GDAL and PROJ versions and
+the checksums of its datum grids and PROJ database, with no system-grid or network fallback.
+
 <details>
 <summary>The builder's code: fetch/, build/, physics/ and tiles/</summary>
 

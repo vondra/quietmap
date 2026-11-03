@@ -59,6 +59,7 @@ kinds! {
     Prepared => "prepared",
     Primary => "primary",
     RailFleetRegions => "rail-fleet-regions",
+    RasterMosaic => "raster-mosaic",
     Rasters => "rasters",
     RegionalVehicleShares => "regional-vehicle-shares",
     RoadClassPriors => "road-class-priors",

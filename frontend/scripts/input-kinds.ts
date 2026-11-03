@@ -44,6 +44,7 @@ export const INPUT_KINDS = [
   "prepared",
   "primary",
   "rail-fleet-regions",
+  "raster-mosaic",
   "rasters",
   "regional-vehicle-shares",
   "road-class-priors",

@@ -13,6 +13,7 @@ mod dev4;
 mod low_profile;
 mod obstacles;
 mod period;
+mod rasters;
 mod rings;
 mod screening;
 mod source_outlines;
@@ -259,6 +260,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
         Path::new(options.get("sources")?),
     )?;
     match command.as_str() {
+        "prepare-rasters" => {
+            rasters::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
+        }
         "source-outlines" => source_outlines::build(
             &Dev4 {
                 prepared: inputs.required(crate::year::Kind::Prepared)?.into(),

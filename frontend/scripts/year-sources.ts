@@ -90,7 +90,7 @@ export function renderYearSources(page: string, years: NamedYear[]): string {
     scope.length === 2 && path.split('/').length > 2 ? `The [regional sources](/about/${path.split('/').slice(0, -1).join('/')}#sources-by-year) apply too.` : '',
   ].filter(Boolean).join(' ')
   const sections = [...years].filter(year => year.manifest.built).sort((a, b) => b.name.localeCompare(a.name)).map(({ name, manifest }) => {
-    const intermediate = new Set<InputKind>(['prepared', 'rasters', 'airport-traffic', 'road-traffic', 'segments', 'shuffled', 'terrain', 'weather', 'bus', 'worship', 'venues', 'water', 'turbines', 'barriers', 'geoid'])
+    const intermediate = new Set<InputKind>(['prepared', 'raster-mosaic', 'rasters', 'airport-traffic', 'road-traffic', 'segments', 'shuffled', 'terrain', 'weather', 'bus', 'worship', 'venues', 'water', 'turbines', 'barriers', 'geoid'])
     const inputs = manifest.inputs.filter(input => local(input.region) && !intermediate.has(input.kind))
     // public_ok governs redistribution of records, not attribution of their publisher.
     const lines = inputs.map(inputLine)
