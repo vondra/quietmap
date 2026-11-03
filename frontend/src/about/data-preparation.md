@@ -63,9 +63,37 @@ remains usable without that table. Country columns and the country record are re
 metro lookup and unused row-level city and continent columns are not produced. A selected square
 gets its geographic record even when it contains no OSM features. The global topology files
 `<out>.railway-ways.arrow` and `<out>.train-routes.arrow` are written beside the square tree.
-Building merging, measured heights, traffic counts and facility observations are later steps.
+Buildings and walls are merged in the following step. Traffic counts and facility observations
+have their own preparation steps.
 
 The implementation is in `build/src/osm/`; the boundary converter is in `fetch/osm_regions.rs`.
+
+</details>
+
+<details>
+<summary>Preparing buildings and noise walls</summary>
+
+Buildings can block sound even where OpenStreetMap has no building record. Preparation matches
+OSM buildings to Overture footprints by overlap and keeps the remaining footprints, including
+their courtyards. The original OSM outline and activity attributes remain separate from the
+outline used to screen sound. A car park or playing field does not borrow a nearby roof.
+
+A measured building height takes precedence over a raster roof measurement, a mapped height,
+a floor count, an Overture height and finally the year's height-by-area table. Roofs sampled
+from a raster need at least three valid pixels and 30% valid coverage of the footprint.
+Registry floor counts fill gaps in mapped counts. A surveyed wall replaces a mapped wall only
+where its start, middle and end coincide within 5 m; crossing walls remain separate.
+
+The year manifest selects the observations and height table. Shared survey caches require a
+publisher edition, and normalized observations carry the year. A missing historical survey
+leaves the next available height estimate. The historical table uses earlier measurements;
+its fit and geographic limits are recorded with the table. Preparing these inputs does not
+establish that the historical map is complete or that changes between years are validated.
+
+`qm-build structure-observations` converts publisher objects; `qm-build structures` writes the
+single building-and-wall table. The implementation is in `build/src/structures/` and the
+publisher converters in `fetch/structure_*.rs`. The height table and its derivation are in
+`years/tables/`. The obsolete footprint lookup index is not produced.
 
 </details>
 

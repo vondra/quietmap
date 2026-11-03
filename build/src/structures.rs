@@ -9,6 +9,18 @@
 //! structures.arrow holds the row (dev4 gives each footprint to the square of its centroid), so
 //! the id is global and every tile storing an outline stores the same one.
 
+pub(crate) mod height_calibration;
+mod height_model;
+mod height_raster;
+mod national_attributes;
+pub(crate) mod observations;
+pub(crate) mod prepare;
+pub(crate) mod prepare_geometry;
+mod prepare_rows;
+#[cfg(test)]
+mod prepare_tests;
+pub(crate) mod prepare_walls;
+
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
 use crate::low_profile::{LowProfileLookup, height_is_per_building, ring_area_m2};
 use crate::rings::RingIndex;

@@ -4,6 +4,9 @@
 //! `--kinds terrain,obstacles,sources`. The source inventory and flow dates live only in the
 //! manifest. Completion verifies the required model inputs and binds the output to its manifest.
 
+#[path = "../../fetch/structure_inputs.rs"]
+mod structure_inputs;
+
 mod aircraft;
 mod airport;
 mod barriers;
@@ -219,9 +222,9 @@ fn events_json(events: &boxes::events::EventCounts) -> serde_json::Value {
 }
 
 fn run(arguments: &[String]) -> Result<(), String> {
-    let (command, rest) = arguments
-        .split_first()
-        .ok_or("usage: qm-build osm|osm-regions|dev4|weather|complete|geoid|aircraft-segments|airport-traffic --key value ..")?;
+    let (command, rest) = arguments.split_first().ok_or(
+        "usage: qm-build COMMAND --year MANIFEST --sources ROOT --out OUTPUT [--key value ...]",
+    )?;
     let options = Arguments::parse(rest)?;
     let out = PathBuf::from(options.get("out")?);
     if command == "manifest" {
@@ -263,6 +266,20 @@ fn run(arguments: &[String]) -> Result<(), String> {
         Path::new(options.get("sources")?),
     )?;
     match command.as_str() {
+        "structure-height-model" => structures::height_calibration::fit(
+            &inputs,
+            &parse_squares(options.get("squares")?)?,
+            &out,
+        )
+        .map_err(|e| e.to_string()),
+        "structure-observations" => {
+            structure_inputs::convert(&inputs, &parse_squares(options.get("squares")?)?, &out)
+                .map_err(|e| e.to_string())
+        }
+        "structures" => {
+            structures::prepare::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
+                .map_err(|e| e.to_string())
+        }
         "osm-regions" => osm_regions::convert(&inputs, &out).map_err(|error| error.to_string()),
         "osm" => osm::build(
             &inputs,

@@ -84,6 +84,41 @@ impl YearInputs {
         }
     }
 
+    /// Survey absence falls through the documented height ladder; footprints remain required.
+    pub fn structure_observation_sources(&self, kind: Kind) -> Result<&[PathBuf], String> {
+        if !matches!(
+            kind,
+            Kind::PrepareBuildingFootprints
+                | Kind::PrepareBuildingHeights
+                | Kind::PrepareNoiseBarriers
+                | Kind::PrepareBuildingAttributes
+        ) {
+            return Err(format!("{kind} is not structure evidence"));
+        }
+        if self.paths.contains_key(&kind) || kind == Kind::PrepareBuildingFootprints {
+            self.paths(kind)
+        } else if self.manifest.unavailable.iter().any(|i| i.kind == kind) {
+            Ok(&[])
+        } else {
+            Err(format!("declare structure evidence {kind} or its absence"))
+        }
+    }
+
+    pub fn structure_height_rasters(&self) -> Result<&[PathBuf], String> {
+        if self.paths.contains_key(&Kind::StructureHeightRaster) {
+            self.paths(Kind::StructureHeightRaster)
+        } else if self
+            .manifest
+            .unavailable
+            .iter()
+            .any(|i| i.kind == Kind::StructureHeightRaster)
+        {
+            Ok(&[])
+        } else {
+            Err("declare measured relative-height rasters or their absence".into())
+        }
+    }
+
     pub fn required(&self, kind: Kind) -> Result<&Path, String> {
         match self.paths(kind)? {
             [path] => Ok(path),
@@ -128,7 +163,11 @@ impl YearInputs {
             let path = directory.join(format!("{kind}.json"));
             self.check_published_table(kind, &path)?;
         }
-        for kind in [Kind::PrepareGeography, Kind::PrepareOsmSpeeds] {
+        for kind in [
+            Kind::PrepareGeography,
+            Kind::PrepareOsmSpeeds,
+            Kind::StructureHeightModel,
+        ] {
             if self.paths.contains_key(&kind) {
                 self.check_published_table(kind, &directory.join(format!("{kind}.json")))?;
             }

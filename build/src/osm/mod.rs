@@ -5,7 +5,7 @@ mod contracts;
 mod finalize;
 mod geography;
 mod geography_output;
-mod geometry;
+pub(crate) mod geometry;
 mod ids;
 mod junctions;
 mod microsegment;

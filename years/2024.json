@@ -425,7 +425,7 @@
     },
     {
       "id": "prague-heights",
-      "kind": "prepare-building-heights",
+      "kind": "structure-height-raster",
       "region": "CZ:Prague",
       "publisher": "IPR Praha",
       "url": "https://geoportalpraha.cz/",
@@ -4269,6 +4269,65 @@
         "boundaries"
       ],
       "description": "CGAZ ADM0 simplified country polygons selected from the declared boundary edition; one GeoJSON FeatureCollection."
+    },
+    {
+      "id": "osm-geography",
+      "kind": "osm-geography",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "osm",
+        "osm-regions"
+      ],
+      "description": "OSM building attributes and barriers with country identity, prepared from the admitted state."
+    },
+    {
+      "id": "structure-observations",
+      "kind": "structure-observations",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "barriers-nl",
+        "barriers-fl",
+        "barriers-va",
+        "overture"
+      ],
+      "description": "Normalized footprints, measured building heights, noise walls and registry attributes; publisher objects retain their source order."
+    },
+    {
+      "id": "structure-height-model",
+      "kind": "structure-height-model",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2023",
+        "end": "2024-12-31"
+      },
+      "published": "2026-11-03",
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [
+        "osm-geography",
+        "prague-heights"
+      ],
+      "description": "Historical height table fitted only to the admitted OSM state and IPR survey: 158467 measured footprints, 104952 mapped floor counts and 570 mapped wall heights. Area medians use 53132 footprints without mapped height or floors. Prototype calibration; the historical map remains unbuilt."
     }
   ],
   "unavailable": [
