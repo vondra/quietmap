@@ -99,7 +99,7 @@ impl TransitionGraph {
         };
         let mut ways: HashMap<i64, Vec<usize>> = HashMap::new();
         let mut way_order = Vec::new();
-        let mut node_ways: HashMap<Point, BTreeSet<i64>> = HashMap::new();
+        let mut node_ways: HashMap<Point, Vec<i64>> = HashMap::new();
         let mut node_order = Vec::new();
         for &index in selected {
             let road = &roads[index];
@@ -114,7 +114,10 @@ impl TransitionGraph {
                 if !node_ways.contains_key(&point) {
                     node_order.push(point);
                 }
-                node_ways.entry(point).or_default().insert(road.way_id);
+                let connected = node_ways.entry(point).or_default();
+                if !connected.contains(&road.way_id) {
+                    connected.push(road.way_id);
+                }
                 *graph.degree.entry(point).or_default() += 1;
             }
         }

@@ -32,7 +32,7 @@ pub(super) fn write(path: &Path, columns: Vec<(&str, ArrayRef)>, contract: (&str
     writer.finish().unwrap();
 }
 
-fn mapped_streets(path: &Path, reverse: bool) {
+fn mapped_streets(path: &Path, reverse: bool, names: [&str; 2]) {
     let center = 1 << 29;
     let mut columns: Vec<(&str, ArrayRef)> = vec![
         ("osm_id", Arc::new(Int64Array::from(vec![1, 2]))),
@@ -49,7 +49,7 @@ fn mapped_streets(path: &Path, reverse: bool) {
         ),
         ("length_m", Arc::new(Float32Array::from(vec![3.7, 3.7]))),
         ("country_iso", Arc::new(UInt16Array::from(vec![0, 0]))),
-        ("name", Arc::new(StringArray::from(vec!["", ""]))),
+        ("name", Arc::new(StringArray::from(names.to_vec()))),
         ("ref", Arc::new(StringArray::from(vec!["", ""]))),
         ("tunnel", Arc::new(BooleanArray::from(vec![false, false]))),
     ];
@@ -73,13 +73,10 @@ fn mapped_streets(path: &Path, reverse: bool) {
     write(path, columns, ("roads_contract", "country_baked_v1"));
 }
 
-#[test]
-fn a_building_at_the_shared_endpoint_keeps_its_street_after_arrow_reordering() {
-    let temporary = tempfile::tempdir().unwrap();
-    let structures = temporary.path().join("structures.arrow");
+fn write_building(structures: &Path) {
     let center = 1 << 29;
     write(
-        &structures,
+        structures,
         vec![
             ("kind", Arc::new(UInt8Array::from(vec![0]))),
             ("osm_id", Arc::new(Int64Array::from(vec![99]))),
@@ -99,6 +96,13 @@ fn a_building_at_the_shared_endpoint_keeps_its_street_after_arrow_reordering() {
         ],
         ("structures_contract", "structures_v5"),
     );
+}
+
+#[test]
+fn a_building_at_the_shared_endpoint_keeps_its_street_after_arrow_reordering() {
+    let temporary = tempfile::tempdir().unwrap();
+    let structures = temporary.path().join("structures.arrow");
+    write_building(&structures);
     let model: Model =
         serde_json::from_str(include_str!("../../test-data/road-preparation.json")).unwrap();
     let run = |reverse| {
@@ -107,7 +111,7 @@ fn a_building_at_the_shared_endpoint_keeps_its_street_after_arrow_reordering() {
         } else {
             "original.arrow"
         });
-        mapped_streets(&path, reverse);
+        mapped_streets(&path, reverse, ["", ""]);
         let batches = input::load(&path).unwrap();
         let mut roads = batches
             .iter()
@@ -121,4 +125,35 @@ fn a_building_at_the_shared_endpoint_keeps_its_street_after_arrow_reordering() {
     };
     assert_eq!(run(false), vec![(1, 300.0), (2, 20.0)]);
     assert_eq!(run(true), run(false));
+}
+
+#[test]
+fn trailing_name_whitespace_does_not_split_one_streets_building_demand() {
+    let temporary = tempfile::tempdir().unwrap();
+    let structures = temporary.path().join("structures.arrow");
+    write_building(&structures);
+    let path = temporary.path().join("roads.arrow");
+    mapped_streets(&path, false, ["Am Wirtsberg", "Am Wirtsberg "]);
+    let batches = input::load(&path).unwrap();
+    let mut roads = input::roads(&batches[0]).unwrap();
+    for road in &mut roads {
+        road.class = 5;
+    }
+    let model = super::tests::model();
+    crate::traffic::preparation::apply(&mut roads, &structures, &model.demand).unwrap();
+    assert!(roads[0].counts.iter().sum::<f64>() > 0.0);
+    assert_eq!(roads[0].counts, roads[1].counts);
+}
+
+#[test]
+fn equal_distance_speed_anchors_follow_the_original_piece_order() {
+    let mut roads = [3, 1, 2].map(super::tests::road);
+    for (index, road) in roads.iter_mut().enumerate() {
+        road.ends = [(index as i32, 0), (index as i32 + 1, 0)];
+        road.country.0 = u16::from_le_bytes(*b"CZ");
+    }
+    roads[0].speed_limit = 130;
+    roads[2].speed_limit = 40;
+    super::speed_transitions::apply(&mut roads, &super::tests::model().speed_transitions);
+    assert_eq!(roads[1].speed_taper, 122);
 }
