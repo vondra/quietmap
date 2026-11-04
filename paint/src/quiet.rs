@@ -78,6 +78,8 @@ impl QuietBlocks {
         let background = quiet.blocks.iter().filter(|&&quiet| quiet).count();
         let candidate_count = block_ids.len();
         let sampled = sample_block_pixels(painter, block_ids)?;
+        let rejections = sampled.rejections;
+        let sampled = sampled.blocks;
         let sampled_count = sampled.len();
         let interpolated_patches: usize = sampled
             .iter()
@@ -89,6 +91,17 @@ impl QuietBlocks {
         }
         eprintln!(
             "qm-paint: {background} open background blocks, {sampled_count}/{candidate_count} source blocks sampled, {interpolated_patches} checked patches interpolated"
+        );
+        eprintln!(
+            "qm-paint: probe rejections (overlapping): unavailable={} sone-total={} sone-layer={} lden-total={} lden-layer={} source={} edge={}; lden-layer alone={}",
+            rejections[0],
+            rejections[1],
+            rejections[2],
+            rejections[3],
+            rejections[4],
+            rejections[5],
+            rejections[6],
+            rejections[7]
         );
         Ok(quiet)
     }
