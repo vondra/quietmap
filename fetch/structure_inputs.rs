@@ -2,8 +2,13 @@
 
 #[path = "structure_attributes.rs"]
 mod attributes;
+#[path = "structure_footprint_spool.rs"]
+mod footprint_spool;
 #[path = "structure_footprints.rs"]
 mod footprints;
+#[path = "structure_parquet.rs"]
+mod parquet_rows;
+use parquet_rows::batches;
 #[path = "structure_surveys.rs"]
 mod surveys;
 #[cfg(test)]
@@ -24,12 +29,8 @@ use arrow_array::{
     Array, Float32Array, Float64Array, Int32Array, Int64Array, LargeStringArray, RecordBatch,
     StringArray,
 };
-use parquet::arrow::{ProjectionMask, arrow_reader::ParquetRecordBatchReaderBuilder};
 use serde::Deserialize;
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,14 +68,19 @@ pub fn bounds(square: Square) -> [f64; 4] {
     ]
 }
 
-pub fn selected(longitude: f64, latitude: f64, square: Square, halo: f64) -> (bool, bool) {
-    let owned = grid::square_of(
+pub fn owner(longitude: f64, latitude: f64) -> Square {
+    let square = grid::square_of(
         latitude,
         crate::structures::prepare_geometry::normalize_longitude(longitude),
-    ) == grid::Square {
-        x: square.x as u16,
-        y: square.y as u16,
-    };
+    );
+    Square {
+        x: u32::from(square.x),
+        y: u32::from(square.y),
+    }
+}
+
+pub fn selected(longitude: f64, latitude: f64, square: Square, halo: f64) -> (bool, bool) {
+    let owned = owner(longitude, latitude) == square;
     if owned {
         return (true, true);
     }
@@ -147,83 +153,6 @@ pub fn text<'a>(batch: &'a RecordBatch, name: &str, row: usize) -> Option<&'a st
         .map(|a| a.value(row))
 }
 
-pub fn batches(
-    path: &Path,
-    columns: &[&str],
-    selection: Option<&[Square]>,
-    contract: Option<(&str, &str)>,
-    mut visit: impl FnMut(RecordBatch) -> Result<()>,
-) -> Result<()> {
-    let builder = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?;
-    if let Some((key, version)) = contract {
-        ensure!(
-            builder.schema().metadata().get(key).map(String::as_str) == Some(version),
-            "{}: expected {version}",
-            path.display()
-        );
-    }
-    let groups = (0..builder.metadata().num_row_groups())
-        .filter(|&i| {
-            selection.is_none_or(|squares| {
-                row_group_intersects(builder.metadata().row_group(i), squares)
-            })
-        })
-        .collect::<Vec<_>>();
-    let roots = builder
-        .schema()
-        .fields()
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| columns.contains(&f.name().as_str()))
-        .map(|(i, _)| i)
-        .collect::<Vec<_>>();
-    let mask = ProjectionMask::roots(builder.parquet_schema(), roots);
-    for batch in builder
-        .with_projection(mask)
-        .with_row_groups(groups)
-        .with_batch_size(8192)
-        .build()?
-    {
-        visit(batch?)?;
-    }
-    Ok(())
-}
-
-fn row_group_intersects(
-    group: &parquet::file::metadata::RowGroupMetaData,
-    squares: &[Square],
-) -> bool {
-    use parquet::file::statistics::Statistics;
-    let bound = |name: &str, minimum: bool| -> Option<f64> {
-        let column = group
-            .columns()
-            .iter()
-            .find(|c| c.column_path().string() == name)?;
-        match column.statistics()? {
-            Statistics::Float(v) => if minimum { v.min_opt() } else { v.max_opt() }
-                .copied()
-                .map(f64::from),
-            Statistics::Double(v) => if minimum { v.min_opt() } else { v.max_opt() }.copied(),
-            _ => None,
-        }
-    };
-    let (Some(west), Some(south), Some(east), Some(north)) = (
-        bound("bbox.xmin", true),
-        bound("bbox.ymin", true),
-        bound("bbox.xmax", false),
-        bound("bbox.ymax", false),
-    ) else {
-        return true;
-    };
-    if [west, south, east, north].iter().any(|v| !v.is_finite()) {
-        return true;
-    }
-    squares.iter().any(|&square| {
-        let b = bounds(square);
-        west <= b[2] && east >= b[0] && south <= b[3] && north >= b[1]
-    })
-}
-
 pub fn convert(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<()> {
     ensure!(!out.exists(), "normalized structures output must be new");
     let mut squares = squares.to_vec();
@@ -234,6 +163,7 @@ pub fn convert(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<()
         "invalid structure square selection"
     );
     let mut rows: Vec<Vec<Observation>> = squares.iter().map(|_| vec![]).collect();
+    let mut footprints = Vec::new();
     for kind in [
         Kind::PrepareBuildingFootprints,
         Kind::PrepareBuildingHeights,
@@ -263,7 +193,13 @@ pub fn convert(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<()
             }
             match (kind, source.format.as_str()) {
                 (Kind::PrepareBuildingFootprints, "overture") => {
-                    footprints::convert(&source, path.parent().unwrap(), &squares, &mut rows)?
+                    footprints.push(footprints::convert(
+                        &source,
+                        path.parent().unwrap(),
+                        &squares,
+                        out,
+                        &inputs.manifest.year,
+                    )?);
                 }
                 (Kind::PrepareBuildingHeights, "measured-heights")
                 | (Kind::PrepareNoiseBarriers, "official-walls") => {
@@ -284,7 +220,12 @@ pub fn convert(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<()
             )?;
         }
     }
-    for (square, rows) in squares.into_iter().zip(rows) {
+    for (index, (square, attributes)) in squares.into_iter().zip(rows).enumerate() {
+        let mut rows = Vec::new();
+        for source in &mut footprints {
+            rows.extend(source.take(index)?);
+        }
+        rows.extend(attributes);
         let path = out.join(format!(
             "z9/{}/{}/structure-observations.arrow",
             square.x, square.y

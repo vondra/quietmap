@@ -1,6 +1,7 @@
 //! Overture GeoParquet to above-ground footprints with canonical centroid ownership and envelope classes.
 
-use super::{Objects, Observation, Square, batches, number, selected, text};
+use super::footprint_spool::Footprints;
+use super::{Objects, Observation, Square, batches, number, owner, text};
 use crate::structures::{observations::FOOTPRINT, prepare_geometry::centroid};
 use anyhow::{Result, ensure};
 use arrow_array::{Array, BinaryArray, BooleanArray};
@@ -49,8 +50,9 @@ pub fn convert(
     source: &Objects,
     root: &Path,
     squares: &[Square],
-    rows: &mut [Vec<Observation>],
-) -> Result<()> {
+    out: &Path,
+    year: &str,
+) -> Result<Footprints> {
     let tiled = source.objects.iter().all(|o| o.degree.is_some());
     ensure!(
         tiled || source.objects.iter().all(|o| o.degree.is_none()),
@@ -81,8 +83,9 @@ pub fn convert(
             .collect();
         objects.retain(|o| touched.contains(&o.degree.unwrap()));
     }
-    let mut selected_rows = vec![Vec::<([i16; 2], usize, Observation)>::new(); squares.len()];
-    let mut sequence = 0usize;
+    let mut selected_rows = Footprints::new(squares.len(), out, year)?;
+    let owners: std::collections::HashMap<_, _> =
+        squares.iter().enumerate().map(|(i, &s)| (s, i)).collect();
     for object in objects {
         let path = root.join(&object.path);
         batches(
@@ -106,8 +109,6 @@ pub fn convert(
                     .column_by_name("is_underground")
                     .and_then(|a| a.as_any().downcast_ref::<BooleanArray>());
                 for i in 0..batch.num_rows() {
-                    let order = sequence;
-                    sequence += 1;
                     if geometry.is_null(i)
                         || underground.is_some_and(|a| !a.is_null(i) && a.value(i))
                     {
@@ -130,39 +131,33 @@ pub fn convert(
                     if object.degree.is_some_and(|tile| tile != degree) {
                         continue;
                     }
+                    let Some(&k) = owners.get(&owner(longitude, latitude)) else {
+                        continue;
+                    };
                     let class = text(&batch, "class", i);
                     let floors = number(&batch, "num_floors", i)
                         .filter(|v| *v > 0.0 && *v <= 255.0)
                         .unwrap_or(0.0) as u8;
-                    for (k, &square) in squares.iter().enumerate() {
-                        if !selected(longitude, latitude, square, 0.0).0 {
-                            continue;
-                        }
-                        selected_rows[k].push((
-                            degree,
-                            order,
-                            Observation {
-                                kind: FOOTPRINT,
-                                geometry: Some(bytes.to_vec()),
-                                longitude,
-                                latitude,
-                                height_m: number(&batch, "height", i),
-                                floors,
-                                building_type: None,
-                                envelope: envelope(class, text(&batch, "subtype", i)),
-                                open_roof: matches!(class, Some("carport" | "roof")),
-                                owned: true,
-                            },
-                        ));
-                    }
+                    selected_rows.push(
+                        k,
+                        Observation {
+                            kind: FOOTPRINT,
+                            geometry: Some(bytes.to_vec()),
+                            longitude,
+                            latitude,
+                            height_m: number(&batch, "height", i),
+                            floors,
+                            building_type: None,
+                            envelope: envelope(class, text(&batch, "subtype", i)),
+                            open_roof: matches!(class, Some("carport" | "roof")),
+                            owned: true,
+                        },
+                    )?;
                 }
                 Ok(())
             },
         )?;
     }
-    for (out, mut found) in rows.iter_mut().zip(selected_rows) {
-        found.sort_by_key(|r| (r.0, r.1));
-        out.extend(found.into_iter().map(|r| r.2));
-    }
-    Ok(())
+    selected_rows.flush()?;
+    Ok(selected_rows)
 }

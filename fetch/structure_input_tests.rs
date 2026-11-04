@@ -5,7 +5,7 @@ use arrow_array::{ArrayRef, BinaryArray, Float32Array};
 use arrow_schema::{DataType, Field, Schema};
 use geos::{Geom, Geometry};
 use parquet::arrow::ArrowWriter;
-use std::sync::Arc;
+use std::{fs::File, sync::Arc};
 
 #[test]
 fn shared_survey_objects_are_read_once_in_original_order() {
