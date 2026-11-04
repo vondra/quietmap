@@ -178,16 +178,20 @@ fn solar_geometry_is_a_calendar_cycle_including_leap_years() {
 }
 
 #[test]
-fn historical_preparation_admits_rail_inputs_without_admitting_an_unbuilt_whole_tree() {
+fn historical_preparation_admission_is_separate_from_release_completion() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years");
     let historical = Manifest::read(&root.join("2024.json")).unwrap();
     assert!(!historical.built);
-    for id in ["rail-movements", "rail-model", "osm-geography"] {
+    for id in [
+        "rail-movements",
+        "rail-model",
+        "osm-geography",
+        "prepared",
+        "airport-traffic",
+    ] {
         assert!(historical.admitted(id).unwrap(), "{id}");
     }
-    for id in ["prepared", "airport-traffic"] {
-        assert!(!historical.admitted(id).unwrap(), "{id}");
-    }
+    assert!(!historical.admitted("building-road-models").unwrap());
     let reference = Manifest::read(&root.join("2026.json")).unwrap();
     assert!(reference.admitted("prepared").unwrap());
 }

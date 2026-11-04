@@ -28,14 +28,21 @@
       "publisher": "OpenStreetMap and the publishers listed below",
       "url": "https://www.openstreetmap.org/copyright",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2024-12-31",
+        "end": "2024-12-31"
       },
       "published": null,
       "licence": "Mixed; see the individual sources",
       "public_ok": true,
-      "depends_on": [],
-      "description": "To be prepared from this manifest’s admitted inputs. Roads, railways, buildings, industrial sites, airports and ship activity; converted from the source inventories below."
+      "depends_on": [
+        "osm-geography",
+        "structures",
+        "road-observations",
+        "road-preparation-model",
+        "rail-movements",
+        "rail-model"
+      ],
+      "description": "Joined OSM geography, structures, prepared road counts and railway flows. Facilities and raster bands remain separate inputs."
     },
     {
       "id": "rasters",
@@ -44,8 +51,8 @@
       "publisher": "OpenGeoHub, Copernicus, ESA and national mapping agencies",
       "url": "https://zenodo.org/records/18887460",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2000",
+        "end": "2024"
       },
       "published": null,
       "licence": "Mixed; see the individual sources",
@@ -201,8 +208,9 @@
       "licence": "ODbL; ADSBExchange terms",
       "public_ok": true,
       "depends_on": [
+        "osm-geography",
         "segments",
-        "prepared"
+        "terrain"
       ],
       "description": "To be prepared from this manifest’s admitted inputs. Taxiing and runway movements derived from the admitted flight days."
     },
@@ -213,8 +221,8 @@
       "publisher": "OpenStreetMap and Overture Maps",
       "url": "https://www.openstreetmap.org/copyright",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2024-12-31",
+        "end": "2024-12-31"
       },
       "published": null,
       "licence": "ODbL",
@@ -233,14 +241,16 @@
       "publisher": "OpenStreetMap contributors",
       "url": "https://www.openstreetmap.org/copyright",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2024-12-31",
+        "end": "2024-12-31"
       },
       "published": null,
       "licence": "ODbL",
       "public_ok": true,
-      "depends_on": [],
-      "description": "To be prepared from this manifest’s admitted inputs. Bus, trolleybus and coach routes."
+      "depends_on": [
+        "osm"
+      ],
+      "description": "Mapped bus, trolleybus and coach routes, derived from the admitted OSM state."
     },
     {
       "id": "worship",
@@ -249,14 +259,16 @@
       "publisher": "OpenStreetMap contributors",
       "url": "https://www.openstreetmap.org/copyright",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2024-12-31",
+        "end": "2024-12-31"
       },
       "published": null,
       "licence": "ODbL",
       "public_ok": true,
-      "depends_on": [],
-      "description": "To be prepared from this manifest’s admitted inputs. Places of worship, bells and minarets."
+      "depends_on": [
+        "osm"
+      ],
+      "description": "Mapped places of worship, bell towers and minarets, derived from the admitted OSM state."
     },
     {
       "id": "venues",
@@ -265,14 +277,16 @@
       "publisher": "OpenStreetMap contributors",
       "url": "https://www.openstreetmap.org/copyright",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2024-12-31",
+        "end": "2024-12-31"
       },
       "published": null,
       "licence": "ODbL",
       "public_ok": true,
-      "depends_on": [],
-      "description": "To be prepared from this manifest’s admitted inputs. Restaurants, cafés, bars and terraces."
+      "depends_on": [
+        "osm"
+      ],
+      "description": "Mapped restaurants, cafes, bars and terraces, derived from the admitted OSM state."
     },
     {
       "id": "segments",
@@ -320,8 +334,8 @@
       "publisher": "OpenGeoHub and national mapping agencies",
       "url": "https://zenodo.org/records/18887460",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2000",
+        "end": "2024"
       },
       "published": null,
       "licence": "Mixed; see terrain sources",
@@ -5713,6 +5727,148 @@
         "structure-height-model"
       ],
       "description": "Prepared structures used for street demand and road settlement context."
+    },
+    {
+      "id": "electric-cars-iea",
+      "kind": "electric-car-share",
+      "region": "world",
+      "publisher": "IEA",
+      "url": "https://www.iea.org/data-and-statistics/data-tools/global-ev-data-explorer",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": "2025",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Battery-electric cars as a percentage of the car fleet; 2024 stock from the 2025 Global EV Data Explorer. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+    },
+    {
+      "id": "rural-free-flow-dft",
+      "kind": "rural-free-flow",
+      "region": "world",
+      "publisher": "Department for Transport",
+      "url": "https://www.gov.uk/government/statistical-data-sets/vehicle-speed-compliance-statistics-data-tables-spe",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Open Government Licence v3.0",
+      "public_ok": true,
+      "depends_on": [
+        "rural-speed-survey"
+      ],
+      "description": "Free-flow car speed as a fraction of the rural single-carriageway speed limit, SPE0102. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+    },
+    {
+      "id": "freight-periods-eba",
+      "kind": "freight-period-shares",
+      "region": "world",
+      "publisher": "Eisenbahn-Bundesamt",
+      "url": "https://www.laerm-monitoring.de/",
+      "observed": {
+        "start": "2023",
+        "end": "2023"
+      },
+      "published": null,
+      "licence": "German public information; derived aggregate shares",
+      "public_ok": true,
+      "depends_on": [
+        "railway-monitoring"
+      ],
+      "description": "Freight trains by END day, evening and night, from the railway noise monitors. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+    },
+    {
+      "id": "us-vehicle-shares-fhwa",
+      "kind": "regional-vehicle-shares",
+      "region": "US",
+      "publisher": "Federal Highway Administration",
+      "url": "https://www.fhwa.dot.gov/policyinformation/statistics/2023/vm4.cfm",
+      "observed": {
+        "start": "2023",
+        "end": "2023"
+      },
+      "published": null,
+      "licence": "Public domain",
+      "public_ok": true,
+      "depends_on": [
+        "us-vehicle-distance"
+      ],
+      "description": "Vehicle-distance shares by state, road group and rural or urban surroundings, Highway Statistics VM-4. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+    },
+    {
+      "id": "building-plant-stocks",
+      "kind": "building-plant",
+      "region": "world",
+      "publisher": "EHPA, EurObserv’ER, EIA, national household surveys and coolinggap.eu",
+      "url": "https://www.eia.gov/consumption/residential/",
+      "observed": {
+        "start": "2020",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Mixed published survey aggregates; source credits in description",
+      "public_ok": true,
+      "depends_on": [
+        "household-plant-surveys"
+      ],
+      "description": "Heat pumps and air conditioners per household: EHPA 2024, US RECS 2020 and national surveys; missing countries use their UN M49 region median, then 0 heat pumps and 0.16 cooling units. Central-unit shares and fixed cooling hours are included. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+    },
+    {
+      "id": "service-cooling-hre",
+      "kind": "service-cooling",
+      "region": "world",
+      "publisher": "Heat Roadmap Europe",
+      "url": "https://heatroadmap.eu/wp-content/uploads/2018/11/HRE4_D3.2.pdf",
+      "observed": {
+        "start": "2015",
+        "end": "2015"
+      },
+      "published": "2018-11",
+      "licence": "Published aggregate estimates; Heat Roadmap Europe attribution",
+      "public_ok": true,
+      "depends_on": [
+        "service-cooling-survey"
+      ],
+      "description": "Share of service floor cooled, D3.2 section 5.3; country estimates, then European regional medians, elsewhere saturation 0.847. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+    },
+    {
+      "id": "dwelling-trips",
+      "kind": "dwelling-trips",
+      "region": "world",
+      "publisher": "Quiet Map; national household travel surveys; OpenStreetMap contributors",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2017",
+        "end": "2022"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (derived coefficients)",
+      "public_ok": true,
+      "depends_on": [
+        "household-travel-surveys"
+      ],
+      "description": "Household vehicle trips: MiD 2017, UK National Travel Survey and NHTS 2022, with regional survey defaults and occupancy adjustment. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+    },
+    {
+      "id": "rail-fleet-regions",
+      "kind": "rail-fleet-regions",
+      "region": "world",
+      "publisher": "Quiet Map; Eisenbahn-Bundesamt",
+      "url": "https://www.laerm-monitoring.de/",
+      "observed": {
+        "start": "2023",
+        "end": "2023"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (derived model assignment)",
+      "public_ok": true,
+      "depends_on": [
+        "railway-monitoring"
+      ],
+      "description": "Networks using the European freight fleet model based on the EBA 2023 observations. Other networks keep the world freight model. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
     }
   ],
   "unavailable": [
@@ -7117,15 +7273,6 @@
       "depends_on": []
     },
     {
-      "id": "electric-cars-iea",
-      "kind": "electric-car-share",
-      "region": "world",
-      "description": "To be derived for 2024. Battery-electric cars as a percentage of the car fleet; 2024 stock from the 2025 Global EV Data Explorer.",
-      "depends_on": [
-        "osm"
-      ]
-    },
-    {
       "id": "train-kilometres-eurostat",
       "kind": "train-scales",
       "region": "world",
@@ -7147,24 +7294,6 @@
       ]
     },
     {
-      "id": "rural-free-flow-dft",
-      "kind": "rural-free-flow",
-      "region": "world",
-      "description": "To be derived for 2024. Free-flow car speed as a fraction of the rural single-carriageway speed limit, SPE0102.",
-      "depends_on": [
-        "rural-speed-survey"
-      ]
-    },
-    {
-      "id": "freight-periods-eba",
-      "kind": "freight-period-shares",
-      "region": "world",
-      "description": "To be derived for 2024. Freight trains by END day, evening and night, from the railway noise monitors.",
-      "depends_on": [
-        "railway-monitoring"
-      ]
-    },
-    {
       "id": "th-doh-highways",
       "kind": "road-reference-counts",
       "region": "TH",
@@ -7177,39 +7306,12 @@
       ]
     },
     {
-      "id": "us-vehicle-shares-fhwa",
-      "kind": "regional-vehicle-shares",
-      "region": "US",
-      "description": "To be derived for 2024. Vehicle-distance shares by state, road group and rural or urban surroundings, Highway Statistics VM-4.",
-      "depends_on": [
-        "us-vehicle-distance"
-      ]
-    },
-    {
       "id": "subdivision-grids",
       "kind": "subdivision-grids",
       "region": "world",
       "description": "To be derived for 2024. Administrative subdivision lookup grids used to attach province and state traffic tables; the original boundary snapshot has no earlier verified vintage.",
       "depends_on": [
         "boundaries"
-      ]
-    },
-    {
-      "id": "building-plant-stocks",
-      "kind": "building-plant",
-      "region": "world",
-      "description": "To be derived for 2024. Heat pumps and air conditioners per household: EHPA 2024, US RECS 2020 and national surveys; missing countries use their UN M49 region median, then 0 heat pumps and 0.16 cooling units. Central-unit shares and fixed cooling hours are included.",
-      "depends_on": [
-        "household-plant-surveys"
-      ]
-    },
-    {
-      "id": "service-cooling-hre",
-      "kind": "service-cooling",
-      "region": "world",
-      "description": "To be derived for 2024. Share of service floor cooled, D3.2 section 5.3; country estimates, then European regional medians, elsewhere saturation 0.847.",
-      "depends_on": [
-        "service-cooling-survey"
       ]
     },
     {
@@ -7232,15 +7334,6 @@
         "bus-training-timetables",
         "osm",
         "road-traffic"
-      ]
-    },
-    {
-      "id": "dwelling-trips",
-      "kind": "dwelling-trips",
-      "region": "world",
-      "description": "To be derived for 2024. Household vehicle trips: MiD 2017, UK National Travel Survey and NHTS 2022, with regional survey defaults and occupancy adjustment.",
-      "depends_on": [
-        "household-travel-surveys"
       ]
     },
     {
@@ -7308,15 +7401,6 @@
       "description": "To be derived for 2024. Country ringing practices checked in October 2026: denomination defaults and clock strikes.",
       "depends_on": [
         "practice-history-church-bells"
-      ]
-    },
-    {
-      "id": "rail-fleet-regions",
-      "kind": "rail-fleet-regions",
-      "region": "world",
-      "description": "To be derived for 2024. Networks using the European freight fleet model based on the EBA 2023 observations. Other networks keep the world freight model.",
-      "depends_on": [
-        "railway-monitoring"
       ]
     },
     {
@@ -8022,7 +8106,7 @@
         "band": "ground-height",
         "horizontal_crs": "EPSG:27700",
         "vertical_crs": 5701,
-        "nodata": null,
+        "nodata": -9999.0,
         "priority": 24,
         "feather_nodes": 256
       },
@@ -8231,7 +8315,7 @@
         "band": "ground-height",
         "horizontal_crs": "EPSG:2180",
         "vertical_crs": 9651,
-        "nodata": null,
+        "nodata": -9999.0,
         "priority": 39,
         "feather_nodes": 256,
         "datum_area": [
