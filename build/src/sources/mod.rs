@@ -217,12 +217,13 @@ pub struct Places<'a> {
 /// square also converts its neighbours and keeps the sources its own tiles own (industry reads the
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
-    (dev4, climate, network, turbines, water, tables): (
+    (dev4, climate, network, turbines, water, ships, tables): (
         &Dev4,
         &Climate,
         &FreightNetwork,
         &turbines::Turbines,
         &water::Water,
+        &Path,
         &SourceTables,
     ),
     (airport_traffic, road_traffic, bus, places): (
@@ -234,6 +235,7 @@ pub fn build(
     squares: &[Square],
     out: &Path,
 ) -> Result<usize, String> {
+    crate::ships::check_squares(ships, squares)?;
     if !airport_traffic.join(COMPLETION_MARKER).exists() {
         return Err(format!(
             "{}: no complete airport traffic",
@@ -244,7 +246,7 @@ pub fn build(
         .par_iter()
         .map(|&square| {
             build_square(
-                (dev4, climate, network, turbines, water, tables),
+                (dev4, climate, network, turbines, water, ships, tables),
                 (airport_traffic, road_traffic, bus, places),
                 square,
                 out,
@@ -270,12 +272,13 @@ pub fn build(
 /// The sources of one square as its file (the squares build in parallel, each within its own
 /// memory): the tiles written and the count of its decks.
 fn build_square(
-    (dev4, climate, network, turbines, water, tables): (
+    (dev4, climate, network, turbines, water, ships, tables): (
         &Dev4,
         &Climate,
         &FreightNetwork,
         &turbines::Turbines,
         &water::Water,
+        &Path,
         &SourceTables,
     ),
     (airport_traffic, road_traffic, bus, places): (
@@ -325,7 +328,7 @@ fn build_square(
             (neighbour, &industrial_sites),
             &mut converted,
         )?;
-        ship::convert(dev4, neighbour, &mut water_tiles, &mut converted)?;
+        ship::convert(ships, neighbour, &mut water_tiles, &mut converted)?;
         airport::convert(airport_traffic, neighbour, &mut converted)?;
         converted.retain(owned);
     }

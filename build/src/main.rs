@@ -13,6 +13,8 @@ mod barriers;
 mod boxes;
 mod climate;
 mod dev4;
+#[path = "../../fetch/era5.rs"]
+mod era5;
 mod low_profile;
 mod obstacles;
 mod osm;
@@ -22,6 +24,9 @@ mod period;
 mod rasters;
 mod rings;
 mod screening;
+#[path = "../../fetch/ships.rs"]
+mod ship_fetch;
+mod ships;
 mod source_outlines;
 mod source_tables;
 mod sources;
@@ -330,6 +335,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             &sources::water::Water::open(
                                 inputs.required(crate::year::Kind::Water)?,
                             )?,
+                            ships::input_root(&inputs)?,
                             &source_tables::SourceTables::read(&inputs)?,
                         ),
                         (
@@ -359,13 +365,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
             }
             Ok(())
         }
-        "weather" => {
-            let dev4 = Dev4 {
-                prepared: PathBuf::new(),
-                rasters: inputs.required(crate::year::Kind::Rasters)?.into(),
-            };
-            weather::build(&dev4, &out)
+        "ships" => {
+            let count = ships::build(&inputs, &parse_squares(options.get("squares")?)?, &out)?;
+            eprintln!("ships: {count} occupancy cells");
+            Ok(())
         }
+        "weather" => weather::build(&inputs, &out),
         "terrain-fine" => {
             let started = std::time::Instant::now();
             let models: Vec<&Path> = inputs

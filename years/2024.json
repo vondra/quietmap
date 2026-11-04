@@ -309,7 +309,7 @@
       "licence": "CC BY 4.0; contains modified Copernicus Climate Change Service information",
       "public_ok": true,
       "depends_on": [
-        "era5"
+        "era5-statistics"
       ],
       "description": "Propagation weather derived from the ERA5 1991–2020 climatology."
     },
@@ -493,7 +493,80 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Annual vessel density by ship type. Satellite coverage is reduced from June 2024."
+      "description": "Annual vessel density by ship type. Satellite coverage is reduced from June 2024.",
+      "conversion": {
+        "source_id": 9901,
+        "priority": 100,
+        "format": "density-raster",
+        "epsg": 3035,
+        "parts": [
+          {
+            "path": "EMODnet_HA_Vessel_Density_06Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_06Avg/vesseldensity_06_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_08Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_08Avg/vesseldensity_08_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_09Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_09Avg/vesseldensity_09_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_10Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_10Avg/vesseldensity_10_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_11Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_11Avg/vesseldensity_11_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_12Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_12Avg/vesseldensity_12_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_00Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_00Avg/vesseldensity_00_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_01Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_01Avg/vesseldensity_01_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_02Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_02Avg/vesseldensity_02_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_03Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_03Avg/vesseldensity_03_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_07Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_07Avg/vesseldensity_07_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_04Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_04Avg/vesseldensity_04_2024.tif",
+            "class": "leisure"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_05Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_05Avg/vesseldensity_05_2024.tif",
+            "class": "leisure"
+          }
+        ]
+      }
     },
     {
       "id": "prague-heights",
@@ -590,22 +663,6 @@
       "public_ok": true,
       "depends_on": [],
       "description": "Building footprints missing from OpenStreetMap."
-    },
-    {
-      "id": "gfw",
-      "kind": "prepare-ships",
-      "region": "world",
-      "publisher": "Global Fishing Watch",
-      "url": "https://globalfishingwatch.org/our-apis/",
-      "observed": {
-        "start": "2024",
-        "end": "2024"
-      },
-      "published": null,
-      "licence": "CC BY-NC 4.0",
-      "public_ok": false,
-      "depends_on": [],
-      "description": "Vessel-presence v4.0 over the flow window, for seas beyond EMODnet and for inland waterways."
     },
     {
       "id": "adsblol",
@@ -4934,6 +4991,106 @@
       "public_ok": true,
       "depends_on": [],
       "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
+    },
+    {
+      "id": "gfw-presence",
+      "kind": "prepare-ships",
+      "region": "world",
+      "publisher": "Global Fishing Watch",
+      "url": "https://globalfishingwatch.org/our-apis/",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "CC BY-NC 4.0",
+      "public_ok": false,
+      "depends_on": [],
+      "description": "Vessel-presence v4.0 over the flow window, for seas beyond EMODnet and for inland waterways.",
+      "conversion": {
+        "source_id": 9902,
+        "priority": 50,
+        "format": "presence-reports",
+        "window": "window.json",
+        "tiff_member": "layer-activity-data-0/public-global-presence-v4.0.tif",
+        "csv_member": "layer-activity-data-0/public-global-presence-v4.0.csv",
+        "dataset": "public-global-presence:v4.0",
+        "cell_degrees": 0.01,
+        "inventory": {
+          "path": "inventory.json",
+          "sha256": "a697bee9b7cdf9e7b99060e19bd8cba119879fbd8c06de0cbc9357a5a382e56a"
+        },
+        "acquisition": {
+          "bounds": [
+            -180,
+            -60,
+            180,
+            84
+          ],
+          "tile_degrees": 8,
+          "classes": {
+            "large": [
+              "cargo",
+              "tanker",
+              "carrier",
+              "bunker",
+              "passenger"
+            ],
+            "work": [
+              "fishing",
+              "support",
+              "gear",
+              "seismic_vessel",
+              "other"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "era5-statistics",
+      "kind": "prepare-weather-statistics",
+      "region": "world",
+      "publisher": "ECMWF; Copernicus Climate Change Service",
+      "url": "https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels",
+      "observed": {
+        "start": "1991",
+        "end": "2020"
+      },
+      "published": null,
+      "licence": "Copernicus data licence",
+      "public_ok": true,
+      "depends_on": [
+        "era5"
+      ],
+      "description": "Completed occurrence counts and absorption means of the admitted ERA5 climate normal.",
+      "conversion": {
+        "sha256": "0a595f7fb4367a212e46ad23296e14f311cbc4735477e5d8015648ce6e78594f",
+        "sampling_hours": 3,
+        "counts": "counts.npy",
+        "favourable": "favourable_counts.npy",
+        "means": "means.npy",
+        "receipt": "receipt.json"
+      }
+    },
+    {
+      "id": "ships",
+      "kind": "ships",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation#ships",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Mixed; see the source inputs",
+      "public_ok": false,
+      "depends_on": [
+        "emodnet",
+        "gfw-presence"
+      ],
+      "description": "Monthly native-grid vessel occupancy with coverage priority."
     }
   ],
   "unavailable": [
@@ -6994,7 +7151,9 @@
     "water",
     "weather",
     "worldcover",
-    "worldcover-antimeridian"
+    "worldcover-antimeridian",
+    "emodnet",
+    "era5-statistics"
   ],
   "rasters": {
     "sources": [

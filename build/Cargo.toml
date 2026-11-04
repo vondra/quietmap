@@ -26,7 +26,7 @@ chrono-tz = { version = "0.10", default-features = false }
 tzf-rs = { version = "=1.2.0", default-features = false }
 rusqlite = { version = "0.37", features = ["bundled"] }
 libc = "0.2"
-tiff = { version = "0.11", default-features = false, features = ["deflate"] }
+tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
 
 osmpbf = "0.3"
 memmap2 = "0.9"
@@ -42,6 +42,9 @@ parquet = "60"
 gdal-sys = "0.12"
 tempfile = "3"
 sha2 = "0.10"
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+csv = "1"
+proj4rs = { version = "0.3", features = ["crs-definitions"] }
 
 [dev-dependencies]
 arrow-select = "60"

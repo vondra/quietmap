@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 git diff --check
 git diff --cached --check
 python3 -m json.tool bench/points.json > /dev/null
+python3 -m unittest discover -s fetch -p 'test_*.py' -q
 
 if [ -f Cargo.toml ]; then
   cargo fmt --all -- --check

@@ -34,8 +34,13 @@ the data. The completed output carries its manifest, its hash and its cutoff; re
 them before accepting the year. The website and popup read their citations from the same
 manifest, using the builder's admission result.
 
-Preparing the source data remains a separate step. A manifest does not establish that a map or
-its derived tables already exist.
+Ships are prepared from the named vessel-density and presence reports on their native grids.
+Coverage takes priority even where no vessel was observed. Each cell keeps its source grid’s
+coordinate system and dimensions. Weather is built from the admitted climatology’s completed
+occurrence counts and absorption means, pinned by their digest. Missing inputs or incomplete
+ship coverage stop the build; another year’s observations are never substituted silently.
+Preparing the other source data remains a separate step. A manifest does not establish that a
+map or its derived tables already exist.
 
 </details>
 
@@ -618,11 +623,12 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
 <details>
 <summary>The builder's code: fetch/, build/, physics/ and tiles/</summary>
 
-- `fetch/` downloads the datasets added to OpenStreetMap's: noise barriers, bus routes, national
+- `fetch/` downloads datasets and decodes publisher formats for the Rust builder. The downloads
+  include vessel-presence reports, noise barriers, bus routes, national
   terrain models, wind turbines, venues, WorldClim, places of worship and the
   <abbr title="Trans-European Transport Network">TEN-T</abbr> rail network.
 - `build/` turns the inputs into the tiles and every source's sound power. Its steps include
-  `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
+  `ships` (monthly occupancy with completed coverage), `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.
 - `tiles/` holds each kind's tile format, writer and reader, and the square files that hold the
@@ -655,8 +661,8 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
   stored whole in every tile whose cells it crosses; a wall longer than the frame is clipped into
   parts within it, a ring larger than the frame is left out (the builder counts it). Footprint and
   source ids are global and stable across tiles; holes are kept.
-- A release is complete when its builder wrote the completion marker last, its first line naming
-  the square files' layout. Only then does a missing file or tile mean "empty"; an unfinished build
+- A release is complete when its builder wrote the completion marker last, binding the square
+  files’ layout to the exact manifest and state cutoff. Only then does a missing file or tile mean "empty"; an unfinished build
   or a tree of another layout is never served.
 - The physics tables (NPD, CNOSSOS coefficients, the Doc 29 classes) are compiled into the
   programs. Ground rays take the place's absorption; the NPD curves are moved to the place's air
