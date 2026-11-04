@@ -252,6 +252,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             &band_weights[..warm],
         ),
         &mut bands,
+        None,
     )?;
     let (mut gpu_sums, mut failed, mut gpu_bands) = (Vec::new(), Vec::new(), Vec::new());
     let mut gpu_s = 0.0;
@@ -268,6 +269,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 &band_weights[..count],
             ),
             &mut bands,
+            None,
         )?;
         gpu_s += started.elapsed().as_secs_f64();
         gpu_sums.extend(sums);

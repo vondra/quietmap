@@ -375,6 +375,7 @@ impl Gpu {
         (receivers, own_footprint): (&[[f64; 2]], &[u64]),
         (candidates, points, band_weights): (&[u32], &[u32], &[f32]),
         bands: &mut CudaSlice<f32>,
+        pair_spectra: Option<&mut Vec<f32>>,
     ) -> Result<(Vec<[f32; PAIR_SUMS]>, Vec<u32>), String> {
         let count = candidates.len();
         if receivers.len() != count
@@ -500,22 +501,24 @@ impl Gpu {
                     ),
                 )
             })?;
-            driver(unsafe {
-                kernel("pair_bands_to_points")?.launch_on_stream(
-                    &stream,
-                    threads(count),
-                    (
-                        &square.scene,
-                        &index,
-                        &point_index,
-                        &band_weights,
-                        count as u32,
-                        &pair_bands,
-                        &failed,
-                        &mut *bands,
-                    ),
-                )
-            })?;
+            if pair_spectra.is_none() {
+                driver(unsafe {
+                    kernel("pair_bands_to_points")?.launch_on_stream(
+                        &stream,
+                        threads(count),
+                        (
+                            &square.scene,
+                            &index,
+                            &point_index,
+                            &band_weights,
+                            count as u32,
+                            &pair_bands,
+                            &failed,
+                            &mut *bands,
+                        ),
+                    )
+                })?;
+            }
             // The rays' buffers are freed on the default stream as this block ends: their kernels
             // finish first.
             // SAFETY: a stream this function created and still holds.
@@ -523,6 +526,9 @@ impl Gpu {
         }
         let sums = read_back(&stream, &sums)?;
         let failed = read_back(&stream, &failed)?;
+        if let Some(spectra) = pair_spectra {
+            *spectra = read_back(&stream, &pair_bands)?;
+        }
         Ok((
             sums.chunks_exact(PAIR_SUMS)
                 .map(|chunk| std::array::from_fn(|k| chunk[k]))

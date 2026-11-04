@@ -1,11 +1,12 @@
 //! Quiet source importance samples batched across hum receivers through the shared exact evaluator.
 
-use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
+use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, whole_energy};
 use crate::hum::HumPointSound;
 use crate::paint::PASS_PAIRS;
 use crate::square::Square;
 use physics::bands::{PERIODS, lden_energy};
 use popup::candidates::{GROUND_REACH_M, loud};
+use popup::evaluate::{Bands, Scratch};
 use popup::sampling::{BoundSample, SampleRound};
 use popup::selection::OMITTED_ENERGY_FRACTION;
 use rayon::prelude::*;
@@ -16,10 +17,17 @@ struct QuietSourceSample {
     layer: usize,
     indices: Vec<u32>,
     orders: Vec<f64>,
-    evaluated: Vec<Option<[f64; PERIODS]>>,
+    evaluated: Vec<Option<usize>>,
+    values: Vec<([f64; PERIODS], Bands)>,
     certain_energy: [f64; PERIODS],
     sample: BoundSample,
     finished: Option<SampleRound>,
+}
+
+impl QuietSourceSample {
+    fn energy(&self, index: usize) -> [f64; PERIODS] {
+        self.values[self.evaluated[index].unwrap()].0
+    }
 }
 
 pub(crate) fn sampled_hum(
@@ -76,6 +84,7 @@ pub(crate) fn sampled_hum(
                         point: at,
                         layer,
                         evaluated: vec![None; indices.len()],
+                        values: Vec::new(),
                         indices,
                         orders,
                         certain_energy: [0.0; PERIODS],
@@ -89,6 +98,7 @@ pub(crate) fn sampled_hum(
         })
         .collect();
     let mut quiet = vec![([[0.0; PERIODS]; LAYERS], PointBands::default()); points.len()];
+    let mut traced_round_pairs = 0usize;
     loop {
         let rounds: Vec<_> = samples
             .iter()
@@ -113,6 +123,7 @@ pub(crate) fn sampled_hum(
                     .collect::<Vec<_>>()
             })
             .collect();
+        traced_round_pairs += needed.len();
         for chunk in needed.chunks(PASS_PAIRS) {
             let pairs: Vec<_> = chunk
                 .iter()
@@ -122,24 +133,35 @@ pub(crate) fn sampled_hum(
                     band_weight: 0.0,
                 })
                 .collect();
-            let energies = evaluate_all(square, points, &pairs, batch)?.pairs;
-            for (&(at, index), energy) in chunk.iter().zip(energies) {
-                samples[at].evaluated[index] = Some(energy.mixed);
+            let evaluated = match batch {
+                Some(batch) => batch.pair_spectra(points, &pairs)?,
+                None => pairs
+                    .par_iter()
+                    .map_init(Scratch::default, |scratch, pair| {
+                        whole_energy(
+                            square,
+                            &points[pair.point as usize],
+                            pair.candidate,
+                            scratch,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            };
+            for (&(at, index), (energy, bands)) in chunk.iter().zip(evaluated) {
+                let sample = &mut samples[at];
+                sample.evaluated[index] = Some(sample.values.len());
+                sample.values.push((energy.mixed, bands));
             }
         }
         for (at, round) in rounds {
             let sample = &mut samples[at];
             for index in round.certain.clone() {
-                for (sum, value) in sample
-                    .certain_energy
-                    .iter_mut()
-                    .zip(sample.evaluated[index].unwrap())
-                {
+                let energy = sample.energy(index);
+                for (sum, value) in sample.certain_energy.iter_mut().zip(energy) {
                     *sum += value;
                 }
             }
-            let (estimate, variance) =
-                round.estimate(&sample.orders, |index| sample.evaluated[index].unwrap());
+            let (estimate, variance) = round.estimate(&sample.orders, |index| sample.energy(index));
             let answer = std::array::from_fn(|period| {
                 loud_energy[sample.point][sample.layer][period]
                     + sample.certain_energy[period]
@@ -154,34 +176,25 @@ pub(crate) fn sampled_hum(
             }
         }
     }
-    // Re-evaluate final draws with their weights instead of retaining a spectrum for every trial draw.
-    let pairs: Vec<_> = samples
-        .iter()
-        .flat_map(|sample| {
-            let round = sample.finished.as_ref().unwrap();
-            (0..round.certain.end)
-                .map(|index| (index, 1.0))
-                .chain(round.weights(&sample.orders))
-                .map(|(index, band_weight)| Pair {
-                    point: sample.point as u32,
-                    candidate: sample.indices[index],
-                    band_weight,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    for chunk in pairs.chunks(PASS_PAIRS) {
-        let evaluated = evaluate_all(square, points, chunk, batch)?;
-        for ((_, total), bands) in quiet.iter_mut().zip(evaluated.bands) {
-            for (total, bands) in total.iter_mut().zip(bands) {
-                for (total, bands) in total.iter_mut().zip(bands) {
-                    for (total, value) in total.iter_mut().zip(bands) {
-                        *total += value;
-                    }
+    let mut reused_final_pairs = 0usize;
+    for sample in &samples {
+        let round = sample.finished.as_ref().unwrap();
+        for (index, weight) in (0..round.certain.end)
+            .map(|index| (index, 1.0))
+            .chain(round.weights(&sample.orders))
+        {
+            reused_final_pairs += 1;
+            let bands = &sample.values[sample.evaluated[index].unwrap()].1;
+            for (total, bands) in quiet[sample.point].1[sample.layer].iter_mut().zip(bands) {
+                for (total, band) in total.iter_mut().zip(bands) {
+                    *total += weight * band;
                 }
             }
         }
     }
+    eprintln!(
+        "qm-paint: hum sample pairs: rounds={traced_round_pairs}, reused final={reused_final_pairs}"
+    );
     for (energy, layers) in &mut quiet {
         for (energy, bands) in energy.iter().zip(layers) {
             for (energy, bands) in energy.iter().zip(bands) {

@@ -116,6 +116,7 @@ fn tangent_and_clipped_corners_keep_cpu_roofs_and_source_containment() {
                 (&receivers, &own),
                 (&candidates, &point_indices, &weights),
                 &mut bands,
+                None,
             )
             .unwrap();
         assert_eq!(

@@ -141,6 +141,12 @@ impl Pair {
 /// every `(p, c)` of `pairs`, which come point by point.
 pub trait Batch: Sync {
     fn evaluate(&self, points: &[Point], pairs: &[Pair]) -> Result<Evaluated, String>;
+    /// Each pair's unweighted energy and spectrum, retained while hum samples converge.
+    fn pair_spectra(
+        &self,
+        points: &[Point],
+        pairs: &[Pair],
+    ) -> Result<Vec<(PairEnergy, Bands)>, String>;
     /// One chunk's Nden per layer and in total (sone), at most [`PIXELS_PER_LOUDNESS_BATCH`] points,
     /// from its packed sound
     /// (`crate::sone::PixelSound::pack`): `input` all the pixels' floats, `offsets` where each
