@@ -227,9 +227,8 @@ building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.
 512 × 512 cells of twice the loudness level in phon (80 one sone, a doubling 20; 254 silence under
 1/16 sone, 255 not assessed). Each tile is compressed when painted: PNG's Paeth predictor uses
 the left, above and upper-left cells (zero outside the tile), and the cell minus that prediction,
-modulo 256, enters one Brotli stream at quality 11 with a 512 KiB window. Among the measured
-Brotli choices, this fixed predictor and quality fit the projected volume budget. The served
-archives in the measured urban area shrink by 26 % against raw-cell Brotli at quality 9.
+modulo 256, enters one lossless Brotli stream with a 512 KiB window. The painter uses quality 10
+for new tiles; existing streams at other quality settings decode in the same way.
 The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` restores the same prediction in place;
 every cell, including silence and not assessed, returns exactly.
 

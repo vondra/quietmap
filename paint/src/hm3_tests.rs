@@ -137,7 +137,7 @@ fn identical_quadrants_share_bytes_and_invalid_ranges_are_refused() {
 }
 
 #[test]
-fn legacy_squares_stay_complete_and_dual_streams_keep_the_same_nden_bytes() {
+fn legacy_fixture_stays_readable_and_keeps_its_nden_streams_when_lden_is_added() {
     let old = tempfile::tempdir().unwrap();
     let path = square_path(old.path(), 12, (9, 17));
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();

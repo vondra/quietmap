@@ -34,8 +34,8 @@ impl Metric {
         }
     }
 }
-// Fixed Paeth at quality 11 meets the measured volume budget; Up and quality 10 do not.
-const NDEN_BROTLI_QUALITY: u8 = 11;
+// Quality 10 preserves every cell with less encoding work than 11, at the cost of larger streams.
+const NDEN_BROTLI_QUALITY: u8 = 10;
 // Lden uses quality 9: the same cells for much less of the painter's processor, which bounds the run.
 const LDEN_BROTLI_QUALITY: u8 = 9;
 // This is the smallest window that retains every possible within-tile match.
