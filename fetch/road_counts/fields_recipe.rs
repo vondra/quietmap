@@ -26,6 +26,8 @@ pub(super) struct Publisher {
     pub(super) search_radius_m: f64,
     pub(super) reference_required: bool,
     pub(super) classes: [Option<Vec<String>>; 4],
+    #[serde(default)]
+    pub(super) class_groups: Vec<(u8, Vec<String>)>,
     pub(super) total: Option<String>,
     pub(super) year_field: Option<String>,
     pub(super) estimated_classes: u8,

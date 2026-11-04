@@ -22,7 +22,7 @@ pub(super) fn convert(
     raw: &[u8],
 ) -> Result<Vec<Observation>> {
     let mut reader = csv::Reader::from_reader(raw);
-    let mut rows = BTreeMap::new();
+    let mut rows = Vec::new();
     for record in reader.deserialize::<BTreeMap<String, String>>() {
         let record = record?;
         let number = |name: &str| -> Result<Option<f64>> {
@@ -53,9 +53,11 @@ pub(super) fn convert(
         if code.is_empty() {
             continue;
         }
-        let mut row = recipe
-            .source
-            .observation(inputs, code.into(), CountBasis::BothDirections)?;
+        let mut row = recipe.source.observation(
+            inputs,
+            super::hpms::identity(&serde_json::to_value(&record)?),
+            CountBasis::BothDirections,
+        )?;
         for (class, fields) in [
             vec!["SV", "SVT"],
             vec!["TB2", "BD", "DRT"],
@@ -79,8 +81,10 @@ pub(super) fn convert(
         row.reference_required = true;
         row.target.reference_rule = crate::roads::observation_target::ReferenceRule::Whole;
         row.road_class_mask = recipe.road_class_mask;
-        rows.insert(code.to_owned(), row);
+        rows.push(row);
     }
     ensure!(!rows.is_empty(), "DRR has no usable count records");
-    Ok(rows.into_values().collect())
+    rows.sort_by(|a, b| a.identity.cmp(&b.identity));
+    rows.dedup_by(|a, b| a.identity == b.identity);
+    Ok(rows)
 }

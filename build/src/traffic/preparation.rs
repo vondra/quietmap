@@ -253,7 +253,11 @@ pub(crate) fn apply(roads: &mut [Road], structures: &Path, model: &DemandModel) 
         }
         let street = &streets[&street_keys[index]];
         let trips = if road.class == 7 {
-            row_trips[index].clamp(20.0, 400.0)
+            match model.service_trip_bounds {
+                Some([minimum, maximum]) => row_trips[index].clamp(minimum, maximum),
+                None if row_trips[index] > 0.0 => row_trips[index],
+                None => continue,
+            }
         } else {
             // Without an admitted street fit, retain the common class prior; no measured background is zero.
             let Some(parameters) = &model.street else {

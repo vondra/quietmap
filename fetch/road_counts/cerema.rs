@@ -18,8 +18,6 @@ pub(super) struct Recipe {
     pub source: Source,
     integer_percent_divisor: f64,
     pub older_editions: Vec<Edition>,
-    motorcycle_share: f64,
-    medium_share_of_heavy: f64,
     search_radius_m: f64,
 }
 
@@ -155,17 +153,12 @@ fn edition(
             .or(median);
         let total = section.observation.total.unwrap();
         let heavy = ratio.map(|v| (total * v).round());
-        if heavy.is_some_and(|v| v + (total * recipe.motorcycle_share).round() > total) {
+        if heavy.is_some_and(|v| v > total) {
             continue;
         }
-        section.observation.vehicle_classes = records::split_heavy(
-            total,
-            heavy,
-            recipe.motorcycle_share,
-            recipe.medium_share_of_heavy,
-        );
+        records::observe_heavy_group(&mut section.observation, heavy);
     }
-    sections.retain(|s| s.observation.vehicle_classes.iter().any(Option::is_some));
+    sections.retain(|s| s.observation.total.is_some());
     Ok(sections)
 }
 

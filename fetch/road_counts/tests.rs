@@ -52,7 +52,7 @@ fn sict_parts_share_an_identity_without_losing_the_measured_split_under_legacy_f
         serde_json::to_vec(&json!({"features":[feature(0.0),feature(1.0)]})).unwrap(),
     )
     .unwrap();
-    let recipe=serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"composition_input":"survey","total_field":"total","fallback_shares":[0.795,0.071,0.082,0.052],"search_radius_m":200.0})).unwrap();
+    let recipe=serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"composition_input":"survey","total_field":"total","search_radius_m":200.0})).unwrap();
     let rows = sict::convert(&recipe, &inputs, &path).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].geometry.len(), 2);
@@ -68,24 +68,21 @@ fn hpms_truncates_fractional_totals_and_preserves_unknown_direction_and_equal_tw
     let root = directory.path().join("2000/survey");
     std::fs::write(root.join("records.json"), serde_json::to_vec(&raw).unwrap()).unwrap();
     std::fs::write(root.join("terminal.json"), br#"{"features":[]}"#).unwrap();
-    let recipe = serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"files":["records.json","terminal.json"],"heavy_shares_by_functional_class":[0.12,0.1,0.08,0.06,0.05],"motorcycle_share":0.01,"medium_share_of_heavy":0.2,"search_radius_m":100.0,"minimum_alignment_cosine":0.86,"twin_radius_m":300.0,"twin_total_ratio_tolerance":0.15})).unwrap();
+    let recipe = serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"files":["records.json","terminal.json"],"functional_class_max":5,"search_radius_m":100.0,"minimum_alignment_cosine":0.86,"twin_radius_m":300.0,"twin_total_ratio_tolerance":0.15})).unwrap();
     let rows = hpms::convert(&recipe, &inputs, &root).unwrap();
     let row = |name| rows.iter().find(|r| r.identity == name).unwrap();
     assert_eq!(row("unknown").count_basis, CountBasis::Unknown);
     assert_eq!(row("twin-one").count_basis, CountBasis::BothDirections);
     assert_eq!(row("directional").count_basis, CountBasis::Directional);
-    assert_eq!(
-        row("unknown").vehicle_classes,
-        [870.0, 24.0, 96.0, 10.0].map(Some)
-    );
+    assert_eq!(row("unknown").vehicle_classes, [None; 4]);
 }
 
 #[test]
 fn reciprocal_loops_keep_each_direction_and_sum_only_for_an_undivided_mapped_road() {
     let (_directory, inputs) = inputs("NL");
     let source = json!({"input_id":"survey","source_id":1,"source_rank":1});
-    let recipe=serde_json::from_value(json!({"source":source,"motorcycle_share":0.01,"search_radius_m":50.0,"minimum_alignment_cosine":0.8660254037844387})).unwrap();
-    let feature = |id, twin, reference, counts: [u32; 3]| json!({"properties":{"vbn_id":id,"vbn_id_tgn":twin,"bnsubsrt_b":"HR","afst_mtw":0,"l1_e_wk":counts[0],"l2_e_wk":counts[1],"l3_e_wk":counts[2],"wegnrhmp_b":reference,"wegnrhmp_e":reference},"geometry":{"type":"LineString","coordinates":[[5.0,52.0],[5.001,52.0]]}});
+    let recipe=serde_json::from_value(json!({"source":source,"search_radius_m":50.0,"minimum_alignment_cosine":0.8660254037844387})).unwrap();
+    let feature = |id, twin, reference, counts: [u32; 3]| json!({"properties":{"vbn_id":id,"vbn_id_tgn":twin,"bnsubsrt_b":"HR","afst_mtw":0,"al_e_wk":counts.iter().sum::<u32>(),"l1_e_wk":counts[0],"l2_e_wk":counts[1],"l3_e_wk":counts[2],"wegnrhmp_b":reference,"wegnrhmp_e":reference},"geometry":{"type":"LineString","coordinates":[[5.0,52.0],[5.001,52.0]]}});
     let rows=inweva::convert(&recipe,&inputs,&json!({"features":[feature("1","2","A1",[100,20,10]),feature("2","1","A1",[200,40,30]),feature("3","","N1",[50,10,5])]})).unwrap();
     assert_eq!(rows.len(), 4);
     let summed = rows.iter().find(|r| r.identity == "1-2").unwrap();
@@ -106,10 +103,8 @@ fn reciprocal_loops_keep_each_direction_and_sum_only_for_an_undivided_mapped_roa
         rows.iter().find(|r| r.identity == "2").unwrap().total,
         Some(270.0)
     );
-    assert_eq!(
-        summed.vehicle_classes,
-        [Some(296.0), Some(60.0), Some(40.0), Some(4.0)]
-    );
+    assert_eq!(summed.vehicle_classes, [None, Some(60.0), Some(40.0), None]);
+    assert_eq!(summed.vehicle_groups[0].count, 300.0);
     assert_eq!(summed.estimated_classes, 9);
     assert_eq!(rows[0].observed_end, "2000-12-31");
     assert_eq!(rows[0].time_basis, TimeBasis::AnnualDaily);
@@ -124,8 +119,20 @@ fn a_blank_drr_class_is_not_a_measured_zero_even_when_the_legacy_mask_says_fifte
     .unwrap();
     let data = "road_code,sum_AADT,MC,SV,SVT,TB2,TB3,T4,ART3,ART4,ART5,ART6,BD,DRT\nA,100,0,100,0,0,0,0,0,0,0,0,0,0\nB,100,,100,0,0,0,0,0,0,0,0,0,0\n";
     let rows = thai_drr::convert(&recipe, &inputs, data.as_bytes()).unwrap();
-    assert_eq!(rows[0].vehicle_classes[3], Some(0.0));
-    assert_eq!(rows[1].vehicle_classes[3], None);
+    assert_eq!(
+        rows.iter()
+            .find(|r| r.reference == "A")
+            .unwrap()
+            .vehicle_classes[3],
+        Some(0.0)
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|r| r.reference == "B")
+            .unwrap()
+            .vehicle_classes[3],
+        None
+    );
     assert!(
         rows.iter()
             .all(|r| r.vehicle_classes[0] == Some(100.0) && r.estimated_classes == 0)
@@ -141,6 +148,8 @@ fn mlit_uses_declared_objects_and_keeps_the_weekday_basis_of_unlocated_summaries
         let mut row = vec![String::new(); 62];
         row[3] = "1".into();
         row[5] = "Example Expressway".into();
+        row[34] = "1".into();
+        row[46] = "1".into();
         row[59] = small.to_string();
         row[60] = large.to_string();
         writer.write_record(row).unwrap();
@@ -148,18 +157,39 @@ fn mlit_uses_declared_objects_and_keeps_the_weekday_basis_of_unlocated_summaries
     let bytes = writer.into_inner().unwrap();
     std::fs::write(directory.path().join("2000/survey/declared.csv"), bytes).unwrap();
     let source = json!({"input_id":"survey","source_id":1,"source_rank":2});
-    let recipe=serde_json::from_value(json!({"source":source,"fallback_source":{"input_id":"survey","source_id":2,"source_rank":1},"files":["declared.csv"],"medium_share_of_large":0.25,"weekday_to_model_daily":1.0})).unwrap();
+    let recipe=serde_json::from_value(json!({"source":source,"fallback_source":{"input_id":"survey","source_id":2,"source_rank":1},"files":["declared.csv"],"weekday_to_model_daily":1.0})).unwrap();
     let rows = mlit::convert(&recipe, &inputs, &directory.path().join("2000/survey")).unwrap();
     let measured = rows.iter().find(|r| r.source_id == 1).unwrap();
-    assert_eq!(
-        measured.vehicle_classes,
-        [Some(150.0), Some(4.0), Some(11.0), None]
-    );
+    assert_eq!(measured.vehicle_classes, [Some(150.0), None, None, None]);
+    assert_eq!(measured.vehicle_groups[0].count, 15.0);
     assert_eq!(measured.time_basis, TimeBasis::WeekdayDaily);
     assert!(measured.geometry.is_empty());
     assert!(
         rows.iter()
             .filter(|r| r.source_id == 2)
-            .all(|r| !r.measured)
+            .all(|r| !r.measured && r.estimated_classes == 15)
     );
+}
+
+#[test]
+fn corrected_dutch_total_preserves_truck_counts_and_an_observed_zero() {
+    let (_directory, inputs) = inputs("NL");
+    let recipe = serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"search_radius_m":50.0,"minimum_alignment_cosine":0.86})).unwrap();
+    let feature = |id, total, light, medium, heavy| json!({"properties":{"vbn_id":id,"vbn_id_tgn":"","bnsubsrt_b":"HR","afst_mtw":0,"al_e_wk":total,"l1_e_wk":light,"l2_e_wk":medium,"l3_e_wk":heavy,"wegnrhmp_b":"A1","wegnrhmp_e":"A1"},"geometry":{"type":"LineString","coordinates":[[5.0,52.0],[5.001,52.0]]}});
+    let rows = inweva::convert(
+        &recipe,
+        &inputs,
+        &json!({"features":[feature("corrected",200,100,20,10),feature("zero",0,0,0,0)]}),
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].total, Some(200.0));
+    assert_eq!(
+        rows[0].vehicle_classes,
+        [None, Some(20.0), Some(10.0), None]
+    );
+    assert_eq!(rows[0].vehicle_groups[0].count, 170.0);
+    assert_eq!(rows[0].estimated_classes, 9);
+    assert_eq!(rows[1].total, Some(0.0));
+    assert_eq!(rows[1].daily_classes([1.0; 4]).unwrap().0, [0.0; 4]);
 }

@@ -27,7 +27,8 @@ for (const device of ['desktop', 'phone'] as const) {
     for (const [region, country, code, method, publisher] of [
       ['asia', 'Thailand', 'th', 'vehicle-kilometres', 'Department of Rural Roads'],
       ['asia', 'Japan', 'jp', 'it is not a measured zero', 'MLIT'],
-      ['europe', 'Netherlands', 'nl', 'Each mapped carriageway keeps its own directional count', 'Rijkswaterstaat'],
+      ['europe', 'Netherlands', 'nl', 'The published all-vehicle total', 'Rijkswaterstaat'],
+      ['europe', 'Italy', 'it', 'daily averages describe November 2015', 'Anas'],
       ['north-america', 'United States', 'us', 'vehicle mix comes from FHWA', 'FHWA'],
     ]) {
       test(`${country} preserves its method and publishes only built years`, async ({ page }, info) => {
@@ -39,6 +40,7 @@ for (const device of ['desktop', 'phone'] as const) {
         await expect(page).toHaveURL(new RegExp(`${countryURL}$`))
         await expect(page.getByRole('heading', { name: 'Roads', exact: true })).toBeVisible()
         await expect(page.locator('main')).toContainText(method)
+        await page.getByText(method, { exact: false }).scrollIntoViewIfNeeded()
         await page.screenshot({ path: info.outputPath(`${code}-${device}-method.png`) })
         for (const year of years) {
           await expect(page.getByRole('heading', { name: year.name, exact: true })).toHaveCount(year.manifest.built ? 1 : 0)

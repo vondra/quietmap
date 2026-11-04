@@ -13,8 +13,6 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 pub(super) struct Recipe {
     pub source: Source,
-    motorcycle_share: f64,
-    medium_share_of_heavy: f64,
     search_radius_m: f64,
 }
 
@@ -60,12 +58,7 @@ pub(super) fn convert(
         row.road_class_mask = records::class_mask(Some(rank), ramp.is_match(reference));
         row.search_radius_m = recipe.search_radius_m;
         row.total = Some(total);
-        row.vehicle_classes = records::split_heavy(
-            total,
-            heavy.map(|v| total * v / 100.0),
-            recipe.motorcycle_share,
-            recipe.medium_share_of_heavy,
-        );
+        records::observe_heavy_group(&mut row, heavy.map(|v| total * v / 100.0));
         row.estimated_classes = 15;
         rows.push(row);
     }

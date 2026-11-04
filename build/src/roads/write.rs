@@ -4,8 +4,8 @@ use super::{allocation, input, model::Model, spatial::RoadIndex};
 use anyhow::Result;
 use arrow_array::RecordBatch;
 use arrow_array::{
-    ArrayRef, Float32Array, Float64Array, Int32Array, StringArray, UInt8Array, UInt16Array,
-    UInt32Array,
+    ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array, StringArray, UInt8Array,
+    UInt16Array, UInt32Array,
 };
 use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema};
@@ -158,6 +158,24 @@ pub fn stage(
                     .map(|c| roads[c.parent as usize].observation_estimated)
                     .collect::<Vec<_>>(),
             )) as ArrayRef,
+        ),
+        (
+            "traffic_observation_measured",
+            Arc::new(BooleanArray::from(
+                children
+                    .iter()
+                    .map(|c| roads[c.parent as usize].count_origin_measured)
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        (
+            "traffic_observation_time_basis",
+            Arc::new(UInt8Array::from(
+                children
+                    .iter()
+                    .map(|c| roads[c.parent as usize].observation_time_basis)
+                    .collect::<Vec<_>>(),
+            )),
         ),
         (
             "traffic_count_basis",

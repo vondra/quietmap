@@ -10,7 +10,7 @@ Traffic volumes, both 2024 editions:
 - State highways: [NZTA Waka Kotahi open data portal](https://opendata-nzta.opendata.arcgis.com/). Each carriageway section has an estimated daily traffic and a heavy vehicle percentage.
 - Auckland streets: [Auckland Transport](https://data-atgis.opendata.arcgis.com/) count sites, each with a daily count and a heavy vehicle percentage.
 
-An OSM motorway, trunk, primary, secondary or tertiary road takes the nearest count within 200 m with a compatible road class. The heavy share is the published percentage; one fifth of it is assigned to medium trucks and 1 % of the traffic to motorcycles, assumed splits. Where no junction lies between them, an uncounted stretch of a counted road carries the count of its neighbour.
+An OSM motorway, trunk, primary, secondary or tertiary road takes the nearest count within 200 m with a compatible road class. The published heavy-vehicle total is retained. The selected year’s class model estimates its medium and heavy parts and the missing motorcycle count. Where no junction lies between them, an uncounted stretch of a counted road carries the count of its neighbour.
 
 Local streets, Auckland's included, have no counts loaded and carry the trips their buildings make. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a model of the trips made within 5 km, fitted on European counts ([method](/about/data-preparation)).
 

@@ -197,7 +197,7 @@ impl Matcher {
                 continue;
             };
             let distance = if same_way && row.target.way_assignment.is_some() {
-                super::matching_distance::flat_distance(midpoint, row.geometry[0][0])
+                super::matching_distance::segment_distance(row.geometry[0][0], points[0], points[2])
             } else if published_way {
                 super::matching_distance::distance_without_heading(row, road, &points)
             } else {
@@ -230,10 +230,9 @@ impl Matcher {
                     && identity_priority == priority
                     && distance == previous_distance
                     && support_distance == best_support
-                    && !row.geometry.is_empty()
-                    && !other.geometry.is_empty()
                     && (row.vehicle_classes != other.vehicle_classes
                         || row.total != other.total
+                        || row.vehicle_groups != other.vehicle_groups
                         || row.count_basis != other.count_basis
                         || row.time_basis != other.time_basis
                         || row.daily_factor != other.daily_factor)
@@ -278,6 +277,7 @@ impl Matcher {
             road.observation = row.identity.clone();
             road.basis = row.count_basis as u8;
             road.count_origin_measured = row.measured;
+            road.observation_time_basis = row.time_basis as u8;
         }
         Ok(())
     }

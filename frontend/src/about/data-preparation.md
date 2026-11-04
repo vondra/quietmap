@@ -111,7 +111,7 @@ which counts and models are used; a road classification alone is not a traffic c
 <details>
 <summary>Road observations and historical traffic</summary>
 
-A road observation keeps the period actually counted, its location or route, the direction and count scope, the source, and a separate value or missing flag for each vehicle class. A reported zero stays zero; a missing class is inferred and remains marked estimated. Measured vehicle classes retain that status even when the count is shared between carriageways or continued along the road. A count of one direction, both directions and a whole street cross-section have different meanings when divided between mapped carriageways.
+A road observation keeps the period actually counted, its location or route, the direction and count scope, the source, and a separate value or missing flag for each vehicle class. A reported zero stays zero; a missing class is inferred and remains marked estimated. A published group, such as all trucks, keeps its total while the selected year’s class model estimates its parts. Measured vehicle classes retain that status even when the count is shared between carriageways or continued along the road. A count of one direction, both directions and a whole street cross-section have different meanings when divided between mapped carriageways.
 
 Each map year selects explicit publisher editions and converter definitions. A later publication can supply earlier observations, but observations after the year’s cutoff cannot enter the map or train its model. The country’s source section says when no dated road count is used; the global road model and mapped buildings then provide the estimate. Road classifications and manually drawn city boxes are not traffic measurements.
 

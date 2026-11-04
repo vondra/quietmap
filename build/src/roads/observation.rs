@@ -43,6 +43,8 @@ pub struct Observation {
     pub search_radius_m: f64,
     pub reference_required: bool,
     pub vehicle_classes: [Option<f64>; 4],
+    #[serde(default)]
+    pub vehicle_groups: Vec<super::observation_groups::VehicleGroup>,
     pub total: Option<f64>,
     pub estimated_classes: u8,
     pub daily_factor: f64,
@@ -55,6 +57,7 @@ pub struct Observation {
 impl Observation {
     pub fn validate(&self, cutoff: NaiveDate) -> Result<()> {
         self.target.validate()?;
+        super::observation_groups::validate(&self.vehicle_groups)?;
         self.sample.validate()?;
         if self.target.way_assignment.is_some() {
             ensure!(
@@ -131,7 +134,9 @@ impl Observation {
             "invalid observed count"
         );
         ensure!(
-            self.total.is_some() || self.vehicle_classes.iter().any(Option::is_some),
+            self.total.is_some()
+                || self.vehicle_classes.iter().any(Option::is_some)
+                || !self.vehicle_groups.is_empty(),
             "observation has no count"
         );
         Ok(())
@@ -166,10 +171,16 @@ impl Observation {
             }
         };
         let mut counts = self.vehicle_classes.map(|v| v.map(to_daily));
+        let grouped_status = super::observation_groups::fill(
+            &self.vehicle_groups,
+            &mut counts,
+            missing_shares,
+            to_daily,
+        )?;
         let known: f64 = counts.iter().flatten().sum();
         let weight: f64 = missing_shares.iter().sum();
-        let missing = self.vehicle_classes.iter().any(Option::is_none);
-        let mut status = self.estimated_classes;
+        let missing = counts.iter().any(Option::is_none);
+        let mut status = self.estimated_classes | grouped_status;
         if missing {
             let total = if let Some(total) = self.total {
                 to_daily(total)
@@ -240,6 +251,7 @@ mod tests {
             road_class_mask: 1,
             search_radius_m: 100.0,
             reference_required: true,
+            vehicle_groups: Vec::new(),
             vehicle_classes: [Some(80.0), None, Some(0.0), None],
             total: Some(100.0),
             estimated_classes: 0,

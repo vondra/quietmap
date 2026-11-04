@@ -161,13 +161,8 @@ pub(super) fn convert(
                 .observation(inputs, id.to_string(), CountBasis::StreetCrossSection)?;
         row.geometry = geometry;
         row.total = Some(total.round());
-        row.vehicle_classes = [
-            heavy.map(|h| (total - h).round()),
-            Some(0.0),
-            heavy.map(f64::round),
-            Some(0.0),
-        ];
-        row.estimated_classes = 10;
+        super::records::observe_heavy_group(&mut row, heavy.map(f64::round));
+        row.estimated_classes = 15;
         row.road_class_mask = recipe.road_class_mask;
         row.search_radius_m = recipe.search_radius_m;
         row.target.coverage = coverage.clone();

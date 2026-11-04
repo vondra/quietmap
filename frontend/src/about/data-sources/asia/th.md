@@ -5,7 +5,7 @@ intro: Department of Rural Roads counts 2024 on rural roads, Department of Highw
 
 ## Roads
 
-Rural roads: Department of Rural Roads daily traffic for 2024, per road and in twelve vehicle classes including motorcycles, from the [Ministry of Transport data portal](https://datagov.mot.go.th/). Counts are matched to OpenStreetMap by the exact Thai road code, such as นบ.3021; the published vehicle split is kept.
+Rural roads: Department of Rural Roads daily traffic for 2024, per road and in twelve vehicle classes including motorcycles, from the [Ministry of Transport data portal](https://datagov.mot.go.th/). Counts are matched to OpenStreetMap by the exact Thai road code, such as นบ.3021; the published vehicle split is kept. Distinct stations on the same road remain distinct observations. Where their counts conflict and the retained table gives no station location, the road keeps the global estimate.
 
 National highways: the Department of Highways' traffic table for 2021 gives the vehicle-kilometres a year of 2,695 control sections, in ten vehicle classes and motorcycles, each in its province. A highway's vehicle-kilometres in a province over the length of its OpenStreetMap roads there give its mean daily traffic across both directions, with the measured vehicle shares: highway 1 carries 124,800 vehicles a day in Pathum Thani and 11,900 in Chai Nat. These means cover 50,145 of the 53,510 km of roads with a department number and miss the department's 2025 counts at 61 stations in Nakhon Sawan by 1.3 dB on average.
 

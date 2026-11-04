@@ -13,6 +13,8 @@ Vehicle mix: where not counted, a main road takes the medium and heavy shares of
 
 Unsigned roads: a primary road 50 km/h in towns, 70 outside, a motorway 130.
 
+The retained ANAS daily averages describe November 2015. They provide a period-based estimate; no measured seasonal adjustment is available.
+
 ## Railways
 
 Italy has no national open timetable. Train counts come from five regional feeds, one busy Wednesday:

@@ -38,6 +38,7 @@ pub struct Road {
     pub basis: u8,
     pub estimated: u8,
     pub observation_estimated: u8,
+    pub observation_time_basis: u8,
     pub observation: String,
     pub reference: String,
     pub corridor: String,
@@ -182,6 +183,7 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>> {
                 basis: 0,
                 estimated: 15,
                 observation_estimated: 15,
+                observation_time_basis: u8::MAX,
                 observation: String::new(),
                 reference: reference.into(),
                 corridor: if reference.is_empty() {

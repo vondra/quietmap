@@ -24,8 +24,6 @@ pub(super) struct Recipe {
     pub source: Source,
     pub files: Vec<PathBuf>,
     pub carriageways: bool,
-    pub motorcycle_share: f64,
-    pub medium_share_of_heavy: f64,
     pub search_radius_m: f64,
 }
 
@@ -88,11 +86,9 @@ pub(super) fn convert(
         )?;
         row.measured = !estimate.is_some_and(|v| v.round() > 0.0);
         row.total = Some(total.round());
-        row.vehicle_classes = records::split_heavy(
-            total.round(),
+        records::observe_heavy_group(
+            &mut row,
             heavy.map(|percent| total.round() * percent / 100.0),
-            recipe.motorcycle_share,
-            recipe.medium_share_of_heavy,
         );
         row.estimated_classes = 15;
         row.road_class_mask = records::class_mask(

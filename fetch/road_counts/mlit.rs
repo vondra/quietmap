@@ -21,7 +21,6 @@ pub(super) struct Recipe {
     pub source: Source,
     fallback_source: Source,
     files: Vec<PathBuf>,
-    medium_share_of_large: f64,
     weekday_to_model_daily: f64,
 }
 
@@ -61,7 +60,7 @@ fn observation(
     inputs: &YearInputs,
     source: &Source,
     key: String,
-    rows: &[[f64; 2]],
+    rows: &[[f64; 3]],
     mask: u16,
     half: bool,
 ) -> Result<Observation> {
@@ -71,12 +70,17 @@ fn observation(
         small = (small / 2.0).round();
         large = (large / 2.0).round();
     }
-    let medium = (large * recipe.medium_share_of_large).round();
     let mut result = source.observation(inputs, key, CountBasis::BothDirections)?;
-    result.vehicle_classes = [Some(small), Some(medium), Some(large - medium), None];
+    result.vehicle_classes = [Some(small), None, None, None];
+    result.vehicle_groups = vec![crate::roads::observation_groups::VehicleGroup {
+        classes: 6,
+        count: large,
+    }];
     result.total = None;
     result.time_basis = TimeBasis::WeekdayDaily;
     result.daily_factor = recipe.weekday_to_model_daily;
+    result.measured =
+        source.source_id == recipe.source.source_id && rows.iter().all(|r| r[2] == 1.0);
     result.estimated_classes = if result.measured { 14 } else { 15 };
     result.road_class_mask = mask;
     Ok(result)
@@ -95,14 +99,9 @@ pub(super) fn convert(
         recipe.source.input_id == recipe.fallback_source.input_id,
         "MLIT summaries must cite their census input"
     );
-    ensure!(
-        recipe.medium_share_of_large.is_finite()
-            && (0.0..=1.0).contains(&recipe.medium_share_of_large),
-        "invalid large-vehicle conversion"
-    );
-    let mut routes = BTreeMap::<String, Vec<[f64; 2]>>::new();
-    let mut names = BTreeMap::<String, Vec<[f64; 2]>>::new();
-    let mut classes = BTreeMap::<u8, Vec<[f64; 2]>>::new();
+    let mut routes = BTreeMap::<String, Vec<[f64; 3]>>::new();
+    let mut names = BTreeMap::<String, Vec<[f64; 3]>>::new();
+    let mut classes = BTreeMap::<u8, Vec<[f64; 3]>>::new();
     for file in &recipe.files {
         ensure!(
             !file.is_absolute() && file.components().all(|c| matches!(c, Component::Normal(_))),
@@ -143,7 +142,9 @@ pub(super) fn convert(
             if small + large == 0.0 {
                 continue;
             }
-            let counts = [small, large];
+            // MLIT kasyo explanation section 19: 1 observed, 2 publisher estimate.
+            let measured = fields[34].trim() == "1" && fields[46].trim() == "1";
+            let counts = [small, large, f64::from(measured)];
             admitted += 1;
             for class in target {
                 classes.entry(*class).or_default().push(counts);
@@ -233,7 +234,7 @@ pub(super) fn convert(
         output.push(row);
     }
     for (class, rows) in classes {
-        let mut row = observation(
+        let row = observation(
             recipe,
             inputs,
             &recipe.fallback_source,
@@ -242,10 +243,9 @@ pub(super) fn convert(
             1 << class,
             false,
         )?;
-        row.measured = false;
         output.push(row);
         if class <= 2 {
-            let mut row = observation(
+            let row = observation(
                 recipe,
                 inputs,
                 &recipe.fallback_source,
@@ -254,7 +254,6 @@ pub(super) fn convert(
                 1 << (class + 10),
                 true,
             )?;
-            row.measured = false;
             output.push(row);
         }
     }

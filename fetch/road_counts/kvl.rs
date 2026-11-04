@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 pub(super) struct Recipe {
     pub source: Source,
     files: Vec<PathBuf>,
-    motorcycle_share: f64,
     search_radius_m: f64,
 }
 
@@ -40,8 +39,7 @@ pub(super) fn convert(
             4
         };
         let heavy = records::number(&p["kvl_raskas"])?;
-        let moto = (total * recipe.motorcycle_share).round();
-        if heavy.is_some_and(|v| v + moto > total) {
+        if heavy.is_some_and(|v| v > total) {
             continue;
         }
         let mut row = recipe.source.observation(
@@ -52,14 +50,9 @@ pub(super) fn convert(
         row.geometry = vec![vec![records::centroid(&feature)?]];
         row.road_class_mask = records::class_mask(Some(rank), false);
         row.search_radius_m = recipe.search_radius_m;
-        row.vehicle_classes = [
-            heavy.map(|v| total - v - moto),
-            Some(0.0),
-            heavy,
-            Some(moto),
-        ];
+        records::observe_heavy_group(&mut row, heavy);
         row.total = Some(total);
-        row.estimated_classes = 1 | 2 | 8;
+        row.estimated_classes = 15;
         rows.push(row);
     }
     Ok(rows)

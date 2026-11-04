@@ -5,7 +5,7 @@ intro: Quebec DJMA 2024 traffic counts, timetables for VIA Rail and seven city s
 
 ## Roads
 
-Traffic volumes, Quebec only: [Ministère des Transports](https://www.donneesquebec.ca/recherche/dataset/debit-de-circulation) DJMA (annual average daily traffic) for the provincial highway network, 2024 edition, with a published truck percentage per section. An OSM road takes the nearest counted section of the same route number and a similar road class. Motorcycles are 1% of vehicles.
+Traffic volumes, Quebec only: [Ministère des Transports](https://www.donneesquebec.ca/recherche/dataset/debit-de-circulation) DJMA (annual average daily traffic) for the provincial highway network, 2024 edition, with a published truck percentage per section. An OSM road takes the nearest counted section of the same route number and a similar road class. The selected year’s vehicle model divides the truck total into medium and heavy vehicles and estimates missing motorcycles.
 
 Canada has no national traffic database, and the Ontario, British Columbia and Alberta publications are not loaded; Quebec's counts reach 12 % of the motorway, trunk and primary length. Other motorways, trunks and primaries use the world estimate per lane ([world defaults](/about/data-preparation)); secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make.
 

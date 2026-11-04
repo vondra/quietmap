@@ -14,7 +14,6 @@ use std::collections::{HashMap, HashSet};
 #[serde(deny_unknown_fields)]
 pub(super) struct Recipe {
     pub source: Source,
-    motorcycle_share: f64,
     search_radius_m: f64,
     minimum_alignment_cosine: f64,
 }
@@ -39,10 +38,6 @@ pub(super) fn convert(
     inputs: &YearInputs,
     raw: &Value,
 ) -> Result<Vec<Observation>> {
-    ensure!(
-        recipe.motorcycle_share.is_finite() && (0.0..=1.0).contains(&recipe.motorcycle_share),
-        "invalid imputed motorcycle share"
-    );
     let features = raw["features"]
         .as_array()
         .ok_or_else(|| anyhow!("INWEVA requires GeoJSON features"))?;
@@ -72,14 +67,14 @@ pub(super) fn convert(
             continue;
         }
         let counts = [
-            count(&p["l1_e_wk"]),
+            count(&p["al_e_wk"]),
             count(&p["l2_e_wk"]),
             count(&p["l3_e_wk"]),
         ];
-        let [Some(light), Some(medium), Some(heavy)] = counts else {
+        let [Some(total), Some(medium), Some(heavy)] = counts else {
             continue;
         };
-        if light + medium + heavy == 0.0 {
+        if total < medium + heavy {
             continue;
         }
         let references = ["wegnrhmp_b", "wegnrhmp_e"]
@@ -119,7 +114,8 @@ pub(super) fn convert(
             rank,
             references,
             geometry,
-            counts: [light, medium, heavy],
+            // The published all-vehicle total can differ from independently corrected class totals.
+            counts: [total - medium - heavy, medium, heavy],
         });
     }
     let by_id = sections
@@ -166,13 +162,11 @@ pub(super) fn convert(
                 },
             )?;
             let total = counts.iter().sum::<f64>();
-            let motorcycle = (total * recipe.motorcycle_share).round().min(counts[0]);
-            row.vehicle_classes = [
-                Some(counts[0] - motorcycle),
-                Some(counts[1]),
-                Some(counts[2]),
-                Some(motorcycle),
-            ];
+            row.vehicle_classes = [None, Some(counts[1]), Some(counts[2]), None];
+            row.vehicle_groups = vec![crate::roads::observation_groups::VehicleGroup {
+                classes: 9,
+                count: counts[0],
+            }];
             row.total = Some(total);
             row.estimated_classes = 9;
             row.reference = references.join(";");

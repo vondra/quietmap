@@ -13,6 +13,7 @@ pub struct DemandModel {
     pub default_footprint_m2: f64,
     pub trip_rates: Vec<TripRate>,
     pub street: Option<StreetParameters>,
+    pub service_trip_bounds: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -100,6 +101,12 @@ impl DemandModel {
                 ),
                 TripRate::None => (),
             }
+        }
+        if let Some([minimum, maximum]) = self.service_trip_bounds {
+            ensure!(
+                minimum.is_finite() && maximum.is_finite() && minimum >= 0.0 && maximum >= minimum,
+                "invalid service trip bounds"
+            );
         }
         if let Some(p) = &self.street {
             ensure!(

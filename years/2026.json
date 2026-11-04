@@ -548,7 +548,7 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "WorldClim 2.1: mean temperature and heating and cooling degree days, climate of 1970–2000."
+      "description": "WorldClim 2.1: mean temperature and heating and cooling degree days, climate of 1970\u20132000."
     },
     {
       "id": "tent",
@@ -711,7 +711,7 @@
       "depends_on": [
         "osm"
       ],
-      "description": "Restaurants, cafés, bars and terraces."
+      "description": "Restaurants, caf\u00e9s, bars and terraces."
     },
     {
       "id": "barriers",
@@ -772,7 +772,7 @@
       "depends_on": [
         "era5"
       ],
-      "description": "Propagation weather derived from the ERA5 1991–2020 climatology."
+      "description": "Propagation weather derived from the ERA5 1991\u20132020 climatology."
     },
     {
       "id": "terrain",
@@ -854,7 +854,7 @@
       "id": "road-period-shares",
       "kind": "road-period-shares",
       "region": "world",
-      "publisher": "FHWA, MLIT, DfT, Rijkswaterstaat, Baden-Württemberg and city noise monitors",
+      "publisher": "FHWA, MLIT, DfT, Rijkswaterstaat, Baden-W\u00fcrttemberg and city noise monitors",
       "url": "https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/",
       "observed": {
         "start": "2021",
@@ -867,7 +867,7 @@
         "road-period-counts",
         "road-period-monitoring"
       ],
-      "description": "Day, evening and night shares by road group and vehicle weight: counts from 2021–2025 and noise monitors through 2026, with regional medians."
+      "description": "Day, evening and night shares by road group and vehicle weight: counts from 2021\u20132025 and noise monitors through 2026, with regional medians."
     },
     {
       "id": "tagged-speeds-osm",
@@ -923,7 +923,7 @@
       "id": "road-class-priors",
       "kind": "road-class-priors",
       "region": "world",
-      "publisher": "ŘSD, DfT and Trafikverket",
+      "publisher": "\u0158SD, DfT and Trafikverket",
       "url": "https://roadtraffic.dft.gov.uk/",
       "observed": {
         "start": "2020",
@@ -944,7 +944,7 @@
       "id": "road-class-shares",
       "kind": "road-class-shares",
       "region": "world",
-      "publisher": "ŘSD, DfT and Trafikverket",
+      "publisher": "\u0158SD, DfT and Trafikverket",
       "url": "https://roadtraffic.dft.gov.uk/",
       "observed": {
         "start": "2020",
@@ -1076,7 +1076,7 @@
       "id": "building-plant-stocks",
       "kind": "building-plant",
       "region": "world",
-      "publisher": "EHPA, EurObserv’ER, EIA, national household surveys and coolinggap.eu",
+      "publisher": "EHPA, EurObserv\u2019ER, EIA, national household surveys and coolinggap.eu",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
         "start": "2020",
@@ -1240,7 +1240,7 @@
       "id": "national-dem-cz",
       "kind": "national-dem",
       "region": "CZ",
-      "publisher": "ČÚZK",
+      "publisher": "\u010c\u00daZK",
       "url": "https://geoportal.cuzk.cz/",
       "observed": {
         "start": "2013",
@@ -1396,7 +1396,7 @@
       "licence": "Copernicus data licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "The 1991–2020 climatology supplies temperature, humidity and propagation weather."
+      "description": "The 1991\u20132020 climatology supplies temperature, humidity and propagation weather."
     },
     {
       "id": "boundaries",
@@ -1590,7 +1590,7 @@
       "depends_on": [
         "segments"
       ],
-      "description": "Aircraft segments grouped by square from this year’s admitted days."
+      "description": "Aircraft segments grouped by square from this year\u2019s admitted days."
     },
     {
       "id": "barriers-wa",
@@ -1644,7 +1644,7 @@
       "id": "ar-dnv-national-provincial-roads-tmda",
       "kind": "prepare-road-counts",
       "region": "AR",
-      "publisher": "Dirección Nacional de Vialidad (DNV) / IGN",
+      "publisher": "Direcci\u00f3n Nacional de Vialidad (DNV) / IGN",
       "url": "https://ide.transporte.gob.ar/geoserver/observ/ows",
       "observed": {
         "start": "2018",
@@ -1660,7 +1660,7 @@
       "id": "ar-dnv-national-provincial-roads-tmda-ows",
       "kind": "prepare-road-counts",
       "region": "AR",
-      "publisher": "Dirección Nacional de Vialidad (DNV) / IGN",
+      "publisher": "Direcci\u00f3n Nacional de Vialidad (DNV) / IGN",
       "url": "https://ide.transporte.gob.ar/geoserver/observ/ows",
       "observed": {
         "start": "2018",
@@ -1676,7 +1676,7 @@
       "id": "ar-dnv-national-provincial-roads-tmda-ows-3",
       "kind": "prepare-road-counts",
       "region": "AR",
-      "publisher": "Dirección Nacional de Vialidad (DNV) / IGN",
+      "publisher": "Direcci\u00f3n Nacional de Vialidad (DNV) / IGN",
       "url": "https://ide.transporte.gob.ar/geoserver/observ/ows",
       "observed": {
         "start": "2018",
@@ -1724,7 +1724,7 @@
       "id": "ca-quebec-mtq-djma",
       "kind": "prepare-road-counts",
       "region": "CA",
-      "publisher": "Ministère des Transports du Québec",
+      "publisher": "Minist\u00e8re des Transports du Qu\u00e9bec",
       "url": "https://ws.mapserver.transports.gouv.qc.ca/swtq?service=wfs&typename=ms:circulation_routier&outputformat=geojson",
       "observed": {
         "start": "2015",
@@ -1734,7 +1734,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Québec MTQ DJMA."
+      "description": "Qu\u00e9bec MTQ DJMA."
     },
     {
       "id": "ch-astra-sasvz-jahresergebnisse-station-list",
@@ -1772,7 +1772,7 @@
       "id": "cl-mop-red-vial-plan-nacional-de-censos-tmda",
       "kind": "prepare-road-counts",
       "region": "CL",
-      "publisher": "MOP Dirección de Vialidad",
+      "publisher": "MOP Direcci\u00f3n de Vialidad",
       "url": "https://rest-sit.mop.gob.cl/arcgis/rest/services/VIALIDAD/Plan_Nacional_de_Censos/MapServer/0",
       "observed": {
         "start": "2024",
@@ -1788,7 +1788,7 @@
       "id": "cl-mop-red-vial-plan-nacional-de-censos-tmda-0",
       "kind": "prepare-road-counts",
       "region": "CL",
-      "publisher": "MOP Dirección de Vialidad",
+      "publisher": "MOP Direcci\u00f3n de Vialidad",
       "url": "https://rest-sit.mop.gob.cl/arcgis/rest/services/VIALIDAD/Plan_Nacional_de_Censos/MapServer/0",
       "observed": {
         "start": "2024",
@@ -1852,7 +1852,7 @@
       "id": "cz-rsd-celostatni-scitani-dopravy",
       "kind": "prepare-road-counts",
       "region": "CZ",
-      "publisher": "Ředitelství silnic a dálnic (ŘSD)",
+      "publisher": "\u0158editelstv\u00ed silnic a d\u00e1lnic (\u0158SD)",
       "url": "https://geoportal.rsd.cz/arcgis/rest/services/ScitaniDopravy/MapServer/3/query",
       "observed": {
         "start": "2020",
@@ -1862,7 +1862,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "ŘSD Celostátní sčítání dopravy."
+      "description": "\u0158SD Celost\u00e1tn\u00ed s\u010d\u00edt\u00e1n\u00ed dopravy."
     },
     {
       "id": "cz-prague-tsk-praha-intenzity-dopravy",
@@ -1894,7 +1894,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Stadt Wien MA46 Dauerzählstellen (city)."
+      "description": "Stadt Wien MA46 Dauerz\u00e4hlstellen (city)."
     },
     {
       "id": "at-vienna-stadt-wien-ma46-dauerzahlstellen-stadt-wien-verkehrszhlstellenzhlwertewien",
@@ -1910,7 +1910,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Stadt Wien MA46 Dauerzählstellen (city)."
+      "description": "Stadt Wien MA46 Dauerz\u00e4hlstellen (city)."
     },
     {
       "id": "cz-brno-brno-bkom-pentlogram",
@@ -1932,7 +1932,7 @@
       "id": "de-bast-svz-autobahnen-bundesstraen",
       "kind": "prepare-road-counts",
       "region": "DE",
-      "publisher": "Bundesanstalt für Straßenwesen (BASt)",
+      "publisher": "Bundesanstalt f\u00fcr Stra\u00dfenwesen (BASt)",
       "url": "https://www.bast.de/DE/Publikationen/Statistik/Verkehrsdaten/2021/Autobahnen-2021.xlsx",
       "observed": {
         "start": "2021",
@@ -1942,13 +1942,13 @@
       "licence": "DL-DE BY 2.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "BASt SVZ Autobahnen + Bundesstraßen."
+      "description": "BASt SVZ Autobahnen + Bundesstra\u00dfen."
     },
     {
       "id": "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
       "kind": "prepare-road-counts",
       "region": "DE",
-      "publisher": "Bundesanstalt für Straßenwesen (BASt)",
+      "publisher": "Bundesanstalt f\u00fcr Stra\u00dfenwesen (BASt)",
       "url": "https://www.bast.de/DE/Publikationen/Statistik/Verkehrsdaten/2021/Autobahnen-2021.xlsx",
       "observed": {
         "start": "2021",
@@ -1958,13 +1958,13 @@
       "licence": "DL-DE BY 2.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "BASt SVZ Autobahnen + Bundesstraßen."
+      "description": "BASt SVZ Autobahnen + Bundesstra\u00dfen."
     },
     {
       "id": "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3",
       "kind": "prepare-road-counts",
       "region": "DE",
-      "publisher": "Bundesanstalt für Straßenwesen (BASt)",
+      "publisher": "Bundesanstalt f\u00fcr Stra\u00dfenwesen (BASt)",
       "url": "https://www.bast.de/DE/Publikationen/Statistik/Verkehrsdaten/2021/Autobahnen-2021.xlsx",
       "observed": {
         "start": "2021",
@@ -1974,13 +1974,13 @@
       "licence": "DL-DE BY 2.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "BASt SVZ Autobahnen + Bundesstraßen."
+      "description": "BASt SVZ Autobahnen + Bundesstra\u00dfen."
     },
     {
       "id": "de-mobidata-bw-hourly-counts",
       "kind": "prepare-road-hourly",
       "region": "DE",
-      "publisher": "Verkehrsministerium Baden-Württemberg, MobiData BW",
+      "publisher": "Verkehrsministerium Baden-W\u00fcrttemberg, MobiData BW",
       "url": "https://mobidata-bw.de/vm/Stundenwerte_Dauerzaehlstellen_BW/Stundenwerte_2025MM.zip",
       "observed": {
         "start": "2026-06-26",
@@ -2006,7 +2006,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Vejdirektoratet Mastra nøgletal."
+      "description": "Vejdirektoratet Mastra n\u00f8gletal."
     },
     {
       "id": "ec-congope-red-vial-ecuador",
@@ -2070,13 +2070,13 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "MITMA Mapa de Tráfico."
+      "description": "MITMA Mapa de Tr\u00e1fico."
     },
     {
       "id": "fi-vaylavirasto-liikennemaarat",
       "kind": "prepare-road-counts",
       "region": "FI",
-      "publisher": "Väylävirasto (Finnish Transport Infrastructure Agency)",
+      "publisher": "V\u00e4yl\u00e4virasto (Finnish Transport Infrastructure Agency)",
       "url": "https://avoinapi.vaylapilvi.fi/vaylatiedot/wfs?typeNames=tiestotiedot:liikennemaarat_2024",
       "observed": {
         "start": "2024",
@@ -2086,7 +2086,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Väylävirasto liikennemäärät."
+      "description": "V\u00e4yl\u00e4virasto liikennem\u00e4\u00e4r\u00e4t."
     },
     {
       "id": "fr-cerema-tmja-reseau-routier-national",
@@ -2102,7 +2102,7 @@
       "licence": "etalab-2.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Cerema TMJA réseau routier national."
+      "description": "Cerema TMJA r\u00e9seau routier national."
     },
     {
       "id": "fr-cerema-tmja-reseau-routier-national-2019",
@@ -2237,16 +2237,16 @@
       "kind": "prepare-road-counts",
       "region": "IT",
       "publisher": "Anas S.p.A.",
-      "url": "https://www.stradeanas.it/it/dati",
+      "url": "https://dati.mit.gov.it/catalog/dataset/traffico-giornaliero-medio-anas",
       "observed": {
-        "start": "2015-11-30",
+        "start": "2015-11-01",
         "end": "2015-11-30"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Traffic counts in the Anas November 2015 file."
+      "description": "Daily averages observed during November 2015. Used as a period-based traffic estimate without an independently fitted seasonal conversion to the annual mean."
     },
     {
       "id": "jp-mlit-road-traffic-census-r3",
@@ -2326,7 +2326,7 @@
       "licence": "NLOD 2.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "NVDB traffic observations selected by each record’s published survey year."
+      "description": "NVDB traffic observations selected by each record\u2019s published survey year."
     },
     {
       "id": "nz-nzta-carriageway-auckland-transport-aadt",
@@ -2364,7 +2364,7 @@
       "id": "pe-mtc-provias-red-vial-nacional-departamental",
       "kind": "prepare-road-counts",
       "region": "PE",
-      "publisher": "MTC Provías (ArcGIS mirror)",
+      "publisher": "MTC Prov\u00edas (ArcGIS mirror)",
       "url": "https://services6.arcgis.com/G8JFnqCHKQ9vb8YW/arcgis/rest/services/Red_Vial_Nacional_2024_MTC_PROVIAS_GEO_GPS_PERU_Suyo_Pomalia/FeatureServer/0",
       "observed": {
         "start": "2024",
@@ -2374,13 +2374,13 @@
       "licence": "public-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "MTC Provías Red Vial Nacional + departamental."
+      "description": "MTC Prov\u00edas Red Vial Nacional + departamental."
     },
     {
       "id": "pe-mtc-provias-red-vial-nacional-departamental-0",
       "kind": "prepare-road-counts",
       "region": "PE",
-      "publisher": "MTC Provías (ArcGIS mirror)",
+      "publisher": "MTC Prov\u00edas (ArcGIS mirror)",
       "url": "https://services6.arcgis.com/G8JFnqCHKQ9vb8YW/arcgis/rest/services/Red_Vial_Nacional_2024_MTC_PROVIAS_GEO_GPS_PERU_Suyo_Pomalia/FeatureServer/0",
       "observed": {
         "start": "2024",
@@ -2390,7 +2390,7 @@
       "licence": "public-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "MTC Provías Red Vial Nacional + departamental."
+      "description": "MTC Prov\u00edas Red Vial Nacional + departamental."
     },
     {
       "id": "ph-dpwh-road-classification",
@@ -2502,7 +2502,7 @@
       "licence": "CC0-1.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Trafikverket NVDB Trafik ÅDT."
+      "description": "Trafikverket NVDB Trafik \u00c5DT."
     },
     {
       "id": "si-drsi-pldp-counting-sites",
@@ -2604,7 +2604,7 @@
       "id": "cz-czptt-timetable-train-sequences-osm-stations",
       "kind": "prepare-rail-network",
       "region": "CZ",
-      "publisher": "Správa železnic / CIS JŘ (JR2026.zip)",
+      "publisher": "Spr\u00e1va \u017eeleznic / CIS J\u0158 (JR2026.zip)",
       "url": "https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/JR2026.zip",
       "observed": {
         "start": "2026-04-08",
@@ -2620,7 +2620,7 @@
       "id": "cz-czptt-timetable-train-sequences-osm-stations-jr2026",
       "kind": "prepare-rail-network",
       "region": "CZ",
-      "publisher": "Správa železnic / CIS JŘ (JR2026.zip)",
+      "publisher": "Spr\u00e1va \u017eeleznic / CIS J\u0158 (JR2026.zip)",
       "url": "https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/JR2026.zip",
       "observed": {
         "start": "2026-04-08",
@@ -2732,7 +2732,7 @@
       "id": "cz-cuzk-ruian-vfr-buildings",
       "kind": "prepare-building-attributes",
       "region": "CZ",
-      "publisher": "ČÚZK",
+      "publisher": "\u010c\u00daZK",
       "url": "https://vdp.cuzk.cz/",
       "observed": {
         "start": "2026-04-09",
@@ -2742,13 +2742,13 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "ČÚZK RÚIAN VFR buildings (floors, use). Snapshot; an earlier observation date is not recorded."
+      "description": "\u010c\u00daZK R\u00daIAN VFR buildings (floors, use). Snapshot; an earlier observation date is not recorded."
     },
     {
       "id": "es-catastro-inspire-buildings",
       "kind": "prepare-building-attributes",
       "region": "ES",
-      "publisher": "Dirección General del Catastro",
+      "publisher": "Direcci\u00f3n General del Catastro",
       "url": "https://www.catastro.hacienda.gob.es/INSPIRE/buildings/ES.SDGC.BU.atom.xml",
       "observed": {
         "start": "2026-04-21",
@@ -2940,7 +2940,7 @@
       "id": "se-vindbrukskollen-turbines",
       "kind": "prepare-turbines",
       "region": "SE",
-      "publisher": "Länsstyrelserna (Vindbrukskollen)",
+      "publisher": "L\u00e4nsstyrelserna (Vindbrukskollen)",
       "url": "https://vbk.lansstyrelsen.se/",
       "observed": {
         "start": "2026-04-11",
@@ -5356,7 +5356,7 @@
       "id": "at-timetable-at-austria-obb",
       "kind": "prepare-timetable",
       "region": "AT",
-      "publisher": "Austria ÖBB",
+      "publisher": "Austria \u00d6BB",
       "url": "https://static.web.oebb.at/open-data/soll-fahrplan-gtfs/GTFS_Fahrplan_2026.zip",
       "observed": {
         "start": "2026-01-14",
@@ -5612,7 +5612,7 @@
       "id": "hr-timetable-hr-croatia-hz",
       "kind": "prepare-timetable",
       "region": "HR",
-      "publisher": "Croatia HŽ",
+      "publisher": "Croatia H\u017d",
       "url": "https://www.hzpp.hr/GTFS_files.zip",
       "observed": {
         "start": "2026-06-03",
@@ -5628,7 +5628,7 @@
       "id": "hu-timetable-hu-hungary-mav",
       "kind": "prepare-timetable",
       "region": "HU",
-      "publisher": "MÁV",
+      "publisher": "M\u00c1V",
       "url": "https://gtfs.menetbrand.com/download/mav/",
       "observed": {
         "start": "2026-05-27",
@@ -5868,7 +5868,7 @@
       "id": "ca-timetable-stm-montreal",
       "kind": "prepare-timetable",
       "region": "CA",
-      "publisher": "Société de transport de Montréal",
+      "publisher": "Soci\u00e9t\u00e9 de transport de Montr\u00e9al",
       "url": "https://www.stm.info/en/about/developers",
       "observed": {
         "start": "2026-08-26",
@@ -5948,7 +5948,7 @@
       "id": "de-timetable-de-full",
       "kind": "prepare-timetable",
       "region": "DE",
-      "publisher": "gtfs.de - GTFS für Deutschland, Daten bereitgestellt von DELFI e.V.",
+      "publisher": "gtfs.de - GTFS f\u00fcr Deutschland, Daten bereitgestellt von DELFI e.V.",
       "url": "https://gtfs.de/en/feeds/de_full/",
       "observed": {
         "start": "2026-09-16",
@@ -6044,7 +6044,7 @@
       "id": "fi-timetable-foli-turku",
       "kind": "prepare-timetable",
       "region": "FI",
-      "publisher": "FÖLI Turun seudun joukkoliikenne",
+      "publisher": "F\u00d6LI Turun seudun joukkoliikenne",
       "url": "http://data.foli.fi/gtfs/v0/20260907-151422/gtfs.zip",
       "observed": {
         "start": "2026-08-10",
@@ -6204,7 +6204,7 @@
       "id": "pl-timetable-polish-trains",
       "kind": "prepare-timetable",
       "region": "PL",
-      "publisher": "Mikołaj Kuranowski",
+      "publisher": "Miko\u0142aj Kuranowski",
       "url": "https://mkuran.pl/gtfs/polish_trains.zip",
       "observed": {
         "start": "2026-09-16",
@@ -6220,7 +6220,7 @@
       "id": "pl-timetable-warsaw-ztm",
       "kind": "prepare-timetable",
       "region": "PL",
-      "publisher": "Mikołaj Kuranowski",
+      "publisher": "Miko\u0142aj Kuranowski",
       "url": "https://mkuran.pl/gtfs/warsaw.zip",
       "observed": {
         "start": "2026-09-16",
@@ -6252,7 +6252,7 @@
       "id": "pl-timetable-wkd-warszawa",
       "kind": "prepare-timetable",
       "region": "PL",
-      "publisher": "Mikołaj Kuranowski",
+      "publisher": "Miko\u0142aj Kuranowski",
       "url": "https://mkuran.pl/gtfs/wkd.zip",
       "observed": {
         "start": "2026-01-07",
@@ -6268,7 +6268,7 @@
       "id": "pl-timetable-silesia-gzm",
       "kind": "prepare-timetable",
       "region": "PL",
-      "publisher": "Mikołaj Kuranowski",
+      "publisher": "Miko\u0142aj Kuranowski",
       "url": "https://mkuran.pl/gtfs/gzm.zip",
       "observed": {
         "start": "2026-09-23",
@@ -6364,7 +6364,7 @@
       "id": "th-timetable-namtang",
       "kind": "prepare-timetable",
       "region": "TH",
-      "publisher": "สำนักงานนโยบายและแผนการขนส่งและจราจร กระทรวงคมนาคม",
+      "publisher": "\u0e2a\u0e33\u0e19\u0e31\u0e01\u0e07\u0e32\u0e19\u0e19\u0e42\u0e22\u0e1a\u0e32\u0e22\u0e41\u0e25\u0e30\u0e41\u0e1c\u0e19\u0e01\u0e32\u0e23\u0e02\u0e19\u0e2a\u0e48\u0e07\u0e41\u0e25\u0e30\u0e08\u0e23\u0e32\u0e08\u0e23 \u0e01\u0e23\u0e30\u0e17\u0e23\u0e27\u0e07\u0e04\u0e21\u0e19\u0e32\u0e04\u0e21",
       "url": "https://namtang-api.otp.go.th/download/namtang-gtfs.zip",
       "observed": {
         "start": "2026-01-07",
@@ -6380,14 +6380,14 @@
       "id": "fine-dem-cz",
       "kind": "fine-dem",
       "region": "CZ",
-      "publisher": "ČÚZK",
+      "publisher": "\u010c\u00daZK",
       "url": "https://ags.cuzk.gov.cz/opendata/",
       "observed": {
         "start": "2013",
         "end": "2013"
       },
       "published": null,
-      "licence": "CC BY 4.0; © ČÚZK",
+      "licence": "CC BY 4.0; \u00a9 \u010c\u00daZK",
       "public_ok": true,
       "depends_on": [],
       "description": "Fine ground-height tiles from the national terrain surveys; their latest survey date is shown. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6396,14 +6396,14 @@
       "id": "fine-dem-de",
       "kind": "fine-dem",
       "region": "DE",
-      "publisher": "Surveying authorities of 15 German Länder",
+      "publisher": "Surveying authorities of 15 German L\u00e4nder",
       "url": "https://hoehendaten.de/",
       "observed": {
         "start": "2026-09-21",
         "end": "2026-09-21"
       },
       "published": null,
-      "licence": "CC BY 4.0; Datenlizenz Deutschland – Namensnennung 2.0 or Zero 2.0, by Land",
+      "licence": "CC BY 4.0; Datenlizenz Deutschland \u2013 Namensnennung 2.0 or Zero 2.0, by Land",
       "public_ok": true,
       "depends_on": [],
       "description": "Ground-height model state archived on the stated date; individual survey dates vary by tile and are not recorded in this aggregate. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6460,7 +6460,7 @@
       "id": "fine-dem-pt",
       "kind": "fine-dem",
       "region": "PT",
-      "publisher": "Direção-Geral do Território",
+      "publisher": "Dire\u00e7\u00e3o-Geral do Territ\u00f3rio",
       "url": "https://www.dgterritorio.gov.pt/levantamento-lidar-de-portugal-continental-0",
       "observed": {
         "start": "2024",
@@ -6492,14 +6492,14 @@
       "id": "raster-es-mdt05-10352",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-10352: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6508,14 +6508,14 @@
       "id": "raster-es-mdt05-5782",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-5782: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6524,14 +6524,14 @@
       "id": "raster-es-mdt05-9392",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-9392: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6540,14 +6540,14 @@
       "id": "raster-es-mdt05-9394",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-9394: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6556,14 +6556,14 @@
       "id": "raster-es-mdt05-9402",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-9402: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6572,14 +6572,14 @@
       "id": "raster-es-mdt05-can-9395",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-CAN-9395: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6588,14 +6588,14 @@
       "id": "raster-es-mdt05-can-9396",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-CAN-9396: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6604,14 +6604,14 @@
       "id": "raster-es-mdt05-can-9397",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-CAN-9397: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6620,14 +6620,14 @@
       "id": "raster-es-mdt05-can-9398",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-CAN-9398: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6636,14 +6636,14 @@
       "id": "raster-es-mdt05-can-9399",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-CAN-9399: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6652,14 +6652,14 @@
       "id": "raster-es-mdt05-can-9400",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-CAN-9400: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6668,14 +6668,14 @@
       "id": "raster-es-mdt05-can-9401",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-CAN-9401: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6684,14 +6684,14 @@
       "id": "raster-es-mdt05-w-10354",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-W-10354: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6700,14 +6700,14 @@
       "id": "raster-es-mdt05-w-5782",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-W-5782: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6716,14 +6716,14 @@
       "id": "raster-es-mdt05-w-9393",
       "kind": "prepare-ground-height",
       "region": "ES",
-      "publisher": "Instituto Geográfico Nacional",
+      "publisher": "Instituto Geogr\u00e1fico Nacional",
       "url": "https://centrodedescargas.cnig.es/",
       "observed": {
         "start": "2022",
         "end": "2022"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Instituto Geográfico Nacional",
+      "licence": "CC BY 4.0; \u00a9 Instituto Geogr\u00e1fico Nacional",
       "public_ok": true,
       "depends_on": [],
       "description": "ES-MDT05-W-9393: mixed 2008-2022 (PNOA-LiDAR flights). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6835,7 +6835,7 @@
         "end": "2026-09-21"
       },
       "published": null,
-      "licence": "Open Government Licence – Canada",
+      "licence": "Open Government Licence \u2013 Canada",
       "public_ok": true,
       "depends_on": [],
       "description": "CA-MRDEM-30: 2006-2026. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6851,7 +6851,7 @@
         "end": "2026-09-21"
       },
       "published": null,
-      "licence": "Open Government Licence 3.0; © Ordnance Survey",
+      "licence": "Open Government Licence 3.0; \u00a9 Ordnance Survey",
       "public_ok": true,
       "depends_on": [],
       "description": "GB-OS-TERRAIN50: 2026-05 (per-tile OS revision). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6899,7 +6899,7 @@
         "end": "2021"
       },
       "published": null,
-      "licence": "Licence Ouverte 2.0; © IGN",
+      "licence": "Licence Ouverte 2.0; \u00a9 IGN",
       "public_ok": true,
       "depends_on": [],
       "description": "FR-RGEALTI: RGE ALTI 2009-2021 mosaic. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -6915,7 +6915,7 @@
         "end": "2021"
       },
       "published": null,
-      "licence": "Licence Ouverte 2.0; © IGN",
+      "licence": "Licence Ouverte 2.0; \u00a9 IGN",
       "public_ok": true,
       "depends_on": [],
       "description": "FR-RGEALTI-CORSE: RGE ALTI 2009-2021 mosaic. Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -7020,14 +7020,14 @@
       "id": "raster-se-mhm",
       "kind": "prepare-ground-height",
       "region": "SE",
-      "publisher": "Lantmäteriet",
+      "publisher": "Lantm\u00e4teriet",
       "url": "https://www.lantmateriet.se/sv/geodata/vara-produkter/produktlista/markhojdmodell-nedladdning/",
       "observed": {
         "start": "2026-09-21",
         "end": "2026-09-21"
       },
       "published": null,
-      "licence": "CC BY 4.0; © Lantmäteriet",
+      "licence": "CC BY 4.0; \u00a9 Lantm\u00e4teriet",
       "public_ok": true,
       "depends_on": [],
       "description": "SE-MHM: Markhoejdmodell rolling ALS (2009-ongoing). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
@@ -7036,7 +7036,7 @@
       "id": "raster-pt-mdt2m",
       "kind": "prepare-ground-height",
       "region": "PT",
-      "publisher": "Direção-Geral do Território",
+      "publisher": "Dire\u00e7\u00e3o-Geral do Territ\u00f3rio",
       "url": "https://www.dgterritorio.gov.pt/levantamento-lidar-de-portugal-continental-0",
       "observed": {
         "start": "2024",
@@ -7870,7 +7870,7 @@
       "id": "road-period-counts",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "FHWA, MLIT, DfT, Rijkswaterstaat and Baden-Württemberg",
+      "publisher": "FHWA, MLIT, DfT, Rijkswaterstaat and Baden-W\u00fcrttemberg",
       "url": "https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/2025/",
       "observed": {
         "start": "2021",
@@ -7918,7 +7918,7 @@
       "id": "household-plant-surveys",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "EHPA, EurObserv’ER, EIA and national household surveys",
+      "publisher": "EHPA, EurObserv\u2019ER, EIA and national household surveys",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
         "start": "2020",
@@ -8260,7 +8260,7 @@
       "licence": "Derived statistics; original survey licences apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "National noise-wall means retained from BMDV/FBA Lärmschutz an Bundesfernstraßen 2022 (Germany), FHWA Noise Barrier Inventory 2022 (US, length-weighted) and ASFINAG end-2022 inventory (Austria). Rounded published aggregates reproduce the original prepared model; this port has not re-derived their unrounded underlying statistics."
+      "description": "National noise-wall means retained from BMDV/FBA L\u00e4rmschutz an Bundesfernstra\u00dfen 2022 (Germany), FHWA Noise Barrier Inventory 2022 (US, length-weighted) and ASFINAG end-2022 inventory (Austria). Rounded published aggregates reproduce the original prepared model; this port has not re-derived their unrounded underlying statistics."
     },
     {
       "id": "raster-land-coverage",
@@ -8324,7 +8324,7 @@
       "licence": "See publisher terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "National vertical-datum grids and EGM2008, converted in 2019 to 2024 according to the grids’ metadata; used to transform each averaged terrain node."
+      "description": "National vertical-datum grids and EGM2008, converted in 2019 to 2024 according to the grids\u2019 metadata; used to transform each averaged terrain node."
     },
     {
       "id": "cz-imperviousness",

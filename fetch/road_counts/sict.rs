@@ -19,7 +19,6 @@ pub(super) struct Recipe {
     pub source: Source,
     pub composition_input: String,
     total_field: String,
-    fallback_shares: [f64; 4],
     search_radius_m: f64,
 }
 
@@ -28,14 +27,6 @@ pub(super) fn convert(
     inputs: &YearInputs,
     path: &Path,
 ) -> Result<Vec<Observation>> {
-    ensure!(
-        recipe
-            .fallback_shares
-            .iter()
-            .all(|v| v.is_finite() && *v >= 0.0)
-            && (recipe.fallback_shares.iter().sum::<f64>() - 1.0).abs() < 1e-12,
-        "invalid SICT fallback composition"
-    );
     let composition_path = inputs
         .by_id(&recipe.composition_input)
         .map_err(anyhow::Error::msg)?;
@@ -106,18 +97,16 @@ pub(super) fn convert(
         let mut row = recipe
             .source
             .observation(inputs, id.into(), CountBasis::BothDirections)?;
-        let shares = composition
-            .get(id)
-            .and_then(|r| *r)
-            .unwrap_or(recipe.fallback_shares);
-        let [_, medium, heavy, motorcycle] = shares.map(|s| (total * s).round());
-        row.vehicle_classes = [
-            total - medium - heavy - motorcycle,
-            medium,
-            heavy,
-            motorcycle,
-        ]
-        .map(Some);
+        if let Some(shares) = composition.get(id).and_then(|r| *r) {
+            let [_, medium, heavy, motorcycle] = shares.map(|s| (total * s).round());
+            row.vehicle_classes = [
+                total - medium - heavy - motorcycle,
+                medium,
+                heavy,
+                motorcycle,
+            ]
+            .map(Some);
+        }
         row.total = Some(total);
         row.geometry = lines;
         row.estimated_classes = if composition.get(id).is_some_and(Option::is_some) {

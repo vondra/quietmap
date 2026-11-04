@@ -132,7 +132,7 @@ fn carriageway(road: &Road, members: &[&Road], model: &Model) -> Carriageway {
         };
     }
     let access = model.access_factor(road);
-    let one_way = road.direction != 0;
+    let one_way = road.direction != 0 && !road.roundabout;
     if road.source_id == 0 {
         let scale = |prior: [f64; 4], factor: f64| prior.map(|value| value * factor);
         return match model.default_traffic(road) {
@@ -177,7 +177,11 @@ fn carriageway(road: &Road, members: &[&Road], model: &Model) -> Carriageway {
     } else {
         road.estimated
     };
-    let lone_direction_of_a_two_way_total = one_way && matches!(road.basis, 0 | 2 | 3);
+    // Retain the measured legacy rule: a lone local one-way street can carry its entire count.
+    let lone_direction_of_a_two_way_total = one_way
+        && road.basis != 4
+        && (!road.count_origin_measured
+            || (road.basis == 2 && road.class <= 2 && !road.corridor.is_empty()));
     let share = if count > 1 {
         1.0 / count as f64
     } else if lone_direction_of_a_two_way_total {

@@ -208,6 +208,23 @@ pub(super) fn observations(
         if let Some(coverage) = &coverage {
             target.coverage = coverage.clone();
         }
+        let mut groups = Vec::new();
+        for (classes, fields) in &publisher.class_groups {
+            let values = fields
+                .iter()
+                .map(|field| number(&values[field]))
+                .collect::<Result<Vec<_>>>()?;
+            if values.iter().all(Option::is_some) {
+                let mut count: f64 = values.into_iter().flatten().sum();
+                if publisher.percentages {
+                    count = (total.unwrap() * count / 100.0).round();
+                }
+                groups.push(crate::roads::observation_groups::VehicleGroup {
+                    classes: *classes,
+                    count,
+                });
+            }
+        }
         rows.push(Observation {
             identity: if values[&publisher.identity].is_null() {
                 super::hpms::identity(record)
@@ -230,6 +247,7 @@ pub(super) fn observations(
             search_radius_m: publisher.search_radius_m,
             reference_required: publisher.reference_required,
             vehicle_classes: counts,
+            vehicle_groups: groups,
             total,
             estimated_classes: publisher.estimated_classes,
             daily_factor: publisher.daily_factor,

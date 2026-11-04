@@ -128,7 +128,7 @@ impl Model {
     }
 
     pub fn default_traffic(&self, road: &Road) -> TrafficDefault {
-        let one_way = road.direction != 0;
+        let one_way = road.direction != 0 && !road.roundabout;
         for city in [Some(road.country.1), None] {
             if let Some(counts) = self
                 .regions

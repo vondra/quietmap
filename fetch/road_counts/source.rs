@@ -60,6 +60,7 @@ impl Source {
             road_class_mask: 0,
             search_radius_m: 0.0,
             reference_required: false,
+            vehicle_groups: Vec::new(),
             vehicle_classes: [None; 4],
             total: None,
             estimated_classes: 0,

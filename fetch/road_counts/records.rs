@@ -239,24 +239,10 @@ pub(super) fn project(transform: &CoordTransform, point: [f64; 2]) -> Result<[f6
     Ok([x[0], y[0]])
 }
 
-pub(super) fn split_heavy(
-    total: f64,
-    heavy: Option<f64>,
-    motorcycle_share: f64,
-    medium_share: f64,
-) -> [Option<f64>; 4] {
-    let moto = (total * motorcycle_share).round();
-    match heavy {
-        Some(large) => {
-            let large = large.round().clamp(0.0, total - moto);
-            let medium = (large * medium_share).round();
-            [
-                Some(total - moto - large),
-                Some(medium),
-                Some(large - medium),
-                Some(moto),
-            ]
-        }
-        None => [None, None, None, Some(moto)],
-    }
+pub(super) fn observe_heavy_group(row: &mut Observation, heavy: Option<f64>) {
+    row.vehicle_classes = [None; 4];
+    row.vehicle_groups = heavy
+        .into_iter()
+        .map(|count| crate::roads::observation_groups::VehicleGroup { classes: 6, count })
+        .collect();
 }

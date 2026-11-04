@@ -154,6 +154,7 @@ pub(super) fn count(way: &Piece, identity: &str) -> Observation {
         road_class_mask: 1 << 2,
         search_radius_m: 1.0,
         reference_required: true,
+        vehicle_groups: Vec::new(),
         vehicle_classes: [Some(80.0), Some(10.0), Some(5.0), Some(5.0)],
         total: Some(100.0),
         estimated_classes: 0,
@@ -229,7 +230,7 @@ fn original_nodes_connect_across_squares_but_distinct_nodes_conflicts_and_juncti
             restricted_street.access = 2;
             assert_eq!(
                 super::allocation::allocate(&restricted_street, &[], &model).0,
-                filled.counts.map(|value| value * 0.5)
+                filled.counts
             );
         }
         roads

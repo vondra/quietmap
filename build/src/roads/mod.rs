@@ -26,6 +26,7 @@ pub(crate) use matching_distance::segment_distance;
 pub(crate) use matching_targets::name as canonical_road_name;
 pub(crate) mod model;
 pub(crate) mod observation;
+pub(crate) mod observation_groups;
 pub(crate) mod observation_io;
 pub(crate) mod observation_sample;
 pub(crate) mod observation_target;

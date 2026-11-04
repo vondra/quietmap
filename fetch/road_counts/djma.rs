@@ -17,9 +17,6 @@ use serde_json::Value;
 pub(super) struct Recipe {
     pub source: Source,
     annual_fields: Vec<String>,
-    motorcycle_share: f64,
-    medium_share_of_heavy: f64,
-    missing_heavy_percent: Option<f64>,
     search_radius_m: f64,
 }
 
@@ -74,17 +71,12 @@ pub(super) fn convert(
             let measured_heavy = heavy_pattern
                 .captures(value)
                 .and_then(|v| v[1].parse::<f64>().ok());
-            let heavy = measured_heavy.or(recipe.missing_heavy_percent);
+            let heavy = measured_heavy;
             if heavy.is_some_and(|v| !(0.0..=100.0).contains(&v)) {
                 continue;
             }
             row.total = Some(total);
-            row.vehicle_classes = records::split_heavy(
-                total,
-                heavy.map(|v| total * v / 100.0),
-                recipe.motorcycle_share,
-                recipe.medium_share_of_heavy,
-            );
+            records::observe_heavy_group(&mut row, heavy.map(|v| total * v / 100.0));
             row.estimated_classes = 15;
             if selected
                 .as_ref()

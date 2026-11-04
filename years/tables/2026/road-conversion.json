@@ -88,7 +88,6 @@
         "source_id": 9528,
         "source_rank": 3353879864
       },
-      "motorcycle_share": 0.01,
       "search_radius_m": 50,
       "minimum_alignment_cosine": 0.8660254037844387
     },
@@ -162,7 +161,6 @@
         "kasyo46.csv",
         "kasyo47.csv"
       ],
-      "medium_share_of_large": 0.25,
       "weekday_to_model_daily": 1.0
     },
     {
@@ -332,19 +330,11 @@
         "hpms-page-234000.json",
         "hpms-page-236000.json"
       ],
-      "heavy_shares_by_functional_class": [
-        0.12,
-        0.1,
-        0.08,
-        0.06,
-        0.05
-      ],
-      "motorcycle_share": 0.01,
-      "medium_share_of_heavy": 0.2,
       "search_radius_m": 100,
       "minimum_alignment_cosine": 0.8660254037844387,
       "twin_radius_m": 300,
-      "twin_total_ratio_tolerance": 0.15
+      "twin_total_ratio_tolerance": 0.15,
+      "functional_class_max": 5
     },
     {
       "format": "sict",
@@ -355,12 +345,6 @@
       },
       "composition_input": "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict",
       "total_field": "tdpa_2024",
-      "fallback_shares": [
-        0.795,
-        0.071,
-        0.082,
-        0.052
-      ],
       "search_radius_m": 200
     },
     {
@@ -408,8 +392,6 @@
         "source_id": 1088,
         "source_rank": 3354002496
       },
-      "motorcycle_share": 0.01,
-      "medium_share_of_heavy": 0.25,
       "search_radius_m": 200
     },
     {
@@ -440,7 +422,6 @@
         "liikennemaarat-page-17000.json",
         "liikennemaarat-page-18000.json"
       ],
-      "motorcycle_share": 0.01,
       "search_radius_m": 200
     },
     {
@@ -461,8 +442,6 @@
         "mastra-page-21000.json"
       ],
       "coordinate_epsg": 25832,
-      "motorcycle_share": 0.01,
-      "medium_share_of_heavy": 0.05,
       "search_radius_m": 200
     },
     {
@@ -496,9 +475,6 @@
         "annee9",
         "annee10"
       ],
-      "motorcycle_share": 0.01,
-      "medium_share_of_heavy": 0.2,
-      "missing_heavy_percent": null,
       "search_radius_m": 25000
     },
     {
@@ -519,8 +495,6 @@
           "integer_percent_divisor": 10
         }
       ],
-      "motorcycle_share": 0.01,
-      "medium_share_of_heavy": 0.05,
       "search_radius_m": 20000
     },
     {
@@ -540,8 +514,6 @@
         "source_id": 1037,
         "source_rank": 3353740301
       },
-      "motorcycle_share": 0.02,
-      "medium_share_of_heavy": 0.15,
       "search_radius_m": 30000,
       "road_class_mask": 31
     },
@@ -605,8 +577,6 @@
         "nzta-page-10000.json"
       ],
       "carriageways": true,
-      "motorcycle_share": 0.01,
-      "medium_share_of_heavy": 0.2,
       "search_radius_m": 200
     },
     {
@@ -620,8 +590,6 @@
         "at-aadt.geojson"
       ],
       "carriageways": false,
-      "motorcycle_share": 0.01,
-      "medium_share_of_heavy": 0.2,
       "search_radius_m": 200
     },
     {
@@ -1281,24 +1249,22 @@
       "classes": [
         null,
         null,
-        [
-          "truc_2023"
-        ],
+        null,
         null
       ],
       "total": "car_2023",
       "year_field": null,
-      "estimated_classes": 10,
+      "estimated_classes": 15,
       "skip_zero_total": true,
       "total_scale": 1000,
       "percentages": true,
       "fixed_fractions": [
         null,
-        0,
         null,
-        0
+        null,
+        null
       ],
-      "residual_class": 0,
+      "residual_class": null,
       "coverage": {
         "input_id": "municipal-road-boundaries",
         "property": "shapeName",
@@ -1312,7 +1278,15 @@
           "line_near_m": 28,
           "street_hint": ""
         }
-      }
+      },
+      "class_groups": [
+        [
+          6,
+          [
+            "truc_2023"
+          ]
+        ]
+      ]
     },
     {
       "format": "mot",

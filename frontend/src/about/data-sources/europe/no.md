@@ -5,7 +5,7 @@ intro: Traffic volumes on state and county roads (NVDB), national passenger time
 
 ## Roads
 
-State and county roads: [NVDB](https://nvdbapiles.atlas.vegvesen.no/), the national road database of Statens vegvesen (daily traffic and share of long vehicles per section). A quarter of the long vehicles are assigned to the medium class, the rest to heavy. Oslo also has counts from the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
+State and county roads: [NVDB](https://nvdbapiles.atlas.vegvesen.no/), the national road database of Statens vegvesen (daily traffic and share of long vehicles per section). The long-vehicle total is retained; the selected year’s class model estimates its medium and heavy parts. Oslo also has counts from the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
 Municipal streets have no counts. Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km.
 

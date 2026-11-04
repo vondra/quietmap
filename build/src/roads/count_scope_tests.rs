@@ -9,7 +9,7 @@ use super::{
 use arrow_array::{Float64Array, UInt8Array};
 
 #[test]
-fn every_one_way_class_halves_a_both_directions_count_but_keeps_directional_and_street_counts() {
+fn rings_and_lone_local_streets_retain_the_measured_whole_cross_section() {
     let model = model();
     for class in 0..13 {
         for direction in [1, 2, 3, 4] {
@@ -17,10 +17,14 @@ fn every_one_way_class_halves_a_both_directions_count_but_keeps_directional_and_
             road.class = class;
             road.direction = direction;
             road.roundabout = direction >= 3;
-            road.corridor.clear();
+            let share = if class <= 2 && !road.roundabout {
+                0.5
+            } else {
+                1.0
+            };
             assert_eq!(
                 allocation::allocate(&road, &[], &model).0,
-                [40.0, 5.0, 2.5, 2.5]
+                road.counts.map(|v| v * share)
             );
             for basis in [1, 4] {
                 road.basis = basis;
@@ -88,6 +92,7 @@ fn an_allocated_count_keeps_its_observed_truck_mix_in_the_prepared_columns() {
     road.observation_source_id = 21;
     road.observation = "measured section".into();
     road.count_origin_measured = true;
+    road.observation_time_basis = 1;
     road.counts = [80.0, 10.0, 5.0, 5.0];
     road.basis = 2;
     road.estimated = 9;
@@ -116,6 +121,17 @@ fn an_allocated_count_keeps_its_observed_truck_mix_in_the_prepared_columns() {
             .value(0),
         9
     );
+    assert!(
+        input::column::<arrow_array::BooleanArray>(&batch, "traffic_observation_measured")
+            .unwrap()
+            .value(0)
+    );
+    assert_eq!(
+        input::column::<UInt8Array>(&batch, "traffic_observation_time_basis")
+            .unwrap()
+            .value(0),
+        1
+    );
     assert_eq!(
         input::column::<Float64Array>(&batch, "aadt_medium")
             .unwrap()
@@ -143,10 +159,11 @@ fn native_prior_normalization_comes_from_the_same_selected_preparation_model() {
 }
 
 #[test]
-fn an_uncounted_roundabout_uses_the_same_one_way_prior_as_an_ordinary_carriageway() {
+fn an_uncounted_roundabout_uses_the_two_way_prior_on_which_it_was_fitted() {
     let mut ordinary = road(1);
     ordinary.class = 3;
     ordinary.source_id = 0;
+    ordinary.direction = 0;
     let mut roundabout = ordinary.clone();
     roundabout.direction = 3;
     roundabout.roundabout = true;
@@ -178,5 +195,23 @@ fn historical_weekday_fit_replaces_the_conversion_fallback_but_never_scales_annu
         let mut road = road(1);
         matcher.apply(&mut road, &model).unwrap();
         assert_eq!(road.counts.iter().sum::<f64>(), expected);
+    }
+}
+
+#[test]
+fn conflicting_unlocated_stations_on_the_same_route_do_not_select_by_input_order() {
+    let mut first = observation();
+    first.geometry.clear();
+    first.reference_required = true;
+    let mut second = first.clone();
+    second.identity = "another station".into();
+    second.vehicle_classes[0] = Some(1000.0);
+    second.total = Some(1020.0);
+    for observations in [vec![first.clone(), second.clone()], vec![second, first]] {
+        let matcher = Matcher::new(observations).unwrap();
+        let mut road = road(1);
+        road.source_id = 0;
+        matcher.apply(&mut road, &model()).unwrap();
+        assert_eq!(road.source_id, 0);
     }
 }

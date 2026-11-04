@@ -1328,7 +1328,11 @@
       "throughFactor": 1.8072904178118965,
       "demandScale": 0.5499480531105053,
       "singleTrackFactor": 0.5804116444101638
-    }
+    },
+    "service_trip_bounds": [
+      20.0,
+      400.0
+    ]
   },
   "speed_transitions": {
     "countries": {

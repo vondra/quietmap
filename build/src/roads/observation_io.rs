@@ -51,6 +51,7 @@ fn schema(inputs: &YearInputs) -> Result<Schema> {
     fields.push(Field::new("geometry", DataType::Binary, false));
     fields.push(Field::new("target", DataType::Utf8, false));
     fields.push(Field::new("sample", DataType::Utf8, false));
+    fields.push(Field::new("vehicle_groups", DataType::Utf8, false));
     Ok(Schema::new_with_metadata(
         fields,
         HashMap::from([
@@ -239,6 +240,11 @@ pub fn write(path: &Path, rows: &[Observation], inputs: &YearInputs) -> Result<(
             .map(|r| serde_json::to_string(&r.sample))
             .collect::<std::result::Result<Vec<_>, _>>()?;
         columns.push(Arc::new(StringArray::from_iter_values(samples)));
+        let groups = rows
+            .iter()
+            .map(|r| serde_json::to_string(&r.vehicle_groups))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        columns.push(Arc::new(StringArray::from_iter_values(groups)));
         writer.write(&RecordBatch::try_new(schema.clone(), columns)?)?;
     }
     writer.finish()?;
@@ -313,6 +319,7 @@ pub fn read(path: &Path, inputs: &YearInputs) -> Result<Vec<Observation>> {
                 search_radius_m: value!(Float64Array, "search_radius_m"),
                 daily_factor: value!(Float64Array, "daily_factor"),
                 vehicle_classes: counts[..4].try_into()?,
+                vehicle_groups: serde_json::from_str(value!(StringArray, "vehicle_groups"))?,
                 total: counts[4],
                 geometry: decode_geometry(value!(BinaryArray, "geometry"))?,
                 target: serde_json::from_str(value!(StringArray, "target"))?,

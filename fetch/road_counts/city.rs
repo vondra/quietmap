@@ -119,23 +119,28 @@ pub(super) fn convert(
             TimeBasis::AnnualDaily
         };
         row.daily_factor = factor;
-        row.measured = !recipe.modeled;
+        row.measured = !recipe.modeled
+            && !records::text(&p["raw_techno"])
+                .to_lowercase()
+                .contains("estimat");
         row.total = Some(if weekday { total } else { total.round() });
         row.vehicle_classes = [
             None,
             None,
-            truck.map(|v| if weekday { v } else { v.round() }),
+            None,
             moto.map(|v| if weekday { v } else { v.round() }),
         ];
-        row.estimated_classes = if recipe.modeled
-            || weekday
-            || records::text(&p["raw_techno"])
-                .to_lowercase()
-                .contains("estimat")
-        {
+        row.vehicle_groups = truck
+            .into_iter()
+            .map(|count| crate::roads::observation_groups::VehicleGroup {
+                classes: 6,
+                count: if weekday { count } else { count.round() },
+            })
+            .collect();
+        row.estimated_classes = if !row.measured {
             15
         } else {
-            3 | if truck.is_none() { 4 } else { 0 } | if moto.is_none() { 8 } else { 0 }
+            7 | if moto.is_none() { 8 } else { 0 }
         };
         row.geometry = geometry(feature, p, &GeometryFormat::Geojson)?;
         for part in &mut row.geometry {

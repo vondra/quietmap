@@ -126,12 +126,18 @@ fn parse(recipe: &Recipe, inputs: &YearInputs, reader: impl Read) -> Result<Vec<
         let Some(total) = count("all_motor_vehicles")?.filter(|v| *v > 0.0) else {
             continue;
         };
+        let rigid = count("HGVs_2_rigid_axle")?;
+        let lorries = count("all_HGVs")?;
+        let buses = count("buses_and_coaches")?;
+        if rigid.zip(lorries).is_some_and(|(r, h)| r > h) {
+            continue;
+        }
         let counts = [
             count("cars_and_taxis")?
                 .zip(count("LGVs")?)
                 .map(|(a, b)| a + b),
-            count("buses_and_coaches")?,
-            count("all_HGVs")?,
+            buses.zip(rigid).map(|(b, r)| b + r),
+            lorries.zip(rigid).map(|(h, r)| h - r),
             count("two_wheeled_motor_vehicles")?,
         ];
         if counts.iter().flatten().sum::<f64>() > total + 2.0 {
@@ -146,6 +152,16 @@ fn parse(recipe: &Recipe, inputs: &YearInputs, reader: impl Read) -> Result<Vec<
         row.geometry = vec![vec![[longitude, latitude]]];
         row.total = Some(total);
         row.vehicle_classes = counts;
+        if rigid.is_none() {
+            row.vehicle_groups = buses
+                .zip(lorries)
+                .into_iter()
+                .map(|(b, h)| crate::roads::observation_groups::VehicleGroup {
+                    classes: 6,
+                    count: b + h,
+                })
+                .collect();
+        }
         row.estimated_classes = if estimated { 15 } else { 0 };
         row.measured = !estimated;
         row.target.reference_rule = ReferenceRule::Whole;
@@ -220,7 +236,10 @@ fn parse(recipe: &Recipe, inputs: &YearInputs, reader: impl Read) -> Result<Vec<
     for (point, ramp) in points.iter_mut().zip(&ramps) {
         if *ramp {
             point.row.count_basis = CountBasis::Directional;
-            point.row.target.way_assignment = Some(recipe.minor_assignment.clone());
+            let mut assignment = recipe.minor_assignment.clone();
+            // A known slip is expected beside a mainline; its link-class mask provides the distinction.
+            assignment.require_class_clearance = false;
+            point.row.target.way_assignment = Some(assignment);
         }
         point.row.road_class_mask = (0u8..13)
             .filter(|c| {

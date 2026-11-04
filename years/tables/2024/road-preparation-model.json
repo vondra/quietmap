@@ -1069,7 +1069,8 @@
     "world": [
       0.01,
       3.68
-    ]
+    ],
+    "service_trip_bounds": null
   },
   "lanes": [],
   "observation_shares": {},

@@ -1089,7 +1089,8 @@
           "capTrips": 2000
         }
       ],
-      "street": null
+      "street": null,
+      "service_trip_bounds": null
     },
     "speed_transitions": {
       "countries": {

@@ -20,8 +20,6 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 pub(super) struct Recipe {
     pub source: Source,
-    motorcycle_share: f64,
-    medium_share_of_heavy: f64,
     search_radius_m: f64,
     road_class_mask: u16,
 }
@@ -74,11 +72,6 @@ pub(super) fn convert(recipe: &Recipe, inputs: &YearInputs, raw: &str) -> Result
         if reference.is_empty() || !reference.bytes().all(|c| c.is_ascii_alphanumeric()) {
             continue;
         }
-        let moto = (total * recipe.motorcycle_share).round();
-        if light < moto {
-            continue;
-        }
-        let medium = (heavy * recipe.medium_share_of_heavy).round();
         let mut row = recipe.source.observation(
             inputs,
             hpms::identity(feature),
@@ -100,12 +93,7 @@ pub(super) fn convert(recipe: &Recipe, inputs: &YearInputs, raw: &str) -> Result
         }];
         row.search_radius_m = recipe.search_radius_m;
         row.total = Some(total);
-        row.vehicle_classes = [
-            Some(light - moto),
-            Some(medium),
-            Some(heavy - medium),
-            Some(moto),
-        ];
+        records::observe_heavy_group(&mut row, Some(heavy));
         row.estimated_classes = 15;
         rows.push(row);
     }

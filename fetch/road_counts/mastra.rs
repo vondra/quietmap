@@ -18,8 +18,6 @@ pub(super) struct Recipe {
     pub source: Source,
     files: Vec<PathBuf>,
     coordinate_epsg: u32,
-    motorcycle_share: f64,
-    medium_share_of_heavy: f64,
     search_radius_m: f64,
 }
 
@@ -82,12 +80,7 @@ pub(super) fn convert(
         row.road_class_mask = records::class_mask(Some(if state { 1 } else { 4 }), number >= 3);
         row.search_radius_m = recipe.search_radius_m;
         row.total = Some(total.round());
-        row.vehicle_classes = records::split_heavy(
-            total.round(),
-            published_count(&p["LBIL_AADT"])?,
-            recipe.motorcycle_share,
-            recipe.medium_share_of_heavy,
-        );
+        records::observe_heavy_group(&mut row, published_count(&p["LBIL_AADT"])?);
         row.estimated_classes = 15;
         if row.count_basis == CountBasis::Directional {
             row.target.way_assignment = Some(crate::roads::observation_target::WayAssignment {

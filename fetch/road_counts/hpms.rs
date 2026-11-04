@@ -20,9 +20,7 @@ use std::path::{Path, PathBuf};
 pub(super) struct Recipe {
     pub source: Source,
     files: Vec<PathBuf>,
-    heavy_shares_by_functional_class: Vec<f64>,
-    motorcycle_share: f64,
-    medium_share_of_heavy: f64,
+    functional_class_max: u8,
     search_radius_m: f64,
     minimum_alignment_cosine: f64,
     twin_radius_m: f64,
@@ -93,12 +91,8 @@ pub(super) fn convert(
 ) -> Result<Vec<Observation>> {
     ensure!(!recipe.files.is_empty(), "no declared HPMS objects");
     ensure!(
-        recipe
-            .heavy_shares_by_functional_class
-            .iter()
-            .chain([&recipe.motorcycle_share, &recipe.medium_share_of_heavy])
-            .all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
-        "invalid HPMS split table"
+        (1..=7).contains(&recipe.functional_class_max),
+        "invalid HPMS class range"
     );
     let mut sections = Vec::new();
     let mut terminal = false;
@@ -123,7 +117,7 @@ pub(super) fn convert(
             }
             let class = number(&p["F_SYSTEM"])?;
             ensure!(class.fract() == 0.0, "fractional HPMS functional class");
-            if class < 1.0 || class > recipe.heavy_shares_by_functional_class.len() as f64 {
+            if class < 1.0 || class > f64::from(recipe.functional_class_max) {
                 continue;
             }
             let rank = class as u8 - 1;
@@ -158,17 +152,6 @@ pub(super) fn convert(
             }
             ensure!(vertices > 0, "empty HPMS geometry");
             centroid.iter_mut().for_each(|v| *v /= vertices as f64);
-            let motorcycle = (total * recipe.motorcycle_share).round();
-            let heavy_group =
-                (total * recipe.heavy_shares_by_functional_class[usize::from(rank)]).round();
-            let medium = (heavy_group * recipe.medium_share_of_heavy).round();
-            row.vehicle_classes = [
-                total - heavy_group - motorcycle,
-                medium,
-                heavy_group - medium,
-                motorcycle,
-            ]
-            .map(Some);
             row.total = Some(total);
             row.estimated_classes = 15;
             row.search_radius_m = recipe.search_radius_m;

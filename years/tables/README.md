@@ -161,6 +161,7 @@ These are the training populations, not a claim of representative counts everywh
 
 `road-calibration.json` keeps the fit's support thresholds and its admitted trip/fleet
 assumptions. Its preparation template has no later fitted priors; an unavailable street background is null and leaves the global class prior.
+Service-road trip bounds are also absent in the historical template: positive assigned trips remain, and no assigned trips leaves the class prior. The contemporary bounds are explicitly retained legacy assumptions.
 The fitter writes the class and weekday values directly into the preparation model,
 and obtains transition limits from the admitted legal-speed table.
 

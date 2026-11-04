@@ -270,6 +270,12 @@ fn local_motorcycles(
             aadt[2].clone()?,
             aadt[3].clone()?,
         ];
+        let observation_id = batch
+            .column_by_name("traffic_observation_id")
+            .map(|a| a.as_string::<i32>());
+        let measured = batch
+            .column_by_name("traffic_observation_measured")
+            .map(|a| a.as_boolean());
         for row in 0..batch.num_rows() {
             let counted = observation_estimated.map_or_else(
                 || super::motorcycles::counted(source_id.value(row), estimated.value(row)),
@@ -277,7 +283,19 @@ fn local_motorcycles(
             );
             if counted && !copies.contains(&(batch_first_row + row)) {
                 let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
-                local.add(class_index, std::array::from_fn(|k| aadt[k].value(row)));
+                let flows = std::array::from_fn(|k| aadt[k].value(row));
+                if let Some(identities) = observation_id {
+                    if source_id.value(row) != 12 && measured.is_some_and(|c| c.value(row)) {
+                        local.add_observation(
+                            source_id.value(row),
+                            identities.value(row),
+                            class_index,
+                            flows,
+                        );
+                    }
+                } else {
+                    local.add(class_index, flows);
+                }
             }
         }
         batch_first_row += batch.num_rows();

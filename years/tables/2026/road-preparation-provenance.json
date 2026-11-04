@@ -10,8 +10,8 @@
     "source_sha256": "5273cf63da4ca8b317bfe972d8a345e7932db0fff7a7789998a890f0081232b6",
     "fetched_utc": "2026-09-24T20:34:24Z",
     "licence": "OGL-UK-3.0",
-    "attribution": "Contains public sector information licensed under OGL v3.0; © Crown copyright, Department for Transport",
-    "counts": "latest positive manual MCU AADF 2015–2025 excluding 2020; residential/unclassified",
+    "attribution": "Contains public sector information licensed under OGL v3.0; \u00a9 Crown copyright, Department for Transport",
+    "counts": "latest positive manual MCU AADF 2015\u20132025 excluding 2020; residential/unclassified",
     "matching": "nearest row <=12 m; no other class within 20 m; >30 m from square edge; source 11",
     "model": "S2p: T[cell] * (through&urban ? c : 1) * (singleTrack ? d : 1) + k * max_street(routed trips); structures_v5 storeys",
     "holdout": "qm-holdout-v1/{x}/{y}: sha256 first 8 hex digits modulo 5 == 0 excluded before extraction",
@@ -37,5 +37,9 @@
   "fleet": {
     "source": "WHO 2023 vehicle registrations and household travel surveys; retained conversion from ownership to local traffic share",
     "assumptions": "Legacy country and continental travel-mode priors are estimates, not observed section counts."
+  },
+  "service_trip_bounds": {
+    "source": "Retained producer bounds of 20\u2013400 vehicles/day on service-road building demand; not a measured historical fit.",
+    "historical_policy": "No bounds are admitted for 2024: positive generated trips are retained; no assigned trips leaves the global class prior."
   }
 }
