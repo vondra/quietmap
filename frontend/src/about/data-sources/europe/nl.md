@@ -7,7 +7,7 @@ intro: National motorway counts (INWEVA), modelled city traffic in Amsterdam, na
 
 Motorways and national roads: [INWEVA](https://www.nationaalgeoregister.nl/geonetwork/srv/api/records/93e99016-9b53-45d6-8b3c-fc9bf8086256), the 2024 Rijkswaterstaat section intensities (CC0), with cars, vans and two truck classes per direction from the loop detectors.
 
-A motorway takes the counted section of its number within 50 m running along it; only sections measured at their own loops count; derived neighbours are treated as uncounted. The detectors cannot see motorcycles, so 1 % of each total is assigned to them.
+A motorway takes the counted section of its number within 50 m running along it; only sections measured at their own loops count; derived neighbours are treated as uncounted. Each mapped carriageway keeps its own directional count; the two counts are added only for an undivided road. The light-vehicle category includes motorcycles without separating them, so their 1 % share is estimated. The two truck classes remain measured.
 
 Amsterdam: the 2025 Amsterdam file of the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities). These values come from the city's traffic model, not from counters, and are shown as modelled.
 

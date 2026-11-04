@@ -22,6 +22,22 @@ test('local citations show observation and publication separately; common lists 
   assert.ok(!renderYearSources('data-sources/europe/cz.md', years).includes('### 2000'))
 })
 
+test('a country uses the global model when its raw count is not selected for the map year', () => {
+  const m = manifest()
+  m.inputs.push({ ...source('Unused network', 'CZ'), kind: 'prepare-road-network' })
+  m.inputs.push({ ...source('conversion', 'world'), kind: 'road-conversion', depends_on: [] })
+  const years = [{ name: m.year, manifest: m }]
+  let text = renderYearSources('data-sources/europe/cz.md', years)
+  assert.ok(text.includes('No road count at or before this year is used for this country.'))
+  assert.ok(!text.includes('[Local]'))
+  assert.ok(!text.includes('[Unused network]'))
+  m.inputs.at(-1).depends_on = ['City']
+  text = renderYearSources('data-sources/europe/cz.md', years)
+  assert.ok(!text.includes('No road count'))
+  assert.ok(text.includes('[City]'))
+  assert.ok(!renderYearSources('data-sources.md', years).includes('No road count'))
+})
+
 test('the public projection rejects private fields, leaked phrases, moving URLs and unknown kinds', () => {
   for (const leaked of ['private enrichment inventory', 'example-cache', 'paged storage', '/private/storage', '[latest]', 'table{01..47}.csv']) {
     const m = manifest(); m.inputs[0].description = leaked
