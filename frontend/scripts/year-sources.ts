@@ -92,15 +92,21 @@ export function renderYearSources(page: string, years: NamedYear[]): string {
     scope.length === 2 && path.split('/').length > 2 ? `The [regional sources](/about/${path.split('/').slice(0, -1).join('/')}#sources-by-year) apply too.` : '',
   ].filter(Boolean).join(' ')
   const sections = [...years].filter(year => year.manifest.built).sort((a, b) => b.name.localeCompare(a.name)).map(({ name, manifest }) => {
-    const intermediate = new Set<InputKind>(['prepared', 'prepare-regions', 'prepare-osm-boundaries', 'osm-geography', 'structure-observations', 'rasters', 'airport-traffic', 'road-traffic', 'segments', 'shuffled', 'terrain', 'weather', 'bus', 'worship', 'venues', 'water', 'turbines', 'barriers', 'geoid', 'raster-mosaic', 'ships', 'prepare-weather-statistics', 'facilities', 'facility-observations'])
-    const inputs = manifest.inputs.filter(input => local(input.region) && !intermediate.has(input.kind))
+    const intermediate = new Set<InputKind>(['prepared', 'prepare-regions', 'prepare-osm-boundaries', 'osm-geography', 'structure-observations', 'structures', 'road-conversion', 'road-observations', 'road-calibration', 'road-preparation-model', 'rasters', 'airport-traffic', 'road-traffic', 'segments', 'shuffled', 'terrain', 'weather', 'bus', 'worship', 'venues', 'water', 'turbines', 'barriers', 'geoid', 'raster-mosaic', 'ships', 'prepare-weather-statistics', 'facilities', 'facility-observations'])
+    const conversion = manifest.inputs.find(input => input.kind === 'road-conversion')
+    const selectedRoadCount = (input: SourceInput) => input.kind === 'road-reference-counts' || input.kind === 'prepare-road-counts' && (!conversion || conversion.depends_on.includes(input.id))
+    const inputs = manifest.inputs.filter(input => local(input.region) && !intermediate.has(input.kind)
+      && (input.kind !== 'prepare-road-counts' || selectedRoadCount(input))
+      && (input.kind !== 'prepare-road-network' || !conversion || conversion.depends_on.includes(input.id)))
+    const noRoadCounts = scope.length === 2 && !inputs.some(selectedRoadCount)
     // public_ok governs redistribution of records, not attribution of their publisher.
     const lines = inputs.map(inputLine)
     return [
       `### ${escapeMarkdown(name)}`,
       `Map state: immediately before **${manifest.as_of}**.${scope === 'world' ? ` Flows: **${manifest.flows.start} to ${manifest.flows.end}**, excluding the last day.${flowExclusions(manifest)}` : ''}`,
+      noRoadCounts ? 'No road count at or before this year is used for this country. Traffic follows the [global model](/about/data-preparation) and the demand from mapped buildings.' : '',
       lines.length ? lines.join('\n\n') : 'No separate local dataset; the world and regional sources apply.',
-    ].join('\n\n')
+    ].filter(Boolean).join('\n\n')
   })
   return ['## Sources by year', sharedLinks, ...sections].filter(Boolean).join('\n\n')
 }
@@ -114,9 +120,9 @@ export function expandYearSources(page: string, markdown: string, years: NamedYe
 export function renderClassPriors(years: NamedYear[]): string {
   const countries = new Intl.DisplayNames(['en'], { type: 'region' })
   return years.filter(year => year.manifest.built).map(({ name }) => {
-    const table = JSON.parse(readFileSync(join(YEARS_DIRECTORY, 'tables', name, 'road-class-priors.json'), 'utf8')) as { rows: { country: string; value: number[][] }[] }
+    const table = JSON.parse(readFileSync(join(YEARS_DIRECTORY, 'tables', name, 'road-class-priors.json'), 'utf8')) as { rows: { country?: string; countries?: string[]; value: number[][] }[] }
     const rows = table.rows.flatMap(row => row.value.map((values, index) =>
-      `| ${countries.of(row.country)} | ${index === 0 ? 'Secondary' : 'Tertiary'} | ${values.map(value => value.toLocaleString('en')).join(' | ')} |`))
+      `| ${row.country ? countries.of(row.country) : row.countries?.length ? row.countries.map(country => countries.of(country)).join(', ') : 'World'} | ${index === 0 ? 'Secondary' : 'Tertiary'} | ${values.map(value => value.toLocaleString('en')).join(' | ')} |`))
     return [`The ${name} map’s national class medians, in vehicles per day:`,
       '| Country | Road | Unknown surroundings | Rural | Urban |', '|---|---|---:|---:|---:|', ...rows].join('\n')
   }).join('\n\n')

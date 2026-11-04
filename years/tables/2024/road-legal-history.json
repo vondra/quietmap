@@ -1,0 +1,290 @@
+{
+  "rows": [
+    {
+      "country": "AT",
+      "value": [
+        50,
+        100,
+        130,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "BA",
+      "value": [
+        50,
+        0,
+        130,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "CH",
+      "value": [
+        50,
+        80,
+        120,
+        100
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "CL",
+      "value": [
+        50,
+        100,
+        120,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "CO",
+      "value": [
+        50,
+        90,
+        120,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "CZ",
+      "value": [
+        50,
+        90,
+        130,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "DE",
+      "value": [
+        50,
+        100,
+        0,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "DK",
+      "value": [
+        50,
+        80,
+        130,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "ES",
+      "value": [
+        0,
+        90,
+        120,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "FR",
+      "value": [
+        50,
+        0,
+        130,
+        110
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "GB",
+      "value": [
+        0,
+        0,
+        113,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "GR",
+      "value": [
+        50,
+        90,
+        130,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "HU",
+      "value": [
+        50,
+        90,
+        130,
+        110
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "IT",
+      "value": [
+        50,
+        0,
+        130,
+        110
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "JP",
+      "value": [
+        0,
+        0,
+        100,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "LU",
+      "value": [
+        50,
+        90,
+        130,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "LV",
+      "value": [
+        50,
+        90,
+        0,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "NZ",
+      "value": [
+        50,
+        100,
+        100,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "PL",
+      "value": [
+        50,
+        0,
+        140,
+        120
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "PT",
+      "value": [
+        50,
+        90,
+        120,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "RS",
+      "value": [
+        50,
+        0,
+        130,
+        0
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    },
+    {
+      "country": "SI",
+      "value": [
+        50,
+        90,
+        130,
+        110
+      ],
+      "valid_from": "2024-12-03",
+      "valid_until": "2025-01-01",
+      "source_url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "scope": "Reported passenger-car defaults; mixed subnational, seasonal or road-type ranges remain zero."
+    }
+  ]
+}

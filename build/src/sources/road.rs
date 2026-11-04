@@ -74,12 +74,6 @@ const SURFACES: [RoadSurface; 5] = [
         ..REFERENCE_SURFACE
     },
 ];
-/// dev4's fitted carriageway priors of secondary and tertiary roads (built-up unknown, rural,
-/// urban; two-way sections, one-way cells scaled alike). They are medians of counted roads, and
-/// where counting is selective the counted roads are the busy ones of their class: Swedish NVDB,
-/// which counts every state road, reads them 5.7 dB high, and an uncounted Czech III-class road
-/// through a village took 2,562 vehicles a day where its counted neighbour carries 1,252.
-const DEV4_CLASS_PRIORS: [[f64; 3]; 2] = [[3_000.0, 2_061.0, 6_445.0], [1_506.0, 1_002.0, 2_562.0]];
 /// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
 const ALL_CATEGORIES_ESTIMATED: u8 = 15;
 /// The medium and heavy shares (%) of local streets, as dev4's service tree splits them.
@@ -143,7 +137,7 @@ fn country_flows(
         return split(total, prior[3], counted_shares(tables, class, built_up));
     };
     let cell = usize::from(built_up.min(2));
-    let scale = cells[row][cell] / DEV4_CLASS_PRIORS[row][cell];
+    let scale = cells[row][cell] / tables.road_preparation_priors[row][cell];
     // Unknown built-up takes the mean of the rural and urban shares.
     let share = |k: usize| {
         let [rural, urban] = [shares[row][0][k], shares[row][1][k]];
@@ -265,6 +259,9 @@ fn local_motorcycles(
         let class = c.get("road_class")?.as_primitive::<UInt8Type>();
         let estimated = c.get("traffic_estimated")?.as_primitive::<UInt8Type>();
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
+        let observation_estimated = batch
+            .column_by_name("traffic_observation_estimated")
+            .map(|a| a.as_primitive::<UInt8Type>());
         let aadt = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
             .map(|name| c.get(name).map(|a| a.as_primitive::<Float64Type>()));
         let aadt = [
@@ -273,12 +270,32 @@ fn local_motorcycles(
             aadt[2].clone()?,
             aadt[3].clone()?,
         ];
+        let observation_id = batch
+            .column_by_name("traffic_observation_id")
+            .map(|a| a.as_string::<i32>());
+        let measured = batch
+            .column_by_name("traffic_observation_measured")
+            .map(|a| a.as_boolean());
         for row in 0..batch.num_rows() {
-            if super::motorcycles::counted(source_id.value(row), estimated.value(row))
-                && !copies.contains(&(batch_first_row + row))
-            {
+            let counted = observation_estimated.map_or_else(
+                || super::motorcycles::counted(source_id.value(row), estimated.value(row)),
+                |status| status.value(row) & 9 == 0,
+            );
+            if counted && !copies.contains(&(batch_first_row + row)) {
                 let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
-                local.add(class_index, std::array::from_fn(|k| aadt[k].value(row)));
+                let flows = std::array::from_fn(|k| aadt[k].value(row));
+                if let Some(identities) = observation_id {
+                    if source_id.value(row) != 12 && measured.is_some_and(|c| c.value(row)) {
+                        local.add_observation(
+                            source_id.value(row),
+                            identities.value(row),
+                            class_index,
+                            flows,
+                        );
+                    }
+                } else {
+                    local.add(class_index, flows);
+                }
             }
         }
         batch_first_row += batch.num_rows();
@@ -568,6 +585,10 @@ pub fn convert(
             u8s("built_up")?,
             u8s("traffic_estimated")?,
         );
+        let observation_estimated = batch
+            .column_by_name("traffic_observation_estimated")
+            .map(|a| a.as_primitive::<UInt8Type>())
+            .unwrap_or(estimated);
         let aadt = [
             f64s("aadt_light")?,
             f64s("aadt_medium")?,
@@ -687,7 +708,7 @@ pub fn convert(
                     built_up.value(row),
                     country.value(row),
                     source_id.value(row),
-                    estimated.value(row),
+                    observation_estimated.value(row),
                 ),
             };
             // The department's mean is the traffic across both directions and its shares count
@@ -698,7 +719,8 @@ pub fn convert(
             }
             // A US road whose vehicle types nobody counted (HPMS's national layer counts the total
             // only) carries its state's mix on its road group in its area (VM-4).
-            let regional_mix = (estimated_categories == ALL_CATEGORIES_ESTIMATED)
+            let regional_mix = (copy
+                || observation_estimated.value(row) == ALL_CATEGORIES_ESTIMATED)
                 .then(|| {
                     let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
                     tables.regional_roads.vehicle_shares(
@@ -963,6 +985,22 @@ mod tests {
             prior,
             "a dataset's split"
         );
+    }
+
+    #[test]
+    fn a_historical_preparation_prior_is_rescaled_from_its_own_admitted_baseline() {
+        let mut tables = SourceTables::fixture_owned();
+        tables.road_preparation_priors[1] = [800.0; 3];
+        let flows = country_flows(
+            &tables,
+            [720.0, 20.0, 40.0, 20.0],
+            4,
+            2,
+            u16::from_le_bytes(*b"CZ"),
+            PRIOR_SOURCE_ID,
+            15,
+        );
+        assert_eq!(flows.iter().sum::<f64>().round(), 962.0);
     }
 
     /// A guessed split keeps the flow and the motorcycles and takes the counted medium and heavy

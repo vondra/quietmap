@@ -107,17 +107,24 @@ publisher converters in `fetch/structure_*.rs`. The height table and its derivat
 A road gets louder with more vehicles, more lorries and higher speed: twice the traffic adds about
 3 dB. Speed is the signed limit, else the country's legal limit for the road's class.
 
-Traffic is where the map is least sure. Of the world's 5.8 million km of motorways, trunk and
-primary roads, 31 % have official traffic figures. Counts cover 18 %, such as the 148,831 vehicles a
-day the [<abbr title="Highway Performance Monitoring System, the US federal road traffic database">HPMS</abbr>](https://www.fhwa.dot.gov/policyinformation/hpms.cfm)
-gives New York's Brooklyn–Queens Expressway (2022). National estimates cover the rest of them, in
-China, India and a few other countries.
+Traffic is where the map is least sure. A located count gives the strongest local evidence; a
+route-wide count is less precise. Where no admitted count reaches a road, the map estimates
+traffic from its class and, where a fitted model is available, the trips made by nearby buildings.
+A side street can carry the trips its own buildings make. The country’s source page identifies
+which counts and models are used; a road classification alone is not a traffic count.
 
-Another 14 % take their traffic from a model trained on the counted roads. It predicts a road's
-traffic from the trips the buildings within 1, 5 and 15 km make. The remaining 54 % have only an
-average for their road class in their country (October 2026). A side street nobody counted carries
-the trips its own buildings make; in a town, a residential street that a bus line runs along carries
-at least what an unclassified street there carries.
+<details>
+<summary>Road observations and historical traffic</summary>
+
+A road observation keeps the period actually counted, its location or route, the direction and count scope, the source, and a separate value or missing flag for each vehicle class. A reported zero stays zero; a missing class is inferred and remains marked estimated. A published group, such as all trucks, keeps its total while the selected year’s class model estimates its parts. Measured vehicle classes retain that status even when the count is shared between carriageways or continued along the road. A count of one direction, both directions and a whole street cross-section have different meanings when divided between mapped carriageways.
+
+Each map year selects explicit publisher editions and converter definitions. A later publication can supply earlier observations, but observations after the year’s cutoff cannot enter the map or train its model. The country’s source section says when no dated road count is used; the global road model and mapped buildings then provide the estimate. Road classifications and manually drawn city boxes are not traffic measurements.
+
+One matcher uses the observation’s declared route, geometry, direction and source priority. At an equally near survey endpoint, the road’s two endpoints distinguish which surveyed section it follows. Conflicting counts with equally good support remain unassigned. Compatible counts can continue along a road through its original mapped nodes, including across a country border or a gap in the coastline data; a branch or conflicting count stops that continuation. Allocation shares a physical cross-section between parallel carriageways and preserves the published total. The final road reader applies the selected year’s vehicle shares, period fractions and speed tables.
+
+Historical class priors and vehicle shares use admitted measured counts. Period shares use complete station-days; where only an all-vehicle hourly series exists, it is the proxy for the non-heavy profile. The weekday conversion is fitted from the same year’s complete days. A legal speed applies only within its documented validity; a posted-speed fit reads numeric limits from the admitted OpenStreetMap state and uses the same settlement and building-density classification as the road model. A fitted cell needs at least 30 mapped pieces. An unavailable local-street background fit leaves the global class estimate. The historical training populations and sample counts accompany the model tables.
+
+</details>
 
 <details>
 <summary>How a road's sound power is computed</summary>

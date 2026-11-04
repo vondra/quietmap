@@ -10,46 +10,41 @@ path = "src/main.rs"
 
 [dependencies]
 tiles = { path = "../tiles" }
-arrow-array = "60"
-arrow-ipc = { version = "60", features = ["zstd"] }
-arrow-schema = "60"
-rayon = "1.12"
-serde_json = { version = "1", features = ["float_roundtrip"] }
-zstd = "0.14"
 physics = { path = "../physics" }
 popup = { path = "../popup" }
-serde = { version = "1", features = ["derive"] }
-flate2 = "1"
-tar = "0.4"
+anyhow = "1"
+arrow-array = "60"
+arrow-buffer = "60"
+arrow-ipc = { version = "60", features = ["zstd"] }
+arrow-schema = "60"
+arrow-select = "60"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.10", default-features = false }
-tzf-rs = { version = "=1.2.0", default-features = false }
-rusqlite = { version = "0.37", features = ["bundled"] }
-libc = "0.2"
-tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
-
-osmpbf = "0.3"
-memmap2 = "0.9"
-anyhow = "1"
-arrow-buffer = "60"
-geo = { version = "0.33.1", default-features = false }
-rstar = "0.12"
-
-geos = { version = "11", features = ["v3_12_0"] }
+csv = "1"
+encoding_rs = "0.8"
+flate2 = "1"
 gdal = "0.19"
-parquet = "60"
-
 gdal-sys = "0.12"
-tempfile = "3"
-csv = "1"
-regex = "1"
-sha2 = "0.10"
-zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-csv = "1"
+geo = { version = "0.33.1", default-features = false }
+geos = { version = "11", features = ["v3_12_0"] }
+libc = "0.2"
+memmap2 = "0.9"
+osmpbf = "0.3"
+parquet = "60"
 proj4rs = { version = "0.3", features = ["crs-definitions"] }
-
-arrow-select = "60"
-csv = "1"
-roxmltree = "0.21"
+rayon = "1.12"
 regex = "1"
-zip = { version = "6", default-features = false, features = ["deflate"] }
+roxmltree = "0.21"
+rstar = "0.12"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3"
+tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
+tzf-rs = { version = "=1.2.0", default-features = false }
+unicode-normalization = "0.1"
+# One zip crate for the ship, rail and road archives: reading only, deflate through zlib-rs.
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zstd = "0.14"

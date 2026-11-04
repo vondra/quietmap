@@ -9,8 +9,28 @@ const citations = JSON.parse(readFileSync(new URL('../.generated/datasets.json',
 for (const device of ['desktop', 'phone'] as const) {
   test.describe(device, () => {
     if (device === 'phone') test.use(PHONE)
+    test('a country without admitted road counts explains its model and retains the source journey', async ({ page }, info) => {
+      await page.goto('/about/data-sources/asia')
+      await page.getByRole('link', { name: 'India', exact: true }).click()
+      const explanation = page.getByText('No road count at or before this year is used for this country.', { exact: false })
+      await explanation.scrollIntoViewIfNeeded()
+      await expect(explanation).toBeVisible()
+      await expect(explanation).toContainText('global model')
+      await page.screenshot({ path: info.outputPath(`missing-road-counts-${device}.png`) })
+      expect(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+      await page.getByRole('link', { name: 'world sources', exact: true }).click()
+      await expect(page).toHaveURL(/\/about\/data-sources#sources-by-year$/)
+      await page.goBack()
+      await expect(page).toHaveURL(/\/about\/data-sources\/asia\/in$/)
+      await expect(explanation).toBeVisible()
+    })
     for (const [region, country, code, method, publisher] of [
       ['asia', 'Thailand', 'th', 'vehicle-kilometres', 'Department of Rural Roads'],
+      ['asia', 'Japan', 'jp', 'it is not a measured zero', 'MLIT'],
+      ['europe', 'Netherlands', 'nl', 'The published all-vehicle total', 'Rijkswaterstaat'],
+      ['europe', 'Sweden', 'se', 'separates cars and motorcycles within the light-vehicle group', 'Trafikverket'],
+      ['south-america', 'Colombia', 'co', 'Motorcycles are missing and are estimated', 'INVIAS'],
+      ['europe', 'Italy', 'it', 'daily averages describe November 2015', 'Anas'],
       ['north-america', 'United States', 'us', 'vehicle mix comes from FHWA', 'FHWA'],
     ]) {
       test(`${country} preserves its method and publishes only built years`, async ({ page }, info) => {
@@ -22,6 +42,7 @@ for (const device of ['desktop', 'phone'] as const) {
         await expect(page).toHaveURL(new RegExp(`${countryURL}$`))
         await expect(page.getByRole('heading', { name: 'Roads', exact: true })).toBeVisible()
         await expect(page.locator('main')).toContainText(method)
+        await page.getByText(method, { exact: false }).scrollIntoViewIfNeeded()
         await page.screenshot({ path: info.outputPath(`${code}-${device}-method.png`) })
         for (const year of years) {
           await expect(page.getByRole('heading', { name: year.name, exact: true })).toHaveCount(year.manifest.built ? 1 : 0)

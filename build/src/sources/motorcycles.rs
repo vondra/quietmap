@@ -59,9 +59,20 @@ pub fn counted(source_id: u16, estimated: u8) -> bool {
 #[derive(Default)]
 pub struct LocalMotorcycles {
     groups: [(f64, f64, u32); GROUPS],
+    observations: std::collections::HashSet<(u16, String, usize)>,
 }
 
 impl LocalMotorcycles {
+    pub fn add_observation(&mut self, source: u16, identity: &str, class: usize, flows: [f64; 4]) {
+        if !identity.is_empty()
+            && self
+                .observations
+                .insert((source, identity.into(), group(class)))
+        {
+            self.add(class, flows);
+        }
+    }
+
     /// Adds a counted row's daily flows (light, medium, heavy, motorcycles).
     pub fn add(&mut self, class: usize, flows: [f64; 4]) {
         let total: f64 = flows.iter().sum();
@@ -133,5 +144,35 @@ mod tests {
         assert!(counted(1113, 15));
         assert!(counted(20, 0));
         assert!(!counted(0, 15));
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    #[test]
+    fn one_station_split_into_many_pieces_is_one_sample() {
+        let mut local = super::LocalMotorcycles::default();
+        for _ in 0..30 {
+            local.add_observation(1, "one station", 4, [90.0, 0.0, 0.0, 10.0]);
+        }
+        assert_eq!(
+            local.share(
+                crate::source_tables::SourceTables::test_fixture(),
+                4,
+                u16::from_le_bytes(*b"DE")
+            ),
+            None
+        );
+        for i in 1..10 {
+            local.add_observation(1, &format!("station {i}"), 4, [90.0, 0.0, 0.0, 10.0]);
+        }
+        assert_eq!(
+            local.share(
+                crate::source_tables::SourceTables::test_fixture(),
+                4,
+                u16::from_le_bytes(*b"DE")
+            ),
+            Some(0.1)
+        );
     }
 }

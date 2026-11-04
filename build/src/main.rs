@@ -29,6 +29,9 @@ mod rail_inputs;
 mod railways;
 mod rasters;
 mod rings;
+#[path = "../../fetch/road_counts.rs"]
+mod road_counts;
+mod roads;
 mod screening;
 #[path = "../../fetch/ships.rs"]
 mod ship_fetch;
@@ -282,6 +285,15 @@ fn run(arguments: &[String]) -> Result<(), String> {
         "prepare-railways" => {
             railways::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
         }
+        "tagged-speed-table" => {
+            roads::tagged_speed_fit::fit(&inputs, &out).map_err(|e| e.to_string())
+        }
+        "road-observations" => road_counts::convert(&inputs, &out).map_err(|e| e.to_string()),
+        "road-model-tables" => roads::calibration::build(&inputs, &out).map_err(|e| e.to_string()),
+        "road-speed-table" => roads::speed_validity::build(&inputs, options.get("kind")?, &out)
+            .map_err(|e| e.to_string()),
+        "roads" => roads::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
+            .map_err(|e| e.to_string()),
         "structure-height-model" => structures::height_calibration::fit(
             &inputs,
             &parse_squares(options.get("squares")?)?,

@@ -1713,7 +1713,7 @@
       "publisher": "Ministère des Transports du Québec",
       "url": "https://ws.mapserver.transports.gouv.qc.ca/swtq?service=wfs&typename=ms:circulation_routier&outputformat=geojson",
       "observed": {
-        "start": "2024",
+        "start": "2015",
         "end": "2024"
       },
       "published": null,
@@ -1985,8 +1985,8 @@
       "publisher": "Vejdirektoratet",
       "url": "https://vmgeoserver.vd.dk/geosmastra/opendata/ows?typeNames=OPEN_DATA_NOEGLETAL_VIEW&CQL_FILTER=AAR>=2023",
       "observed": {
-        "start": "2026-04-11",
-        "end": "2026-04-11"
+        "start": "2000",
+        "end": "2025"
       },
       "published": null,
       "licence": "CC-BY-4.0",
@@ -2113,7 +2113,7 @@
       "publisher": "Department for Transport",
       "url": "https://storage.googleapis.com/dft-statistics/road-traffic/downloads/data-gov-uk/dft_traffic_counts_aadf.zip",
       "observed": {
-        "start": "2025",
+        "start": "2000",
         "end": "2025"
       },
       "published": null,
@@ -2156,7 +2156,7 @@
     },
     {
       "id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
-      "kind": "prepare-road-counts",
+      "kind": "prepare-road-network",
       "region": "ID",
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0",
@@ -2168,7 +2168,7 @@
       "licence": "public-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Bina Marga toll / regional LHRT / national roads. Snapshot; an earlier observation date is not recorded."
+      "description": "National-road geometry used to exclude provincial counts from parallel national roads; retained snapshot."
     },
     {
       "id": "ie-tii-counter-sites-daily-class-aggregate",
@@ -2223,16 +2223,16 @@
       "kind": "prepare-road-counts",
       "region": "IT",
       "publisher": "Anas S.p.A.",
-      "url": "https://www.stradeanas.it/it/dati",
+      "url": "https://dati.mit.gov.it/catalog/dataset/traffico-giornaliero-medio-anas",
       "observed": {
-        "start": "2015-11-30",
+        "start": "2015-11-01",
         "end": "2015-11-30"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Traffic counts in the Anas November 2015 file."
+      "description": "Daily averages observed during November 2015. Used as a period-based traffic estimate without an independently fitted seasonal conversion to the annual mean."
     },
     {
       "id": "jp-mlit-road-traffic-census-r3",
@@ -2305,14 +2305,14 @@
       "publisher": "Statens vegvesen",
       "url": "https://nvdbapiles.atlas.vegvesen.no/vegobjekter/540",
       "observed": {
-        "start": "2026-04-11",
-        "end": "2026-04-11"
+        "start": "1982",
+        "end": "2025"
       },
       "published": null,
       "licence": "NLOD 2.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "NVDB Trafikkmengde. Snapshot; an earlier observation date is not recorded."
+      "description": "NVDB traffic observations selected by each record’s published survey year."
     },
     {
       "id": "nz-nzta-carriageway-auckland-transport-aadt",
@@ -2481,8 +2481,8 @@
       "publisher": "Trafikverket",
       "url": "https://www.trafikverket.se/e-tjanster/hamta-data-fran-trafikverket/",
       "observed": {
-        "start": "2026-09-25",
-        "end": "2026-09-25"
+        "start": "2013",
+        "end": "2026"
       },
       "published": null,
       "licence": "CC0-1.0",
@@ -9056,6 +9056,283 @@
         "facility-observations"
       ],
       "description": "Mapped industry and leisure classified from the admitted facility observations. One registry site selects one containing footprint; dedicated mapped activity and quiet uses keep their identity."
+    },
+    {
+      "id": "road-preparation-model",
+      "kind": "road-preparation-model",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2026-09-28",
+        "end": "2026-09-28"
+      },
+      "published": null,
+      "licence": "AGPL-3.0-or-later",
+      "public_ok": true,
+      "depends_on": [
+        "road-preparation-calibration",
+        "household-travel-surveys",
+        "motorcycle-fleets"
+      ],
+      "description": "Carriageway priors and local street demand fitted on the admitted counts; versioned trip-generation, access and vehicle-mix assumptions. Unsupported regional traffic assignments are excluded."
+    },
+    {
+      "id": "road-observations",
+      "kind": "road-observations",
+      "region": "world",
+      "publisher": "The road-count publishers listed below",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2026-09-28",
+        "end": "2026-09-28"
+      },
+      "published": null,
+      "licence": "Mixed; see original observations",
+      "public_ok": false,
+      "depends_on": [
+        "road-conversion",
+        "cz-rsd-celostatni-scitani-dopravy",
+        "nl-rws-inweva-weekdag-gemiddelde-intensiteiten",
+        "th-drr-rural-roads-aadt",
+        "jp-mlit-road-traffic-census-r3",
+        "cz-prague-tsk-praha-intenzity-dopravy",
+        "municipal-road-boundaries",
+        "us-fhwa-hpms",
+        "mx-sict-imt-datos-viales-u1-segments",
+        "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3",
+        "no-nvdb-trafikkmengde",
+        "fi-vaylavirasto-liikennemaarat",
+        "dk-vejdirektoratet-mastra-ngletal",
+        "se-trafikverket-nvdb-trafik-adt",
+        "ca-quebec-mtq-djma",
+        "fr-cerema-tmja-reseau-routier-national",
+        "fr-cerema-tmja-reseau-routier-national-2019",
+        "pl-gddkia-generalny-pomiar-ruchu",
+        "es-mitma-mapa-de-trafico",
+        "si-drsi-pldp-counting-sites",
+        "si-drsi-pldp-counting-sites-pldp2024noo",
+        "ch-astra-sasvz-jahresergebnisse-station-list",
+        "ch-astra-sasvz-jahresergebnisse-station-list-jahres-ergebnisse-2024",
+        "ie-tii-counter-sites-daily-class-aggregate-per-site-class-aggr-2019-06-19",
+        "ie-tii-counter-sites-daily-class-aggregate",
+        "it-anas-traffic-2015-11",
+        "nz-nzta-carriageway-auckland-transport-aadt",
+        "nz-nzta-carriageway-auckland-transport-aadt-0",
+        "gb-dft-aadf-by-count-point",
+        "eu-city-vienna",
+        "eu-city-brno",
+        "eu-city-copenhagen",
+        "eu-city-helsinki",
+        "eu-city-paris",
+        "eu-city-grenoble",
+        "eu-city-toulouse",
+        "eu-city-lyon",
+        "eu-city-lille",
+        "eu-city-bordeaux",
+        "eu-city-rennes",
+        "eu-city-marseille",
+        "eu-city-rouen",
+        "eu-city-montpellier",
+        "eu-city-berlin",
+        "eu-city-hamburg",
+        "eu-city-dublin",
+        "eu-city-milan",
+        "eu-city-luxembourg",
+        "eu-city-amsterdam",
+        "eu-city-oslo",
+        "eu-city-lisbon",
+        "eu-city-valencia",
+        "eu-city-barcelona",
+        "eu-city-madrid",
+        "eu-city-malmo",
+        "eu-city-stockholm",
+        "eu-city-zurich",
+        "eu-city-geneva",
+        "eu-city-london",
+        "eu-city-birmingham",
+        "eu-city-manchester",
+        "eu-city-glasgow",
+        "eu-city-edinburgh",
+        "eu-city-cardiff",
+        "ar-dnv-national-provincial-roads-tmda-ows-3",
+        "co-invias-red-vial-tpds-nube-tpda-0",
+        "pe-mtc-provias-red-vial-nacional-departamental",
+        "id-bina-marga-toll-regional-lhrt-national-roads-0",
+        "cz-brno-brno-bkom-pentlogram",
+        "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads",
+        "cl-mop-red-vial-plan-nacional-de-censos-tmda-0",
+        "at-vienna-stadt-wien-ma46-dauerzahlstellen-stadt-wien-verkehrszhlstellenzhlwertewien",
+        "at-vienna-stadt-wien-ma46-dauerzahlstellen",
+        "municipal-road-boundaries-austria",
+        "id-bina-marga-toll-regional-lhrt-national-roads-0-3"
+      ],
+      "description": "Normalized road observations retain their original intervals, direction and cross-section basis, source identity and independently missing vehicle classes."
+    },
+    {
+      "id": "structures",
+      "kind": "structures",
+      "region": "world",
+      "publisher": "OpenStreetMap and the building survey publishers",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2026-09-28",
+        "end": "2026-09-28"
+      },
+      "published": null,
+      "licence": "Mixed; see the footprint and height sources",
+      "public_ok": false,
+      "depends_on": [
+        "structure-observations",
+        "osm-geography",
+        "structure-height-model"
+      ],
+      "description": "Mapped structures provide building demand and settlement context for road preparation."
+    },
+    {
+      "id": "road-conversion",
+      "kind": "road-conversion",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2026-09-28",
+        "end": "2026-09-28"
+      },
+      "published": null,
+      "licence": "AGPL-3.0-or-later",
+      "public_ok": true,
+      "depends_on": [
+        "cz-rsd-celostatni-scitani-dopravy",
+        "nl-rws-inweva-weekdag-gemiddelde-intensiteiten",
+        "th-drr-rural-roads-aadt",
+        "jp-mlit-road-traffic-census-r3",
+        "cz-prague-tsk-praha-intenzity-dopravy",
+        "municipal-road-boundaries",
+        "us-fhwa-hpms",
+        "mx-sict-imt-datos-viales-u1-segments",
+        "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3",
+        "no-nvdb-trafikkmengde",
+        "fi-vaylavirasto-liikennemaarat",
+        "dk-vejdirektoratet-mastra-ngletal",
+        "se-trafikverket-nvdb-trafik-adt",
+        "ca-quebec-mtq-djma",
+        "fr-cerema-tmja-reseau-routier-national",
+        "fr-cerema-tmja-reseau-routier-national-2019",
+        "pl-gddkia-generalny-pomiar-ruchu",
+        "es-mitma-mapa-de-trafico",
+        "si-drsi-pldp-counting-sites",
+        "si-drsi-pldp-counting-sites-pldp2024noo",
+        "ch-astra-sasvz-jahresergebnisse-station-list",
+        "ch-astra-sasvz-jahresergebnisse-station-list-jahres-ergebnisse-2024",
+        "ie-tii-counter-sites-daily-class-aggregate-per-site-class-aggr-2019-06-19",
+        "ie-tii-counter-sites-daily-class-aggregate",
+        "it-anas-traffic-2015-11",
+        "nz-nzta-carriageway-auckland-transport-aadt",
+        "nz-nzta-carriageway-auckland-transport-aadt-0",
+        "gb-dft-aadf-by-count-point",
+        "eu-city-vienna",
+        "eu-city-brno",
+        "eu-city-copenhagen",
+        "eu-city-helsinki",
+        "eu-city-paris",
+        "eu-city-grenoble",
+        "eu-city-toulouse",
+        "eu-city-lyon",
+        "eu-city-lille",
+        "eu-city-bordeaux",
+        "eu-city-rennes",
+        "eu-city-marseille",
+        "eu-city-rouen",
+        "eu-city-montpellier",
+        "eu-city-berlin",
+        "eu-city-hamburg",
+        "eu-city-dublin",
+        "eu-city-milan",
+        "eu-city-luxembourg",
+        "eu-city-amsterdam",
+        "eu-city-oslo",
+        "eu-city-lisbon",
+        "eu-city-valencia",
+        "eu-city-barcelona",
+        "eu-city-madrid",
+        "eu-city-malmo",
+        "eu-city-stockholm",
+        "eu-city-zurich",
+        "eu-city-geneva",
+        "eu-city-london",
+        "eu-city-birmingham",
+        "eu-city-manchester",
+        "eu-city-glasgow",
+        "eu-city-edinburgh",
+        "eu-city-cardiff",
+        "ar-dnv-national-provincial-roads-tmda-ows-3",
+        "co-invias-red-vial-tpds-nube-tpda-0",
+        "pe-mtc-provias-red-vial-nacional-departamental",
+        "id-bina-marga-toll-regional-lhrt-national-roads-0",
+        "cz-brno-brno-bkom-pentlogram",
+        "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads",
+        "cl-mop-red-vial-plan-nacional-de-censos-tmda-0",
+        "at-vienna-stadt-wien-ma46-dauerzahlstellen-stadt-wien-verkehrszhlstellenzhlwertewien",
+        "at-vienna-stadt-wien-ma46-dauerzahlstellen",
+        "municipal-road-boundaries-austria",
+        "id-bina-marga-toll-regional-lhrt-national-roads-0-3"
+      ],
+      "description": "Publisher format definitions, exact source objects, count scope and vehicle-class semantics for the shared road observation format."
+    },
+    {
+      "id": "municipal-road-boundaries",
+      "kind": "prepare-boundaries",
+      "region": "CZ",
+      "publisher": "geoBoundaries",
+      "url": "https://www.geoboundaries.org/",
+      "observed": {
+        "start": "2026-08-17",
+        "end": "2026-08-17"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Municipal boundary used to limit the geographical support of a city traffic survey."
+    },
+    {
+      "id": "municipal-road-boundaries-austria",
+      "kind": "prepare-boundaries",
+      "region": "AT",
+      "publisher": "geoBoundaries",
+      "url": "https://www.geoboundaries.org/",
+      "observed": {
+        "start": "2026-08-17",
+        "end": "2026-08-17"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Municipal boundary used to limit the geographical support of a city traffic survey."
+    },
+    {
+      "id": "road-preparation-calibration",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Quiet Map; national traffic censuses and household travel surveys",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2026-09-25",
+        "end": "2026-09-25"
+      },
+      "published": null,
+      "licence": "AGPL-3.0-or-later",
+      "public_ok": true,
+      "depends_on": [
+        "road-observations"
+      ],
+      "description": "Recorded carriageway fit on 739122 km of counted roads; local street fit on 4546 DfT counters. Earlier unmeasured terminal priors and trip-rate assumptions are identified in the model provenance."
     }
   ],
   "unavailable": [

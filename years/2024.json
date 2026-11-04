@@ -769,7 +769,7 @@
       "publisher": "Ministère des Transports du Québec",
       "url": "https://ws.mapserver.transports.gouv.qc.ca/swtq?service=wfs&typename=ms:circulation_routier&outputformat=geojson",
       "observed": {
-        "start": "2024",
+        "start": "2015",
         "end": "2024"
       },
       "published": null,
@@ -1039,16 +1039,16 @@
       "kind": "prepare-road-counts",
       "region": "IT",
       "publisher": "Anas S.p.A.",
-      "url": "https://www.stradeanas.it/it/dati",
+      "url": "https://dati.mit.gov.it/catalog/dataset/traffico-giornaliero-medio-anas",
       "observed": {
-        "start": "2015-11-30",
+        "start": "2015-11-01",
         "end": "2015-11-30"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Traffic counts in the Anas November 2015 file."
+      "description": "Daily averages observed during November 2015. Used as a period-based traffic estimate without an independently fitted seasonal conversion to the annual mean."
     },
     {
       "id": "jp-mlit-road-traffic-census-r3",
@@ -1313,7 +1313,7 @@
       "publisher": "Vejdirektoratet",
       "url": "https://vmgeoserver.vd.dk/geosmastra/opendata/ows?service=WFS&version=2.0.0&request=GetFeature&typeNames=OPEN_DATA_NOEGLETAL_VIEW&outputFormat=application%2Fjson&CQL_FILTER=AAR%3E%3D2022%20AND%20AAR%3C%3D2024",
       "observed": {
-        "start": "2024",
+        "start": "2022",
         "end": "2024"
       },
       "published": null,
@@ -1553,8 +1553,8 @@
       "publisher": "MOP Dirección de Vialidad",
       "url": "https://rest-sit.mop.gob.cl/arcgis/rest/services/VIALIDAD/Plan_Nacional_de_Censos/MapServer/1/query?where=1%3D1&outFields=*&outSR=4326&f=json",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2022",
+        "end": "2023"
       },
       "published": null,
       "licence": "Publisher open-data terms",
@@ -1697,14 +1697,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=0&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2016",
+        "end": "2019"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-02000-geojson",
@@ -1713,14 +1713,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=2000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2014",
+        "end": "2022"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-04000-geojson",
@@ -1729,14 +1729,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=4000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2014",
+        "end": "2021"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-06000-geojson",
@@ -1745,14 +1745,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=6000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2016",
+        "end": "2022"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-08000-geojson",
@@ -1761,14 +1761,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=8000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2016",
+        "end": "2023"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-10000-geojson",
@@ -1777,14 +1777,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=10000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2015",
+        "end": "2023"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-12000-geojson",
@@ -1793,14 +1793,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=12000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2020",
+        "end": "2023"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-14000-geojson",
@@ -1809,14 +1809,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=14000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2019",
+        "end": "2023"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-16000-geojson",
@@ -1825,14 +1825,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=16000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2015",
+        "end": "2023"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-18000-geojson",
@@ -1841,14 +1841,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=18000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2015",
+        "end": "2023"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-20000-geojson",
@@ -1857,14 +1857,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=20000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
+        "start": "2018",
         "end": "2024"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-22000-geojson",
@@ -1873,14 +1873,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=22000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
+        "start": "2017",
         "end": "2024"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-24000-geojson",
@@ -1889,30 +1889,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=24000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
+        "start": "2016",
         "end": "2024"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
-    },
-    {
-      "id": "road-counts-id-jalan-daerah-page-26000-geojson",
-      "kind": "prepare-road-counts",
-      "region": "ID",
-      "publisher": "Bina Marga (PUPR)",
-      "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=26000&resultRecordCount=2000&f=geojson",
-      "observed": {
-        "start": "2024",
-        "end": "2024"
-      },
-      "published": null,
-      "licence": "Publisher open-data terms",
-      "public_ok": true,
-      "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-id-jalan-daerah-page-28000-geojson",
@@ -1921,14 +1905,14 @@
       "publisher": "Bina Marga (PUPR)",
       "url": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=28000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
+        "start": "2023",
         "end": "2024"
       },
       "published": null,
       "licence": "Publisher open-data terms",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year."
+      "description": "Archived road traffic for 2024; earlier observations remain where the archive contains no count for that year. Retained, but not selected for matching: no admitted national-road geometry can exclude parallel national roads."
     },
     {
       "id": "road-counts-nz-sh-traffic-monitoring-sites-page-00000-geojson",
@@ -5243,6 +5227,492 @@
         "facility-observations"
       ],
       "description": "Mapped industry and leisure classified from the admitted facility observations. One registry site selects one containing footprint; dedicated mapped activity and quiet uses keep their identity."
+    },
+    {
+      "id": "no-nvdb-trafikkmengde",
+      "kind": "prepare-road-counts",
+      "region": "NO",
+      "publisher": "Statens vegvesen",
+      "url": "https://nvdbapiles.atlas.vegvesen.no/vegobjekter/540",
+      "observed": {
+        "start": "1982",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "NLOD 2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "NVDB Trafikkmengde. Snapshot; an earlier observation date is not recorded."
+    },
+    {
+      "id": "se-trafikverket-nvdb-trafik-adt",
+      "kind": "prepare-road-counts",
+      "region": "SE",
+      "publisher": "Trafikverket",
+      "url": "https://www.trafikverket.se/e-tjanster/hamta-data-fran-trafikverket/",
+      "observed": {
+        "start": "2013",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "CC0-1.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Trafikverket NVDB Trafik ÅDT."
+    },
+    {
+      "id": "gb-dft-aadf-by-count-point",
+      "kind": "prepare-road-counts",
+      "region": "GB",
+      "publisher": "Department for Transport",
+      "url": "https://storage.googleapis.com/dft-statistics/road-traffic/downloads/data-gov-uk/dft_traffic_counts_aadf.zip",
+      "observed": {
+        "start": "2000",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "OGL-UK-3.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "DfT AADF by count point."
+    },
+    {
+      "id": "road-conversion",
+      "kind": "road-conversion",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "cz-rsd-celostatni-scitani-dopravy",
+        "nl-rws-inweva-weekdag-gemiddelde-intensiteiten",
+        "th-drr-rural-roads-aadt",
+        "jp-mlit-road-traffic-census-r3",
+        "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict",
+        "mx-sict-imt-datos-viales-u1-segments",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3",
+        "no-nvdb-trafikkmengde",
+        "fi-vaylavirasto-liikennemaarat",
+        "se-trafikverket-nvdb-trafik-adt",
+        "ca-quebec-mtq-djma",
+        "fr-cerema-tmja-reseau-routier-national-2019",
+        "fr-cerema-tmja-reseau-routier-national",
+        "pl-gddkia-generalny-pomiar-ruchu",
+        "es-mitma-mapa-de-trafico",
+        "si-drsi-pldp-counting-sites-pldp2024noo",
+        "si-drsi-pldp-counting-sites",
+        "ie-tii-counter-sites-daily-class-aggregate",
+        "ie-tii-counter-sites-daily-class-aggregate-per-site-class-aggr-2019-06-19",
+        "it-anas-traffic-2015-11",
+        "gb-dft-aadf-by-count-point",
+        "eu-city-vienna",
+        "eu-city-brno",
+        "eu-city-copenhagen",
+        "eu-city-helsinki",
+        "eu-city-paris",
+        "eu-city-grenoble",
+        "eu-city-toulouse",
+        "eu-city-lyon",
+        "eu-city-lille",
+        "eu-city-bordeaux",
+        "eu-city-rennes",
+        "eu-city-marseille",
+        "eu-city-rouen",
+        "eu-city-montpellier",
+        "eu-city-berlin",
+        "eu-city-hamburg",
+        "eu-city-dublin",
+        "eu-city-milan",
+        "eu-city-luxembourg",
+        "eu-city-amsterdam",
+        "eu-city-oslo",
+        "eu-city-lisbon",
+        "eu-city-valencia",
+        "eu-city-barcelona",
+        "eu-city-madrid",
+        "eu-city-malmo",
+        "eu-city-stockholm",
+        "eu-city-zurich",
+        "eu-city-geneva",
+        "eu-city-london",
+        "eu-city-birmingham",
+        "eu-city-manchester",
+        "eu-city-glasgow",
+        "eu-city-edinburgh",
+        "eu-city-cardiff",
+        "ar-dnv-national-provincial-roads-tmda-ows-3",
+        "co-invias-red-vial-tpds-nube-tpda-0",
+        "pe-mtc-provias-red-vial-nacional-departamental",
+        "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads",
+        "road-counts-dk-mastra-2022-2024-json",
+        "road-counts-de-bast-dauerzaehlstellen-2024-csv",
+        "road-counts-cl-censos-2022sur-2023norte-esri-json",
+        "road-counts-cz-city-brno-pentlogram-2024-page-00000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-02000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-04000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-06000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-08000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-10000-geojson",
+        "road-counts-us-tmas-2024-apr-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-aug-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-dec-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-feb-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-jan-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-jul-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-jun-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-mar-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-may-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-nov-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-oct-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-sep-2024-ccs-data-zip",
+        "road-counts-de-bw-hourly-2024-stundenwerte-2024-zip",
+        "road-counts-us-hpms2024-zip"
+      ],
+      "description": "Publisher converters select the recorded observation intervals, exact objects, class meanings and count bases."
+    },
+    {
+      "id": "road-observations",
+      "kind": "road-observations",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "road-conversion",
+        "cz-rsd-celostatni-scitani-dopravy",
+        "nl-rws-inweva-weekdag-gemiddelde-intensiteiten",
+        "th-drr-rural-roads-aadt",
+        "jp-mlit-road-traffic-census-r3",
+        "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict",
+        "mx-sict-imt-datos-viales-u1-segments",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3",
+        "no-nvdb-trafikkmengde",
+        "fi-vaylavirasto-liikennemaarat",
+        "se-trafikverket-nvdb-trafik-adt",
+        "ca-quebec-mtq-djma",
+        "fr-cerema-tmja-reseau-routier-national-2019",
+        "fr-cerema-tmja-reseau-routier-national",
+        "pl-gddkia-generalny-pomiar-ruchu",
+        "es-mitma-mapa-de-trafico",
+        "si-drsi-pldp-counting-sites-pldp2024noo",
+        "si-drsi-pldp-counting-sites",
+        "ie-tii-counter-sites-daily-class-aggregate",
+        "ie-tii-counter-sites-daily-class-aggregate-per-site-class-aggr-2019-06-19",
+        "it-anas-traffic-2015-11",
+        "gb-dft-aadf-by-count-point",
+        "eu-city-vienna",
+        "eu-city-brno",
+        "eu-city-copenhagen",
+        "eu-city-helsinki",
+        "eu-city-paris",
+        "eu-city-grenoble",
+        "eu-city-toulouse",
+        "eu-city-lyon",
+        "eu-city-lille",
+        "eu-city-bordeaux",
+        "eu-city-rennes",
+        "eu-city-marseille",
+        "eu-city-rouen",
+        "eu-city-montpellier",
+        "eu-city-berlin",
+        "eu-city-hamburg",
+        "eu-city-dublin",
+        "eu-city-milan",
+        "eu-city-luxembourg",
+        "eu-city-amsterdam",
+        "eu-city-oslo",
+        "eu-city-lisbon",
+        "eu-city-valencia",
+        "eu-city-barcelona",
+        "eu-city-madrid",
+        "eu-city-malmo",
+        "eu-city-stockholm",
+        "eu-city-zurich",
+        "eu-city-geneva",
+        "eu-city-london",
+        "eu-city-birmingham",
+        "eu-city-manchester",
+        "eu-city-glasgow",
+        "eu-city-edinburgh",
+        "eu-city-cardiff",
+        "ar-dnv-national-provincial-roads-tmda-ows-3",
+        "co-invias-red-vial-tpds-nube-tpda-0",
+        "pe-mtc-provias-red-vial-nacional-departamental",
+        "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads",
+        "road-counts-dk-mastra-2022-2024-json",
+        "road-counts-de-bast-dauerzaehlstellen-2024-csv",
+        "road-counts-cl-censos-2022sur-2023norte-esri-json",
+        "road-counts-cz-city-brno-pentlogram-2024-page-00000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-02000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-04000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-06000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-08000-geojson",
+        "road-counts-cz-city-brno-pentlogram-2024-page-10000-geojson",
+        "road-counts-us-tmas-2024-apr-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-aug-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-dec-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-feb-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-jan-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-jul-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-jun-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-mar-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-may-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-nov-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-oct-2024-ccs-data-zip",
+        "road-counts-us-tmas-2024-sep-2024-ccs-data-zip",
+        "road-counts-de-bw-hourly-2024-stundenwerte-2024-zip",
+        "road-counts-us-hpms2024-zip"
+      ],
+      "description": "Located and hourly road counts admitted only through their original observed intervals; per-class missingness remains explicit."
+    },
+    {
+      "id": "trip-generation-observations",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "ITE and national household travel surveys",
+      "url": "https://www.ite.org/technical-resources/topics/trip-and-parking-generation/",
+      "observed": {
+        "start": "2017",
+        "end": "2022"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Building trip rates from the ITE 11th edition and household travel studies; model assumptions retain their documented scope."
+    },
+    {
+      "id": "road-calibration",
+      "kind": "road-calibration",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "road-observations",
+        "household-travel-surveys",
+        "motorcycle-fleets",
+        "trip-generation-observations",
+        "legal-speeds-osm"
+      ],
+      "description": "Length-weighted class totals and independently observed class fractions; equal-station medians from complete hourly days. Unavailable local-street and service-road demand fits leave the common class prior in force."
+    },
+    {
+      "id": "road-preparation-model",
+      "kind": "road-preparation-model",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "road-calibration"
+      ],
+      "description": "Shared road allocation parameters; section totals and medium/heavy fractions are fitted from admitted counts, while remaining class estimates use the declared preparation template."
+    },
+    {
+      "id": "road-class-priors",
+      "kind": "road-class-priors",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "road-calibration"
+      ],
+      "description": "Observed secondary and tertiary section medians by mapped functional class and reported environment; unsupported countries use the observed global model."
+    },
+    {
+      "id": "road-class-shares",
+      "kind": "road-class-shares",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "road-calibration"
+      ],
+      "description": "Independently observed medium and heavy fractions; unsupported countries use the observed global model."
+    },
+    {
+      "id": "counted-class-shares",
+      "kind": "counted-class-shares",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "road-calibration"
+      ],
+      "description": "Observed global medium and heavy percentages by road class and environment."
+    },
+    {
+      "id": "road-period-shares",
+      "kind": "road-period-shares",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "road-calibration"
+      ],
+      "description": "Daily period fractions from complete station-days; unsupported country cells use the observed global median."
+    },
+    {
+      "id": "tagged-speeds-osm",
+      "kind": "tagged-speeds",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "osm-geography",
+        "structures"
+      ],
+      "description": "Median numeric mapped speed by country, road class and the same building-density context used by the reader, with at least 30 mapped pieces per cell. This projection covers the prepared fixture geography; absent cells retain the global model until the whole admitted state is prepared."
+    },
+    {
+      "id": "practice-history-legal-speeds",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "International Transport Forum / IRTAD",
+      "url": "https://www.itf-oecd.org/road-safety-annual-report-2024",
+      "observed": {
+        "start": "2024-12-03",
+        "end": "2024-12-03"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "ITF national speed-limit survey valid on 3 December 2024; mixed regional, seasonal and road-type ranges remain unspecified."
+    },
+    {
+      "id": "practice-history-heavy-speeds",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "National Police Agency Japan and New Zealand Police",
+      "url": "https://www.npa.go.jp/bureau/traffic/highway/index.html",
+      "observed": {
+        "start": "2004-05-03",
+        "end": "2024-04-01"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Dated police notices of Japanese and New Zealand heavy-vehicle caps. Other countries retain the documented global model cap."
+    },
+    {
+      "id": "legal-speeds-osm",
+      "kind": "legal-speeds",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "practice-history-legal-speeds"
+      ],
+      "description": "Numeric default limits valid at the map-state cutoff; zero means no uniform documented limit."
+    },
+    {
+      "id": "heavy-speeds",
+      "kind": "heavy-speeds",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "practice-history-heavy-speeds"
+      ],
+      "description": "Heavy-vehicle model caps selected by documented validity at the map-state cutoff."
+    },
+    {
+      "id": "structures",
+      "kind": "structures",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "structure-observations",
+        "osm-geography",
+        "structure-height-model"
+      ],
+      "description": "Prepared structures used for street demand and road settlement context."
     }
   ],
   "unavailable": [
@@ -5377,13 +5847,6 @@
       "kind": "prepare-road-network",
       "region": "PY",
       "description": "MOPC Rutas Nacionales (national network policy): no dated input at or before the map date is admitted. The remaining mapped features and class defaults are used.",
-      "depends_on": []
-    },
-    {
-      "id": "se-trafikverket-nvdb-trafik-adt",
-      "kind": "prepare-road-counts",
-      "region": "SE",
-      "description": "Trafikverket NVDB Trafik ÅDT: no dated input at or before the map date is admitted. Uncounted traffic is modelled.",
       "depends_on": []
     },
     {
@@ -6647,13 +7110,6 @@
       "depends_on": []
     },
     {
-      "id": "gb-dft-aadf-by-count-point",
-      "kind": "prepare-road-counts",
-      "region": "GB",
-      "description": "DfT AADF by count point: the available edition is newer than the map date; the remaining admitted sources and defaults apply.",
-      "depends_on": []
-    },
-    {
       "id": "us-fhwa-tmas-hourly-volumes",
       "kind": "prepare-road-hourly",
       "region": "US",
@@ -6688,90 +7144,6 @@
       "depends_on": [
         "motorcycle-fleets",
         "gb-dft-aadf-by-count-point"
-      ]
-    },
-    {
-      "id": "road-period-shares",
-      "kind": "road-period-shares",
-      "region": "world",
-      "description": "To be derived for 2024. Day, evening and night shares by road group and vehicle weight: counts from 2021–2025 and noise monitors through 2026, with regional medians.",
-      "depends_on": [
-        "road-period-counts",
-        "road-period-monitoring"
-      ]
-    },
-    {
-      "id": "tagged-speeds-osm",
-      "kind": "tagged-speeds",
-      "region": "world",
-      "description": "To be derived for 2024. Median posted speed by country, road class and rural or urban surroundings, from the mapped roads.",
-      "depends_on": [
-        "osm"
-      ]
-    },
-    {
-      "id": "practice-history-legal-speeds",
-      "kind": "model-observations",
-      "region": "world",
-      "description": "Historical validity of legal-speeds must be established from dated laws or practice records.",
-      "depends_on": []
-    },
-    {
-      "id": "legal-speeds-osm",
-      "kind": "legal-speeds",
-      "region": "world",
-      "description": "To be derived for 2024. Legal default speed: urban, rural, motorway and motorroad; zero means no supplied limit.",
-      "depends_on": [
-        "practice-history-legal-speeds"
-      ]
-    },
-    {
-      "id": "practice-history-heavy-speeds",
-      "kind": "model-observations",
-      "region": "world",
-      "description": "Historical validity of heavy-speeds must be established from dated laws or practice records.",
-      "depends_on": []
-    },
-    {
-      "id": "heavy-speeds",
-      "kind": "heavy-speeds",
-      "region": "world",
-      "description": "To be derived for 2024. Truck and bus speed caps from legal limits and vehicle speed limiters.",
-      "depends_on": [
-        "practice-history-heavy-speeds"
-      ]
-    },
-    {
-      "id": "road-class-priors",
-      "kind": "road-class-priors",
-      "region": "world",
-      "description": "To be derived for 2024. Representative national traffic medians for secondary and tertiary roads, by rural and urban surroundings.",
-      "depends_on": [
-        "cz-rsd-celostatni-scitani-dopravy",
-        "gb-dft-aadf-by-count-point",
-        "se-trafikverket-nvdb-trafik-adt",
-        "prepared"
-      ]
-    },
-    {
-      "id": "road-class-shares",
-      "kind": "road-class-shares",
-      "region": "world",
-      "description": "To be derived for 2024. Medium and heavy vehicle percentages on secondary and tertiary roads.",
-      "depends_on": [
-        "cz-rsd-celostatni-scitani-dopravy",
-        "gb-dft-aadf-by-count-point",
-        "se-trafikverket-nvdb-trafik-adt",
-        "prepared"
-      ]
-    },
-    {
-      "id": "counted-class-shares",
-      "kind": "counted-class-shares",
-      "region": "world",
-      "description": "To be derived for 2024. Medium and heavy percentages by road class and surroundings from the counted road rows.",
-      "depends_on": [
-        "prepared"
       ]
     },
     {
@@ -6967,6 +7339,13 @@
       "region": "world",
       "description": "The legacy country corridor assumptions describe 2026; they are not retroactively applied. Use admitted observations and rail-class priors.",
       "depends_on": []
+    },
+    {
+      "id": "road-counts-id-jalan-daerah-page-26000-geojson",
+      "kind": "prepare-road-counts",
+      "region": "ID",
+      "depends_on": [],
+      "description": "The retained publisher response contains an error instead of observations. Repeat retrieval returned the same error; this part is not used."
     }
   ],
   "validity": {

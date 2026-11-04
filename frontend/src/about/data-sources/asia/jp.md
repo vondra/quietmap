@@ -7,11 +7,11 @@ intro: MLIT road traffic census 2021 on main roads. No railway timetable; all li
 
 Traffic on main roads comes from the [MLIT road traffic census of 2021](https://www.mlit.go.jp/road/census/r3/), all 47 prefectures: 24-hour counts of small and large vehicles per surveyed section.
 
-The census has no open geometry; section numbers resolve to a location only through the paid Digital Road Map. Counts are therefore joined by identity: expressways by name, national highways by route number. Each matched road gets the median of all counted sections on its route, so one value applies along the whole route.
+The census has no open geometry; section numbers resolve to a location only through the paid Digital Road Map. Counts are therefore joined by identity: expressways by name, national highways by route number. Each matched road gets the median of the observed sections on its route, so one value applies along the whole route. Publisher estimates are used only where no observed section is available, and remain marked estimated.
 
-Unmatched roads and prefectural roads get the census median for their road class.
+On roads without a matching route, census road-class medians, including the publisher’s estimated sections, supply the starting estimate. The road demand model uses surrounding buildings where supported, and vehicle shares follow the selected model. These are modelled road totals.
 
-On matched roads, large vehicles are split 25% medium and 75% heavy, as the census gives no axle split. Motorcycles are not counted in the census and are set to zero there. Local streets carry the trips their buildings make.
+On roads matched by route or name, the census large-vehicle total is retained; the selected year’s class model estimates its medium and heavy parts. Motorcycles are not counted in the census. Their missing count is estimated from the selected model’s vehicle shares and remains marked estimated; it is not a measured zero. Local streets carry the trips their buildings make.
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 2 % of a town street's traffic (a local estimate); electric cars 0.5 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
 
