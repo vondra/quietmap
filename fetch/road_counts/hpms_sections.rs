@@ -58,10 +58,53 @@ pub(super) fn relabel_twins(sections: &mut [Section], radius_m: f64, total_ratio
         });
         if twin {
             sections[i].row.count_basis = CountBasis::BothDirections;
+            // The non-inventory twin already contributes this section to the length-weighted fit.
+            sections[i].row.sample.length_m = None;
             relabeled += 1;
         }
     }
     eprintln!(
         "road-counts: HPMS duplicated section totals: {relabeled} inventory directions relabeled"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_relabelled_inventory_twin_does_not_train_the_same_section_twice() {
+        let (_directory, inputs) = super::super::tests::inputs("US");
+        let source: super::super::Source = serde_json::from_value(
+            serde_json::json!({"input_id":"survey","source_id":21,"source_rank":1}),
+        )
+        .unwrap();
+        let mut sections = [1_u8, 6]
+            .into_iter()
+            .map(|facility| {
+                let mut row = source
+                    .observation(
+                        &inputs,
+                        format!("facility {facility}"),
+                        if facility == 1 {
+                            CountBasis::Directional
+                        } else {
+                            CountBasis::BothDirections
+                        },
+                    )
+                    .unwrap();
+                row.total = Some(100.0);
+                row.sample.length_m = Some(1000.0);
+                Section {
+                    row,
+                    rank: 0,
+                    facility: Some(facility),
+                    centroid: [0.0, f64::from(facility) * 0.00001],
+                }
+            })
+            .collect::<Vec<_>>();
+        relabel_twins(&mut sections, 300.0, 0.15);
+        assert_eq!(sections[0].row.count_basis, CountBasis::BothDirections);
+        assert_eq!(sections[0].row.sample.length_m, None);
+        assert_eq!(sections[1].row.sample.length_m, Some(1000.0));
+    }
 }

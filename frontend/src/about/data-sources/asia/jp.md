@@ -11,7 +11,7 @@ The census has no open geometry; section numbers resolve to a location only thro
 
 Unmatched roads and prefectural roads get the census median for their road class.
 
-The census gives one large-vehicle total without an axle split. That total is retained; the selected year’s measured class shares estimate its medium and heavy parts. Motorcycles are not counted in the census. Their missing count is estimated from the selected model’s vehicle shares and remains marked estimated; it is not a measured zero. Local streets carry the trips their buildings make.
+The census gives one large-vehicle total without an axle split. That total is retained; the selected year’s class model estimate its medium and heavy parts. Motorcycles are not counted in the census. Their missing count is estimated from the selected model’s vehicle shares and remains marked estimated; it is not a measured zero. Local streets carry the trips their buildings make.
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 2 % of a town street's traffic (a local estimate); electric cars 0.5 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
 
