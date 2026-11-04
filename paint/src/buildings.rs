@@ -1,5 +1,5 @@
 //! A building on the map: its loudest façade, as a click inside it is answered (`popup::building`):
-//! of its exposed façade receivers in the square (CNOSSOS-EU 2.8, `popup::obstacles`), the few whose
+//! buildings crossing a square edge use the popup's complete façade ranking; otherwise the few whose
 //! painted outdoor pixel in front is loudest are painted as points of their blocks, and the loudest
 //! of them from the ground sources gives every pixel of the building its level.
 
@@ -35,6 +35,7 @@ pub(crate) struct FacadeCandidate {
     footprint: u64,
     point: Point,
     pixel: usize,
+    exact: bool,
 }
 
 /// Each building's façade receivers to paint (`indoor`: its pixels' places and footprints): of its
@@ -71,8 +72,27 @@ pub(crate) fn facade_candidates(
             let Some(building) = square.obstacles.enclosing_building(inside)? else {
                 return Ok(Vec::new());
             };
+            let receivers = square.obstacles.facade_receivers(&building)?;
+            if receivers.is_empty() {
+                return Ok(Vec::new());
+            }
+            if building
+                .rings
+                .iter()
+                .flat_map(|ring| &ring.points)
+                .any(|&position| pixel_of(square, n, position).is_none())
+            {
+                let point = crate::boundary_facades::choose(square, &building, &receivers)?;
+                let pixel = crate::boundary_facades::background_pixel(square, n, point.position);
+                return Ok(vec![FacadeCandidate {
+                    footprint,
+                    point,
+                    pixel,
+                    exact: true,
+                }]);
+            }
             let mut ranked: Vec<(f64, [f64; 2], usize)> = Vec::new();
-            for receiver in square.obstacles.facade_receivers(&building)? {
+            for receiver in receivers {
                 if let Some(pixel) = pixel_of(square, n, receiver.position) {
                     let estimate = in_front(receiver.position, receiver.outward_bearing_deg);
                     ranked.push((estimate, receiver.position, pixel));
@@ -87,6 +107,7 @@ pub(crate) fn facade_candidates(
                         footprint,
                         point: Point::on_facade(square, position, footprint)?,
                         pixel,
+                        exact: false,
                     })
                 })
                 .collect()
@@ -101,8 +122,11 @@ pub(crate) fn facade_candidates(
 pub(crate) fn building_levels(
     painter: &PointPainter,
     exact_source_counts: &[usize],
-    mut candidates: Vec<FacadeCandidate>,
+    candidates: Vec<FacadeCandidate>,
 ) -> Result<HashMap<u64, Painted>, String> {
+    let (boundary, mut candidates): (Vec<_>, Vec<_>) = candidates
+        .into_iter()
+        .partition(|candidate| candidate.exact);
     let (n, side) = (painter.grid.pixels, painter.grid.block);
     let block_of = |pixel: usize| (pixel / n / side) * (n / side) + (pixel % n) / side;
     candidates.sort_by_key(|c| block_of(c.pixel));
@@ -144,7 +168,30 @@ pub(crate) fn building_levels(
     })?;
     let painted = (painted.into_iter())
         .flat_map(|(_, (points_run, paint))| footprints[points_run].iter().copied().zip(paint));
-    Ok(loudest_by_ground(painted))
+    let mut levels = loudest_by_ground(painted);
+    let (footprints, points, pixels) = boundary.into_iter().fold(
+        (Vec::new(), Vec::new(), Vec::new()),
+        |(mut footprints, mut points, mut pixels), candidate| {
+            footprints.push(candidate.footprint);
+            points.push(candidate.point);
+            pixels.push(candidate.pixel);
+            (footprints, points, pixels)
+        },
+    );
+    let paint = crate::etalon::paint_points(
+        painter.square,
+        n,
+        &points,
+        &pixels,
+        (
+            &painter.corners.hum,
+            &painter.corners.flight_spectra,
+            &painter.corners.displays,
+        ),
+        painter.batch,
+    )?;
+    levels.extend(footprints.into_iter().zip(paint));
+    Ok(levels)
 }
 
 /// Per building the paint of its loudest candidate from the ground sources (the flights apart),
@@ -178,6 +225,10 @@ pub(crate) fn fill_buildings(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "building_boundary_tests.rs"]
+mod boundary_tests;
 
 #[cfg(test)]
 mod tests {

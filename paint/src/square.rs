@@ -366,9 +366,37 @@ impl<'a> Square<'a> {
             }
         }
         let mut obstacles = Scene::new(frame);
-        obstacles.insert_all(obstacle_tiles);
         let half = [frame.east_m_per_unit / 2.0, frame.north_m_per_unit / 2.0];
-        obstacles.prepare_reflection_coverage(half.map(|value| -value), half)?;
+        let (mut receiver_low, mut receiver_high) = (half.map(|value| -value), half);
+        let facade_footprints: std::collections::HashSet<u64> = obstacle_tiles
+            .iter()
+            .filter(|(other, _)| *other == tile)
+            .filter_map(|(_, outlines)| outlines.as_ref())
+            .flat_map(|outlines| (0..outlines.outline_count()).map(|index| outlines.outline(index)))
+            .filter(|outline| outline.kind.is_building() && outline.envelope.is_enclosed())
+            .map(|outline| outline.footprint_id)
+            .collect();
+        // A footprint can have a detached wing stored only in a neighbouring tile.
+        for (other, outlines) in &obstacle_tiles {
+            let Some(outlines) = outlines else { continue };
+            for index in 0..outlines.outline_count() {
+                let outline = outlines.outline(index);
+                if !facade_footprints.contains(&outline.footprint_id) {
+                    continue;
+                }
+                for vertex in outline.first_vertex..outline.first_vertex + outline.vertex_count {
+                    let position =
+                        frame.to_metres(other.global(outlines.vertex(vertex)).to_mercator());
+                    for axis in 0..2 {
+                        let margin = popup::obstacles::FACADE_RECEIVER_OFFSET_M;
+                        receiver_low[axis] = receiver_low[axis].min(position[axis] - margin);
+                        receiver_high[axis] = receiver_high[axis].max(position[axis] + margin);
+                    }
+                }
+            }
+        }
+        obstacles.insert_all(obstacle_tiles);
+        obstacles.prepare_reflection_coverage(receiver_low, receiver_high)?;
         // Every piece within the ground reach of some pixel: of the square's centre, its reach
         // and half its diagonal.
         let half_diagonal = frame.east_m_per_unit.hypot(frame.north_m_per_unit) / 2.0;

@@ -12,6 +12,7 @@
 //! (`frontend/src/about/the-noise-map.md`).
 
 mod blocks;
+mod boundary_facades;
 mod buildings;
 pub mod etalon;
 pub mod exact;

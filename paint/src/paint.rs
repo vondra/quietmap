@@ -29,7 +29,7 @@ use std::ops::Range;
 use std::sync::atomic::AtomicUsize;
 use tiles::geo::Mercator;
 
-/// A cell not assessed: a building with no exposed façade in the square, or nothing painted there.
+/// A cell not assessed: a building with no exposed façade, or nothing painted there.
 pub const NO_LEVEL: u8 = 255;
 /// A cell assessed and silent: under 0 phon, 1/16 sone (the quiet zones count it quiet, a zoom out
 /// averages it as no loudness).
