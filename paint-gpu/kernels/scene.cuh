@@ -563,14 +563,28 @@ __device__ int scene_locate(const ObstacleScene& scene, i64 cell_x, i64 cell_y, 
 #define ENDPOINT_TOLERANCE_M 0.001f
 
 // crossings::segment_intersection_t; false for no crossing.
-__device__ __forceinline__ bool segment_intersection_t(float sx, float sy, float dx, float dy, float ax, float ay, float bx, float by, float* t_out) {
-    float ex = bx - ax, ey = by - ay;
-    float denominator = dx * ey - dy * ex;
+__device__ __forceinline__ bool segment_intersection_t(double sx, double sy, double dx, double dy, double ax, double ay, double bx, double by, double* t_out) {
+    double ex = bx - ax, ey = by - ay;
+    double denominator = dx * ey - dy * ex;
     if (denominator == 0.0f) return false;
-    float wx = ax - sx, wy = ay - sy;
-    float t = (wx * ey - wy * ex) / denominator;
-    float u = (wx * dy - wy * dx) / denominator;
-    if (t > 0.0f && t < 1.0f && u >= 0.0f && u <= 1.0f) {
+    double wx = ax - sx, wy = ay - sy;
+    double t_numerator = wx * ey - wy * ex;
+    double u_numerator = wx * dy - wy * dx;
+    double sign = denominator > 0.0 ? 1.0 : -1.0;
+    double extent = fabs(denominator);
+    // Reject clear misses before two slow divisions. Eight double epsilons include rounding
+    // at u = 0 or 1; possible hits keep the original t division and endpoint comparisons.
+    double slack = extent * 1.7763568394002505e-15;
+    if (sign * t_numerator < -slack || sign * t_numerator > extent + slack
+        || sign * u_numerator < -slack || sign * u_numerator > extent + slack) return false;
+    double t = t_numerator / denominator;
+    // Interior edge hits need no u division; at its endpoints retain the original rounding.
+    bool within_edge = sign * u_numerator > slack && sign * u_numerator < extent - slack;
+    if (!within_edge) {
+        double u = u_numerator / denominator;
+        within_edge = u >= 0.0 && u <= 1.0;
+    }
+    if (t > 0.0f && t < 1.0f && within_edge) {
         *t_out = t;
         return true;
     }
@@ -581,13 +595,40 @@ __device__ __forceinline__ bool segment_intersection_t(float sx, float sy, float
 // found on (the tile slot and the edge's first vertex): the order of crossings at one t. `tie`: the
 // next crossing handed on has the same t.
 struct Crossing {
-    float t;
+    double t;
     float height_m;
     u64 footprint_id;
     u64 edge;
-    int building;
+    int bounds_roof;
     int tie;
 };
+
+// crossings::edge_bounds_roof: a tangent vertex screens as a top but does not enter its ring.
+__device__ double vertex_side(const ObstacleScene& scene, const ObstacleTile& tile, u32 vertex,
+                              double sx, double sy, double dx, double dy) {
+    int x, y;
+    tile_vertex_local(scene, tile, vertex, &x, &y);
+    return dx * (tile.offset_y + (double)y - sy) - dy * (tile.offset_x + (double)x - sx);
+}
+
+__device__ bool edge_bounds_roof(const ObstacleScene& scene, const ObstacleTile& tile, u32 outline_index,
+                                 const Outline& outline, u32 edge, double sx, double sy, double dx, double dy) {
+    if (outline.kind == OUTLINE_KIND_WALL) return false;
+    double a = vertex_side(scene, tile, edge, sx, sy, dx, dy);
+    double b = vertex_side(scene, tile, edge + 1, sx, sy, dx, dy);
+    if (a != 0.0 && b != 0.0) return true;
+    u32 end = outline_index + 1 < tile.outline_count
+        ? tile_outline(scene, tile, outline_index + 1).first_vertex : tile.vertex_count;
+    u32 distinct = end - outline.first_vertex - 1;
+    u32 vertex = ((a == 0.0 ? edge : edge + 1) - outline.first_vertex) % distinct;
+    double before = 0.0, after = 0.0;
+    for (u32 offset = 1; offset < distinct; offset++) {
+        if (before == 0.0) before = vertex_side(scene, tile, outline.first_vertex + (vertex + distinct - offset) % distinct, sx, sy, dx, dy);
+        if (after == 0.0) after = vertex_side(scene, tile, outline.first_vertex + (vertex + offset) % distinct, sx, sy, dx, dy);
+        if (before != 0.0 && after != 0.0) break;
+    }
+    return before * after < 0.0;
+}
 
 __device__ __forceinline__ bool crossing_before(const Crossing& a, const Crossing& b) {
     if (a.t != b.t) return a.t < b.t;
@@ -677,7 +718,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                             int bx, by;
                             tile_vertex_local(scene, *tile, next, &bx, &by);
                             bool meets = high[0] >= min(ax, bx) && max(ax, bx) >= low[0] && high[1] >= min(ay, by) && max(ay, by) >= low[1];
-                            float t;
+                            double t;
                             if (meets && segment_intersection_t(start[0], start[1], delta[0], delta[1],
                                                                 offset[0] + (float)ax, offset[1] + (float)ay,
                                                                 offset[0] + (float)bx, offset[1] + (float)by, &t)
@@ -686,7 +727,8 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                                 Crossing crossing;
                                 crossing.t = t;
                                 crossing.height_m = outline.height_m;
-                                crossing.building = outline.kind != OUTLINE_KIND_WALL;
+                                crossing.bounds_roof = edge_bounds_roof(scene, *tile, outline_index, outline, next - 1,
+                                                                        start[0], start[1], delta[0], delta[1]);
                                 crossing.footprint_id = outline.footprint_id;
                                 crossing.edge = (slot << 32) | (u64)(next - 1);
                                 if (!have_taken || crossing_before(taken, crossing)) {

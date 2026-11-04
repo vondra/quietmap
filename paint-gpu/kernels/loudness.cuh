@@ -16,6 +16,8 @@ __device__ void loud_accumulate(float* mixture, const LoudDistribution& d, float
             atomicAdd(&mixture[2 * b + 1], weight * d.bins[b][1]);
         }
     }
+    // The next layer may overwrite the shared distribution from lane 0.
+    __syncwarp();
 }
 
 // The pixels' mixtures: a warp a task (a pixel's period, group of hours and weather state,

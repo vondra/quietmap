@@ -92,7 +92,8 @@ struct OpenRoof {
 struct KeptCrossing {
     u64 footprint_id;
     u64 edge;
-    float t;
+    double t;
+    int index;
 };
 
 // A crossing the ray keeps: its place along the ray (0 at the source, 1 at the receiver), its
@@ -102,7 +103,7 @@ struct RayCrossing {
     float t;
     float height_m;
     u64 footprint_id;
-    int building;
+    int bounds_roof;
     int closes;
 };
 
