@@ -1,25 +1,18 @@
-//! Industrial sites, solar farms and substations of dev4's `industrial.arrow` as point and area
-//! sources, the facility joins run here over the target square and its neighbours (they hold every
-//! part and transformer of a facility reaching the target's tiles). Its wind turbines are silent:
-//! `turbines` places the standing ones.
+//! Manifest-selected industrial, wind and solar facilities as point and area sound sources.
 
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_area_m2,
-    ring_cell, site_points,
+    site_points,
 };
 use super::facilities::{
     FacilityJoins, Tags, facility_share, is_gas_substation, is_solar_plant, parse_tags,
     plant_output_mw, substation_power,
 };
 use super::{Converted, fields, group_key};
-use crate::dev4::{
-    Dev4, Square, Table, column, degrees_to_z30, positive, require_stamp, text, z30_corner_degrees,
-};
+use crate::dev4::{Dev4, Square, degrees_to_z30, z30_corner_degrees};
 use crate::rings::{RingIndex, across_antimeridian, z30_cells};
 use crate::structures::building_footprints;
-use arrow_array::{
-    BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array, UInt16Array,
-};
+
 use physics::emission::industrial::*;
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
@@ -37,7 +30,7 @@ const FOOTPRINT_REACH_M: f64 = 300.0;
 /// The cells of the index the sites' reach marks: 2^14 z30 cells, about 600 m of Web Mercator.
 const REACH_CELL_SHIFT: u32 = 14;
 
-/// One `industrial.arrow` row as the conversion reads it; tags are kept for power rows only.
+/// One normalized industrial facility as the conversion reads it; tags are kept for power rows only.
 pub struct IndustrialRow {
     pub osm_kind: String,
     pub osm_id: i64,
@@ -158,13 +151,15 @@ fn type_label(source_type: u8) -> &'static str {
 }
 
 /// Converts the industrial rows of `target` and its neighbours; returns how many rows emit.
-pub fn convert(dev4: &Dev4, target: Square, out: &mut Vec<Converted>) -> Result<usize, String> {
+pub fn convert(
+    dev4: &Dev4,
+    facilities: &crate::facilities::Dataset,
+    target: Square,
+    out: &mut Vec<Converted>,
+) -> Result<usize, String> {
     let mut rows = Vec::new();
     for square in target.with_neighbours() {
-        if let Some(table) = dev4.table(square, "industrial.arrow")? {
-            read_rows(&table, &mut rows)
-                .map_err(|error| format!("industrial.arrow of {square:?}: {error}"))?;
-        }
+        rows.extend(read_rows(facilities, square)?);
     }
     let mut joins = FacilityJoins::default();
     for row in &rows {
@@ -225,13 +220,13 @@ fn site_reach(row: &IndustrialRow) -> ((i32, i32), (i32, i32)) {
 /// sewage works' hall was a block of flats with heat pumps, 2026-10-17); a rail yard's or a dead
 /// site's buildings are not homes either. A wind farm's outline is farmland around its turbines:
 /// its houses are homes.
-pub fn site_outlines(dev4: &Dev4, squares: &[Square]) -> Result<RingIndex, String> {
+pub fn site_outlines(
+    facilities: &crate::facilities::Dataset,
+    squares: &[Square],
+) -> Result<RingIndex, String> {
     let mut rows = Vec::new();
     for &square in squares {
-        if let Some(table) = dev4.table(square, "industrial.arrow")? {
-            read_rows(&table, &mut rows)
-                .map_err(|error| format!("industrial.arrow of {square:?}: {error}"))?;
-        }
+        rows.extend(read_rows(facilities, square)?);
     }
     let mut index = RingIndex::default();
     for (at, row) in rows.into_iter().enumerate() {
@@ -290,64 +285,42 @@ fn place(
     }
 }
 
-pub(crate) fn read_rows(table: &Table, rows: &mut Vec<IndustrialRow>) -> Result<(), String> {
-    for (key, value) in [
-        ("grid", "z30"),
-        ("industrial_contract", "country_land_baked_v1"),
-        ("osm_industrial_contract", "2"),
-    ] {
-        require_stamp(table, key, value)?;
-    }
-    for batch in &table.batches {
-        // Only the centroid is required; older squares lack some columns, which then read as
-        // absent values (as dev4 reads them, `point_sources.rs`).
-        let (gx, gy) = (
-            column::<Int32Array>(batch, "centroid_gx")?,
-            column::<Int32Array>(batch, "centroid_gy")?,
-        );
-        let bytes = |name: &str| column::<UInt8Array>(batch, name).ok();
-        let (types, subtypes, suppressed) = (
-            bytes("source_type"),
-            bytes("site_subtype"),
-            bytes("suppressed"),
-        );
-        let words = |name: &str| column::<UInt16Array>(batch, name).ok();
-        let (naces, sources) = (words("nace_4digit"), words("source_id"));
-        let floats = |name: &str| column::<Float32Array>(batch, name).ok();
-        let (powers, areas) = (floats("rated_power_kw"), floats("area_m2"));
-        let texts = |name: &str| column::<StringArray>(batch, name).ok();
-        let (kinds, names, tags) = (texts("osm_kind"), texts("name"), texts("osm_tags"));
-        let ids = column::<Int64Array>(batch, "osm_id").ok();
-        let geometry = column::<BinaryArray>(batch, "geom").ok();
-        for row in 0..batch.num_rows() {
-            let source_type = types.map_or(0, |values| values.value(row));
+pub(crate) fn read_rows(
+    facilities: &crate::facilities::Dataset,
+    square: Square,
+) -> Result<Vec<IndustrialRow>, String> {
+    use crate::facilities::{geometry, records::INDUSTRY};
+    facilities
+        .rows(square, INDUSTRY)?
+        .into_iter()
+        .map(|row| {
             let power = matches!(
-                source_type,
+                row.source_type,
                 SOURCE_SOLAR_FARM | SOURCE_SUBSTATION | SOURCE_TRANSFORMER
             );
-            rows.push(IndustrialRow {
-                osm_kind: kinds.map_or("", |values| text(values, row)).to_string(),
-                osm_id: ids.map_or(0, |values| values.value(row)),
-                centroid: (gx.value(row), gy.value(row)),
-                source_type,
-                site_subtype: subtypes.map_or(0, |values| values.value(row)),
-                name: names.map_or("", |values| text(values, row)).to_string(),
-                rated_power_kw: powers.and_then(|values| positive(values, row)),
-                ring: geometry.map_or_else(Vec::new, |values| ring_cell(values, row)),
-                area_m2: areas.and_then(|values| positive(values, row)),
-                nace: naces
-                    .map(|values| values.value(row))
-                    .filter(|code| *code > 0),
-                tags: match tags {
-                    Some(values) if power => parse_tags(text(values, row)),
-                    _ => Tags::new(),
+            Ok(IndustrialRow {
+                osm_kind: row.osm_kind,
+                osm_id: row.osm_id,
+                centroid: geometry::grid_point(row.longitude, row.latitude),
+                source_type: row.source_type,
+                site_subtype: row.site_subtype,
+                name: row.name.unwrap_or_default(),
+                rated_power_kw: row
+                    .capacity
+                    .filter(|v| *v > 0.0 && row.capacity_unit == "kW"),
+                ring: geometry::grid_ring(row.geometry.as_deref()).map_err(|e| e.to_string())?,
+                area_m2: row.area_m2.filter(|v| *v > 0.0).map(f64::from),
+                nace: (row.activity > 0).then_some(row.activity),
+                tags: if power {
+                    parse_tags(&row.osm_tags)
+                } else {
+                    Tags::new()
                 },
-                suppressed: suppressed.is_some_and(|values| values.value(row) != 0),
-                source_id: sources.map_or(0, |values| values.value(row)),
-            });
-        }
-    }
-    Ok(())
+                suppressed: row.suppressed != 0 || row.operating_state == 2,
+                source_id: row.source_id,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

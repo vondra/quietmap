@@ -356,6 +356,19 @@ in Europe, the [Global Power Plant Database](https://datasets.wri.org/dataset/gl
 and national registers. The levels per sector and area are calibrated on the Czech strategic noise
 maps of 2022.
 
+A dated operating interval or an earlier observed status determines a site's state. A planned
+retirement does not close a working plant, and a newer closure record cannot silence another
+tenant described by a different register. Conflicting evidence stays unknown. An undated
+“operating” label in a later register cannot establish its earlier status. Where history is missing,
+operation remains unknown; mapped activity supplies an estimate, not evidence that the site was
+running. Names can suggest a sector but do not measure its sound. The dated registers are listed
+under [sources by year](/about/data-sources#sources-by-year).
+
+The year manifest selects the facility model and its registers. `qm-build facility-observations`
+converts publisher formats in `fetch/facilities*.rs`; `qm-build facilities` joins those observations
+to the shared OSM geography in `build/src/facilities/`. Industry, leisure and displayed site outlines
+read that same facility input.
+
 <details>
 <summary>Hours, turbines, solar farms and substations</summary>
 
