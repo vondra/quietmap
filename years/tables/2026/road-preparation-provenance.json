@@ -1,0 +1,41 @@
+{
+  "carriageways": {
+    "source": "Counted road sections; length-weighted medians, excluding tunnels, roundabouts and derived flow",
+    "training_km": 739122,
+    "fit_date": "2026-09-25",
+    "holdout_km": 0
+  },
+  "local_street": {
+    "source_url": "https://storage.googleapis.com/dft-statistics/road-traffic/downloads/data-gov-uk/dft_traffic_counts_aadf.zip",
+    "source_sha256": "5273cf63da4ca8b317bfe972d8a345e7932db0fff7a7789998a890f0081232b6",
+    "fetched_utc": "2026-09-24T20:34:24Z",
+    "licence": "OGL-UK-3.0",
+    "attribution": "Contains public sector information licensed under OGL v3.0; © Crown copyright, Department for Transport",
+    "counts": "latest positive manual MCU AADF 2015–2025 excluding 2020; residential/unclassified",
+    "matching": "nearest row <=12 m; no other class within 20 m; >30 m from square edge; source 11",
+    "model": "S2p: T[cell] * (through&urban ? c : 1) * (singleTrack ? d : 1) + k * max_street(routed trips); structures_v5 storeys",
+    "holdout": "qm-holdout-v1/{x}/{y}: sha256 first 8 hex digits modulo 5 == 0 excluded before extraction",
+    "objective": "least squares on ln(AADF); positive parameters via exponential transform",
+    "cv": "five folds by sha256(w3-cv/{x}/{y}) first 8 hex digits modulo 5; rural-through constraint and single-track factor chosen from training residuals, then refit",
+    "training_counts": 4546,
+    "training_squares": 115,
+    "scipy_version": "1.18.1",
+    "numpy_version": "2.5.3",
+    "feature_code_sha256": "a5882efd237c36ba26073936123b5d19ef50eab9a83c183c2da6cdea1d5cec99",
+    "features_sha256": "86084a095baf759118ada0ffcbeb39b06df5af22a3773ab1882cfd2aa7473113",
+    "inputs_sha256": "50053e43c5508b9787966a69a6af24409489b6fcf911dd0d29c8e3b248fa028d"
+  },
+  "terminal_priors": {
+    "source": "Retained global preparation priors; not independently measured class totals. Vehicle-class ratios are model estimates.",
+    "unsupported_regional_assignments": "Removed: country or city boxes do not constitute a traffic count."
+  },
+  "trip_rates": {
+    "source": "ITE Trip Generation Manual 11th edition (2021); retained published conversion and damping assumptions",
+    "source_url": "https://www.ite.org/technical-resources/topics/trip-and-parking-generation/",
+    "assumptions": "Rates apply the previous area, occupancy and travel-mode assumptions; they are not fresh observations from the map year."
+  },
+  "fleet": {
+    "source": "WHO 2023 vehicle registrations and household travel surveys; retained conversion from ownership to local traffic share",
+    "assumptions": "Legacy country and continental travel-mode priors are estimates, not observed section counts."
+  }
+}

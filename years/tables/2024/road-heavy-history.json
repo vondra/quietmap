@@ -1,0 +1,20 @@
+{
+  "rows": [
+    {
+      "country": "JP",
+      "value": 80,
+      "valid_from": "2024-04-01",
+      "valid_until": null,
+      "source_url": "https://www.npa.go.jp/laws/notification/koutuu/kisei/kisei20240301_2.pdf",
+      "scope": "Common cap covering the model's combined lorry and bus classes. Trailers remain at 80 km/h; the 90 km/h allowance for rigid large goods vehicles is not applied to the whole mixed class."
+    },
+    {
+      "country": "NZ",
+      "value": 90,
+      "valid_from": "2004-05-03",
+      "valid_until": null,
+      "source_url": "https://www.police.govt.nz/news/release/1358",
+      "scope": "Vehicles over 3500 kg on the open road; school buses retain 80 km/h."
+    }
+  ]
+}

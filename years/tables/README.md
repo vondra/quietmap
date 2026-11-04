@@ -127,3 +127,52 @@ manifest's `osm-geography-identities` and `osm-implicit-speeds` ids below the
 external year source root; completion checks these published copies too.
 The `osm-boundaries` id is the boundary edition's ADM0 FeatureCollection;
 `boundaries` continues to identify the whole administrative edition.
+
+## Road preparation and historical fits
+
+`road-conversion.json` selects publisher converters, exact objects and their schema
+parameters. Every referenced raw or auxiliary input is a declared dependency of the
+conversion input. Converters produce one Arrow observation contract: identity,
+observed interval, location/reference/direction, annual/weekday/hourly/period basis,
+individual optional vehicle counts, count scope, source priority and matching support.
+Publisher column names and edition-specific objects occur in these dated recipes.
+The Arrow metadata binds the observation file to the manifest's SHA-256.
+
+`road-preparation-model.json` supplies physical carriageway priors, access factors,
+building trip generation, local-street background and speed-transition parameters.
+The preparation stage preserves the fallback columns consumed by the final road reader;
+the reader's building, vehicle, speed and period enrichment still uses its admitted
+model tables. The preparation demand calculation lives in the traffic module beside
+that reader's routed building demand. A preparation run alone is not a complete map.
+
+The historical calibration uses annual, measured, two-direction sections with a
+reported sampling length. It fits length-weighted class medians; a missing or modeled
+vehicle-class count cannot train that class's share. The admitted HPMS population
+supplies the 2024 global and US section priors. Single-unit truck and bus AADT already
+contains buses (FHWA classes 4–7); combination AADT covers classes 8–13.
+`road-model-samples.json` records the support of every fitted cell.
+
+Hourly fits require complete station-days, combine only disjoint intervals, and give
+each supported station equal weight. The 2024 non-heavy profile uses TMAS all-vehicle
+counts where no separate heavy series exists; Baden-Württemberg's classified hours
+supply the heavy profiles. `road-weekday-factor.json` records the median ratio of
+annual-daily to weekday-daily traffic and the contributing station-lane count.
+These are the training populations, not a claim of representative counts everywhere.
+
+`road-calibration.json` keeps the fit's support thresholds and its admitted trip/fleet
+assumptions. Its preparation template has no later fitted priors; an unavailable street background is null and leaves the global class prior.
+The fitter writes the class and weekday values directly into the preparation model,
+and obtains transition limits from the admitted legal-speed table.
+
+`tagged-speeds.json` is fitted from numeric limits in the manifest-selected mapped
+OSM geometry. A mapped piece contributes one observation, classified by the same
+settlement polygons and building-density model used by road preparation. A cell needs
+at least 30 pieces. The current 2024 fit covers the 116 nonempty staged fixture-context
+squares and produces 12 country rows; it is not a whole-world speed fit. Expand the
+prepared geography and run the same command to extend coverage.
+`tagged-speed-samples.json` records the square list and support.
+Legal and heavy speed histories retain their source, applicability and validity
+interval (exclusive end). A country lacking a documented historical row retains the
+road model's global speed fallback; no later legal check is backdated. Japan's 2024
+mixed lorry/bus cap retains 80 km/h to cover trailers; the rigid-lorry allowance of
+90 km/h cannot be applied to that entire mixed class.

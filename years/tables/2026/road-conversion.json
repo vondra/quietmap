@@ -1,0 +1,1363 @@
+{
+  "objects": [
+    {
+      "input_id": "cz-rsd-celostatni-scitani-dopravy",
+      "records": "",
+      "properties": "/attributes",
+      "identity": "OBJECTID",
+      "reference": "PSILNICE",
+      "geometry": {
+        "format": "arcgis"
+      },
+      "source_id": 20,
+      "source_rank": 3353608212,
+      "country": "CZ",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1,
+      "direction": 0,
+      "road_class_mask": 31,
+      "search_radius_m": 10000,
+      "reference_required": true,
+      "classes": [
+        [
+          "O",
+          "LN"
+        ],
+        [
+          "SN",
+          "A",
+          "TR",
+          "TRP"
+        ],
+        [
+          "TN",
+          "TNP",
+          "SNP",
+          "NSN",
+          "AK"
+        ],
+        [
+          "M"
+        ]
+      ],
+      "total": "SV",
+      "year_field": null,
+      "estimated_classes": 0,
+      "reference_prefix_by_field": [
+        "PKOD_R",
+        {
+          "1": "D",
+          "5": "D"
+        }
+      ],
+      "class_masks_by_field": [
+        "PKOD_R",
+        {
+          "1": 3,
+          "5": 3,
+          "2": 7,
+          "6": 7,
+          "3": 28,
+          "4": 24
+        }
+      ],
+      "reference_alias_prefixes": [],
+      "skip_zero_total": true,
+      "format": "fields",
+      "target": {
+        "reference_rule": "first-valid-token",
+        "reference_rewrites": [
+          {
+            "pattern": "^D[0-9]+$",
+            "replacement": "$0"
+          },
+          {
+            "pattern": "^(?:[IV]+/)?([0-9]+)[a-zA-Z]?$",
+            "replacement": "$1"
+          }
+        ]
+      },
+      "reference_alias_suffixes": []
+    },
+    {
+      "format": "inweva",
+      "source": {
+        "input_id": "nl-rws-inweva-weekdag-gemiddelde-intensiteiten",
+        "source_id": 9528,
+        "source_rank": 3353879864
+      },
+      "motorcycle_share": 0.01,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "thai-drr",
+      "source": {
+        "input_id": "th-drr-rural-roads-aadt",
+        "source_id": 1113,
+        "source_rank": 3353871449
+      },
+      "road_class_mask": 31
+    },
+    {
+      "format": "mlit",
+      "source": {
+        "input_id": "jp-mlit-road-traffic-census-r3",
+        "source_id": 9392,
+        "source_rank": 3353683120
+      },
+      "fallback_source": {
+        "input_id": "jp-mlit-road-traffic-census-r3",
+        "source_id": 9865,
+        "source_rank": 1743070857
+      },
+      "files": [
+        "kasyo01.csv",
+        "kasyo02.csv",
+        "kasyo03.csv",
+        "kasyo04.csv",
+        "kasyo05.csv",
+        "kasyo06.csv",
+        "kasyo07.csv",
+        "kasyo08.csv",
+        "kasyo09.csv",
+        "kasyo10.csv",
+        "kasyo11.csv",
+        "kasyo12.csv",
+        "kasyo13.csv",
+        "kasyo14.csv",
+        "kasyo15.csv",
+        "kasyo16.csv",
+        "kasyo17.csv",
+        "kasyo18.csv",
+        "kasyo19.csv",
+        "kasyo20.csv",
+        "kasyo21.csv",
+        "kasyo22.csv",
+        "kasyo23.csv",
+        "kasyo24.csv",
+        "kasyo25.csv",
+        "kasyo26.csv",
+        "kasyo27.csv",
+        "kasyo28.csv",
+        "kasyo29.csv",
+        "kasyo30.csv",
+        "kasyo31.csv",
+        "kasyo32.csv",
+        "kasyo33.csv",
+        "kasyo34.csv",
+        "kasyo35.csv",
+        "kasyo36.csv",
+        "kasyo37.csv",
+        "kasyo38.csv",
+        "kasyo39.csv",
+        "kasyo40.csv",
+        "kasyo41.csv",
+        "kasyo42.csv",
+        "kasyo43.csv",
+        "kasyo44.csv",
+        "kasyo45.csv",
+        "kasyo46.csv",
+        "kasyo47.csv"
+      ],
+      "medium_share_of_large": 0.25,
+      "weekday_to_model_daily": 1.0
+    },
+    {
+      "format": "tsk",
+      "source": {
+        "input_id": "cz-prague-tsk-praha-intenzity-dopravy",
+        "source_id": 9003,
+        "source_rank": 3890815787
+      },
+      "weekday_to_model_daily": 1.0,
+      "sheet": "Úseky - po profilech - dle uzlů",
+      "street_aliases": {
+        "BARRAND.MOST": "Barrandovský most",
+        "DEJVICKÝ T.": "Dejvický tunel",
+        "BRUSNICKÝ T.": "Brusnický tunel",
+        "STRAH.TUNEL": "Strahovský tunel",
+        "BUBENEČ.TUN.": "Bubenečský tunel",
+        "TUN.MRÁZOVKA": "Tunel Mrázovka",
+        "TĚŠNOVSKÝ T.": "Těšnovský tunel",
+        "V HOLEŠOVIČ.": "V Holešovičkách",
+        "5.KVĚTNA": "5. května",
+        "ŠTĚRB.SPOJKA": "Štěrboholská spojka",
+        "NUSEL.MOST": "Nuselský most",
+        "MOST BARIK.": "most Barikádníků",
+        "ROZVAD.SPOJ.": "Rozvadovská spojka",
+        "JIRÁSK.MOST": "Jiráskův most",
+        "ROHAN.NÁBŘ.": "Rohanské nábřeží",
+        "NÁB.K.JAROŠE": "nábřeží Kapitána Jaroše",
+        "NÁB.L.SVOB.": "nábřeží Ludvíka Svobody",
+        "BUBEN.NÁBŘ.": "Bubenské nábřeží",
+        "POD KREJCÁR.": "Pod Krejcárkem",
+        "BĚLOCERKEVS.": "Bělocerkevská",
+        "J.ŽELIVSKÉHO": "Jana Želivského",
+        "ČERNOKOSTEL.": "Černokostelecká",
+        "N.POVLTAVSKÁ": "Nová Povltavská"
+      },
+      "coverage_input": "municipal-road-boundaries",
+      "coverage_property": "shapeName",
+      "coverage_name": "Prague",
+      "road_class_mask": 6206
+    },
+    {
+      "format": "hpms",
+      "source": {
+        "input_id": "us-fhwa-hpms",
+        "source_id": 21,
+        "source_rank": 3353739285
+      },
+      "files": [
+        "hpms-page-0.json",
+        "hpms-page-2000.json",
+        "hpms-page-4000.json",
+        "hpms-page-6000.json",
+        "hpms-page-8000.json",
+        "hpms-page-10000.json",
+        "hpms-page-12000.json",
+        "hpms-page-14000.json",
+        "hpms-page-16000.json",
+        "hpms-page-18000.json",
+        "hpms-page-20000.json",
+        "hpms-page-22000.json",
+        "hpms-page-24000.json",
+        "hpms-page-26000.json",
+        "hpms-page-28000.json",
+        "hpms-page-30000.json",
+        "hpms-page-32000.json",
+        "hpms-page-34000.json",
+        "hpms-page-36000.json",
+        "hpms-page-38000.json",
+        "hpms-page-40000.json",
+        "hpms-page-42000.json",
+        "hpms-page-44000.json",
+        "hpms-page-46000.json",
+        "hpms-page-48000.json",
+        "hpms-page-50000.json",
+        "hpms-page-52000.json",
+        "hpms-page-54000.json",
+        "hpms-page-56000.json",
+        "hpms-page-58000.json",
+        "hpms-page-60000.json",
+        "hpms-page-62000.json",
+        "hpms-page-64000.json",
+        "hpms-page-66000.json",
+        "hpms-page-68000.json",
+        "hpms-page-70000.json",
+        "hpms-page-72000.json",
+        "hpms-page-74000.json",
+        "hpms-page-76000.json",
+        "hpms-page-78000.json",
+        "hpms-page-80000.json",
+        "hpms-page-82000.json",
+        "hpms-page-84000.json",
+        "hpms-page-86000.json",
+        "hpms-page-88000.json",
+        "hpms-page-90000.json",
+        "hpms-page-92000.json",
+        "hpms-page-94000.json",
+        "hpms-page-96000.json",
+        "hpms-page-98000.json",
+        "hpms-page-100000.json",
+        "hpms-page-102000.json",
+        "hpms-page-104000.json",
+        "hpms-page-106000.json",
+        "hpms-page-108000.json",
+        "hpms-page-110000.json",
+        "hpms-page-112000.json",
+        "hpms-page-114000.json",
+        "hpms-page-116000.json",
+        "hpms-page-118000.json",
+        "hpms-page-120000.json",
+        "hpms-page-122000.json",
+        "hpms-page-124000.json",
+        "hpms-page-126000.json",
+        "hpms-page-128000.json",
+        "hpms-page-130000.json",
+        "hpms-page-132000.json",
+        "hpms-page-134000.json",
+        "hpms-page-136000.json",
+        "hpms-page-138000.json",
+        "hpms-page-140000.json",
+        "hpms-page-142000.json",
+        "hpms-page-144000.json",
+        "hpms-page-146000.json",
+        "hpms-page-148000.json",
+        "hpms-page-150000.json",
+        "hpms-page-152000.json",
+        "hpms-page-154000.json",
+        "hpms-page-156000.json",
+        "hpms-page-158000.json",
+        "hpms-page-160000.json",
+        "hpms-page-162000.json",
+        "hpms-page-164000.json",
+        "hpms-page-166000.json",
+        "hpms-page-168000.json",
+        "hpms-page-170000.json",
+        "hpms-page-172000.json",
+        "hpms-page-174000.json",
+        "hpms-page-176000.json",
+        "hpms-page-178000.json",
+        "hpms-page-180000.json",
+        "hpms-page-182000.json",
+        "hpms-page-184000.json",
+        "hpms-page-186000.json",
+        "hpms-page-188000.json",
+        "hpms-page-190000.json",
+        "hpms-page-192000.json",
+        "hpms-page-194000.json",
+        "hpms-page-196000.json",
+        "hpms-page-198000.json",
+        "hpms-page-200000.json",
+        "hpms-page-202000.json",
+        "hpms-page-204000.json",
+        "hpms-page-206000.json",
+        "hpms-page-208000.json",
+        "hpms-page-210000.json",
+        "hpms-page-212000.json",
+        "hpms-page-214000.json",
+        "hpms-page-216000.json",
+        "hpms-page-218000.json",
+        "hpms-page-220000.json",
+        "hpms-page-222000.json",
+        "hpms-page-224000.json",
+        "hpms-page-226000.json",
+        "hpms-page-228000.json",
+        "hpms-page-230000.json",
+        "hpms-page-232000.json",
+        "hpms-page-234000.json",
+        "hpms-page-236000.json"
+      ],
+      "heavy_shares_by_functional_class": [
+        0.12,
+        0.1,
+        0.08,
+        0.06,
+        0.05
+      ],
+      "motorcycle_share": 0.01,
+      "medium_share_of_heavy": 0.2,
+      "search_radius_m": 100,
+      "minimum_alignment_cosine": 0.8660254037844387,
+      "twin_radius_m": 300,
+      "twin_total_ratio_tolerance": 0.15
+    },
+    {
+      "format": "sict",
+      "source": {
+        "input_id": "mx-sict-imt-datos-viales-u1-segments",
+        "source_id": 9484,
+        "source_rank": 3353879820
+      },
+      "composition_input": "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict",
+      "total_field": "tdpa_2024",
+      "fallback_shares": [
+        0.795,
+        0.071,
+        0.082,
+        0.052
+      ],
+      "search_radius_m": 200
+    },
+    {
+      "format": "bast",
+      "source": {
+        "input_id": "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
+        "source_id": 22,
+        "source_rank": 3353673750
+      },
+      "sheet": "Zeilenformat",
+      "reference_prefix": "A",
+      "search_radius_m": 15000,
+      "fallback": {
+        "road_class_mask": 1,
+        "search_radius_m": 2000,
+        "reference_sources": [
+          22,
+          23
+        ]
+      }
+    },
+    {
+      "format": "bast",
+      "source": {
+        "input_id": "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3",
+        "source_id": 23,
+        "source_rank": 3353673751
+      },
+      "sheet": "Zeilenformat",
+      "reference_prefix": "B",
+      "search_radius_m": 15000,
+      "fallback": {
+        "road_class_mask": 2,
+        "search_radius_m": 2000,
+        "reference_sources": [
+          22,
+          23
+        ]
+      }
+    },
+    {
+      "format": "nvdb",
+      "source": {
+        "input_id": "no-nvdb-trafikkmengde",
+        "source_id": 1088,
+        "source_rank": 3354002496
+      },
+      "motorcycle_share": 0.01,
+      "medium_share_of_heavy": 0.25,
+      "search_radius_m": 200
+    },
+    {
+      "format": "kvl",
+      "source": {
+        "input_id": "fi-vaylavirasto-liikennemaarat",
+        "source_id": 1039,
+        "source_rank": 3353871375
+      },
+      "files": [
+        "liikennemaarat-page-0.json",
+        "liikennemaarat-page-1000.json",
+        "liikennemaarat-page-2000.json",
+        "liikennemaarat-page-3000.json",
+        "liikennemaarat-page-4000.json",
+        "liikennemaarat-page-5000.json",
+        "liikennemaarat-page-6000.json",
+        "liikennemaarat-page-7000.json",
+        "liikennemaarat-page-8000.json",
+        "liikennemaarat-page-9000.json",
+        "liikennemaarat-page-10000.json",
+        "liikennemaarat-page-11000.json",
+        "liikennemaarat-page-12000.json",
+        "liikennemaarat-page-13000.json",
+        "liikennemaarat-page-14000.json",
+        "liikennemaarat-page-15000.json",
+        "liikennemaarat-page-16000.json",
+        "liikennemaarat-page-17000.json",
+        "liikennemaarat-page-18000.json"
+      ],
+      "motorcycle_share": 0.01,
+      "search_radius_m": 200
+    },
+    {
+      "format": "mastra",
+      "source": {
+        "input_id": "dk-vejdirektoratet-mastra-ngletal",
+        "source_id": 1031,
+        "source_rank": 3354002439
+      },
+      "files": [
+        "mastra-page-0.json",
+        "mastra-page-3000.json",
+        "mastra-page-6000.json",
+        "mastra-page-9000.json",
+        "mastra-page-12000.json",
+        "mastra-page-15000.json",
+        "mastra-page-18000.json",
+        "mastra-page-21000.json"
+      ],
+      "coordinate_epsg": 25832,
+      "motorcycle_share": 0.01,
+      "medium_share_of_heavy": 0.05,
+      "search_radius_m": 200
+    },
+    {
+      "format": "trafik",
+      "source": {
+        "input_id": "se-trafikverket-nvdb-trafik-adt",
+        "source_id": 9752,
+        "source_rank": 3354011160
+      },
+      "layer": "TRAFIK_DK_O_105_Trafik",
+      "motorcycle_share": 0.01,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "djma",
+      "source": {
+        "input_id": "ca-quebec-mtq-djma",
+        "source_id": 1019,
+        "source_rank": 3353871355
+      },
+      "annual_fields": [
+        "annee_en_cours",
+        "annee2",
+        "annee3",
+        "annee4",
+        "annee5",
+        "annee6",
+        "annee7",
+        "annee8",
+        "annee9",
+        "annee10"
+      ],
+      "motorcycle_share": 0.01,
+      "medium_share_of_heavy": 0.2,
+      "missing_heavy_percent": null,
+      "search_radius_m": 25000
+    },
+    {
+      "format": "cerema",
+      "source": {
+        "input_id": "fr-cerema-tmja-reseau-routier-national",
+        "source_id": 24,
+        "source_rank": 3353870360
+      },
+      "integer_percent_divisor": 1,
+      "older_editions": [
+        {
+          "source": {
+            "input_id": "fr-cerema-tmja-reseau-routier-national-2019",
+            "source_id": 24,
+            "source_rank": 3353870360
+          },
+          "integer_percent_divisor": 10
+        }
+      ],
+      "motorcycle_share": 0.01,
+      "medium_share_of_heavy": 0.05,
+      "search_radius_m": 20000
+    },
+    {
+      "format": "gpr",
+      "source": {
+        "input_id": "pl-gddkia-generalny-pomiar-ruchu",
+        "source_id": 1097,
+        "source_rank": 3353674825
+      },
+      "search_radius_m": 500,
+      "identity_field": "nr2020"
+    },
+    {
+      "format": "mitma",
+      "source": {
+        "input_id": "es-mitma-mapa-de-trafico",
+        "source_id": 1037,
+        "source_rank": 3353740301
+      },
+      "motorcycle_share": 0.02,
+      "medium_share_of_heavy": 0.15,
+      "search_radius_m": 30000,
+      "road_class_mask": 31
+    },
+    {
+      "format": "pldp",
+      "source": {
+        "input_id": "si-drsi-pldp-counting-sites",
+        "source_id": 9705,
+        "source_rank": 3353880041
+      },
+      "sites_input": "si-drsi-pldp-counting-sites-pldp2024noo",
+      "search_radius_m": 200
+    },
+    {
+      "format": "sasvz",
+      "source": {
+        "input_id": "ch-astra-sasvz-jahresergebnisse-station-list",
+        "source_id": 9756,
+        "source_rank": 3353880092
+      },
+      "sites_input": "ch-astra-sasvz-jahresergebnisse-station-list-jahres-ergebnisse-2024",
+      "count_sheet": "DTV mit Klassen",
+      "site_sheet": "SASVZ_CSACR",
+      "motorcycle_share": 0.01,
+      "search_radius_m": 200
+    },
+    {
+      "format": "tii",
+      "source": {
+        "input_id": "ie-tii-counter-sites-daily-class-aggregate-per-site-class-aggr-2019-06-19",
+        "source_id": 1049,
+        "source_rank": 3353543705
+      },
+      "sites_input": "ie-tii-counter-sites-daily-class-aggregate",
+      "weekday_to_model_daily": 1.0,
+      "search_radius_m": 25000
+    },
+    {
+      "format": "anas",
+      "source": {
+        "input_id": "it-anas-traffic-2015-11",
+        "source_id": 1054,
+        "source_rank": 3353281566
+      },
+      "search_radius_m": 30000,
+      "period_to_model_daily": 1.0
+    },
+    {
+      "format": "nzta",
+      "source": {
+        "input_id": "nz-nzta-carriageway-auckland-transport-aadt",
+        "source_id": 1090,
+        "source_rank": 3354002498
+      },
+      "files": [
+        "nzta-page-0.json",
+        "nzta-page-2000.json",
+        "nzta-page-4000.json",
+        "nzta-page-6000.json",
+        "nzta-page-8000.json",
+        "nzta-page-10000.json"
+      ],
+      "carriageways": true,
+      "motorcycle_share": 0.01,
+      "medium_share_of_heavy": 0.2,
+      "search_radius_m": 200
+    },
+    {
+      "format": "nzta",
+      "source": {
+        "input_id": "nz-nzta-carriageway-auckland-transport-aadt-0",
+        "source_id": 1090,
+        "source_rank": 3354002498
+      },
+      "files": [
+        "at-aadt.geojson"
+      ],
+      "carriageways": false,
+      "motorcycle_share": 0.01,
+      "medium_share_of_heavy": 0.2,
+      "search_radius_m": 200
+    },
+    {
+      "format": "dft",
+      "source": {
+        "input_id": "gb-dft-aadf-by-count-point",
+        "source_id": 1041,
+        "source_rank": 3353936913
+      },
+      "archive_entry": null,
+      "excluded_manual_years": [
+        2020
+      ],
+      "maximum_age_years": 10,
+      "major_radius_m": 15000,
+      "minor_assignment": {
+        "maximum_distance_m": 12,
+        "clearance_m": 20
+      },
+      "slip_maximum_length_km": 1,
+      "slip_junction_pattern": "(?i)\\b(slip|junc|junction|roundabout)\\b",
+      "slip_total_ratio": 0.25,
+      "slip_neighbor_radius_m": 10000
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-vienna",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-brno",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-copenhagen",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-helsinki",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-paris",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-grenoble",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-toulouse",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-lyon",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-lille",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-bordeaux",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-rennes",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-marseille",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": true,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-rouen",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-montpellier",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-berlin",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-hamburg",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-dublin",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-milan",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-luxembourg",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-amsterdam",
+        "source_id": 1103,
+        "source_rank": 1743324239
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": true,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-oslo",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-lisbon",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-valencia",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-barcelona",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-madrid",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-malmo",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-stockholm",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-zurich",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-geneva",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-london",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-birmingham",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-manchester",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-glasgow",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-edinburgh",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "city",
+      "source": {
+        "input_id": "eu-city-cardiff",
+        "source_id": 10,
+        "source_rank": 2816933898
+      },
+      "weekday_to_model_daily": 0.9274,
+      "modeled": false,
+      "placeholder_zero_trucks": false,
+      "search_radius_m": 50,
+      "minimum_alignment_cosine": 0.8660254037844387
+    },
+    {
+      "format": "fields",
+      "input_id": "ar-dnv-national-provincial-roads-tmda-ows-3",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "gid",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1004,
+      "source_rank": 3353478124,
+      "country": "AR",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 7,
+      "search_radius_m": 300,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "valor",
+      "year_field": null,
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "total_fallback_fields": [
+        "tmda17"
+      ],
+      "minimum_total": 50
+    },
+    {
+      "format": "fields",
+      "input_id": "co-invias-red-vial-tpds-nube-tpda-0",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "objectid_12",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1026,
+      "source_rank": 3353871362,
+      "country": "CO",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 7,
+      "search_radius_m": 500,
+      "reference_required": false,
+      "classes": [
+        [
+          "au_p"
+        ],
+        [
+          "bu_p"
+        ],
+        [
+          "ca_p"
+        ],
+        null
+      ],
+      "total": "conteo",
+      "year_field": null,
+      "estimated_classes": 15,
+      "skip_zero_total": true,
+      "minimum_total": 50,
+      "percentages": true,
+      "percentage_total": 95,
+      "fixed_fractions": [
+        null,
+        null,
+        null,
+        0.05
+      ]
+    },
+    {
+      "format": "fields",
+      "input_id": "pe-mtc-provias-red-vial-nacional-departamental",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1093,
+      "source_rank": 3353871429,
+      "country": "PE",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 7,
+      "search_radius_m": 400,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "dIMD",
+      "year_field": null,
+      "estimated_classes": 0,
+      "skip_zero_total": true
+    },
+    {
+      "format": "fields",
+      "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": null,
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "cz-brno-brno-bkom-pentlogram",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "id",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 9005,
+      "source_rank": 3890684717,
+      "country": "CZ",
+      "measured": true,
+      "count_basis": "street-cross-section",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 6718,
+      "search_radius_m": 70,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        [
+          "truc_2023"
+        ],
+        null
+      ],
+      "total": "car_2023",
+      "year_field": null,
+      "estimated_classes": 10,
+      "skip_zero_total": true,
+      "total_scale": 1000,
+      "percentages": true,
+      "fixed_fractions": [
+        null,
+        0,
+        null,
+        0
+      ],
+      "residual_class": 0,
+      "coverage": {
+        "input_id": "municipal-road-boundaries",
+        "property": "shapeName",
+        "name": "Brno-City"
+      },
+      "target": {
+        "distance_rule": "whole-piece",
+        "street_assignment": {
+          "candidate_classes": 7743,
+          "point_band_m": 15,
+          "line_near_m": 28,
+          "street_hint": ""
+        }
+      }
+    },
+    {
+      "format": "mot",
+      "source": {
+        "input_id": "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads",
+        "source_id": 1102,
+        "source_rank": 3353871438
+      },
+      "search_radius_m": 600,
+      "period_to_model_daily": 1.0,
+      "way_assignment": {
+        "maximum_distance_m": 600,
+        "clearance_m": 600,
+        "require_class_clearance": false,
+        "extend_along_way": true
+      }
+    },
+    {
+      "format": "mop",
+      "source": {
+        "input_id": "cl-mop-red-vial-plan-nacional-de-censos-tmda-0",
+        "source_id": 1023,
+        "source_rank": 3353871359
+      },
+      "arcgis": false,
+      "year_field": "ANO",
+      "search_radius_m": 600
+    },
+    {
+      "format": "wien",
+      "source": {
+        "input_id": "at-vienna-stadt-wien-ma46-dauerzahlstellen-stadt-wien-verkehrszhlstellenzhlwertewien",
+        "source_id": 9004,
+        "source_rank": 3890815788
+      },
+      "sites_input": "at-vienna-stadt-wien-ma46-dauerzahlstellen",
+      "coverage": {
+        "input_id": "municipal-road-boundaries-austria",
+        "property": "shapeName",
+        "name": "Wien(Stadt)"
+      },
+      "minimum_months": 10,
+      "road_class_mask": 6718,
+      "search_radius_m": 70,
+      "point_band_m": 15
+    }
+  ]
+}
