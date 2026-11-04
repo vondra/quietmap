@@ -206,8 +206,9 @@ pub fn object_key(group_key: u64) -> String {
 
 /// The mapped places whose sound the buildings carry: places of worship (bells, calls to prayer)
 /// and bars, restaurants and cafés (the people outside them).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct Places<'a> {
+    pub facilities: &'a crate::facilities::Dataset,
     pub worship: Option<&'a worship::WorshipSites>,
     pub venues: Option<&'a venues::Venues>,
 }
@@ -237,6 +238,7 @@ pub fn build(
     out: &Path,
 ) -> Result<usize, String> {
     crate::ships::check_squares(ships, squares)?;
+    places.facilities.require_source_context(squares)?;
     if !airport_traffic.join(COMPLETION_MARKER).exists() {
         return Err(format!(
             "{}: no complete airport traffic",
@@ -299,7 +301,7 @@ fn build_square(
         .collect();
     around.sort_unstable_by_key(|square| (square.x, square.y));
     around.dedup();
-    let industrial_sites = industry::site_outlines(dev4, &around)?;
+    let industrial_sites = industry::site_outlines(places.facilities, &around)?;
     let reach = Reach::of_square(square);
     let decks = decks::Decks::of_square(dev4, square, out)?;
     let mut water_tiles = water.tiles();
@@ -315,6 +317,7 @@ fn build_square(
         rail::convert((dev4, network, tables), neighbour, &decks, &mut converted)?;
         leisure::convert(
             dev4,
+            places.facilities,
             neighbour,
             (
                 road_traffic.filter(|_| buildings_mapped),
@@ -333,7 +336,7 @@ fn build_square(
         airport::convert(airport_traffic, neighbour, &mut converted)?;
         converted.retain(owned);
     }
-    industry::convert(dev4, square, &mut converted)?;
+    industry::convert(dev4, places.facilities, square, &mut converted)?;
     turbines::convert(turbines, square, &mut converted);
     converted.retain(owned);
     let mut by_tile: BTreeMap<TileId, Vec<Converted>> = BTreeMap::new();

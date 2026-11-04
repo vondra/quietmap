@@ -1,6 +1,6 @@
 //! Mapped industrial boundaries, indexed by the source's id for display when its popup row opens.
 
-use crate::dev4::{Dev4, Square, z30_corner_degrees};
+use crate::dev4::{Square, z30_corner_degrees};
 use crate::sources::industry::read_rows;
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -31,10 +31,11 @@ fn geometry(ring: &[(i32, i32)]) -> Option<Value> {
 
 /// One display database per year, made from the same industrial input as the sound sources.
 /// Repeated copies of a ring are kept once; distinct parts of one source keep their whole rings.
-pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<(), String> {
-    if !dev4.prepared.join("z9").is_dir() {
-        return Err("source outlines: prepared input has no z9 directory".into());
-    }
+pub fn build(
+    facilities: &crate::facilities::Dataset,
+    squares: &[Square],
+    out: &Path,
+) -> Result<(), String> {
     let partial = out.with_extension("sqlite.partial");
     for path in [out, partial.as_path()] {
         if path.exists() {
@@ -58,12 +59,7 @@ pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<(), String> 
             .prepare("INSERT OR IGNORE INTO outlines (id, geometry) VALUES (?1, ?2)")
             .map_err(|error| error.to_string())?;
         for &square in squares {
-            let Some(table) = dev4.table(square, "industrial.arrow")? else {
-                continue;
-            };
-            let mut rows = Vec::new();
-            read_rows(&table, &mut rows)
-                .map_err(|error| format!("industrial.arrow of {square:?}: {error}"))?;
+            let rows = read_rows(facilities, square)?;
             read += rows.len();
             for row in rows {
                 if let Some(geometry) = geometry(&row.ring) {

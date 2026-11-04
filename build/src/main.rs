@@ -15,6 +15,9 @@ mod climate;
 mod dev4;
 #[path = "../../fetch/era5.rs"]
 mod era5;
+mod facilities;
+#[path = "../../fetch/facilities.rs"]
+mod facility_inputs;
 mod low_profile;
 mod obstacles;
 mod osm;
@@ -293,6 +296,13 @@ fn run(arguments: &[String]) -> Result<(), String> {
             structures::prepare::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
                 .map_err(|e| e.to_string())
         }
+        "facility-observations" => {
+            facility_inputs::convert(&inputs, &out).map_err(|e| e.to_string())
+        }
+        "facilities" => {
+            facilities::prepare::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
+                .map_err(|e| e.to_string())
+        }
         "osm-regions" => osm_regions::convert(&inputs, &out).map_err(|error| error.to_string()),
         "osm" => osm::build(
             &inputs,
@@ -305,10 +315,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             rasters::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
         }
         "source-outlines" => source_outlines::build(
-            &Dev4 {
-                prepared: inputs.required(crate::year::Kind::Prepared)?.into(),
-                rasters: PathBuf::new(),
-            },
+            &facilities::Dataset::open(&inputs)?,
             &parse_squares(options.get("squares")?)?,
             &out,
         ),
@@ -352,6 +359,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                                 inputs.required(crate::year::Kind::Bus)?,
                             )?),
                             sources::Places {
+                                facilities: &facilities::Dataset::open(&inputs)?,
                                 worship: Some(&sources::worship::WorshipSites::load(
                                     inputs.required(crate::year::Kind::Worship)?,
                                 )?),

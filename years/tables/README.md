@@ -173,3 +173,31 @@ The `osm-boundaries` id is the boundary edition's ADM0 FeatureCollection;
 
 The frozen factors and their observation vintages remain inputs, not a new fit to this port's
 fixture squares.
+
+`facility-model.json` selects publisher adapters and their geographic coverage, activity mappings,
+source authority, name inferences and duplicate-site rules. `qm-build facility-observations`
+normalizes each admitted `prepare-industrial-sites` input; `qm-build facilities` joins these
+observations to `osm-geography` and writes the `facilities` input consumed by industry, leisure and
+site outlines. Both Arrow stages use one schema, with WGS84 WKB geometry, stable publisher or OSM
+identity, source, activity, capacity and its unit, and operating dates. A publisher without persistent
+IDs gets a deterministic content identity; it cannot link a renamed or relocated record across
+snapshots. Each raw observation has a separate, unique content identity, which the classification
+and operation references name. Classification is mapped (0),
+reported by a register (1), or inferred from a name (2); none is a sound measurement. Operation is
+unknown (0), observed operating (1), or inactive (2). `classification_admitted` is separate: a register
+can describe the sector without having observed operation. The [method](../../frontend/src/about/data-preparation.md)
+describes temporal admission and conflicting evidence. Completion inventories and Arrow metadata
+cover the selected dependency declarations, model bytes and normalized observation bytes; an
+unrelated manifest entry does not invalidate facilities. A missing square is an error. Registered capacity is retained with the observation; the mapped
+power capacity used by the existing emitter keeps its mapped value and unit. Wind rows remain, but
+the obsolete parameter enrichment is omitted because the independent turbine input owns emission.
+The facility builder reads one ring around `--squares` from `osm-geography`, but writes and lists
+only the requested squares. For `sources`, prepare facilities for its targets and their two-square
+halo: building sound uses the sites around neighbouring buildings. That requires three rings of
+OSM geography around the source targets. Longitude wraps; latitude stops at the poles. The source
+preflight rejects incomplete context before writing tiles. Empty prepared squares have explicit
+empty Arrow files; a context-only square is not claimed as a completed output.
+
+GPPD commissioning years are capacity-weighted means of generating-unit dates, not opening bounds; the converter leaves their operating intervals unknown. See [WRI’s calculation](https://github.com/wri/global-power-plant-database/blob/master/build_databases/build_database_USA.py#L178-L185).
+
+Facility identity recipes name publisher business, unit or global keys. Export row counters (`OBJECTID`, `FID`) are rejected; a source without a persistent key uses the documented name/location fallback. Shared administrative docket numbers are not treated as plant identifiers. The observation input’s `depends_on` is the converter’s source list, and its register dependencies must equal the recipe list.

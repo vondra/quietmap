@@ -184,6 +184,7 @@ impl YearInputs {
             Kind::PrepareOsmSpeeds,
             Kind::StructureHeightModel,
             Kind::RailModel,
+            Kind::FacilityModel,
         ] {
             if self.paths.contains_key(&kind) {
                 self.check_published_table(kind, &directory.join(format!("{kind}.json")))?;

@@ -5184,6 +5184,65 @@
         "ar-timetable-subte-buenos-aires"
       ],
       "description": "Rail movements integrate all admitted service dates and exceptions over the flow window. Missing dates are estimated from the same operator’s covered-day mean, with that component retained separately; absent timetables use the declared class or corridor estimates."
+    },
+    {
+      "id": "facility-model",
+      "kind": "facility-model",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024-12-31",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (method); source licences apply to observations",
+      "public_ok": true,
+      "depends_on": [
+        "osm"
+      ],
+      "description": "Activity code mappings, ordered name inferences and containment authority. Names infer an activity; they do not measure operation or sound. The same linguistic rules apply to each selected map state."
+    },
+    {
+      "id": "facility-observations",
+      "kind": "facility-observations",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024-12-31",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (method); source licences apply to observations",
+      "public_ok": true,
+      "depends_on": [
+        "facility-model",
+        "osm-regions",
+        "europe-eea-e-prtr-ied-production-facilities",
+        "world-wri-global-power-plant-database"
+      ],
+      "description": "Facility identities, geometry, activity, capacity units and dated operating evidence. A later operating snapshot alone cannot establish historical operation; unavailable registers leave the mapped activity and explicitly unknown history."
+    },
+    {
+      "id": "facilities",
+      "kind": "facilities",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024-12-31",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (method); source licences apply to observations",
+      "public_ok": true,
+      "depends_on": [
+        "osm-geography",
+        "facility-model",
+        "facility-observations"
+      ],
+      "description": "Mapped industry and leisure classified from the admitted facility observations. One registry site selects one containing footprint; dedicated mapped activity and quiet uses keep their identity."
     }
   ],
   "unavailable": [
@@ -7253,7 +7312,9 @@
     "worldcover",
     "worldcover-antimeridian",
     "emodnet",
-    "era5-statistics"
+    "era5-statistics",
+    "europe-eea-e-prtr-ied-production-facilities",
+    "world-wri-global-power-plant-database"
   ],
   "rasters": {
     "sources": [

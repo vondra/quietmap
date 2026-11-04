@@ -216,3 +216,18 @@ fn a_site_point_inside_a_building_takes_it_as_its_own() {
     );
     assert_eq!(inside + outside, out.len());
 }
+
+#[test]
+fn retired_industrial_wind_parameters_cannot_change_the_independent_turbine_emission() {
+    for source_type in [SOURCE_WIND_TURBINE, SOURCE_WIND_OUTLINE] {
+        for rated_power_kw in [None, Some(600.0), Some(6000.0)] {
+            assert_eq!(
+                emission(&IndustrialRow {
+                    rated_power_kw,
+                    ..row(source_type)
+                }),
+                None
+            );
+        }
+    }
+}

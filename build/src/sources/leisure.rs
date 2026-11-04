@@ -1,4 +1,4 @@
-//! Open-air leisure areas and shooting ranges of dev4's `leisure.arrow` as area sources 1.5 m
+//! Open-air leisure facilities and shooting ranges as area sources 1.5 m
 //! above the ground, in the Building layer as dev4 shows them: the area law over the polygon (a
 //! node takes its class's reference footprint; a line is no area and emits from its centroid),
 //! ranges by shots a year unless roofed. Motorsport (PLAN-z13 DROP) and unknown classes are silent.
@@ -16,14 +16,13 @@
 //! (0.50, 2026-10-18).
 
 use super::cells::{
-    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
+    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, site_points,
 };
 use super::facilities::{Tags, parse_tags};
 use super::venues::{Seating, Venues};
 use super::{Converted, displayed_duty, fields, group_key};
-use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
+use crate::dev4::{Dev4, Square, z30_corner_degrees};
 use crate::traffic::{GRID_SIDE, grid_cell, parking_shares};
-use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
 use physics::bands::PERIOD_HOURS;
 use physics::emission::leisure::*;
 use physics::emission::spectrum::SoundPower;
@@ -43,7 +42,7 @@ const LINE_GEOMETRY: u8 = 2;
 /// about 200 m: 3 x 3 of them) with the street parking spaces there.
 const STREET_PARKING_REACH_CELLS: usize = 1;
 
-/// One `leisure.arrow` row as the conversion reads it; tags are kept for shooting ranges only.
+/// One normalized leisure facility as the conversion reads it; tags are kept for shooting ranges only.
 pub struct LeisureRow {
     pub osm_kind: String,
     pub osm_id: i64,
@@ -191,11 +190,12 @@ impl ParkingBudget {
     }
 }
 
-/// Converts the leisure rows of one dev4 square, its car parks bound by the trip ends of the
+/// Converts the leisure facilities of one square, its car parks bound by the trip ends of the
 /// square's buildings under `traffic` when given (its buildings mapped); returns how many rows
 /// emit.
 pub fn convert(
     dev4: &Dev4,
+    facilities: &crate::facilities::Dataset,
     square: Square,
     (traffic, venues, tables): (
         Option<&std::path::Path>,
@@ -204,17 +204,7 @@ pub fn convert(
     ),
     out: &mut Vec<Converted>,
 ) -> Result<usize, String> {
-    let Some(table) = dev4.table(square, "leisure.arrow")? else {
-        return Ok(0);
-    };
-    let context = |error: String| format!("leisure.arrow of {square:?}: {error}");
-    for (key, value) in [("grid", "z30"), ("leisure_contract", "leisure_v5")] {
-        require_stamp(&table, key, value).map_err(context)?;
-    }
-    let mut rows = Vec::new();
-    for batch in &table.batches {
-        rows.extend(read_batch(batch).map_err(context)?);
-    }
+    let rows = read_rows(facilities, square)?;
     // A street strip takes the trip ends made by cars that park on the street, a lot those off it.
     let parking = rows
         .iter()
@@ -357,34 +347,33 @@ fn heard_in_events(
     )
 }
 
-fn read_batch(batch: &arrow_array::RecordBatch) -> Result<Vec<LeisureRow>, String> {
-    let integers = |name: &str| column::<Int32Array>(batch, name);
-    let (gx, gy) = (integers("centroid_gx")?, integers("centroid_gy")?);
-    let texts = |name: &str| column::<StringArray>(batch, name);
-    let (kinds, names, tags) = (texts("osm_kind")?, texts("name")?, texts("osm_tags")?);
-    let bytes = |name: &str| column::<UInt8Array>(batch, name);
-    let (classes, geometry_kinds) = (bytes("sport")?, bytes("geometry_kind")?);
-    let (ids, geometry) = (
-        column::<Int64Array>(batch, "osm_id")?,
-        column::<BinaryArray>(batch, "geom")?,
-    );
-    let areas = column::<Float32Array>(batch, "area_m2")?;
-    Ok((0..batch.num_rows())
-        .map(|row| LeisureRow {
-            osm_kind: kinds.value(row).to_string(),
-            osm_id: ids.value(row),
-            centroid: (gx.value(row), gy.value(row)),
-            class: classes.value(row),
-            name: text(names, row).to_string(),
-            ring: ring_cell(geometry, row),
-            area_m2: positive(areas, row),
-            is_line: geometry_kinds.value(row) == LINE_GEOMETRY,
-            tags: match classes.value(row) {
-                SHOOTING => parse_tags(tags.value(row)),
-                _ => Tags::new(),
-            },
+pub(crate) fn read_rows(
+    facilities: &crate::facilities::Dataset,
+    square: Square,
+) -> Result<Vec<LeisureRow>, String> {
+    use crate::facilities::{geometry, records::LEISURE};
+    facilities
+        .rows(square, LEISURE)?
+        .into_iter()
+        .filter(|row| row.operating_state != 2)
+        .map(|row| {
+            Ok(LeisureRow {
+                osm_kind: row.osm_kind,
+                osm_id: row.osm_id,
+                centroid: geometry::grid_point(row.longitude, row.latitude),
+                class: u8::try_from(row.activity).map_err(|e| e.to_string())?,
+                name: row.name.unwrap_or_default(),
+                ring: geometry::grid_ring(row.geometry.as_deref()).map_err(|e| e.to_string())?,
+                area_m2: row.area_m2.filter(|v| *v > 0.0).map(f64::from),
+                is_line: row.geometry_kind == LINE_GEOMETRY,
+                tags: if row.activity == u16::from(SHOOTING) {
+                    parse_tags(&row.osm_tags)
+                } else {
+                    Tags::new()
+                },
+            })
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]

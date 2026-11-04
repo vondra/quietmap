@@ -41,6 +41,8 @@ parquet = "60"
 
 gdal-sys = "0.12"
 tempfile = "3"
+csv = "1"
+regex = "1"
 sha2 = "0.10"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 csv = "1"

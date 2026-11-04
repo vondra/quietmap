@@ -3,7 +3,7 @@
 mod classify;
 mod contracts;
 mod finalize;
-mod geography;
+pub(crate) mod geography;
 mod geography_output;
 pub(crate) mod geometry;
 mod ids;
