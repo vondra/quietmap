@@ -193,7 +193,6 @@ fn service_roads_keep_their_prior_when_no_demand_bounds_are_admitted() {
     let batch = input::load(&path).unwrap().remove(0);
     let mut roads = input::roads(&batch).unwrap();
     let mut model = super::tests::model();
-    model.demand.street = None;
     model.demand.service_trip_bounds = None;
     crate::traffic::preparation::apply(&mut roads, &structures, &model.demand).unwrap();
     assert!(roads.iter().all(|road| road.source_id == 0));
