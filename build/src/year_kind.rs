@@ -67,6 +67,8 @@ kinds! {
     PrepareWeatherStatistics => "prepare-weather-statistics",
     Prepared => "prepared",
     Primary => "primary",
+    RailModel => "rail-model",
+    RailFlows => "rail-flows",
     RailFleetRegions => "rail-fleet-regions",
     RasterMosaic => "raster-mosaic",
     Rasters => "rasters",

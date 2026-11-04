@@ -28,6 +28,8 @@ pub struct Manifest {
     pub shared: BTreeSet<String>,
     #[serde(default)]
     pub rasters: Option<crate::rasters::config::RasterPlan>,
+    #[serde(default)]
+    pub railways: Option<crate::railways::config::RailPlan>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +94,9 @@ impl Manifest {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(railways) = &self.railways {
+            railways.validate(self)?;
+        }
         if let Some(rasters) = &self.rasters {
             rasters.validate(self)?;
         }

@@ -1,6 +1,6 @@
 ---
 title: Belgium
-intro: Passenger timetables for SNCB/NMBS and three regional tram and metro networks. Roads are estimated from the buildings around them. Rail freight from class defaults.
+intro: Partial passenger timetables for SNCB/NMBS, Brussels and Flanders. Roads are estimated from the buildings around them. Rail freight from class defaults.
 ---
 
 ## Roads
@@ -13,10 +13,10 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Train counts, one busy Wednesday:
+The 2026 map averages the services inside its observation window. Missing dates take estimated traffic:
 
-- National railway: [SNCB/NMBS](https://gtfs.irail.be/).
-- Trams, metro and light rail: [STIB/MIVB](https://stibmivb.opendatasoft.com/) (Brussels), [De Lijn](http://gtfs.irail.be/de-lijn/de_lijn-gtfs.zip) (Antwerp, Ghent, coast tram), [TEC](http://opendata.tec-wl.be/Current%20GTFS/TEC-GTFS.zip) (Charleroi).
+- National railway: [SNCB/NMBS](https://gtfs.irail.be/), covering 142 of the 365 days.
+- Trams, metro and light rail: [STIB/MIVB](https://stibmivb.opendatasoft.com/) covers 1 day in Brussels; [De Lijn](http://gtfs.irail.be/de-lijn/de_lijn-gtfs.zip) covers 92 days in Antwerp, Ghent and on the coast tram. The [TEC](http://opendata.tec-wl.be/Current%20GTFS/TEC-GTFS.zip) archive has no dates inside the window, so Charleroi takes estimated counts.
 
 Lines without a count take the class defaults. No Belgian timetable includes freight, and Belgium publishes no goods train-kilometres: freight keeps the class defaults' national total, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 

@@ -104,12 +104,17 @@ export function railDatasetLines(
   passengerSourceId: number | null,
   freightSourceId: number | null,
   soundings = false,
+  missingCalendarEstimateShares: [number, number] = [0, 0],
 ): string[] {
   const slots: Array<[string, number | null]> = soundings
     ? [['Soundings', passengerSourceId]]
     : [['Passenger trains', passengerSourceId], ['Freight', freightSourceId]]
-  return slots.flatMap(([label, id]) => {
+  return slots.flatMap(([label, id], index) => {
     const line = datasetLine(id)
-    return line ? [`${label}: ${line}`] : []
+    const share = missingCalendarEstimateShares[index]
+    const percent = 100 * share
+    const missing = share > 0 ? `${percent < 0.1 ? '<0.1' : percent.toFixed(1)}% estimated for dates without timetable data` : ''
+    const description = [line, missing].filter(Boolean).join('; ')
+    return description ? [`${label}: ${description}`] : []
   })
 }

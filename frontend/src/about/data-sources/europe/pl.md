@@ -17,7 +17,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Train counts, one busy Wednesday:
+Timetables are averaged over the observation year. The archived Polish Trains, Warsaw ZTM, Kraków and GZM feeds fall outside the 2026 window; those lines retain estimates. WKD contributes the 261 days its calendar covers:
 
 | Feed | What it covers |
 |---|---|

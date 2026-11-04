@@ -16,7 +16,7 @@ Unsigned roads: a primary road 30 km/h in towns, 80 outside, a motorway 120.
 
 ## Railways
 
-Train counts, one busy Wednesday:
+Timetables are averaged over the observation year. The archived Cercanías feed falls outside the 2026 window, so those lines retain estimates; the other feeds contribute the days their calendars cover. Renfe AV/LD/MD covers 144 days and FGC 147; missing dates use each operator’s covered-day mean, labelled as estimated:
 
 | Feed | What it covers |
 |---|---|

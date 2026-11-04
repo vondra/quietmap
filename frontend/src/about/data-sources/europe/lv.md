@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Train counts: [Vivi timetable](https://www.vivi.lv/) of the national passenger operator, one busy Wednesday. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. Riga trams have no feed loaded and default to 120 per day on every track.
+Train counts: [Vivi timetable](https://www.vivi.lv/) of the national passenger operator, averaged over the observation year. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. Riga trams have no feed loaded and default to 120 per day on every track.
 
 ## Homes and places
 

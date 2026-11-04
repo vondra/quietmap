@@ -19,7 +19,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train and tram counts: national timetable of [opentransportdata.swiss](https://opentransportdata.swiss/) (SBB and the regional operators), one busy Wednesday. The timetable is passenger-only; freight comes from the class defaults, 31.4 trains a day on a main line (fitted to the national goods train-kilometres of 2023), 37 % of it at night as at Germany's railway monitors.
+Train and tram counts: national timetable of [opentransportdata.swiss](https://opentransportdata.swiss/) (SBB and the regional operators), averaged over the observation year. The timetable is passenger-only; freight comes from the class defaults, 31.4 trains a day on a main line (fitted to the national goods train-kilometres of 2023), 37 % of it at night as at Germany's railway monitors.
 
 ## Buildings and terrain
 

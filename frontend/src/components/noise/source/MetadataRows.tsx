@@ -113,7 +113,10 @@ function RailwayRows({ m }: { m: ContributorMetadata }) {
   const traffic = railTraffic(m)
   // A level crossing's horn carries its soundings in the passenger slots.
   const horn = text(m, 'rail_type') === 'horn'
-  const data = railDatasetLines(num(m, 'passenger_source_id'), num(m, 'freight_source_id'), horn)
+  const data = railDatasetLines(num(m, 'passenger_source_id'), num(m, 'freight_source_id'), horn, [
+    num(m, 'passenger_missing_calendar_estimate_share') ?? 0,
+    num(m, 'freight_missing_calendar_estimate_share') ?? 0,
+  ])
   const description = [railTrafficDescription(traffic, horn), ...(data.length ? [`Data:\n${data.join('\n')}`] : [])]
   return (
     <>

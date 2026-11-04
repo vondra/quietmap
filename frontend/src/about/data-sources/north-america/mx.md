@@ -17,9 +17,9 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Mexico City: [SEMOVI unified GTFS](https://datos.cdmx.gob.mx/dataset/gtfs) and Movimex's Toluca timetable, covering the Metro, Tren Ligero and part of El Insurgente. Headway-based entries are expanded into daily train counts. Surface metro sections are included; see the [railway method](/about/data-preparation).
+Mexico City: [SEMOVI unified GTFS](https://datos.cdmx.gob.mx/dataset/gtfs), covering the Metro, Tren Ligero, Tren Suburbano and part of El Insurgente. The separate Movimex archive has no admissible observation window and is excluded. The SEMOVI calendar covers 122 of the 365 days in the 2026 observation window; missing dates use its covered-day mean, labelled as estimated. Headway-based entries are expanded into daily train counts. Surface metro sections are included; see the [railway method](/about/data-preparation).
 
-Tren Suburbano, the Guadalajara and Monterrey light rail and Tren Maya take no timetable, and freight railways publish no schedules. These lines use class defaults.
+The Guadalajara and Monterrey light rail and Tren Maya take no timetable, and freight railways publish no schedules. These lines use class defaults.
 
 ## Industry
 

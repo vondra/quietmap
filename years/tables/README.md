@@ -36,6 +36,49 @@ roads without local counts use the global road model; the lack of counts is not 
 omit its fitted tables. `road-class-priors` override the older global class medians described
 on Data preparation; the two are not the same fit.
 
+## Railway preparation inputs
+
+`rail-model.json` is the single preparation model: category/source precedence, country ownership,
+daily class priors, period fractions, spatial corridor rules and matching extents. Daily counts
+are trains across the whole line, before sharing between parallel tracks. The ordered corridor
+rules preserve the explicitly estimated counts documented on the country source pages; they
+are not timetable observations. The six national main-line freight priors were fitted using
+Eurostat train-kilometres and a later mapped network, so the historical model omits that fit.
+
+The manifest's `railways.objects` chooses publisher adapters and input ids. Converters produce
+one version-2 JSON-lines movement stream: a window header, then service paths, station observations,
+directed station pairs, spatial observations or crossing soundings. Passenger and freight are
+independent nullable counts: null is unknown and zero is an observed absence. Calendar coverage
+keeps one bit per day of the flow window. A GTFS operator keeps its own observation horizon;
+the span of its selected service calendars, with seasonal patterns kept together.
+A complete `feed_info` interval can establish
+known zero dates. `ignore_feed_window` selects the publisher adapter's service-calendar bounds
+when that metadata overstates the archive's coverage; the input description records why.
+Each timetable count is the sum of active departures
+divided by the entire window's day count. `missing_calendar_estimate` stores the additional
+passenger and freight counts inferred from that same observation's mean on covered dates.
+It is computed before any station or interval aggregation, follows the winning source and
+is shared across tracks with the observed count. A zero from partial calendar coverage remains
+in the normalized observations but cannot claim annual silence: the matcher leaves that category
+to its declared model. A complete calendar can establish an annual zero. Prepared rows retain six period components;
+native display records retain the two estimated shares. Absent components in older files mean
+zero; a partial set is invalid. The production converter has no selected-weekday option.
+The annual assumption and its limits are described in Data preparation.
+An absent optional shape keeps ordered-station matching with its ambiguity check. A GTFS service
+with any unresolved stop keeps its count as an unlocated observation. CIS retains the ordered
+pairs of resolved timing points; fewer than two resolved stations also keeps an unlocated count.
+An unlocated observation adds no spatial claim and is reported separately from observed zero.
+The converter prints structured `railways: operator-calendar` records with covered dates and
+trip counts. These reproduce the observation bounds in each selected manifest; edition metadata
+is committed with its inputs, rather than discovered from a current feed at build time.
+
+Source ids, ranks and editions preserve provenance and precedence; they never choose input
+files. Only manifest admission selects sources. `rail-movements` depends on exactly the admitted
+publisher objects and any station lookup used by the conversion. Historical archives that are
+absent or not admitted leave the declared class estimate. The movement stream's window must
+match the selected manifest. Original OSM node identities and way distances remain authoritative
+through graph matching, interval splitting and finalization.
+
 ## Thai highway counts and subdivision grids
 
 `road-reference-counts` rows are country, highway number, subdivision, daily traffic across
@@ -127,3 +170,6 @@ manifest's `osm-geography-identities` and `osm-implicit-speeds` ids below the
 external year source root; completion checks these published copies too.
 The `osm-boundaries` id is the boundary edition's ADM0 FeatureCollection;
 `boundaries` continues to identify the whole administrative edition.
+
+The frozen factors and their observation vintages remain inputs, not a new fit to this port's
+fixture squares.

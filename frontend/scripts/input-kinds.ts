@@ -53,6 +53,8 @@ export const INPUT_KINDS = [
   "prepared",
   "primary",
   "rail-fleet-regions",
+  "rail-flows",
+  "rail-model",
   "raster-mosaic",
   "rasters",
   "regional-vehicle-shares",

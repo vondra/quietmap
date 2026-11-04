@@ -33,13 +33,13 @@ impl YearInputs {
     pub fn by_id(&self, id: &str) -> Result<PathBuf, String> {
         if !self.manifest.admitted(id)? {
             return Err(format!(
-                "year {}: raster input {id} is not admitted",
+                "year {}: input {id} is not admitted",
                 self.manifest.year
             ));
         }
         let path = self.root.join(id);
         if !path.exists() {
-            return Err(format!("missing raster input {}", path.display()));
+            return Err(format!("missing input {}", path.display()));
         }
         Ok(path)
     }
@@ -183,9 +183,27 @@ impl YearInputs {
             Kind::PrepareGeography,
             Kind::PrepareOsmSpeeds,
             Kind::StructureHeightModel,
+            Kind::RailModel,
         ] {
             if self.paths.contains_key(&kind) {
                 self.check_published_table(kind, &directory.join(format!("{kind}.json")))?;
+            }
+        }
+        if let Some(plan) = &self.manifest.railways {
+            for object in &plan.objects {
+                if let crate::railways::config::RailObject::PreparedMovements { input } = object
+                    && self.manifest.admitted(input)?
+                {
+                    let published = directory.join(format!("{input}.jsonl"));
+                    if std::fs::read(&published).map_err(|error| error.to_string())?
+                        != std::fs::read(self.by_id(input)?).map_err(|error| error.to_string())?
+                    {
+                        return Err(format!(
+                            "{input}: input differs from published observations {}",
+                            published.display()
+                        ));
+                    }
+                }
             }
         }
         Ok(())

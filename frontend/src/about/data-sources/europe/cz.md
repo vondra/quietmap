@@ -20,10 +20,9 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 Train counts are derived from the national timetable
 ([CIS JR](https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/)), routed along
-OpenStreetMap tracks.
+OpenStreetMap tracks. The 2026 archive covers 261 of the 365 days in the observation window. Counts integrate every covered day, including weekends and exceptions; the other 104 days use the mean service of those covered days, labelled as estimated.
 
-The public timetable is passenger-only. Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. Lines without any
-scheduled service default to 2 passenger and 1 freight train per day.
+The public timetable is passenger-only. Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. On dates covered by the timetable, a line without scheduled service receives a residual of 2 passenger and 1 freight train per day. The same residual estimates uncovered dates; it is a modelled allowance for unscheduled movement, not a counted absence. These line totals are shared between parallel tracks.
 
 ## Industry
 

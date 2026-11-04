@@ -1,6 +1,6 @@
 ---
 title: France
-intro: National road census (Cerema TMJA), street counts in ten cities, SNCF national and Transilien timetables. Paris metro and city trams not covered; rail freight from the national train-kilometres.
+intro: National road census (Cerema TMJA), street counts in ten cities, Estimated rail traffic; the archived SNCF timetables fall outside the 2026 observation window. Paris metro and city trams not covered; rail freight from the national train-kilometres.
 ---
 
 ## Roads
@@ -16,7 +16,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train counts: two [SNCF timetables](https://data.sncf.com/), one busy Wednesday. The national feed covers TGV, Intercités and TER; the Transilien feed adds the RER and Transilien trains of the Paris region.
+The archived [SNCF timetables](https://data.sncf.com/) for national trains and Transilien start after the 2026 observation window. They contribute no scheduled services to that year; passenger counts use estimates calibrated against national train-kilometres. Earlier maps use only timetables available for their own year.
 
 The Paris metro and city trams are not covered: no RATP feed is loaded. Their surface sections use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 

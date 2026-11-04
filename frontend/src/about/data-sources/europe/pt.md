@@ -1,6 +1,6 @@
 ---
 title: Portugal
-intro: City traffic counts in Lisbon, four timetables for trains and light rail. Other roads are estimated from the buildings around them. Fertagus and Lisbon trams not covered; rail freight from the national train-kilometres.
+intro: City traffic counts in Lisbon, passenger trains from the CP timetable. Other roads are estimated from the buildings around them. Fertagus and Lisbon trams not covered; rail freight from the national train-kilometres.
 ---
 
 ## Roads
@@ -15,14 +15,12 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside, a motorway 120.
 
 ## Railways
 
-Train counts, one busy Wednesday:
-
-| Feed | What it covers |
-|---|---|
-| [CP Comboios de Portugal](https://publico.cp.pt/gtfs/gtfs.zip) | National and commuter trains |
-| Metro do Porto | Porto light rail |
-| [Metro Sul do Tejo](https://mts.pt/imt/MTS-20240129.zip) | Almada and Seixal light rail |
-| [Carris Metropolitana](https://api.carrismetropolitana.pt/v2/gtfs) | Lisbon area. Mostly buses; not used |
+[CP Comboios de Portugal](https://publico.cp.pt/gtfs/gtfs.zip) supplies national and commuter
+train schedules, averaged over the observation window. The archived Metro do Porto feed does
+not cover the 2026 window. Metro Sul do Tejo's archive keeps holiday dates through 2030 but its
+regular schedules end on 7 September 2025; it cannot establish annual service and is excluded.
+Both light-rail networks retain class estimates. Carris Metropolitana's loaded feed contains
+no selected rail service.
 
 Fertagus trains over the 25 de Abril bridge and the Lisbon trams have no feed loaded. The timetables are passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 

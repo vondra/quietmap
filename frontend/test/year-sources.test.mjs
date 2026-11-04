@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, readFileSync } from 'node:fs'
-import { readYears, renderYearSources, validatePublicManifest, REGIONS, PRIVATE_SOURCE_TEXT } from '../scripts/year-sources.ts'
+import { readYears, renderYearSources, validatePublicManifest, observedLabel, REGIONS, PRIVATE_SOURCE_TEXT } from '../scripts/year-sources.ts'
 
 const source = (id, region, public_ok = true) => ({ id, kind: 'prepare-road-counts', region, public_ok,
   publisher: id, url: 'https://example.org/counts', observed: { start: '1999', end: '2000' }, published: '2002', licence: 'CC0',
@@ -95,4 +95,33 @@ test('every established popup provenance code retains its citation', async () =>
   for (const code of codes) assert.ok(citations[code]?.[0], `Missing citation for ${code}`)
   assert.ok(citations[10][0].length < 100)
   for (const code of [2024, 2028, 2030, 2035, 2057, 2073, 2075]) assert.ok(citations[code][1])
+})
+
+test('railway citations follow the admitted movement objects in every year', async () => {
+  const { datasetCitations } = await import('../scripts/dataset-citations.ts')
+  for (const { manifest } of readYears()) {
+    const citations = datasetCitations(manifest)
+    const admitted = new Set(manifest.inputs.find(input => input.kind === 'rail-flows').depends_on)
+    for (const object of manifest.railways.objects) {
+      if (object.source_id != null && admitted.has(object.input)) {
+        assert.ok(citations[object.source_id], `${manifest.year}: ${object.input}`)
+        if (object.format === 'gtfs') assert.equal(citations[object.source_id][2], '')
+      }
+    }
+    const calendar = manifest.railways.objects.find(object => object.format === 'czptt')
+    if (calendar) {
+      const input = manifest.inputs.find(input => input.id === calendar.input)
+      assert.equal(citations[calendar.source_id][1], observedLabel(input.observed))
+    }
+  }
+})
+
+test('an excluded railway object cannot widen an admitted timetable citation', async () => {
+  const { datasetCitations } = await import('../scripts/dataset-citations.ts')
+  const input = (id, publisher, start, end) => ({ id, publisher, kind: 'prepare-timetable', region: 'MX', url: `https://example.com/${id}`, observed: { start, end } })
+  const manifest = {
+    inputs: [input('current', 'Current operator', '2024-01-01', '2024-12-31'), input('future', 'Excluded operator', '2000', '2100'), { id: 'movements', kind: 'rail-flows', depends_on: ['current'] }],
+    railways: { objects: [{ input: 'current', source_id: 2057 }, { input: 'future', source_id: 2057 }] },
+  }
+  assert.deepEqual(datasetCitations(manifest)[2057], ['Current operator', observedLabel({ start: '2024-01-01', end: '2024-12-31' }), '', 'https://example.com/current'])
 })

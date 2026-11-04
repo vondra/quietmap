@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Train counts: ŽSR timetable on the [national open data portal](https://data.slovensko.sk/), one busy Wednesday. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train counts: ŽSR timetable on the [national open data portal](https://data.slovensko.sk/), averaged over the observation year. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 
 ## Homes and places
 

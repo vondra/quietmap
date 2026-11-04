@@ -124,14 +124,6 @@
         "us-fhwa-hpms",
         "us-fhwa-tmas-hourly-volumes",
         "ve-ve360-vialidad",
-        "cz-czptt-timetable-train-sequences-osm-stations",
-        "cz-czptt-timetable-train-sequences-osm-stations-jr2026",
-        "cn-mainland-cr-metros",
-        "cn-mainland-cr-metros-4",
-        "in-living-atlas-in-railway-metro",
-        "in-living-atlas-in-railway-metro-1",
-        "us-fra-highway-rail-crossing-inventory",
-        "ca-transport-canada-grade-crossings-inventory",
         "cz-cuzk-ruian-vfr-buildings",
         "es-catastro-inspire-buildings",
         "world-wri-global-power-plant-database",
@@ -294,69 +286,6 @@
         "za-power-plants-eskom",
         "za-power-plants-gem",
         "za-coal-mines-gem",
-        "de-timetable-de-germany-delfi",
-        "ch-timetable-ch-switzerland-opentransportdata",
-        "at-timetable-at-austria-obb",
-        "nl-timetable-nl-netherlands",
-        "se-timetable-se-sweden",
-        "no-timetable-no-norway",
-        "fi-timetable-fi-finland-digitraffic",
-        "be-timetable-be-belgium-sncb",
-        "in-timetable-in-indian-railways-unofficial",
-        "us-timetable-us-amtrak",
-        "ca-timetable-ca-via-rail",
-        "fr-timetable-fr-sncf-national",
-        "fr-timetable-fr-idf-sncf-transilien",
-        "lu-timetable-lu-luxembourg-atp-open-data",
-        "gr-timetable-gr-hellenic-train-community-timetable",
-        "lv-timetable-lv-pv-latvia-vivi",
-        "ee-timetable-ee-estonia-peatus",
-        "bg-timetable-bg-sofia-sofia-traffic",
-        "hr-timetable-hr-croatia-hz",
-        "hu-timetable-hu-hungary-mav",
-        "sk-timetable-sk-slovakia-zsr",
-        "au-timetable-au-vic-victoria-ptv",
-        "au-timetable-au-qld-queensland-translink",
-        "ae-timetable-rta-dubai",
-        "ar-timetable-subte-buenos-aires",
-        "au-timetable-nsw-sydney",
-        "au-timetable-adelaide-metro",
-        "au-timetable-transperth-wa",
-        "be-timetable-stib-brussels",
-        "be-timetable-delijn-flanders",
-        "be-timetable-tec-wallonia",
-        "ca-timetable-via-rail",
-        "ca-timetable-go-transit",
-        "ca-timetable-ttc-toronto",
-        "ca-timetable-stm-montreal",
-        "ca-timetable-translink-vancouver",
-        "ca-timetable-oc-transpo",
-        "ca-timetable-calgary-transit",
-        "ca-timetable-edmonton-ets",
-        "de-timetable-de-full",
-        "dk-timetable-rejseplanen",
-        "es-timetable-fgc-catalunya",
-        "fi-timetable-fintraffic-vr",
-        "fi-timetable-hsl-helsinki",
-        "fi-timetable-tampere",
-        "ie-timetable-nta-unified",
-        "il-timetable-mot-unified",
-        "it-timetable-toscana-trenitalia",
-        "it-timetable-trenord-lombardia",
-        "it-timetable-gtt-piemonte",
-        "it-timetable-ferrotramviaria-puglia",
-        "it-timetable-trenitalia-sardegna",
-        "mx-timetable-cdmx-semovi",
-        "pl-timetable-polish-trains",
-        "pl-timetable-warsaw-ztm",
-        "pl-timetable-krakow-tram",
-        "pl-timetable-wkd-warszawa",
-        "pl-timetable-silesia-gzm",
-        "pt-timetable-cp-comboios",
-        "pt-timetable-metro-porto",
-        "pt-timetable-metro-sul-tejo",
-        "se-timetable-gtfs-sverige-2",
-        "th-timetable-namtang",
         "raster-gedtm30-v1.2",
         "raster-es-mdt05-10352",
         "raster-es-mdt05-5782",
@@ -440,11 +369,11 @@
         "turbine-register-nve",
         "turbine-register-clm",
         "turbine-register-rivm",
-        "es-timetable-renfe-av-ld-md",
-        "es-timetable-renfe-cercanias",
         "osm-regions",
         "osm-implicit-speeds",
-        "gfw-presence"
+        "gfw-presence",
+        "rail-movements",
+        "rail-model"
       ],
       "description": "Roads, railways, buildings, industrial sites, airports and ship activity; converted from the source inventories below."
     },
@@ -2656,38 +2585,6 @@
       "public_ok": true,
       "depends_on": [],
       "description": "VE360 Vialidad (national network policy). Snapshot; an earlier observation date is not recorded."
-    },
-    {
-      "id": "cz-czptt-timetable-train-sequences-osm-stations",
-      "kind": "prepare-rail-network",
-      "region": "CZ",
-      "publisher": "Správa železnic / CIS JŘ (JR2026.zip)",
-      "url": "https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/JR2026.zip",
-      "observed": {
-        "start": "2026-04-08",
-        "end": "2026-04-08"
-      },
-      "published": null,
-      "licence": "CC-BY-4.0",
-      "public_ok": true,
-      "depends_on": [],
-      "description": "CZPTT timetable train sequences + OSM stations."
-    },
-    {
-      "id": "cz-czptt-timetable-train-sequences-osm-stations-jr2026",
-      "kind": "prepare-rail-network",
-      "region": "CZ",
-      "publisher": "Správa železnic / CIS JŘ (JR2026.zip)",
-      "url": "https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/JR2026.zip",
-      "observed": {
-        "start": "2026-04-08",
-        "end": "2026-04-08"
-      },
-      "published": null,
-      "licence": "CC-BY-4.0",
-      "public_ok": true,
-      "depends_on": [],
-      "description": "CZPTT timetable train sequences + OSM stations."
     },
     {
       "id": "cn-mainland-cr-metros",
@@ -5384,14 +5281,14 @@
       "publisher": "DELFI e.V.",
       "url": "https://data.public-transport.earth/gtfs/de",
       "observed": {
-        "start": "2026-08-19",
-        "end": "2026-09-30"
+        "start": "2026-08-15",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-08-19, 2026-09-30."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 17 covered days, within 2026-08-15 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Publisher-labelled codesharing aliases are excluded; they describe trains already listed under their operating services."
     },
     {
       "id": "ch-timetable-ch-switzerland-opentransportdata",
@@ -5400,14 +5297,14 @@
       "publisher": "SBB",
       "url": "https://data.public-transport.earth/gtfs/ch",
       "observed": {
-        "start": "2026-07-15",
-        "end": "2026-08-26"
+        "start": "2025-12-14",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-07-15, 2026-08-26."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "at-timetable-at-austria-obb",
@@ -5416,14 +5313,14 @@
       "publisher": "Austria ÖBB",
       "url": "https://static.web.oebb.at/open-data/soll-fahrplan-gtfs/GTFS_Fahrplan_2026.zip",
       "observed": {
-        "start": "2026-01-14",
-        "end": "2026-01-14"
+        "start": "2025-12-14",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-01-14."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "nl-timetable-nl-netherlands",
@@ -5432,14 +5329,14 @@
       "publisher": "OVapi",
       "url": "https://data.public-transport.earth/gtfs/nl",
       "observed": {
-        "start": "2026-06-24",
-        "end": "2026-07-08"
+        "start": "2026-06-11",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-06-24, 2026-07-08."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 37–82 covered days, within 2026-06-11 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
     },
     {
       "id": "se-timetable-se-sweden",
@@ -5448,14 +5345,14 @@
       "publisher": "Samtrafiken i Sverige AB",
       "url": "https://data.public-transport.earth/gtfs/se",
       "observed": {
-        "start": "2026-02-25",
-        "end": "2026-02-25"
+        "start": "2026-01-09",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-02-25."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 235 covered days, within 2026-01-09 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "no-timetable-no-norway",
@@ -5464,14 +5361,14 @@
       "publisher": "Entur",
       "url": "https://data.public-transport.earth/gtfs/no",
       "observed": {
-        "start": "2026-06-17",
-        "end": "2026-07-15"
+        "start": "2025-09-01",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-06-17, 2026-07-15."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 1–365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "fi-timetable-fi-finland-digitraffic",
@@ -5480,14 +5377,14 @@
       "publisher": "Fintraffic",
       "url": "https://rata.digitraffic.fi/api/v1/trains/gtfs-all.zip",
       "observed": {
-        "start": "2026-11-04",
-        "end": "2026-11-04"
+        "start": "2026-06-06",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-11-04."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 87 covered days, within 2026-06-06 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Only passenger categories 102 and 109 are selected; the mixed archive’s type-100 non-passenger movements are excluded."
     },
     {
       "id": "be-timetable-be-belgium-sncb",
@@ -5496,14 +5393,14 @@
       "publisher": "NMBS/SNCB",
       "url": "https://transportdata.be/",
       "observed": {
-        "start": "2026-10-28",
-        "end": "2026-10-28"
+        "start": "2026-04-12",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-10-28."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 142 covered days, within 2026-04-12 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "in-timetable-in-indian-railways-unofficial",
@@ -5512,14 +5409,14 @@
       "publisher": "P. Radha Krishna",
       "url": "https://raw.githubusercontent.com/Neo2308/indianrailways-gtfs/main/gtfs/gtfs.zip",
       "observed": {
-        "start": "2026-09-02",
-        "end": "2026-09-02"
+        "start": "2026-08-30",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-02."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 2 covered days, within 2026-08-30 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "us-timetable-us-amtrak",
@@ -5535,7 +5432,7 @@
       "licence": "Provider terms; no published open licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-23."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "ca-timetable-ca-via-rail",
@@ -5544,14 +5441,14 @@
       "publisher": "VIA Rail Canada inc.",
       "url": "https://www.viarail.ca/sites/all/files/gtfs/viarail.zip",
       "observed": {
-        "start": "2026-09-30",
-        "end": "2026-09-30"
+        "start": "2026-08-17",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-30."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 15 covered days, within 2026-08-17 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "fr-timetable-fr-sncf-national",
@@ -5567,7 +5464,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-30."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "fr-timetable-fr-idf-sncf-transilien",
@@ -5583,7 +5480,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-30."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "lu-timetable-lu-luxembourg-atp-open-data",
@@ -5599,7 +5496,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-10-14."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "gr-timetable-gr-hellenic-train-community-timetable",
@@ -5609,13 +5506,13 @@
       "url": "https://jbb.ghsq.de/gtfs/gr-hellenic-train.gtfs.zip",
       "observed": {
         "start": "2026-07-08",
-        "end": "2026-07-08"
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-07-08."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 55 covered days, within 2026-07-08 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "lv-timetable-lv-pv-latvia-vivi",
@@ -5624,14 +5521,14 @@
       "publisher": "Latvia Vivi",
       "url": "https://www.vivi.lv/uploads/GTFS.zip",
       "observed": {
-        "start": "2026-09-09",
-        "end": "2026-09-09"
+        "start": "2025-12-14",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "ee-timetable-ee-estonia-peatus",
@@ -5640,14 +5537,14 @@
       "publisher": "Eesti Maanteeamet",
       "url": "https://www.peatus.ee/",
       "observed": {
-        "start": "2026-01-07",
-        "end": "2026-01-07"
+        "start": "2025-09-01",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-01-07."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 335–365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "bg-timetable-bg-sofia-sofia-traffic",
@@ -5656,14 +5553,14 @@
       "publisher": "Theoremus",
       "url": "https://gtfs.sofiatraffic.bg/api/v1/static",
       "observed": {
-        "start": "2026-06-17",
-        "end": "2026-06-17"
+        "start": "2026-06-13",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-06-17."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 80 covered days, within 2026-06-13 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "hr-timetable-hr-croatia-hz",
@@ -5672,14 +5569,14 @@
       "publisher": "Croatia HŽ",
       "url": "https://www.hzpp.hr/GTFS_files.zip",
       "observed": {
-        "start": "2026-06-03",
-        "end": "2026-06-03"
+        "start": "2025-12-08",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-06-03."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 267 covered days, within 2025-12-08 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "hu-timetable-hu-hungary-mav",
@@ -5688,14 +5585,14 @@
       "publisher": "MÁV",
       "url": "https://gtfs.menetbrand.com/download/mav/",
       "observed": {
-        "start": "2026-05-27",
-        "end": "2026-05-27"
+        "start": "2026-02-13",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-05-27."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 200 covered days, within 2026-02-13 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "sk-timetable-sk-slovakia-zsr",
@@ -5704,14 +5601,14 @@
       "publisher": "iTranSys, s.r.o.",
       "url": "https://data.slovensko.sk/download?id=f63ef0f2-c4e7-496b-bdd1-44ba0e9438e9",
       "observed": {
-        "start": "2026-06-10",
-        "end": "2026-06-10"
+        "start": "2025-12-14",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-06-10."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "au-timetable-au-vic-victoria-ptv",
@@ -5727,7 +5624,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-03, 2026-09-09, 2026-10-07."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "au-timetable-au-qld-queensland-translink",
@@ -5743,7 +5640,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-16."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "ae-timetable-rta-dubai",
@@ -5752,14 +5649,14 @@
       "publisher": "Road and Transport Authority (RTA)",
       "url": "https://www.dubaipulse.gov.ae/dataset/73765e8f-e8c4-443c-9687-288072ed9d12/resource/11515bd3-bdba-466f-ab65-f057bd123ab5/download/gtfs.7z",
       "observed": {
-        "start": "2025-09-03",
-        "end": "2025-09-03"
+        "start": "2025-09-01",
+        "end": "2025-12-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2025-09-03."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 122 covered days, within 2025-09-01 through 2025-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "ar-timetable-subte-buenos-aires",
@@ -5775,7 +5672,7 @@
       "licence": "public-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2014-05-07."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "au-timetable-nsw-sydney",
@@ -5791,7 +5688,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-16."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "au-timetable-adelaide-metro",
@@ -5800,14 +5697,14 @@
       "publisher": "Adelaide Metro",
       "url": "https://www.adelaidemetro.com.au/",
       "observed": {
-        "start": "2026-04-15",
-        "end": "2026-04-15"
+        "start": "2026-04-10",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-04-15."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 144 covered days, within 2026-04-10 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "au-timetable-transperth-wa",
@@ -5823,7 +5720,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-23."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "be-timetable-stib-brussels",
@@ -5832,14 +5729,14 @@
       "publisher": "STIB",
       "url": "https://transportdata.be/",
       "observed": {
-        "start": "2026-09-23",
-        "end": "2026-09-23"
+        "start": "2026-08-31",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-23."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 1 covered day, within 2026-08-31 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "be-timetable-delijn-flanders",
@@ -5848,14 +5745,14 @@
       "publisher": "De Lijn",
       "url": "https://transportdata.be/",
       "observed": {
-        "start": "2026-09-02",
-        "end": "2026-09-02"
+        "start": "2026-06-01",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-02."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 92 covered days, within 2026-06-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "be-timetable-tec-wallonia",
@@ -5871,7 +5768,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "ca-timetable-via-rail",
@@ -5880,14 +5777,14 @@
       "publisher": "VIA Rail Canada inc.",
       "url": "https://www.viarail.ca/",
       "observed": {
-        "start": "2026-09-30",
-        "end": "2026-09-30"
+        "start": "2026-08-17",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-30."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 15 covered days, within 2026-08-17 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "ca-timetable-go-transit",
@@ -5896,14 +5793,14 @@
       "publisher": "Metrolinx",
       "url": "https://assets.metrolinx.com/raw/upload/Documents/Metrolinx/Open%20Data/GO-GTFS.zip",
       "observed": {
-        "start": "2026-09-02",
-        "end": "2026-09-02"
+        "start": "2026-08-31",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-02."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 1 covered day, within 2026-08-31 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "ca-timetable-ttc-toronto",
@@ -5919,7 +5816,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "ca-timetable-stm-montreal",
@@ -5928,14 +5825,14 @@
       "publisher": "Société de transport de Montréal",
       "url": "https://www.stm.info/en/about/developers",
       "observed": {
-        "start": "2026-08-26",
-        "end": "2026-08-26"
+        "start": "2026-06-15",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-08-26."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 78 covered days, within 2026-06-15 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "ca-timetable-translink-vancouver",
@@ -5951,7 +5848,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "ca-timetable-oc-transpo",
@@ -5967,7 +5864,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "ca-timetable-calgary-transit",
@@ -5976,14 +5873,14 @@
       "publisher": "Calgary Transit",
       "url": "https://data.calgary.ca/api/views/npk7-z3bj/files/6e8216d6-cdc8-4724-b478-ebce77509301?filename=CT_GTFS.zip",
       "observed": {
-        "start": "2026-08-26",
-        "end": "2026-08-26"
+        "start": "2026-08-25",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-08-26."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 7 covered days, within 2026-08-25 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "ca-timetable-edmonton-ets",
@@ -5999,7 +5896,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-02."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "de-timetable-de-full",
@@ -6015,7 +5912,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-16, 2026-09-30."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "dk-timetable-rejseplanen",
@@ -6031,7 +5928,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-23, 2026-11-25."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "es-timetable-fgc-catalunya",
@@ -6040,14 +5937,14 @@
       "publisher": "FGC",
       "url": "https://www.fgc.cat/google/google_transit.zip",
       "observed": {
-        "start": "2026-04-08",
-        "end": "2026-04-08"
+        "start": "2026-04-07",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-04-08."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 147 covered days, within 2026-04-07 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
     },
     {
       "id": "fi-timetable-fintraffic-vr",
@@ -6056,14 +5953,14 @@
       "publisher": "Fintraffic",
       "url": "https://rata.digitraffic.fi/api/v1/trains/gtfs-passenger.zip",
       "observed": {
-        "start": "2026-09-02",
-        "end": "2026-09-02"
+        "start": "2026-04-04",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-02."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 150 covered days, within 2026-04-04 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "fi-timetable-hsl-helsinki",
@@ -6079,7 +5976,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "fi-timetable-tampere",
@@ -6088,14 +5985,14 @@
       "publisher": "Tampere",
       "url": "https://data.itsfactory.fi/",
       "observed": {
-        "start": "2026-10-21",
-        "end": "2026-10-21"
+        "start": "2026-08-29",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-10-21."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 3 covered days, within 2026-08-29 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "fi-timetable-foli-turku",
@@ -6120,14 +6017,14 @@
       "publisher": "National Transport Authority",
       "url": "https://www.transportforireland.ie/transitData/Data/GTFS_All.zip",
       "observed": {
-        "start": "2026-04-15",
-        "end": "2026-04-15"
+        "start": "2026-04-09",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-04-15."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 145 covered days, within 2026-04-09 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
     },
     {
       "id": "il-timetable-mot-unified",
@@ -6143,7 +6040,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "it-timetable-toscana-trenitalia",
@@ -6152,14 +6049,14 @@
       "publisher": "Toscana Trenitalia",
       "url": "https://dati.toscana.it/dataset/8bb8f8fe-fe7d-41d0-90dc-49f2456180d1/resource/4f85393b-357d-443d-8378-65de4198505f/download/trenitalia.gtfs",
       "observed": {
-        "start": "2026-04-22",
-        "end": "2026-04-22"
+        "start": "2026-01-15",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-04-22."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 229 covered days, within 2026-01-15 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "it-timetable-trenord-lombardia",
@@ -6168,14 +6065,14 @@
       "publisher": "Trenord",
       "url": "https://www.dati.lombardia.it/download/3z4k-mxz9/application%2Fzip",
       "observed": {
-        "start": "2026-02-18",
-        "end": "2026-02-18"
+        "start": "2026-01-27",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-02-18."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 217 covered days, within 2026-01-27 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "it-timetable-gtt-piemonte",
@@ -6184,14 +6081,14 @@
       "publisher": "Gruppo Torinese Trasporti S.p.A",
       "url": "https://www.gtt.to.it/open_data/gtt_gtfs.zip",
       "observed": {
-        "start": "2026-04-08",
-        "end": "2026-04-08"
+        "start": "2026-04-07",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-04-08."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 147 covered days, within 2026-04-07 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "it-timetable-ferrotramviaria-puglia",
@@ -6200,14 +6097,14 @@
       "publisher": "Ferrotramviaria Puglia",
       "url": "http://dati.mit.gov.it/catalog/dataset/1b5195b2-8c2e-409a-b104-78dd5f5e057f/resource/ba72e7dd-d68e-4503-b08f-66f5a707a4d5/download/ferrovienordbarese.gtfs",
       "observed": {
-        "start": "2023-11-01",
-        "end": "2023-11-01"
+        "start": "2025-09-01",
+        "end": "2025-12-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2023-11-01."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 122 covered days, within 2025-09-01 through 2025-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "it-timetable-trenitalia-sardegna",
@@ -6216,14 +6113,14 @@
       "publisher": "TRENITALIA",
       "url": "https://www.sardegnamobilita.it/opendata/R_SARDEGTRASP_00008_1_dati_trenitalia.zip",
       "observed": {
-        "start": "2026-09-16",
-        "end": "2026-09-16"
+        "start": "2026-06-06",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-16."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 87 covered days, within 2026-06-06 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "mx-timetable-cdmx-semovi",
@@ -6232,14 +6129,14 @@
       "publisher": "Cdmx Semovi",
       "url": "https://www.semovi.cdmx.gob.mx/",
       "observed": {
-        "start": "2024-12-04",
-        "end": "2024-12-04"
+        "start": "2025-09-01",
+        "end": "2025-12-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2024-12-04."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 122 covered days, within 2025-09-01 through 2025-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "mx-timetable-toluca-movimex",
@@ -6271,7 +6168,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-16."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "pl-timetable-warsaw-ztm",
@@ -6287,7 +6184,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-16."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "pl-timetable-krakow-tram",
@@ -6303,7 +6200,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "pl-timetable-wkd-warszawa",
@@ -6312,14 +6209,14 @@
       "publisher": "Mikołaj Kuranowski",
       "url": "https://mkuran.pl/gtfs/wkd.zip",
       "observed": {
-        "start": "2026-01-07",
-        "end": "2026-01-07"
+        "start": "2025-12-14",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-01-07."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "pl-timetable-silesia-gzm",
@@ -6335,7 +6232,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-23."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "pt-timetable-cp-comboios",
@@ -6344,14 +6241,14 @@
       "publisher": "Cp Comboios",
       "url": "https://publico.cp.pt/gtfs/gtfs.zip",
       "observed": {
-        "start": "2026-06-03",
-        "end": "2026-06-03"
+        "start": "2025-12-14",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-06-03."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "pt-timetable-metro-porto",
@@ -6367,23 +6264,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-09-09."
-    },
-    {
-      "id": "pt-timetable-metro-sul-tejo",
-      "kind": "prepare-timetable",
-      "region": "PT",
-      "publisher": "MTS",
-      "url": "https://mts.pt/imt/MTS-20240129.zip",
-      "observed": {
-        "start": "2024-12-25",
-        "end": "2024-12-25"
-      },
-      "published": null,
-      "licence": "open-data",
-      "public_ok": true,
-      "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2024-12-25."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "id": "pt-timetable-carris-metropolitana",
@@ -6408,14 +6289,14 @@
       "publisher": "Samtrafiken i Sverige AB",
       "url": "https://api.resrobot.se/gtfs/sweden.zip",
       "observed": {
-        "start": "2026-04-29",
-        "end": "2026-05-13"
+        "start": "2026-04-04",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-04-29, 2026-05-13."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 150 covered days, within 2026-04-04 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "th-timetable-namtang",
@@ -6424,14 +6305,14 @@
       "publisher": "สำนักงานนโยบายและแผนการขนส่งและจราจร กระทรวงคมนาคม",
       "url": "https://namtang-api.otp.go.th/download/namtang-gtfs.zip",
       "observed": {
-        "start": "2026-01-07",
-        "end": "2026-01-07"
+        "start": "2026-01-01",
+        "end": "2026-08-31"
       },
       "published": null,
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-01-07."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 243 covered days, within 2026-01-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "fine-dem-cz",
@@ -8124,12 +8005,12 @@
       "id": "es-timetable-renfe-av-ld-md",
       "publisher": "Renfe",
       "observed": {
-        "start": "2026-04-29",
-        "end": "2026-04-29"
+        "start": "2026-04-10",
+        "end": "2026-08-31"
       },
       "published": null,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-04-29."
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 144 covered days, within 2026-04-10 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "kind": "prepare-timetable",
@@ -8145,7 +8026,7 @@
       },
       "published": null,
       "depends_on": [],
-      "description": "Scheduled rail or tram service sampled on 2026-10-07."
+      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
       "region": "world",
@@ -8808,9 +8689,175 @@
         "gfw-presence"
       ],
       "description": "Monthly native-grid vessel occupancy with coverage priority."
+    },
+    {
+      "id": "cz-osm-railway-stations",
+      "kind": "prepare-rail-network",
+      "region": "CZ",
+      "publisher": "OpenStreetMap contributors",
+      "url": "https://www.openstreetmap.org/copyright",
+      "observed": {
+        "start": "2026-04-08",
+        "end": "2026-04-08"
+      },
+      "published": null,
+      "licence": "ODbL 1.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Retained OpenStreetMap railway-station names and coordinates used to locate CIS timetable paths."
+    },
+    {
+      "id": "cz-cis-service-calendar",
+      "kind": "prepare-rail-network",
+      "region": "CZ",
+      "publisher": "Správa železnic / CIS JŘ",
+      "url": "https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/JR2026.zip",
+      "observed": {
+        "start": "2025-12-14",
+        "end": "2026-12-12"
+      },
+      "published": "2025-11-10",
+      "licence": "CC-BY-4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Original CIS path bitmap calendars, integrated over the entire declared flow window. Published 5–10 November 2025; passenger traffic codes 11 and C1–C4."
+    },
+    {
+      "id": "rail-prior-observations",
+      "kind": "prepare-rail-network",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See dependencies; model parameters MIT",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Legacy operator corridor assumptions for seventeen countries, explicitly estimated. Coordinates and ordered classifications are in the selected rail model; no measured status is inferred."
+    },
+    {
+      "id": "rail-model",
+      "kind": "rail-model",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See dependencies; model parameters MIT",
+      "public_ok": true,
+      "depends_on": [
+        "railway-monitoring",
+        "rail-kilometres"
+      ],
+      "description": "Rail category precedence, dated source ownership, period shares and labelled class/corridor priors. Historical years omit national freight fits made on a later network."
+    },
+    {
+      "id": "rail-movements",
+      "kind": "rail-flows",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2026",
+        "end": "2026"
+      },
+      "published": null,
+      "licence": "See dependencies; model parameters MIT",
+      "public_ok": false,
+      "depends_on": [
+        "us-fra-highway-rail-crossing-inventory",
+        "ca-transport-canada-grade-crossings-inventory",
+        "de-timetable-de-germany-delfi",
+        "ch-timetable-ch-switzerland-opentransportdata",
+        "at-timetable-at-austria-obb",
+        "nl-timetable-nl-netherlands",
+        "se-timetable-se-sweden",
+        "no-timetable-no-norway",
+        "fi-timetable-fi-finland-digitraffic",
+        "be-timetable-be-belgium-sncb",
+        "in-timetable-in-indian-railways-unofficial",
+        "us-timetable-us-amtrak",
+        "ca-timetable-ca-via-rail",
+        "fr-timetable-fr-sncf-national",
+        "fr-timetable-fr-idf-sncf-transilien",
+        "lu-timetable-lu-luxembourg-atp-open-data",
+        "gr-timetable-gr-hellenic-train-community-timetable",
+        "lv-timetable-lv-pv-latvia-vivi",
+        "ee-timetable-ee-estonia-peatus",
+        "bg-timetable-bg-sofia-sofia-traffic",
+        "hr-timetable-hr-croatia-hz",
+        "hu-timetable-hu-hungary-mav",
+        "sk-timetable-sk-slovakia-zsr",
+        "au-timetable-au-vic-victoria-ptv",
+        "au-timetable-au-qld-queensland-translink",
+        "ae-timetable-rta-dubai",
+        "ar-timetable-subte-buenos-aires",
+        "au-timetable-nsw-sydney",
+        "au-timetable-adelaide-metro",
+        "au-timetable-transperth-wa",
+        "be-timetable-stib-brussels",
+        "be-timetable-delijn-flanders",
+        "be-timetable-tec-wallonia",
+        "ca-timetable-via-rail",
+        "ca-timetable-go-transit",
+        "ca-timetable-ttc-toronto",
+        "ca-timetable-stm-montreal",
+        "ca-timetable-translink-vancouver",
+        "ca-timetable-oc-transpo",
+        "ca-timetable-calgary-transit",
+        "ca-timetable-edmonton-ets",
+        "de-timetable-de-full",
+        "dk-timetable-rejseplanen",
+        "es-timetable-fgc-catalunya",
+        "fi-timetable-fintraffic-vr",
+        "fi-timetable-hsl-helsinki",
+        "fi-timetable-tampere",
+        "ie-timetable-nta-unified",
+        "il-timetable-mot-unified",
+        "it-timetable-toscana-trenitalia",
+        "it-timetable-trenord-lombardia",
+        "it-timetable-gtt-piemonte",
+        "it-timetable-ferrotramviaria-puglia",
+        "it-timetable-trenitalia-sardegna",
+        "mx-timetable-cdmx-semovi",
+        "pl-timetable-polish-trains",
+        "pl-timetable-warsaw-ztm",
+        "pl-timetable-krakow-tram",
+        "pl-timetable-wkd-warszawa",
+        "pl-timetable-silesia-gzm",
+        "pt-timetable-cp-comboios",
+        "pt-timetable-metro-porto",
+        "pt-timetable-carris-metropolitana",
+        "se-timetable-gtfs-sverige-2",
+        "th-timetable-namtang",
+        "es-timetable-renfe-av-ld-md",
+        "es-timetable-renfe-cercanias",
+        "cz-cis-service-calendar",
+        "cn-mainland-cr-metros",
+        "cn-mainland-cr-metros-4",
+        "in-living-atlas-in-railway-metro",
+        "in-living-atlas-in-railway-metro-1",
+        "rail-prior-observations",
+        "cz-osm-railway-stations"
+      ],
+      "description": "Rail movements integrate all admitted service dates and exceptions over the flow window. Missing dates are estimated from the same operator’s covered-day mean, with that component retained separately; absent timetables use the declared class or corridor estimates."
     }
   ],
-  "unavailable": [],
+  "unavailable": [
+    {
+      "id": "pt-timetable-metro-sul-tejo",
+      "kind": "prepare-timetable",
+      "region": "PT",
+      "description": "The retained archive’s regular service calendar ends in September before almost all of this flow window; sparse holiday dates and a feed_info end in 2030 do not establish current service. No valid calendar was recovered for this window; the railway class estimate remains.",
+      "depends_on": []
+    }
+  ],
   "validity": {
     "legal-speeds-osm": {
       "start": "2026-09-21",
@@ -9927,5 +9974,2749 @@
         "us_noaa_g2018u0.tif": "fa9a407ac7ee3f5a3694008e4bcd09ce9cc250452f0c3b11700a4960340abce2"
       }
     }
+  },
+  "railways": {
+    "objects": [
+      {
+        "format": "fra-crossings",
+        "input": "us-fra-highway-rail-crossing-inventory",
+        "source_id": 111
+      },
+      {
+        "format": "tc-crossings",
+        "input": "ca-transport-canada-grade-crossings-inventory",
+        "source_id": 112
+      },
+      {
+        "format": "gtfs",
+        "input": "de-timetable-de-germany-delfi",
+        "source_id": 100,
+        "country": "DE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false,
+        "excluded_agency_names": [
+          "DB Fernverkehr (Codesharing)"
+        ]
+      },
+      {
+        "format": "gtfs",
+        "input": "ch-timetable-ch-switzerland-opentransportdata",
+        "source_id": 100,
+        "country": "CH",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "at-timetable-at-austria-obb",
+        "source_id": 100,
+        "country": "AT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "nl-timetable-nl-netherlands",
+        "source_id": 100,
+        "country": "NL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": true
+      },
+      {
+        "format": "gtfs",
+        "input": "se-timetable-se-sweden",
+        "source_id": 100,
+        "country": "SE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "no-timetable-no-norway",
+        "source_id": 100,
+        "country": "NO",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "fi-timetable-fi-finland-digitraffic",
+        "source_id": 100,
+        "country": "FI",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          102,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "be-timetable-be-belgium-sncb",
+        "source_id": 100,
+        "country": "BE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "in-timetable-in-indian-railways-unofficial",
+        "source_id": 100,
+        "country": "IN",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-us-amtrak",
+        "source_id": 100,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-ca-via-rail",
+        "source_id": 100,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "fr-timetable-fr-sncf-national",
+        "source_id": 100,
+        "country": "FR",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "fr-timetable-fr-idf-sncf-transilien",
+        "source_id": 100,
+        "country": "FR",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [],
+        "excluded_route_names": [
+          "TER"
+        ],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "lu-timetable-lu-luxembourg-atp-open-data",
+        "source_id": 100,
+        "country": "LU",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gr-timetable-gr-hellenic-train-community-timetable",
+        "source_id": 100,
+        "country": "GR",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "lv-timetable-lv-pv-latvia-vivi",
+        "source_id": 100,
+        "country": "LV",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ee-timetable-ee-estonia-peatus",
+        "source_id": 100,
+        "country": "EE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "bg-timetable-bg-sofia-sofia-traffic",
+        "source_id": 100,
+        "country": "BG",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "hr-timetable-hr-croatia-hz",
+        "source_id": 100,
+        "country": "HR",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "hu-timetable-hu-hungary-mav",
+        "source_id": 100,
+        "country": "HU",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "sk-timetable-sk-slovakia-zsr",
+        "source_id": 100,
+        "country": "SK",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "au-timetable-au-vic-victoria-ptv",
+        "source_id": 100,
+        "country": "AU",
+        "directories": [
+          "1/extracted",
+          "10/extracted",
+          "2/extracted"
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "tram_route_types": [],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "au-timetable-au-qld-queensland-translink",
+        "source_id": 100,
+        "country": "AU",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ae-timetable-rta-dubai",
+        "source_id": 2000,
+        "country": "AE",
+        "directories": [
+          "GTFS_20250823"
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ar-timetable-subte-buenos-aires",
+        "source_id": 2004,
+        "country": "AR",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "au-timetable-nsw-sydney",
+        "source_id": 2005,
+        "country": "AU",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "au-timetable-adelaide-metro",
+        "source_id": 2005,
+        "country": "AU",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "au-timetable-transperth-wa",
+        "source_id": 2005,
+        "country": "AU",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "be-timetable-stib-brussels",
+        "source_id": 2009,
+        "country": "BE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "be-timetable-delijn-flanders",
+        "source_id": 2009,
+        "country": "BE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "be-timetable-tec-wallonia",
+        "source_id": 2009,
+        "country": "BE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-via-rail",
+        "source_id": 2015,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-go-transit",
+        "source_id": 2015,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-ttc-toronto",
+        "source_id": 2015,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-stm-montreal",
+        "source_id": 2015,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-translink-vancouver",
+        "source_id": 2015,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-oc-transpo",
+        "source_id": 2015,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-calgary-transit",
+        "source_id": 2015,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ca-timetable-edmonton-ets",
+        "source_id": 2015,
+        "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "de-timetable-de-full",
+        "source_id": 9864,
+        "country": "DE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "dk-timetable-rejseplanen",
+        "source_id": 2024,
+        "country": "DK",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "es-timetable-fgc-catalunya",
+        "source_id": 2028,
+        "country": "ES",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": true
+      },
+      {
+        "format": "gtfs",
+        "input": "fi-timetable-fintraffic-vr",
+        "source_id": 2030,
+        "country": "FI",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "fi-timetable-hsl-helsinki",
+        "source_id": 2030,
+        "country": "FI",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "fi-timetable-tampere",
+        "source_id": 2030,
+        "country": "FI",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "fi-timetable-foli-turku",
+        "source_id": 2030,
+        "country": "FI",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "ie-timetable-nta-unified",
+        "source_id": 2035,
+        "country": "IE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": true
+      },
+      {
+        "format": "gtfs",
+        "input": "il-timetable-mot-unified",
+        "source_id": 2036,
+        "country": "IL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "it-timetable-toscana-trenitalia",
+        "source_id": 2040,
+        "country": "IT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "it-timetable-trenord-lombardia",
+        "source_id": 2040,
+        "country": "IT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "it-timetable-gtt-piemonte",
+        "source_id": 2040,
+        "country": "IT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "it-timetable-ferrotramviaria-puglia",
+        "source_id": 2040,
+        "country": "IT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "it-timetable-trenitalia-sardegna",
+        "source_id": 2040,
+        "country": "IT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "mx-timetable-cdmx-semovi",
+        "source_id": 2057,
+        "country": "MX",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "mx-timetable-toluca-movimex",
+        "source_id": 2057,
+        "country": "MX",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "pl-timetable-polish-trains",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "pl-timetable-warsaw-ztm",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "pl-timetable-krakow-tram",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "pl-timetable-wkd-warszawa",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "pl-timetable-silesia-gzm",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": true
+      },
+      {
+        "format": "gtfs",
+        "input": "pt-timetable-cp-comboios",
+        "source_id": 2067,
+        "country": "PT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "pt-timetable-metro-porto",
+        "source_id": 2067,
+        "country": "PT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "pt-timetable-carris-metropolitana",
+        "source_id": 2067,
+        "country": "PT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "se-timetable-gtfs-sverige-2",
+        "source_id": 2073,
+        "country": "SE",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "th-timetable-namtang",
+        "source_id": 2075,
+        "country": "TH",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "es-timetable-renfe-av-ld-md",
+        "source_id": 2028,
+        "country": "ES",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "es-timetable-renfe-cercanias",
+        "source_id": 2028,
+        "country": "ES",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "czptt",
+        "input": "cz-cis-service-calendar",
+        "stations": "cz-osm-railway-stations",
+        "source_id": 110,
+        "country": "CZ"
+      },
+      {
+        "format": "geojson",
+        "input": "cn-mainland-cr-metros",
+        "source_id": 2021,
+        "country": "CN",
+        "category": "national",
+        "rail_types": [
+          0
+        ],
+        "radius_m": 500,
+        "fields": {
+          "speed": "TopSpeed",
+          "service": "ServiceType"
+        },
+        "accepted": {
+          "Status": [
+            "",
+            "运营中",
+            "operating"
+          ]
+        },
+        "excluded": {}
+      },
+      {
+        "format": "geojson",
+        "input": "cn-mainland-cr-metros-4",
+        "source_id": 2021,
+        "country": "CN",
+        "category": "metro",
+        "rail_types": [
+          0,
+          1,
+          2
+        ],
+        "radius_m": 500,
+        "fields": {
+          "speed": "TopSpeed",
+          "service": "ServiceType"
+        },
+        "accepted": {
+          "Status": [
+            "",
+            "运营中",
+            "operating"
+          ]
+        },
+        "excluded": {
+          "ServiceType": [
+            "BRT"
+          ]
+        }
+      },
+      {
+        "format": "geojson",
+        "input": "in-living-atlas-in-railway-metro",
+        "source_id": 2037,
+        "country": "IN",
+        "category": "national",
+        "rail_types": [
+          0
+        ],
+        "radius_m": 500,
+        "fields": {
+          "speed": "speed",
+          "gauge": "type",
+          "zone": "railwayzone"
+        },
+        "accepted": {},
+        "excluded": {}
+      },
+      {
+        "format": "geojson",
+        "input": "in-living-atlas-in-railway-metro-1",
+        "source_id": 2037,
+        "country": "IN",
+        "category": "metro",
+        "rail_types": [
+          1,
+          2
+        ],
+        "radius_m": 500,
+        "fields": {
+          "speed": "speed",
+          "gauge": "type",
+          "zone": "railwayzone"
+        },
+        "accepted": {},
+        "excluded": {}
+      },
+      {
+        "format": "prepared-movements",
+        "input": "rail-prior-observations"
+      }
+    ]
   }
 }

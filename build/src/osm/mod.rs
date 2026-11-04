@@ -19,6 +19,7 @@ mod relations;
 mod speed_rules;
 mod spill;
 mod transport;
+pub(crate) use transport::year_sibling_path;
 
 use anyhow::{Result, anyhow, ensure};
 use std::path::Path;

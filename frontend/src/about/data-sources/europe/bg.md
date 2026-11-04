@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Sofia tram and metro counts: [Sofia Traffic feed](https://www.sofiatraffic.bg/), one busy Wednesday. The national railway BDZ has no feed loaded. Class defaults apply elsewhere: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks.
+Sofia tram and metro counts: [Sofia Traffic feed](https://www.sofiatraffic.bg/), averaged over the observation year. The national railway BDZ has no feed loaded. Class defaults apply elsewhere: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks.
 
 Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 

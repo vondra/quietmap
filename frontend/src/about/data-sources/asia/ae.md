@@ -15,7 +15,7 @@ Unsigned roads: a primary road 80 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-Train counts come from the [Dubai RTA timetable on Dubai Pulse](https://www.dubaipulse.gov.ae/dataset/73765e8f-e8c4-443c-9687-288072ed9d12/resource/11515bd3-bdba-466f-ab65-f057bd123ab5/download/gtfs.7z). No current feed was available; the 2025 archive is used, with service up to 31 December 2025. Only the Dubai Tram is taken from it.
+Train counts come from the [Dubai RTA timetable on Dubai Pulse](https://www.dubaipulse.gov.ae/dataset/73765e8f-e8c4-443c-9687-288072ed9d12/resource/11515bd3-bdba-466f-ab65-f057bd123ab5/download/gtfs.7z). No current feed was available; the 2025 archive is used, with service up to 31 December 2025. Only the Dubai Tram is taken from it. In the 2026 observation window it defines 122 of 365 days. The other 243 days use its covered-day mean and are labelled as estimated.
 
 Surface metro sections are included; see the [railway method](/about/data-preparation).
 
