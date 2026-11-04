@@ -74,3 +74,10 @@ test('a level crossing names the dataset of its soundings, never passenger train
   assert.deepEqual(railDatasetLines(20, 0, false), [`Passenger trains: ${citation(20)}`])
 })
 
+
+// A timetable citation must expose the independently estimated missing-calendar share.
+test('rail sources distinguish the missing-day estimate from the timetable', () => {
+  assert.deepEqual(railDatasetLines(100, 0, false, [0.75, 0]), [`Passenger trains: ${citation(100)}; 75.0% estimated for dates without timetable data`])
+  assert.deepEqual(railDatasetLines(65535, 0, false, [0.75, 0]), ['Passenger trains: 75.0% estimated for dates without timetable data'])
+  assert.deepEqual(railDatasetLines(65535, 0, false, [0.0001, 0]), ['Passenger trains: <0.1% estimated for dates without timetable data'])
+})
