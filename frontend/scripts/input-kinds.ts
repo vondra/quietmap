@@ -58,6 +58,7 @@ export const INPUT_KINDS = [
   "regional-vehicle-shares",
   "road-observations",
   "road-conversion",
+  "road-calibration",
   "road-preparation-model",
   "road-class-priors",
   "road-class-shares",

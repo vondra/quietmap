@@ -20,6 +20,7 @@ pub enum TimeBasis {
     AnnualDaily,
     WeekdayDaily,
     Hourly,
+    PeriodDaily,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -45,10 +46,30 @@ pub struct Observation {
     pub total: Option<f64>,
     pub estimated_classes: u8,
     pub daily_factor: f64,
+    #[serde(default)]
+    pub target: super::observation_target::Target,
+    #[serde(default)]
+    pub sample: super::observation_sample::Sample,
 }
 
 impl Observation {
     pub fn validate(&self, cutoff: NaiveDate) -> Result<()> {
+        self.target.validate()?;
+        self.sample.validate()?;
+        if self.target.way_assignment.is_some() {
+            ensure!(
+                self.geometry.len() == 1 && self.geometry[0].len() == 1 && self.direction == 0,
+                "way assignment requires a located counter point"
+            );
+        }
+        if let Some(fallback) = &self.target.reference_fallback {
+            ensure!(
+                self.reference_required
+                    && !self.geometry.is_empty()
+                    && fallback.search_radius_m <= self.search_radius_m,
+                "reference fallback needs enclosing geometric support"
+            );
+        }
         ensure!(
             !self.identity.is_empty() && !self.input_id.is_empty(),
             "observation identity is empty"
@@ -69,7 +90,9 @@ impl Observation {
             "invalid observation road-class mask"
         );
         ensure!(
-            self.search_radius_m.is_finite() && self.search_radius_m > 0.0,
+            self.search_radius_m.is_finite()
+                && self.search_radius_m >= 0.0
+                && (self.geometry.is_empty() || self.search_radius_m > 0.0),
             "invalid observation search radius"
         );
         ensure!(
@@ -85,13 +108,19 @@ impl Observation {
             "required reference is missing"
         );
         ensure!(
-            !self.geometry.is_empty()
+            (!self.geometry.is_empty() || self.country != 0)
                 && self.geometry.iter().all(|part| !part.is_empty()
-                    && part.iter().all(|[lon, lat]| lon.is_finite()
-                        && lat.is_finite()
-                        && (-180.0..=180.0).contains(lon)
-                        && (-90.0..=90.0).contains(lat))),
+                    && part.iter().all(super::observation_target::coordinate)),
             "invalid observation geometry"
+        );
+        ensure!(
+            !self.geometry.is_empty()
+                || !self.measured
+                || self.sample.fit_only
+                || self.target.source_way.is_some()
+                || self.reference_required
+                || !self.target.identities.is_empty(),
+            "an unlocated measurement needs road identity"
         );
         ensure!(
             self.vehicle_classes
@@ -109,41 +138,67 @@ impl Observation {
     }
 
     pub fn daily_classes(&self, missing_shares: [f64; 4]) -> Result<([f64; 4], u8)> {
+        self.daily_classes_using_factor(missing_shares, self.daily_factor)
+    }
+
+    pub fn daily_classes_using_factor(
+        &self,
+        missing_shares: [f64; 4],
+        daily_factor: f64,
+    ) -> Result<([f64; 4], u8)> {
+        ensure!(
+            daily_factor.is_finite() && daily_factor > 0.0,
+            "invalid daily conversion"
+        );
         ensure!(
             missing_shares.iter().all(|v| v.is_finite() && *v >= 0.0),
             "invalid class shares"
         );
-        let known: f64 = self.vehicle_classes.iter().flatten().sum();
-        let missing_weight: f64 = (0..4)
-            .filter(|&i| self.vehicle_classes[i].is_none())
-            .map(|i| missing_shares[i])
-            .sum();
+        let to_daily = |value: f64| {
+            let daily = value * daily_factor;
+            if matches!(
+                self.time_basis,
+                TimeBasis::WeekdayDaily | TimeBasis::PeriodDaily
+            ) {
+                daily.round()
+            } else {
+                daily
+            }
+        };
+        let mut counts = self.vehicle_classes.map(|v| v.map(to_daily));
+        let known: f64 = counts.iter().flatten().sum();
+        let weight: f64 = missing_shares.iter().sum();
         let missing = self.vehicle_classes.iter().any(Option::is_none);
-        let residual = if missing {
-            let total = self
-                .total
-                .ok_or_else(|| anyhow::anyhow!("missing classes require a total"))?;
+        let mut status = self.estimated_classes;
+        if missing {
+            let total = to_daily(
+                self.total
+                    .ok_or_else(|| anyhow::anyhow!("missing classes require a total"))?,
+            );
             ensure!(total >= known, "observed classes exceed the total");
             ensure!(
-                missing_weight > 0.0 || total == known,
+                weight > 0.0 || total == known,
                 "missing classes have no model share"
             );
-            total - known
-        } else {
-            0.0
-        };
-        let mut status = self.estimated_classes;
-        let counts = std::array::from_fn(|i| {
-            self.vehicle_classes[i].unwrap_or_else(|| {
+            // Preserve the published classes; infer heavy, motorcycle and medium totals, with light
+            // as the remainder (the original city census allocation). The last unknown conserves flow.
+            let unknown = [2, 3, 1, 0]
+                .into_iter()
+                .filter(|&i| counts[i].is_none())
+                .collect::<Vec<_>>();
+            let mut remaining = total - known;
+            for (position, &i) in unknown.iter().enumerate() {
                 status |= 1 << i;
-                if residual == 0.0 {
-                    0.0
+                let value = if position + 1 == unknown.len() || weight == 0.0 {
+                    remaining
                 } else {
-                    residual * missing_shares[i] / missing_weight
-                }
-            }) * self.daily_factor
-        });
-        Ok((counts, status))
+                    (total * missing_shares[i] / weight).round().min(remaining)
+                };
+                counts[i] = Some(value);
+                remaining -= value;
+            }
+        }
+        Ok((counts.map(Option::unwrap), status))
     }
 }
 
@@ -173,21 +228,15 @@ mod tests {
             total: Some(100.0),
             estimated_classes: 0,
             daily_factor: 1.0,
+            target: Default::default(),
+            sample: Default::default(),
         }
     }
 
     #[test]
     fn missing_classes_keep_the_observed_zero_and_fill_only_the_residual() {
         let (counts, flags) = observation().daily_classes([0.8, 0.1, 0.05, 0.05]).unwrap();
-        assert_eq!(
-            counts,
-            [
-                80.0,
-                20.0 * 0.1 / (0.1 + 0.05),
-                0.0,
-                20.0 * 0.05 / (0.1 + 0.05)
-            ]
-        );
+        assert_eq!(counts, [80.0, 15.0, 0.0, 5.0]);
         assert_eq!(flags, 0b1010);
         let mut row = observation();
         row.vehicle_classes = [Some(80.0), Some(10.0), Some(0.0), Some(10.0)];

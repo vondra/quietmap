@@ -123,7 +123,7 @@ fn carriageway(road: &Road, members: &[&Road], model: &Model) -> Carriageway {
             whole: Some(total(road.counts)),
         };
     }
-    let measured = road.measured && road.counts.iter().any(|v| *v > 0.0);
+    let measured = road.count_origin_measured && road.counts.iter().any(|v| *v > 0.0);
     if road.tunnel || (matches!(road.access, 2 | 4) && !measured) {
         return Carriageway {
             counts: [0.0; 4],
@@ -179,7 +179,8 @@ fn carriageway(road: &Road, members: &[&Road], model: &Model) -> Carriageway {
     };
     let lone_direction_of_a_two_way_total = one_way
         && road.basis != 4
-        && (!road.measured || (road.basis == 2 && road.class <= 2 && !road.corridor.is_empty()));
+        && (!road.count_origin_measured
+            || (road.basis == 2 && road.class <= 2 && !road.corridor.is_empty()));
     let share = if count > 1 {
         1.0 / count as f64
     } else if lone_direction_of_a_two_way_total {

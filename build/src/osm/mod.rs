@@ -1,16 +1,16 @@
 //! Multi-pass OSM extraction, original transport topology and country joins from admitted inputs.
 
-mod classify;
+pub(crate) mod classify;
 mod contracts;
 mod finalize;
-mod geography;
+pub(crate) mod geography;
 mod geography_output;
 pub(crate) mod geometry;
 mod ids;
-mod junctions;
+pub(crate) mod junctions;
 mod microsegment;
 mod model_nodes;
-mod node_cache;
+pub(crate) mod node_cache;
 mod output_paths;
 mod pass2;
 mod poi_join;

@@ -28,6 +28,7 @@ struct Agreement {
     flow: Option<Flow>,
     conflict: bool,
     unresolved: bool,
+    potential_observations: bool,
 }
 
 impl Agreement {
@@ -35,13 +36,17 @@ impl Agreement {
         self.conflict |=
             other.conflict || matches!((&self.flow,&other.flow),(Some(a),Some(b)) if a!=b);
         self.unresolved |= other.unresolved;
+        self.potential_observations |= other.potential_observations;
         if self.flow.is_none() {
             self.flow = other.flow.clone();
         }
     }
     fn observed(road: &Road) -> Self {
         Self {
-            flow: (road.measured && !road.observation.is_empty()).then(|| Flow {
+            flow: (road.count_origin_measured
+                && road.source_id != CONTINUITY_SOURCE
+                && !road.observation.is_empty())
+            .then(|| Flow {
                 counts: road.counts,
                 basis: road.basis,
                 source: road.observation_source_id,
@@ -49,6 +54,7 @@ impl Agreement {
             }),
             conflict: false,
             unresolved: false,
+            potential_observations: false,
         }
     }
 }
@@ -144,7 +150,7 @@ impl Plan {
                 road.observation_source_id = fill.flow.source;
                 road.observation = fill.flow.identity.clone();
                 road.estimated = 15;
-                road.measured = false;
+                road.count_origin_measured = true;
             }
         }
     }
@@ -255,6 +261,7 @@ pub fn build(
             for row in members {
                 let road = &roads[row];
                 agreement.add(&Agreement::observed(road));
+                agreement.potential_observations |= matcher.has_measurements_in(road.country.0);
                 if (road.source_id == 0 || road.source_id == CONTINUITY_SOURCE) && scope.needs(road)
                 {
                     targets.push((road.way_id, road.segment_idx));
@@ -294,6 +301,12 @@ pub fn build(
                 }
             }
         }
+        eprintln!(
+            "road-continuity: {}/{}: {} mapped pieces",
+            square.x,
+            square.y,
+            roads.len()
+        );
     }
     let mut parent = (0..parts.len()).collect::<Vec<_>>();
     fn representative(parent: &mut [usize], mut row: usize) -> usize {
@@ -326,7 +339,7 @@ pub fn build(
     for (index, part) in parts.into_iter().enumerate() {
         let agreement = &agreements[&representative(&mut parent, index)];
         ensure!(
-            !agreement.unresolved || part.targets.is_empty(),
+            !agreement.unresolved || part.targets.is_empty() || !agreement.potential_observations,
             "continuity requires original topology beyond the supplied geography at {}/{}",
             part.square.x,
             part.square.y

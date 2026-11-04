@@ -14,17 +14,17 @@ use arrow_array::{
 };
 use std::{collections::BTreeSet, path::Path, sync::Arc};
 
-const CENTER: i32 = 1 << 29;
+pub(super) const CENTER: i32 = 1 << 29;
 
 #[derive(Clone)]
-struct Piece {
-    way: i64,
-    nodes: [i64; 2],
-    eastings: [i32; 2],
-    class: u8,
+pub(super) struct Piece {
+    pub way: i64,
+    pub nodes: [i64; 2],
+    pub eastings: [i32; 2],
+    pub class: u8,
 }
 
-fn square(root: &Path, x: u32, rows: &[Piece]) {
+pub(super) fn square(root: &Path, x: u32, rows: &[Piece]) {
     let directory = root.join("z9").join(x.to_string()).join("255");
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(directory.join("square-country-city.bin"), []).unwrap();
@@ -128,7 +128,7 @@ fn square(root: &Path, x: u32, rows: &[Piece]) {
     );
 }
 
-fn count(way: &Piece, identity: &str) -> Observation {
+pub(super) fn count(way: &Piece, identity: &str) -> Observation {
     let lon =
         ((f64::from(way.eastings[0]) + f64::from(way.eastings[1])) / 2.0 / f64::from(1 << 30)
             - 0.5)
@@ -158,7 +158,31 @@ fn count(way: &Piece, identity: &str) -> Observation {
         total: Some(100.0),
         estimated_classes: 0,
         daily_factor: 1.0,
+        target: Default::default(),
+        sample: Default::default(),
     }
+}
+
+#[test]
+fn incomplete_chains_require_context_only_where_an_admitted_count_can_apply() {
+    let piece = Piece {
+        way: 1,
+        nodes: [1, 2],
+        eastings: [CENTER - 10_000, CENTER],
+        class: 2,
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    square(temporary.path(), 255, std::slice::from_ref(&piece));
+    let selected = BTreeSet::from([Square { x: 255, y: 255 }]);
+    let model: Model =
+        serde_json::from_str(include_str!("../../test-data/road-preparation.json")).unwrap();
+    let mut observation = count(&piece, "distant station");
+    observation.geometry[0][0][0] += 1.0;
+    let matcher = Matcher::new(vec![observation.clone()]).unwrap();
+    assert!(continuity::build(temporary.path(), &selected, &matcher, &model).is_err());
+    observation.country = u16::from_le_bytes(*b"CZ");
+    let matcher = Matcher::new(vec![observation]).unwrap();
+    assert!(continuity::build(temporary.path(), &selected, &matcher, &model).is_ok());
 }
 
 #[test]
@@ -188,7 +212,7 @@ fn original_nodes_connect_across_squares_but_distinct_nodes_conflicts_and_juncti
         let temporary = tempfile::tempdir().unwrap();
         square(temporary.path(), 255, std::slice::from_ref(&first));
         square(temporary.path(), 256, &right);
-        let matcher = Matcher::new(observations);
+        let matcher = Matcher::new(observations).unwrap();
         let plan = continuity::build(temporary.path(), &selected, &matcher, &model).unwrap();
         let mut roads = super::matched_roads(
             &input::load(&temporary.path().join("z9/256/255/roads.arrow")).unwrap(),
@@ -197,6 +221,17 @@ fn original_nodes_connect_across_squares_but_distinct_nodes_conflicts_and_juncti
         )
         .unwrap();
         plan.apply(Square { x: 256, y: 255 }, &mut roads);
+        for filled in roads.iter().filter(|road| road.source_id == 12) {
+            assert!(filled.count_origin_measured);
+            let mut restricted_street = filled.clone();
+            restricted_street.direction = 1;
+            restricted_street.class = 3;
+            restricted_street.access = 2;
+            assert_eq!(
+                super::allocation::allocate(&restricted_street, &[], &model).0,
+                filled.counts
+            );
+        }
         roads
             .into_iter()
             .map(|r| (r.way_id, r.source_id, r.counts, r.estimated))
@@ -213,6 +248,13 @@ fn original_nodes_connect_across_squares_but_distinct_nodes_conflicts_and_juncti
         ]
     );
     let mut disconnected = second.clone();
+    let mut modeled = count(&first, "modeled class prior");
+    modeled.measured = false;
+    assert!(
+        run(vec![second.clone(), third.clone()], vec![modeled])
+            .iter()
+            .all(|r| r.1 == 0)
+    );
     disconnected.nodes[0] = 99;
     assert!(
         run(

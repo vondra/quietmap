@@ -270,7 +270,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
         Path::new(options.get("sources")?),
     )?;
     match command.as_str() {
+        "tagged-speed-table" => {
+            roads::tagged_speed_fit::fit(&inputs, &out, Path::new(options.get("scratch")?))
+                .map_err(|e| e.to_string())
+        }
         "road-observations" => road_counts::convert(&inputs, &out).map_err(|e| e.to_string()),
+        "road-model-tables" => roads::calibration::build(&inputs, &out).map_err(|e| e.to_string()),
+        "road-speed-table" => roads::speed_validity::build(&inputs, options.get("kind")?, &out)
+            .map_err(|e| e.to_string()),
         "roads" => roads::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
             .map_err(|e| e.to_string()),
         "structure-height-model" => structures::height_calibration::fit(

@@ -49,6 +49,8 @@ fn schema(inputs: &YearInputs) -> Result<Schema> {
         fields.push(Field::new(name, DataType::Float64, true));
     }
     fields.push(Field::new("geometry", DataType::Binary, false));
+    fields.push(Field::new("target", DataType::Utf8, false));
+    fields.push(Field::new("sample", DataType::Utf8, false));
     Ok(Schema::new_with_metadata(
         fields,
         HashMap::from([
@@ -91,10 +93,7 @@ fn decode_geometry(mut bytes: &[u8]) -> Result<Vec<Vec<[f64; 2]>>> {
         Ok(value as usize)
     }
     let part_count = count(&mut bytes)?;
-    ensure!(
-        part_count > 0 && part_count <= bytes.len() / 4,
-        "invalid geometry part count"
-    );
+    ensure!(part_count <= bytes.len() / 4, "invalid geometry part count");
     let mut parts = Vec::with_capacity(part_count);
     for _ in 0..part_count {
         let point_count = count(&mut bytes)?;
@@ -152,11 +151,14 @@ pub fn validate(rows: &[Observation], inputs: &YearInputs) -> Result<()> {
             &row.observed_start,
             &row.observed_end,
             row.direction,
+            row.time_basis as u8,
         );
         ensure!(
             identities.insert(key, row).is_none(),
-            "duplicate observation identity {}",
-            row.identity
+            "duplicate observation identity {} in {} (source {})",
+            row.identity,
+            row.input_id,
+            row.source_id
         );
     }
     Ok(())
@@ -227,6 +229,16 @@ pub fn write(path: &Path, rows: &[Observation], inputs: &YearInputs) -> Result<(
         columns.push(Arc::new(BinaryArray::from_iter_values(
             geometry.iter().map(Vec::as_slice),
         )));
+        let targets = rows
+            .iter()
+            .map(|r| serde_json::to_string(&r.target))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        columns.push(Arc::new(StringArray::from_iter_values(targets)));
+        let samples = rows
+            .iter()
+            .map(|r| serde_json::to_string(&r.sample))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        columns.push(Arc::new(StringArray::from_iter_values(samples)));
         writer.write(&RecordBatch::try_new(schema.clone(), columns)?)?;
     }
     writer.finish()?;
@@ -279,6 +291,7 @@ pub fn read(path: &Path, inputs: &YearInputs) -> Result<Vec<Observation>> {
                 0 => TimeBasis::AnnualDaily,
                 1 => TimeBasis::WeekdayDaily,
                 2 => TimeBasis::Hourly,
+                3 => TimeBasis::PeriodDaily,
                 _ => return Err(anyhow!("invalid time basis")),
             };
             rows.push(Observation {
@@ -302,6 +315,8 @@ pub fn read(path: &Path, inputs: &YearInputs) -> Result<Vec<Observation>> {
                 vehicle_classes: counts[..4].try_into()?,
                 total: counts[4],
                 geometry: decode_geometry(value!(BinaryArray, "geometry"))?,
+                target: serde_json::from_str(value!(StringArray, "target"))?,
+                sample: serde_json::from_str(value!(StringArray, "sample"))?,
             });
         }
     }

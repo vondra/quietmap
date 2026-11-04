@@ -73,6 +73,7 @@ kinds! {
     RegionalVehicleShares => "regional-vehicle-shares",
     RoadObservations => "road-observations",
     RoadConversion => "road-conversion",
+    RoadCalibration => "road-calibration",
     RoadPreparationModel => "road-preparation-model",
     RoadClassPriors => "road-class-priors",
     RoadClassShares => "road-class-shares",

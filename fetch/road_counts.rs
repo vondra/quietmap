@@ -1,275 +1,131 @@
-//! Convert pinned publisher JSON records to dated, nullable road observations selected by the manifest.
+//! Convert pinned publisher formats into the single dated road-observation input selected by the manifest.
+
+#[path = "road_counts/anas.rs"]
+mod anas;
+#[path = "road_counts/bast.rs"]
+mod bast;
+#[path = "road_counts/bast_daily.rs"]
+mod bast_daily;
+#[path = "road_counts/bw_hourly.rs"]
+mod bw_hourly;
+#[path = "road_counts/cerema.rs"]
+mod cerema;
+#[path = "road_counts/city.rs"]
+mod city;
+#[path = "road_counts/dft.rs"]
+mod dft;
+#[path = "road_counts/djma.rs"]
+mod djma;
+#[path = "road_counts/fields.rs"]
+mod fields;
+#[path = "road_counts/gpr.rs"]
+mod gpr;
+#[path = "road_counts/hpms.rs"]
+mod hpms;
+#[path = "road_counts/hpms_gdb.rs"]
+mod hpms_gdb;
+#[path = "road_counts/inweva.rs"]
+mod inweva;
+#[path = "road_counts/kvl.rs"]
+mod kvl;
+#[path = "road_counts/mastra.rs"]
+mod mastra;
+#[path = "road_counts/mitma.rs"]
+mod mitma;
+#[path = "road_counts/mlit.rs"]
+mod mlit;
+#[path = "road_counts/mop.rs"]
+mod mop;
+#[path = "road_counts/mot.rs"]
+mod mot;
+#[path = "road_counts/nvdb.rs"]
+mod nvdb;
+#[path = "road_counts/nzta.rs"]
+mod nzta;
+#[path = "road_counts/pldp.rs"]
+mod pldp;
+#[path = "road_counts/records.rs"]
+mod records;
+#[path = "road_counts/sasvz.rs"]
+mod sasvz;
+#[path = "road_counts/sict.rs"]
+mod sict;
+#[cfg(test)]
+#[path = "road_counts/tests.rs"]
+mod tests;
+#[path = "road_counts/thai_drr.rs"]
+mod thai_drr;
+#[path = "road_counts/tii.rs"]
+mod tii;
+#[path = "road_counts/tmas.rs"]
+mod tmas;
+#[path = "road_counts/trafik.rs"]
+mod trafik;
+#[path = "road_counts/tsk.rs"]
+mod tsk;
+#[path = "road_counts/wien.rs"]
+mod wien;
+
+#[path = "road_counts/source.rs"]
+mod source;
+use source::Source;
+#[path = "road_counts/exclusions.rs"]
+mod exclusions;
+#[path = "road_counts/fields_recipe.rs"]
+mod fields_recipe;
+#[cfg(test)]
+#[path = "road_counts/format_tests.rs"]
+mod format_tests;
+#[path = "road_counts/geometry.rs"]
+mod geometry;
 
 use crate::{
-    roads::{
-        observation::{CountBasis, Observation, TimeBasis},
-        observation_io,
-    },
+    roads::observation_io,
     year::{Kind, YearInputs},
 };
 use anyhow::{Result, anyhow, ensure};
 use serde::Deserialize;
-use serde_json::Value;
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Recipe {
-    objects: Vec<Publisher>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Publisher {
-    input_id: String,
-    records: String,
-    properties: String,
-    identity: String,
-    reference: Option<String>,
-    geometry: GeometryFormat,
-    source_id: u16,
-    source_rank: u32,
-    country: String,
-    measured: bool,
-    count_basis: CountBasis,
-    time_basis: TimeBasis,
-    daily_factor: f64,
-    direction: u8,
-    road_class_mask: u16,
-    search_radius_m: f64,
-    reference_required: bool,
-    classes: [Option<Vec<String>>; 4],
-    total: Option<String>,
-    year_field: Option<String>,
-    estimated_classes: u8,
-    #[serde(default)]
-    reference_prefix_by_field: Option<(String, BTreeMap<String, String>)>,
-    #[serde(default)]
-    class_masks_by_field: Option<(String, BTreeMap<String, u16>)>,
-    #[serde(default)]
-    reference_alias_prefixes: Vec<String>,
-    #[serde(default)]
-    skip_zero_total: bool,
+    objects: Vec<Converter>,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "format", rename_all = "kebab-case", deny_unknown_fields)]
-enum GeometryFormat {
-    Geojson,
-    Arcgis,
-    Point { longitude: String, latitude: String },
-}
-
-fn number(value: &Value) -> Result<Option<f64>> {
-    if value.is_null() || value.as_str().is_some_and(|s| s.trim().is_empty()) {
-        return Ok(None);
-    }
-    let number = match value.as_f64() {
-        Some(number) => number,
-        None => value
-            .as_str()
-            .ok_or_else(|| anyhow!("invalid count value"))?
-            .trim()
-            .parse()?,
-    };
-    ensure!(number.is_finite() && number >= 0.0, "invalid count {value}");
-    Ok(Some(number))
-}
-
-fn text(value: &Value) -> String {
-    value.as_str().map(str::to_owned).unwrap_or_else(|| {
-        if value.is_null() {
-            String::new()
-        } else {
-            value.to_string()
-        }
-    })
-}
-
-fn geometry(
-    value: &Value,
-    properties: &Value,
-    format: &GeometryFormat,
-) -> Result<Vec<Vec<[f64; 2]>>> {
-    let lines: Vec<Value> = match format {
-        GeometryFormat::Point {
-            longitude,
-            latitude,
-        } => vec![serde_json::json!([[
-            properties[longitude],
-            properties[latitude]
-        ]])],
-        GeometryFormat::Arcgis => value["geometry"]["paths"]
-            .as_array()
-            .cloned()
-            .ok_or_else(|| anyhow!("missing ArcGIS paths"))?,
-        GeometryFormat::Geojson => match value["geometry"]["type"].as_str() {
-            Some("Point") => vec![serde_json::json!([value["geometry"]["coordinates"]])],
-            Some("LineString") => vec![value["geometry"]["coordinates"].clone()],
-            Some("MultiLineString") => value["geometry"]["coordinates"]
-                .as_array()
-                .cloned()
-                .ok_or_else(|| anyhow!("missing line parts"))?,
-            _ => return Err(anyhow!("road observation requires point or line geometry")),
-        },
-    };
-    lines
-        .into_iter()
-        .map(|line| {
-            line.as_array()
-                .ok_or_else(|| anyhow!("invalid road line"))?
-                .iter()
-                .map(|point| {
-                    let coordinates = point
-                        .as_array()
-                        .ok_or_else(|| anyhow!("invalid road coordinate"))?;
-                    ensure!(coordinates.len() >= 2, "short road coordinate");
-                    Ok([
-                        coordinates[0]
-                            .as_f64()
-                            .ok_or_else(|| anyhow!("invalid longitude"))?,
-                        coordinates[1]
-                            .as_f64()
-                            .ok_or_else(|| anyhow!("invalid latitude"))?,
-                    ])
-                })
-                .collect()
-        })
-        .collect()
-}
-
-fn observations(
-    publisher: &Publisher,
-    raw: &Value,
-    inputs: &YearInputs,
-) -> Result<Vec<Observation>> {
-    let input = inputs
-        .manifest
-        .inputs
-        .iter()
-        .find(|r| r.id == publisher.input_id)
-        .ok_or_else(|| anyhow!("unknown count input {}", publisher.input_id))?;
-    ensure!(
-        inputs
-            .manifest
-            .admitted(&input.id)
-            .map_err(anyhow::Error::msg)?,
-        "unadmitted count input"
-    );
-    let (start, end) = input.observed.bounds().map_err(anyhow::Error::msg)?;
-    let country = publisher.country.as_bytes();
-    ensure!(
-        country.len() == 2 && country.iter().all(u8::is_ascii_uppercase),
-        "invalid publisher country"
-    );
-    let records = raw
-        .pointer(&publisher.records)
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("missing publisher records"))?;
-    let mut rows = Vec::new();
-    for record in records {
-        let values = record
-            .pointer(&publisher.properties)
-            .ok_or_else(|| anyhow!("missing count properties"))?;
-        let mut reference = publisher
-            .reference
-            .as_ref()
-            .map(|key| text(&values[key]))
-            .unwrap_or_default();
-        if let Some((field, prefixes)) = &publisher.reference_prefix_by_field {
-            let prefix = prefixes
-                .get(&text(&values[field]))
-                .map_or("", String::as_str);
-            reference = format!(
-                "{prefix}{}",
-                reference
-                    .chars()
-                    .filter(char::is_ascii_digit)
-                    .collect::<String>()
-            );
-        }
-        if !publisher.reference_alias_prefixes.is_empty() {
-            reference = publisher
-                .reference_alias_prefixes
-                .iter()
-                .map(|prefix| format!("{prefix}{reference}"))
-                .collect::<Vec<_>>()
-                .join(";");
-        }
-        let mask = if let Some((field, classes)) = &publisher.class_masks_by_field {
-            let Some(mask) = classes.get(&text(&values[field])) else {
-                continue;
-            };
-            *mask & publisher.road_class_mask
-        } else {
-            publisher.road_class_mask
-        };
-        if mask == 0 || publisher.reference_required && reference.is_empty() {
-            continue;
-        }
-        let mut counts = [None; 4];
-        for (i, fields) in publisher.classes.iter().enumerate() {
-            if let Some(fields) = fields {
-                let values = fields
-                    .iter()
-                    .map(|key| number(&values[key]))
-                    .collect::<Result<Vec<_>>>()?;
-                if values.iter().all(Option::is_some) {
-                    counts[i] = Some(values.into_iter().flatten().sum());
-                }
-            }
-        }
-        let total = publisher
-            .total
-            .as_ref()
-            .map(|field| number(&values[field]))
-            .transpose()?
-            .flatten();
-        if total.is_none() && counts.iter().all(Option::is_none) {
-            continue;
-        }
-        if publisher.skip_zero_total
-            && total.unwrap_or_else(|| counts.iter().flatten().sum()) == 0.0
-        {
-            continue;
-        }
-        let (observed_start, observed_end) = if let Some(field) = &publisher.year_field {
-            let year: i32 = text(&values[field]).parse()?;
-            let from = chrono::NaiveDate::from_ymd_opt(year, 1, 1)
-                .ok_or_else(|| anyhow!("invalid count year"))?;
-            let to = chrono::NaiveDate::from_ymd_opt(year, 12, 31)
-                .ok_or_else(|| anyhow!("invalid count year"))?;
-            if from < start || to > end {
-                continue;
-            }
-            (from, to)
-        } else {
-            (start, end)
-        };
-        rows.push(Observation {
-            identity: text(&values[&publisher.identity]),
-            input_id: publisher.input_id.clone(),
-            source_id: publisher.source_id,
-            source_rank: publisher.source_rank,
-            measured: publisher.measured,
-            country: u16::from_le_bytes(country.try_into()?),
-            observed_start: observed_start.to_string(),
-            observed_end: observed_end.to_string(),
-            count_basis: publisher.count_basis,
-            time_basis: publisher.time_basis,
-            direction: publisher.direction,
-            reference,
-            geometry: geometry(record, values, &publisher.geometry)?,
-            road_class_mask: mask,
-            search_radius_m: publisher.search_radius_m,
-            reference_required: publisher.reference_required,
-            vehicle_classes: counts,
-            total,
-            estimated_classes: publisher.estimated_classes,
-            daily_factor: publisher.daily_factor,
-        });
-    }
-    Ok(rows)
+enum Converter {
+    Fields(Box<fields::Publisher>),
+    Inweva(inweva::Recipe),
+    ThaiDrr(thai_drr::Recipe),
+    Mlit(mlit::Recipe),
+    Tsk(tsk::Recipe),
+    Wien(wien::Recipe),
+    Bast(bast::Recipe),
+    BastDaily(bast_daily::Recipe),
+    Mot(mot::Recipe),
+    Mop(mop::Recipe),
+    Hpms(hpms::Recipe),
+    HpmsGdb(hpms_gdb::Recipe),
+    Sict(sict::Recipe),
+    Dft(dft::Recipe),
+    Nvdb(nvdb::Recipe),
+    Kvl(kvl::Recipe),
+    Mastra(mastra::Recipe),
+    Trafik(trafik::Recipe),
+    Djma(djma::Recipe),
+    Cerema(cerema::Recipe),
+    Gpr(gpr::Recipe),
+    Mitma(mitma::Recipe),
+    Pldp(pldp::Recipe),
+    Sasvz(sasvz::Recipe),
+    Anas(anas::Recipe),
+    Nzta(nzta::Recipe),
+    Tii(tii::Recipe),
+    City(city::Recipe),
+    Tmas(tmas::Recipe),
+    BwHourly(bw_hourly::Recipe),
 }
 
 pub fn convert(inputs: &YearInputs, output: &Path) -> Result<()> {
@@ -285,22 +141,147 @@ pub fn convert(inputs: &YearInputs, output: &Path) -> Result<()> {
         .ok_or_else(|| anyhow!("missing converter input"))?;
     ensure!(!recipe.objects.is_empty(), "empty road converter recipe");
     let mut rows = Vec::new();
-    for publisher in recipe.objects {
+    for object in recipe.objects {
+        let input_id = match &object {
+            Converter::Fields(r) => &r.input_id,
+            Converter::Inweva(r) => &r.source.input_id,
+            Converter::ThaiDrr(r) => &r.source.input_id,
+            Converter::Mlit(r) => &r.source.input_id,
+            Converter::Tsk(r) => &r.source.input_id,
+            Converter::Wien(r) => &r.source.input_id,
+            Converter::Bast(r) => &r.source.input_id,
+            Converter::BastDaily(r) => &r.source.input_id,
+            Converter::Mot(r) => &r.source.input_id,
+            Converter::Mop(r) => &r.source.input_id,
+            Converter::Hpms(r) => &r.source.input_id,
+            Converter::HpmsGdb(r) => &r.source.input_id,
+            Converter::Sict(r) => &r.source.input_id,
+            Converter::Dft(r) => &r.source.input_id,
+            Converter::Nvdb(r) => &r.source.input_id,
+            Converter::Kvl(r) => &r.source.input_id,
+            Converter::Mastra(r) => &r.source.input_id,
+            Converter::Trafik(r) => &r.source.input_id,
+            Converter::Djma(r) => &r.source.input_id,
+            Converter::Cerema(r) => &r.source.input_id,
+            Converter::Gpr(r) => &r.source.input_id,
+            Converter::Mitma(r) => &r.source.input_id,
+            Converter::Pldp(r) => &r.source.input_id,
+            Converter::Sasvz(r) => &r.source.input_id,
+            Converter::Anas(r) => &r.source.input_id,
+            Converter::Nzta(r) => &r.source.input_id,
+            Converter::Tii(r) => &r.source.input_id,
+            Converter::City(r) => &r.source.input_id,
+            Converter::Tmas(r) => &r.source.input_id,
+            Converter::BwHourly(r) => &r.source.input_id,
+        };
         ensure!(
-            conversion.depends_on.contains(&publisher.input_id),
-            "converter omits raw dependency {}",
-            publisher.input_id
+            conversion.depends_on.contains(input_id),
+            "converter omits raw dependency {input_id}"
         );
-        let path = inputs
-            .by_id(&publisher.input_id)
-            .map_err(anyhow::Error::msg)?;
-        let raw: Value = serde_json::from_slice(&std::fs::read(path)?)?;
-        let converted = observations(&publisher, &raw, inputs)?;
-        eprintln!(
-            "road-counts: {}: {} observations",
-            publisher.input_id,
-            converted.len()
+        if let Converter::Tsk(recipe) = &object {
+            ensure!(
+                conversion.depends_on.contains(&recipe.coverage_input),
+                "converter omits municipal boundary dependency"
+            );
+        }
+        if let Converter::Fields(recipe) = &object {
+            ensure!(
+                recipe
+                    .exclusion
+                    .as_ref()
+                    .is_none_or(|r| conversion.depends_on.contains(&r.input_id)),
+                "converter omits excluded-network dependency"
+            );
+            ensure!(
+                recipe
+                    .coverage
+                    .as_ref()
+                    .is_none_or(|r| conversion.depends_on.contains(&r.input_id)),
+                "converter omits municipal boundary dependency"
+            );
+        }
+        if let Converter::Wien(recipe) = &object {
+            ensure!(
+                conversion.depends_on.contains(&recipe.coverage.input_id),
+                "converter omits municipal boundary dependency"
+            );
+        }
+        if let Converter::Sict(recipe) = &object {
+            ensure!(
+                conversion.depends_on.contains(&recipe.composition_input),
+                "converter omits composition dependency"
+            );
+        }
+        if let Converter::Cerema(recipe) = &object {
+            ensure!(
+                recipe
+                    .older_editions
+                    .iter()
+                    .all(|edition| conversion.depends_on.contains(&edition.source.input_id)),
+                "converter omits older census dependency"
+            );
+        }
+        let sites = match &object {
+            Converter::Pldp(r) => Some(&r.sites_input),
+            Converter::Sasvz(r) => Some(&r.sites_input),
+            Converter::Tii(r) => Some(&r.sites_input),
+            Converter::Wien(r) => Some(&r.sites_input),
+            _ => None,
+        };
+        ensure!(
+            sites.is_none_or(|id| conversion.depends_on.contains(id)),
+            "converter omits station-location dependency"
         );
+        let path = inputs.by_id(input_id).map_err(anyhow::Error::msg)?;
+        let converted = match &object {
+            Converter::Fields(r) => fields::convert(r, &path, inputs)?,
+            Converter::Inweva(r) => {
+                inweva::convert(r, inputs, &serde_json::from_slice(&std::fs::read(path)?)?)?
+            }
+            Converter::ThaiDrr(r) => thai_drr::convert(r, inputs, &std::fs::read(path)?)?,
+            Converter::Mlit(r) => mlit::convert(r, inputs, &path)?,
+            Converter::Tsk(r) => tsk::convert(r, inputs, &path)?,
+            Converter::Wien(r) => wien::convert(r, inputs, &path)?,
+            Converter::Bast(r) => bast::convert(r, inputs, &path)?,
+            Converter::BastDaily(r) => bast_daily::convert(r, inputs, &path)?,
+            Converter::Mot(r) => mot::convert(r, inputs, &path)?,
+            Converter::Mop(r) => {
+                mop::convert(r, inputs, &serde_json::from_slice(&std::fs::read(path)?)?)?
+            }
+            Converter::Hpms(r) => hpms::convert(r, inputs, &path)?,
+            Converter::HpmsGdb(r) => {
+                hpms_gdb::convert(r, inputs, &path, output.parent().unwrap_or(Path::new(".")))?
+            }
+            Converter::Sict(r) => sict::convert(r, inputs, &path)?,
+            Converter::Dft(r) => dft::convert(r, inputs, &path)?,
+            Converter::Nvdb(r) => {
+                nvdb::convert(r, inputs, &serde_json::from_slice(&std::fs::read(path)?)?)?
+            }
+            Converter::Kvl(r) => kvl::convert(r, inputs, &path)?,
+            Converter::Mastra(r) => mastra::convert(r, inputs, &path)?,
+            Converter::Trafik(r) => trafik::convert(r, inputs, &path)?,
+            Converter::Djma(r) => {
+                djma::convert(r, inputs, &serde_json::from_slice(&std::fs::read(path)?)?)?
+            }
+            Converter::Cerema(r) => cerema::convert(r, inputs, &path)?,
+            Converter::Gpr(r) => {
+                gpr::convert(r, inputs, &serde_json::from_slice(&std::fs::read(path)?)?)?
+            }
+            Converter::Mitma(r) => mitma::convert(r, inputs, &std::fs::read_to_string(path)?)?,
+            Converter::Pldp(r) => pldp::convert(r, inputs, &path)?,
+            Converter::Sasvz(r) => sasvz::convert(r, inputs, &path)?,
+            Converter::Tii(r) => tii::convert(r, inputs, &path)?,
+            Converter::Tmas(r) => tmas::convert(r, inputs, &path)?,
+            Converter::BwHourly(r) => bw_hourly::convert(r, inputs, &path)?,
+            Converter::City(r) => {
+                city::convert(r, inputs, &serde_json::from_slice(&std::fs::read(path)?)?)?
+            }
+            Converter::Nzta(r) => nzta::convert(r, inputs, &path)?,
+            Converter::Anas(r) => {
+                anas::convert(r, inputs, &serde_json::from_slice(&std::fs::read(path)?)?)?
+            }
+        };
+        eprintln!("road-counts: {input_id}: {} observations", converted.len());
         rows.extend(converted);
     }
     observation_io::write(output, &rows, inputs)

@@ -11,6 +11,10 @@ pub struct Model {
     pub speed_transitions: super::speed_transitions::Parameters,
     pub demand: crate::traffic::preparation_model::DemandModel,
     pub world: [[f64; 4]; 13],
+    #[serde(default)]
+    pub observation_shares: std::collections::BTreeMap<u16, [[f64; 4]; 13]>,
+    #[serde(default)]
+    pub weekday_to_annual_factor: Option<f64>,
     pub carriageways: Vec<[[[f64; 2]; 3]; 2]>,
     pub one_way_section_classes: Vec<u8>,
     pub regions: Vec<RegionalPrior>,
@@ -52,6 +56,11 @@ impl Model {
     }
 
     pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.weekday_to_annual_factor
+                .is_none_or(|v| v.is_finite() && v > 0.0),
+            "invalid weekday conversion"
+        );
         self.demand.validate()?;
         self.speed_transitions.validate()?;
         ensure!(
@@ -64,6 +73,7 @@ impl Model {
         );
         for classes in std::iter::once(self.world.as_slice())
             .chain(self.regions.iter().map(|r| r.classes.as_slice()))
+            .chain(self.observation_shares.values().map(|r| r.as_slice()))
         {
             ensure!(
                 classes.len() <= 13
@@ -140,7 +150,7 @@ impl Model {
     }
 
     pub fn access_factor(&self, road: &Road) -> f64 {
-        if road.measured {
+        if road.count_origin_measured {
             1.0
         } else if road.class == 8 && road.access == 0 {
             self.untagged_track_access

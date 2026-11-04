@@ -12,14 +12,14 @@ use crate::year::YearInputs;
 use serde_json::json;
 use std::path::Path;
 
-fn model() -> Model {
+pub(super) fn model() -> Model {
     let model: Model =
         serde_json::from_str(include_str!("../../test-data/road-preparation.json")).unwrap();
     model.validate().unwrap();
     model
 }
 
-fn road(id: i64) -> Road {
+pub(super) fn road(id: i64) -> Road {
     Road {
         way_id: id,
         segment_idx: 0,
@@ -40,7 +40,7 @@ fn road(id: i64) -> Road {
         country: (0, 0),
         source_id: 1,
         observation_source_id: 1,
-        measured: true,
+        count_origin_measured: true,
         counts: [80.0, 10.0, 5.0, 5.0],
         basis: 2,
         estimated: 0,
@@ -50,7 +50,7 @@ fn road(id: i64) -> Road {
     }
 }
 
-fn observation() -> Observation {
+pub(super) fn observation() -> Observation {
     Observation {
         identity: "station".into(),
         input_id: "survey".into(),
@@ -72,6 +72,8 @@ fn observation() -> Observation {
         total: Some(100.0),
         estimated_classes: 0,
         daily_factor: 1.0,
+        target: Default::default(),
+        sample: Default::default(),
     }
 }
 
@@ -111,6 +113,18 @@ fn observed_zero_missing_class_and_count_scope_survive_arrow_without_future_leak
     different.manifest.as_of = "2002-01-01".into();
     std::fs::write(&different.manifest_path, b"changed manifest bytes").unwrap();
     assert!(observation_io::read(&path, &different).is_err());
+}
+
+#[test]
+fn a_stations_hourly_series_and_annual_count_are_distinct_but_a_duplicate_series_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let inputs = inputs(directory.path());
+    let annual = observation();
+    let mut hourly = annual.clone();
+    hourly.time_basis = TimeBasis::Hourly;
+    hourly.sample.fit_only = true;
+    observation_io::validate(&[annual, hourly.clone()], &inputs).unwrap();
+    assert!(observation_io::validate(&[hourly.clone(), hourly], &inputs).is_err());
 }
 
 #[test]
@@ -170,6 +184,7 @@ fn matching_uses_priority_scope_and_geometry_without_inventing_a_connector() {
     let mut target = road(1);
     target.source_id = 0;
     Matcher::new(vec![first])
+        .unwrap()
         .apply(&mut target, &model)
         .unwrap();
     assert_eq!(target.source_id, 0);
@@ -179,6 +194,7 @@ fn matching_uses_priority_scope_and_geometry_without_inventing_a_connector() {
     high.source_rank = 20;
     high.geometry = vec![vec![[0.0, 0.0001], [0.001, 0.0001]]];
     Matcher::new(vec![low, high.clone()])
+        .unwrap()
         .apply(&mut target, &model)
         .unwrap();
     assert_eq!(target.source_id, 2);
@@ -186,12 +202,16 @@ fn matching_uses_priority_scope_and_geometry_without_inventing_a_connector() {
     high.count_basis = CountBasis::Directional;
     target.source_id = 0;
     Matcher::new(vec![high.clone()])
+        .unwrap()
         .apply(&mut target, &model)
         .unwrap();
     assert_eq!(target.source_id, 0);
     high.direction = 1;
     high.road_class_mask = 1 << 10;
-    Matcher::new(vec![high]).apply(&mut target, &model).unwrap();
+    Matcher::new(vec![high])
+        .unwrap()
+        .apply(&mut target, &model)
+        .unwrap();
     assert_eq!(target.source_id, 0);
 }
 

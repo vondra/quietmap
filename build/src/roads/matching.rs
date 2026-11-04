@@ -1,11 +1,21 @@
 //! One spatial/ref/direction matcher with source precedence for every normalized road observation.
 
-use super::{input::Road, model::Model, observation::Observation};
+use super::{
+    input::Road,
+    matching_distance::{distance, longitude_delta, road_points},
+    model::Model,
+    observation::Observation,
+};
 use anyhow::Result;
 use rstar::{AABB, RTree, RTreeObject};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
+use unicode_normalization::UnicodeNormalization;
 
-struct Candidate {
-    index: usize,
+pub(super) struct Candidate {
+    pub index: usize,
     envelope: AABB<[f64; 2]>,
 }
 impl RTreeObject for Candidate {
@@ -18,51 +28,16 @@ impl RTreeObject for Candidate {
 pub struct Matcher {
     observations: Vec<Observation>,
     tree: RTree<Candidate>,
-}
-
-fn longitude_delta(value: f64) -> f64 {
-    if value > 180.0 {
-        value - 360.0
-    } else if value < -180.0 {
-        value + 360.0
-    } else {
-        value
-    }
-}
-
-fn flat_distance(point: [f64; 2], other: [f64; 2]) -> f64 {
-    let cosine = ((point[1] + other[1]) / 2.0 * std::f64::consts::PI / 180.0).cos();
-    (longitude_delta(other[0] - point[0]) * 111_320.0 * cosine)
-        .hypot((other[1] - point[1]) * 110_540.0)
-}
-
-fn segment_distance(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> f64 {
-    // These local metric coefficients are the original count matcher's degree approximation.
-    let longitude_scale = 111_320.0 * (point[1] * std::f64::consts::PI / 180.0).cos();
-    let px = longitude_delta(point[0] - start[0]) * longitude_scale;
-    let py = (point[1] - start[1]) * 110_540.0;
-    let ex = longitude_delta(end[0] - start[0]) * longitude_scale;
-    let ey = (end[1] - start[1]) * 110_540.0;
-    let squared = ex * ex + ey * ey;
-    if squared < 1e-6 {
-        return flat_distance(point, start);
-    }
-    let fraction = ((px * ex + py * ey) / squared).clamp(0.0, 1.0);
-    (px - fraction * ex).hypot(py - fraction * ey)
-}
-
-fn road_midpoint(road: &Road) -> [f64; 2] {
-    let start = crate::osm::geometry::poly::meters_to_lonlat(road.start.0, road.start.1);
-    let end = crate::osm::geometry::poly::meters_to_lonlat(road.end.0, road.end.1);
-    [
-        (start.0 + longitude_delta(end.0 - start.0) / 2.0 + 180.0).rem_euclid(360.0) - 180.0,
-        (start.1 + end.1) / 2.0,
-    ]
+    targets: super::matching_targets::Targets,
+    by_way: HashMap<i64, Vec<usize>>,
+    assigned: HashMap<usize, i64>,
+    assigned_streets: HashMap<usize, HashSet<String>>,
+    measured_countries: HashSet<u16>,
 }
 
 pub fn canonical_reference(value: &str) -> String {
     value
-        .chars()
+        .nfkc()
         .filter(|c| !c.is_whitespace())
         .flat_map(char::to_uppercase)
         .collect()
@@ -70,9 +45,17 @@ pub fn canonical_reference(value: &str) -> String {
 
 impl Matcher {
     pub fn has_measurements(&self) -> bool {
-        self.observations.iter().any(|r| r.measured)
+        !self.measured_countries.is_empty()
     }
-    pub fn new(observations: Vec<Observation>) -> Self {
+    pub fn has_measurements_in(&self, country: u16) -> bool {
+        self.measured_countries.contains(&0) || self.measured_countries.contains(&country)
+    }
+    pub fn new(observations: Vec<Observation>) -> Result<Self> {
+        let observations = observations
+            .into_iter()
+            .filter(|row| !row.sample.fit_only)
+            .collect::<Vec<_>>();
+        let targets = super::matching_targets::Targets::new(&observations)?;
         let mut candidates = Vec::new();
         for (index, row) in observations.iter().enumerate() {
             for part in &row.geometry {
@@ -91,7 +74,7 @@ impl Matcher {
                     + row.search_radius_m / 110_540.0;
                 let latitude = south.abs().max(north.abs()).min(90.0);
                 let reach =
-                    (row.search_radius_m / (111_320.0 * latitude.to_radians().cos())).min(360.0);
+                    (row.search_radius_m / (110_540.0 * latitude.to_radians().cos())).min(360.0);
                 for shift in [-360.0, 0.0, 360.0] {
                     candidates.push(Candidate {
                         index,
@@ -103,80 +86,168 @@ impl Matcher {
                 }
             }
         }
-        Self {
+        let mut by_way = HashMap::<i64, Vec<usize>>::new();
+        for (i, row) in observations.iter().enumerate() {
+            if let Some(id) = row.target.source_way {
+                by_way.entry(id).or_default().push(i);
+            }
+        }
+        let measured_countries = observations
+            .iter()
+            .filter(|r| r.measured)
+            .map(|r| r.country)
+            .collect();
+        Ok(Self {
             observations,
             tree: RTree::bulk_load(candidates),
+            targets,
+            by_way,
+            assigned: HashMap::new(),
+            assigned_streets: HashMap::new(),
+            measured_countries,
+        })
+    }
+
+    pub fn assign_counter_ways(&mut self, mapped: &Path) -> Result<()> {
+        self.assigned_streets =
+            super::matching_streets::assign(&self.observations, &self.tree, mapped)?;
+        self.assigned = super::matching_assignment::assign(
+            &self.observations,
+            &self.tree,
+            &self.targets,
+            mapped,
+        )?;
+        for (&index, &way) in &self.assigned {
+            self.by_way.entry(way).or_default().push(index);
         }
+        Ok(())
     }
 
     pub fn apply(&self, road: &mut Road, model: &Model) -> Result<()> {
-        let midpoint = road_midpoint(road);
-        let references = road
-            .reference
-            .split(';')
-            .map(canonical_reference)
-            .collect::<Vec<_>>();
+        let points = road_points(road);
+        let midpoint = points[1];
         let mut candidates = self
             .tree
-            .locate_in_envelope_intersecting(&AABB::from_point(midpoint))
+            .locate_in_envelope_intersecting(&AABB::from_corners(
+                [
+                    points[0][0].min(points[2][0]),
+                    points[0][1].min(points[2][1]),
+                ],
+                [
+                    points[0][0].max(points[2][0]),
+                    points[0][1].max(points[2][1]),
+                ],
+            ))
             .map(|c| c.index)
             .collect::<Vec<_>>();
+        let query = self.targets.query(road);
+        self.targets.candidates(road, &query, &mut candidates);
+        candidates.extend(self.by_way.get(&road.way_id).into_iter().flatten().copied());
         candidates.sort_unstable();
         candidates.dedup();
-        let mut best: Option<(usize, f64)> = None;
+        let mut best: Option<(usize, super::matching_targets::IdentityScore, f64)> = None;
+        let mut conflicting = false;
         for index in candidates {
             let row = &self.observations[index];
-            if row.country != 0 && row.country != road.country.0
-                || row.road_class_mask & (1 << road.class) == 0
-                || row.reference_required
-                    && !row
-                        .reference
-                        .split(';')
-                        .any(|reference| references.contains(&canonical_reference(reference)))
+            if row.target.excluded_segments.iter().any(|segment| {
+                super::segment_distance(midpoint, segment[0], segment[1])
+                    < row.target.exclusion_radius_m
+            }) {
+                continue;
+            }
+            if row.target.street_assignment.is_some()
+                && !self
+                    .assigned_streets
+                    .get(&index)
+                    .is_some_and(|names| names.contains(&super::matching_targets::name(&road.name)))
             {
                 continue;
             }
-            let mut distance = row.search_radius_m;
-            for part in &row.geometry {
-                if part.len() == 1 {
-                    distance = distance.min(flat_distance(midpoint, part[0]));
-                }
-                for pair in part.windows(2) {
-                    if row.direction != 0 && road.direction != 0 {
-                        let travel = road.travel_vector();
-                        let sign = if row.direction == 2 { -1.0 } else { 1.0 };
-                        let along = longitude_delta(pair[1][0] - pair[0][0])
-                            * midpoint[1].to_radians().cos()
-                            * travel.0
-                            + (pair[1][1] - pair[0][1]) * travel.1;
-                        if sign * along <= 0.0 {
-                            continue;
-                        }
-                    }
-                    distance = distance.min(segment_distance(midpoint, pair[0], pair[1]));
-                }
-            }
-            if distance >= row.search_radius_m {
+            let published_way = row.target.source_way == Some(road.way_id);
+            let assigned_way = self.assigned.get(&index) == Some(&road.way_id);
+            let same_way = published_way
+                || assigned_way
+                    && row
+                        .target
+                        .way_assignment
+                        .as_ref()
+                        .is_some_and(|a| a.extend_along_way);
+            if row.target.way_assignment.is_some() && !assigned_way {
                 continue;
             }
-            if best.is_none_or(|(previous, previous_distance)| {
+            if row.country != 0 && row.country != road.country.0
+                || row.road_class_mask & (1 << road.class) == 0
+            {
+                continue;
+            }
+            let support = if same_way {
+                Some(((u16::MAX, std::cmp::Reverse(0)), f64::INFINITY))
+            } else {
+                self.targets.accepts(index, row, &query, midpoint)
+            };
+            let Some((identity_priority, radius)) = support else {
+                continue;
+            };
+            let distance = if same_way && row.target.way_assignment.is_some() {
+                super::matching_distance::flat_distance(midpoint, row.geometry[0][0])
+            } else if published_way {
+                super::matching_distance::distance_without_heading(row, road, &points)
+            } else {
+                distance(row, road, &points)
+            };
+            if !distance.is_finite() || (!row.geometry.is_empty() && distance >= radius) {
+                continue;
+            }
+            if let Some((previous, priority, previous_distance)) = best {
+                let other = &self.observations[previous];
+                if row.source_rank == other.source_rank
+                    && identity_priority == priority
+                    && distance == previous_distance
+                    && !row.geometry.is_empty()
+                    && !other.geometry.is_empty()
+                    && (row.vehicle_classes != other.vehicle_classes
+                        || row.total != other.total
+                        || row.count_basis != other.count_basis
+                        || row.time_basis != other.time_basis
+                        || row.daily_factor != other.daily_factor)
+                {
+                    conflicting = true;
+                }
+            }
+            if best.is_none_or(|(previous, previous_priority, previous_distance)| {
                 row.source_rank > self.observations[previous].source_rank
                     || row.source_rank == self.observations[previous].source_rank
-                        && distance < previous_distance
+                        && (identity_priority > previous_priority
+                            || identity_priority == previous_priority
+                                && distance < previous_distance)
             }) {
-                best = Some((index, distance));
+                best = Some((index, identity_priority, distance));
+                conflicting = false;
             }
         }
-        if let Some((index, _)) = best {
+        if !conflicting && let Some((index, _, _)) = best {
             let row = &self.observations[index];
-            let (counts, estimated) = row.daily_classes(model.world[usize::from(road.class)])?;
+            let shares = model
+                .observation_shares
+                .get(&row.source_id)
+                .unwrap_or(&model.world);
+            let shares = shares[usize::from(road.class)];
+            let (counts, estimated) =
+                if row.time_basis == super::observation::TimeBasis::WeekdayDaily {
+                    row.daily_classes_using_factor(
+                        shares,
+                        model.weekday_to_annual_factor.unwrap_or(row.daily_factor),
+                    )?
+                } else {
+                    row.daily_classes(shares)?
+                };
             road.counts = counts;
             road.estimated = estimated;
             road.source_id = row.source_id;
             road.observation_source_id = row.source_id;
             road.observation = row.identity.clone();
             road.basis = row.count_basis as u8;
-            road.measured = row.measured;
+            road.count_origin_measured = row.measured;
         }
         Ok(())
     }

@@ -103,14 +103,10 @@ impl DemandModel {
         }
         let p = &self.street;
         ensure!(
-            positive(&[
-                p.residential_urban,
-                p.unclassified_urban,
-                p.rural,
-                p.through_factor,
-                p.demand_scale,
-                p.single_track_factor
-            ]),
+            [p.residential_urban, p.unclassified_urban, p.rural]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.0)
+                && positive(&[p.through_factor, p.demand_scale, p.single_track_factor]),
             "invalid street demand parameters"
         );
         Ok(())

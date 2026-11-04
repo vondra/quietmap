@@ -1,20 +1,41 @@
 //! Prepare road observations and allocate each physical cross-section through one common model.
 
 mod allocation;
+#[cfg(test)]
+mod assignment_tests;
+pub(crate) mod calibration;
 mod continuity;
+#[cfg(test)]
+mod continuity_country_tests;
 mod continuity_scope;
 #[cfg(test)]
 mod continuity_tests;
 pub(crate) mod input;
 mod matching;
+#[cfg(test)]
+mod matching_ambiguity_tests;
+mod matching_assignment;
+mod matching_distance;
+mod matching_streets;
+mod matching_targets;
+pub(crate) use matching_distance::flat_distance;
+pub(crate) use matching_distance::great_circle as great_circle_distance;
+pub(crate) use matching_distance::segment_distance;
+pub(crate) use matching_targets::name as canonical_road_name;
 mod model;
 pub(crate) mod observation;
 pub(crate) mod observation_io;
+pub(crate) mod observation_sample;
+pub(crate) mod observation_target;
 #[cfg(test)]
 mod order_tests;
 mod settlement;
 mod spatial;
 mod speed_transitions;
+pub(crate) mod speed_validity;
+pub(crate) mod tagged_speed_fit;
+#[cfg(test)]
+mod target_tests;
 #[cfg(test)]
 mod tests;
 mod topology;
@@ -88,7 +109,8 @@ pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<(
         observations.extend(observation_io::read(path, inputs)?);
     }
     observation_io::validate(&observations, inputs)?;
-    let matcher = matching::Matcher::new(observations);
+    let mut matcher = matching::Matcher::new(observations)?;
+    matcher.assign_counter_ways(mapped)?;
     let selected = squares.iter().copied().collect::<BTreeSet<_>>();
     let continuity = continuity::build(mapped, &selected, &matcher, &model)?;
     std::fs::create_dir(output)?;
