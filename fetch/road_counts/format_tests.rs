@@ -99,3 +99,24 @@ fn network_only_lines_supply_no_count_and_a_known_total_keeps_its_observed_resid
     );
     assert_eq!(rows[0].estimated_classes, 10);
 }
+#[test]
+fn the_selected_gpr_recipe_names_the_edition_specific_identity_column() {
+    let (_directory, inputs) = super::tests::inputs("PL");
+    let recipe = serde_json::from_value(serde_json::json!({
+        "source":{"input_id":"survey","source_id":1097,"source_rank":1},
+        "search_radius_m":500.0,"identity_field":"section_key"
+    }))
+    .unwrap();
+    let rows = super::gpr::convert(
+        &recipe,
+        &inputs,
+        &serde_json::json!([{
+            "section_key":"section-a", "ref":"DK1", "isProvincial":false,
+            "coords":[[19.0,51.0],[19.01,51.0]], "aadt_light":80,
+            "aadt_medium":10,"aadt_heavy":5,"aadt_moto":5
+        }]),
+    )
+    .unwrap();
+    assert_eq!(rows[0].identity, "section-a");
+    assert_eq!(rows[0].total, Some(100.0));
+}

@@ -127,30 +127,30 @@ fn distance_with_heading(
     }
     let mut best = f64::INFINITY;
     if row.target.distance_rule == DistanceRule::NearestPiece {
-        let mut nearest = None;
+        let mut nearest_follows = false;
         for part in &row.geometry {
             if part.len() == 1 {
                 let distance = flat_distance(points[1], part[0]);
                 if distance < best {
                     best = distance;
-                    nearest = Some((part[0], part[0]));
+                    nearest_follows =
+                        !respect_heading || follows(row, road, points, part[0], part[0]);
                 }
             }
             for pair in part.windows(2) {
                 let distance = segment_distance(points[1], pair[0], pair[1]);
                 if distance < best {
                     best = distance;
-                    nearest = Some((pair[0], pair[1]));
+                    nearest_follows =
+                        !respect_heading || follows(row, road, points, pair[0], pair[1]);
+                } else if distance == best
+                    && (!respect_heading || follows(row, road, points, pair[0], pair[1]))
+                {
+                    nearest_follows = true;
                 }
             }
         }
-        return if nearest
-            .is_some_and(|(start, end)| !respect_heading || follows(row, road, points, start, end))
-        {
-            best
-        } else {
-            f64::INFINITY
-        };
+        return if nearest_follows { best } else { f64::INFINITY };
     }
     for part in &row.geometry {
         if part.len() == 1 {

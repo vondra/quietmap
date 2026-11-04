@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[serde(deny_unknown_fields)]
 pub(super) struct Recipe {
     pub source: Source,
+    identity_field: String,
     search_radius_m: f64,
 }
 
@@ -67,7 +68,7 @@ pub(super) fn convert(
     {
         let mut row = recipe.source.observation(
             inputs,
-            records::text(&value["nr2020"]),
+            records::text(&value[&recipe.identity_field]),
             CountBasis::BothDirections,
         )?;
         for (class, field) in ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]

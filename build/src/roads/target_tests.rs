@@ -82,6 +82,31 @@ fn a_distant_parallel_part_cannot_rescue_a_section_whose_nearest_part_crosses_th
 }
 
 #[test]
+fn equally_near_parts_at_one_endpoint_keep_an_aligned_count_in_either_geometry_order() {
+    let mut observed = observation();
+    observed.geometry = vec![
+        vec![[0.0, -0.001], [0.0, 0.0]],
+        vec![[0.0, 0.0], [0.001, 0.0]],
+    ];
+    observed.target.minimum_alignment_cosine = 0.8660254037844387;
+    observed.target.distance_rule = DistanceRule::NearestPiece;
+    for reverse in [false, true] {
+        if reverse {
+            observed.geometry.reverse();
+        }
+        let mut target = road(1);
+        target.source_id = 0;
+        target.start = (-50.0, 10.0);
+        target.end = (50.0, 10.0);
+        Matcher::new(vec![observed.clone()])
+            .unwrap()
+            .apply(&mut target, &model())
+            .unwrap();
+        assert_eq!(target.source_id, 1);
+    }
+}
+
+#[test]
 fn route_aliases_have_country_class_and_municipal_support_without_invented_positions() {
     let mut observed = observation();
     observed.country = 1;
