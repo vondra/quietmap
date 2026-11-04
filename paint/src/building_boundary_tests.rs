@@ -1,6 +1,7 @@
 //! Adjacent squares must answer a split building at the same complete façade.
 
 use crate::paint::{Grid, corners_of, paint_pixels};
+
 use crate::square::{Files, Square};
 use physics::bands::{BANDS, PERIODS};
 use physics::weather::{COLUMNS, ROWS, WeatherNode, WeatherTable, encode as encode_weather};
@@ -93,7 +94,7 @@ fn both_halves_of_a_building_take_the_facade_facing_its_source() {
     let grid = Grid {
         pixels: 64,
         block: 8,
-        hum: 16,
+        hum_spacing: 16,
     };
     let painted: Vec<_> = tiles
         .into_iter()

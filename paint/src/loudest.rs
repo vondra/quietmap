@@ -35,19 +35,7 @@ pub(crate) struct LoudestIndex {
 impl LoudestIndex {
     /// The index of `square` for receivers at `points`.
     pub fn new(square: &Square, points: &[Point]) -> Self {
-        let mut area = ReceiverArea {
-            low: [f64::INFINITY; 2],
-            high: [f64::NEG_INFINITY; 2],
-            altitudes_m: [f64::INFINITY, f64::NEG_INFINITY],
-        };
-        for point in points {
-            for axis in 0..2 {
-                area.low[axis] = area.low[axis].min(point.position[axis]);
-                area.high[axis] = area.high[axis].max(point.position[axis]);
-            }
-            area.altitudes_m[0] = area.altitudes_m[0].min(point.altitude_m);
-            area.altitudes_m[1] = area.altitudes_m[1].max(point.altitude_m);
-        }
+        let area = ReceiverArea::from_points(points.iter().map(|p| (p.position, p.altitude_m)));
         let impedance_db = receiver_impedance_db(area.altitudes_m[0])
             .max(receiver_impedance_db(area.altitudes_m[1]));
         let lists = (square.aircraft.par_iter())

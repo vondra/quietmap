@@ -4,19 +4,23 @@
 //! Background blocks blend loudness at corners and evaluate their original energy fields. Source blocks check actual
 //! pixel receivers against sampled loudness; only patches away from sources and walls that agree
 //! omit work.
-//! Candidate source lists live in bounded chunks, while the retained lattice holds only sound.
+//! Source blocks retain their admissions; sampled pixel fields are evaluated in bounded chunks.
 
+use crate::blocks::Block;
 use crate::exact::LAYERS;
 use crate::flights::blend_flights;
+use crate::levels::Painted;
 use crate::levels::{PaintedCells, layer_energy};
-use crate::paint::{Painted, corner_weights, rectangle_at};
+use crate::paint::{corner_weights, rectangle_at};
 use crate::points::PointPainter;
 use crate::quiet_corners::loudness_at_corners;
 use crate::quiet_samples::{QuietSamples, sample_block_pixels};
 use rayon::prelude::*;
+use std::borrow::Cow;
 
 pub(crate) struct QuietBlocks {
-    pub blocks: Vec<bool>,
+    pub known_blocks: Vec<bool>,
+    admissions: Vec<Option<Block>>,
     pub exact_source_counts: Vec<usize>,
     loudness: Vec<[f64; LAYERS + 1]>,
     samples: Vec<Option<QuietSamples>>,
@@ -62,7 +66,8 @@ impl QuietBlocks {
         }
         let loudness = loudness_at_corners(painter, needed)?;
         let mut quiet = Self {
-            blocks: vec![false; candidates.len()],
+            known_blocks: vec![false; candidates.len()],
+            admissions: (0..candidates.len()).map(|_| None).collect(),
             exact_source_counts: candidates.iter().map(|&(_, count)| count).collect(),
             loudness,
             samples: (0..candidates.len()).map(|_| None).collect(),
@@ -70,15 +75,17 @@ impl QuietBlocks {
         let mut block_ids = Vec::new();
         for (at, (background, _)) in candidates.into_iter().enumerate() {
             if background {
-                quiet.blocks[at] = true;
+                quiet.known_blocks[at] = true;
             } else {
                 block_ids.push(at);
             }
         }
-        let background = quiet.blocks.iter().filter(|&&quiet| quiet).count();
+        let background = quiet.known_blocks.iter().filter(|&&quiet| quiet).count();
         let candidate_count = block_ids.len();
         let sampled = sample_block_pixels(painter, block_ids)?;
-        let rejections = sampled.rejections;
+        for (at, block) in sampled.admissions {
+            quiet.admissions[at] = Some(block);
+        }
         let sampled = sampled.blocks;
         let sampled_count = sampled.len();
         let interpolated_patches: usize = sampled
@@ -86,31 +93,32 @@ impl QuietBlocks {
             .map(|(_, samples)| samples.interpolated_patches())
             .sum();
         for (at, samples) in sampled {
-            quiet.blocks[at] = samples.complete();
+            quiet.known_blocks[at] = samples.complete();
             quiet.samples[at] = Some(samples);
         }
         eprintln!(
             "qm-paint: {background} open background blocks, {sampled_count}/{candidate_count} source blocks sampled, {interpolated_patches} checked patches interpolated"
         );
-        eprintln!(
-            "qm-paint: probe rejections (overlapping): unavailable={} sone-total={} sone-layer={} lden-total={} lden-layer={} source={} edge={}; lden-layer alone={}",
-            rejections[0],
-            rejections[1],
-            rejections[2],
-            rejections[3],
-            rejections[4],
-            rejections[5],
-            rejections[6],
-            rejections[7]
-        );
         Ok(quiet)
+    }
+
+    /// Rejected patches and façade passes share their already computed admissions.
+    pub fn block<'a>(
+        &'a self,
+        painter: &PointPainter,
+        near: &mut Vec<u32>,
+        at: usize,
+    ) -> Cow<'a, Block> {
+        self.admissions[at]
+            .as_ref()
+            .map_or_else(|| Cow::Owned(painter.block(near, at)), Cow::Borrowed)
     }
 
     pub fn has_paint(&self, painter: &PointPainter, at: usize) -> bool {
         let grid = painter.grid;
         let (x, y) = (at % grid.pixels, at / grid.pixels);
         let block = (y / grid.block) * (grid.pixels / grid.block) + x / grid.block;
-        self.blocks[block]
+        self.known_blocks[block]
             || self.samples[block]
                 .as_ref()
                 .is_some_and(|samples| samples.has_paint(x % grid.block, y % grid.block))
@@ -140,7 +148,7 @@ impl QuietBlocks {
         let steady = painter.corners.hum.energies_at(x, y);
         let flights = blend_flights(around.map(|at| painter.corners.flights[at]), fx, fy);
         (
-            layer_energy(painter.square, &steady, &flights[0], 1.0, &[], &[]),
+            layer_energy(painter.square, &steady, &flights.energy, 1.0, &[], &[]),
             ndens,
         )
     }

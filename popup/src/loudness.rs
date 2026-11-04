@@ -77,7 +77,7 @@ pub struct Curve {
     /// The spectrum's third-octave levels set to an A-weighted level of 0 dB (`-inf` silent);
     /// `None` for a spectrum without energy.
     shape_db: Option<[f64; THIRD_OCTAVES]>,
-    values: Vec<OnceLock<f64>>,
+    values: OnceLock<Vec<OnceLock<f64>>>,
 }
 
 impl Curve {
@@ -87,7 +87,6 @@ impl Curve {
             .zip(A_WEIGHTING_DB)
             .map(|(value, weight)| value * energy(weight))
             .sum();
-        let steps = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
         Curve {
             shape_db: (a_weighted > 0.0).then(|| {
                 thirds.map(|value| {
@@ -98,7 +97,7 @@ impl Curve {
                     }
                 })
             }),
-            values: (0..=steps).map(|_| OnceLock::new()).collect(),
+            values: OnceLock::new(),
         }
     }
 
@@ -109,7 +108,11 @@ impl Curve {
 
     /// The loudness (sone) at the curve's `step`th whole decibel.
     fn value(&self, step: usize) -> f64 {
-        *self.values[step].get_or_init(|| {
+        let values = self.values.get_or_init(|| {
+            let steps = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
+            (0..=steps).map(|_| OnceLock::new()).collect()
+        });
+        *values[step].get_or_init(|| {
             self.shape_db.map_or(0.0, |shape| {
                 let level_db = CURVE_LOW_DB + step as f64;
                 zwicker_loudness_sone(&shape.map(|db| db + level_db))
@@ -119,7 +122,7 @@ impl Curve {
 
     /// The loudness (sone) at `level_db`.
     pub fn at(&self, level_db: f64) -> f64 {
-        let last = self.values.len() - 1;
+        let last = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
         let position = (level_db - CURVE_LOW_DB).clamp(0.0, last as f64);
         let below = (position.floor() as usize).min(last - 1);
         let (low, high) = (self.value(below), self.value(below + 1));

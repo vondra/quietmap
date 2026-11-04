@@ -1,11 +1,40 @@
 //! Quantized Nden and Lden from one receiver's sound, with a shared linear-energy account.
 
 use crate::exact::{LAYERS, PairEnergy};
-use crate::paint::{Cells, NO_LEVEL, Painted, SILENCE, cells_of};
 use crate::square::Square;
 use physics::bands::{PERIODS, lden_energy, level_db};
 use rayon::prelude::*;
 use tiles::sources::Layer;
+
+/// A cell not assessed: a building with no exposed façade, or nothing painted there.
+pub const NO_LEVEL: u8 = 255;
+/// A cell assessed and silent: under 0 phon, 1/16 sone (the quiet zones count it quiet, a zoom out
+/// averages it as no loudness).
+pub const SILENCE: u8 = 254;
+
+/// Per pixel (row-major from the north-west) its cell per layer and the total's last ([`cell`]),
+/// [`SILENCE`] or [`NO_LEVEL`].
+pub type Cells = Vec<[u8; LAYERS + 1]>;
+
+/// An outdoor point painted: per layer its Lden energy (a building's façade is chosen by it) and its
+/// loudness per layer and in total (sone).
+pub type Painted = ([f64; LAYERS], [f64; LAYERS + 1]);
+
+/// The cell of a loudness (sone): twice its loudness level in phon (40 + 10 log2 sone), so a step
+/// is half a phon (3.5 % of loudness) and a doubling 20 steps; [`SILENCE`] under 0 phon.
+pub fn cell(sone: f64) -> u8 {
+    let byte = 80.0 + 20.0 * sone.log2();
+    if byte.is_nan() || byte < 0.0 {
+        SILENCE
+    } else {
+        byte.round().min(f64::from(SILENCE - 1)) as u8
+    }
+}
+
+/// The cells of a pixel's loudness per layer and in total.
+pub fn cells_of(ndens: &[f64; LAYERS + 1]) -> [u8; LAYERS + 1] {
+    ndens.map(cell)
+}
 
 /// Both quantities from the same assessed pixels, before they enter an atomic square bundle.
 #[derive(Clone)]

@@ -77,6 +77,20 @@ pub struct TileId {
 }
 
 impl TileId {
+    /// The shortest signed tile offset from `origin`, wrapping longitude at the antimeridian.
+    pub fn offset_from(self, origin: TileId) -> [i64; 2] {
+        [
+            wrap_x(f64::from(self.x) - f64::from(origin.x)) as i64,
+            i64::from(self.y) - i64::from(origin.y),
+        ]
+    }
+
+    /// The Chebyshev ring around `origin` that contains this tile.
+    pub fn ring_distance(self, origin: TileId) -> u32 {
+        let [dx, dy] = self.offset_from(origin);
+        dx.unsigned_abs().max(dy.unsigned_abs()) as u32
+    }
+
     pub fn containing(position: Mercator) -> Self {
         let last = f64::from(TILES_PER_AXIS - 1);
         TileId {

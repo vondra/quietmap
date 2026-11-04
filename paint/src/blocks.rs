@@ -93,6 +93,7 @@ pub(crate) struct LeftGroup {
 /// beyond its own (sorted) and their Lden energy at each corner, what they leave out at each corner
 /// per layer and period, and of it each source group's (sorted by group): it sounds with its passes
 /// at the pixels, not steady (a railway's farther ways carry the same trains).
+#[derive(Clone)]
 pub(crate) struct Block {
     pub exact: Vec<u32>,
     pub admitted: Vec<u32>,

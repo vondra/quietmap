@@ -280,7 +280,7 @@ impl Gpu {
                 segments.extend(request_segments);
             }
         }
-        let mut sums = vec![[[[0.0; PERIODS]; 2]; 2]; requests.len()];
+        let mut sums = vec![[FlightSums::default(); 2]; requests.len()];
         if segments.is_empty() {
             return Ok(sums);
         }
@@ -312,10 +312,9 @@ impl Gpu {
         for (slot, request_sums) in sums.iter_mut().enumerate() {
             for (band, band_sums) in request_sums.iter_mut().enumerate() {
                 let at = (2 * slot + band) * 2 * PERIODS;
-                for (kind, values) in band_sums.iter_mut().enumerate() {
-                    for (period, value) in values.iter_mut().enumerate() {
-                        *value = totals[at + kind * PERIODS + period];
-                    }
+                for period in 0..PERIODS {
+                    band_sums.energy[period] = totals[at + period];
+                    band_sums.energy_times_lambda[period] = totals[at + PERIODS + period];
                 }
             }
         }

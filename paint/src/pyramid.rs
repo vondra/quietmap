@@ -4,7 +4,7 @@
 use crate::exact::LAYERS;
 use crate::hm3::{Metric, PaintedSquare, TILE_PX, encode_metric_tile};
 use crate::levels::lden_cell;
-use crate::paint::{Cells, NO_LEVEL, SILENCE, cell};
+use crate::levels::{Cells, NO_LEVEL, SILENCE, cell};
 use crate::region::{self, REGION_ZOOM};
 use pmtiles::TileCoord;
 use rayon::prelude::*;

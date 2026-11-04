@@ -1,5 +1,6 @@
 //! The time levels' tests: traffic by the hour, lines alone and together, the weather, events.
 
+use super::traffic::OTHER_PERIOD_SHARES;
 use super::*;
 use crate::candidates::DisplayRef;
 use crate::update::Contributor;
@@ -202,17 +203,17 @@ fn a_busy_roads_quiet_hours_lower_its_night_l90() {
 #[test]
 fn a_contributor_is_heard_as_its_passes_or_as_a_steady_sound() {
     let lane = contributor(7, Layer::Road, 40.0, 4.0);
-    let heard_lane = heard(&lane, &quiet_road(&lane.group()).unwrap()).unwrap();
+    let heard_lane = passes_at(&lane, &quiet_road(&lane.group()).unwrap()).unwrap();
     assert!((heard_lane.per_hour[0] - 33.0 * 0.70 / 12.0).abs() < 1e-9);
     assert!(!heard_lane.steady);
     let motorway = contributor(8, Layer::Road, 45.0, 300.0);
     let busy = serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
         "road_class": "motorway"});
-    let heard_motorway = heard(&motorway, &busy).unwrap();
+    let heard_motorway = passes_at(&motorway, &busy).unwrap();
     assert!((heard_motorway.per_hour[0] - 30_000.0 * 0.65 / 12.0).abs() < 1e-9);
     assert!(heard_motorway.steady);
     let industry = contributor(9, Layer::Industry, 45.0, 30.0);
-    assert_eq!(heard(&industry, &busy), None);
+    assert_eq!(passes_at(&industry, &busy), None);
 }
 
 /// Industry is steady; the same click gives the same levels whatever order the hash maps
@@ -401,6 +402,6 @@ fn events_sound_for_their_duty_and_are_silent_otherwise() {
     let ringing = 10.0 * 51f64.log10() + 40.0;
     assert!((distribution.exceeded_db(0.019) - ringing).abs() <= BIN_DB / 2.0);
     let fields = bells_fields(&bells.group()).unwrap();
-    let heard_bells = heard(&bells, &fields).unwrap();
+    let heard_bells = passes_at(&bells, &fields).unwrap();
     assert!(!heard_bells.steady && (heard_bells.per_hour[0] - 3.0).abs() < 1e-9);
 }

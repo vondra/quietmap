@@ -4,7 +4,6 @@ use crate::exact::{Batch, Point};
 use crate::flights::{FlightSums, HeardTile, tiles_heard};
 use crate::paint::Grid;
 use crate::square::{Square, gap_to_tile};
-use physics::bands::PERIODS;
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{
     AircraftReceiver, ReceiverArea, minimum_box_slant_m, tile_flight_sums,
@@ -54,20 +53,8 @@ pub struct FlightBoxes {
 impl FlightBoxes {
     /// The boxes the square's block `corners` hear, at `grid`'s hum spacing.
     pub fn new(square: &Square, grid: Grid, corners: &[Point]) -> Self {
-        let coarse_m = square.frame.east_m_per_unit / grid.pixels as f64 * grid.hum as f64;
-        let mut area = ReceiverArea {
-            low: [f64::INFINITY; 2],
-            high: [f64::NEG_INFINITY; 2],
-            altitudes_m: [f64::INFINITY, f64::NEG_INFINITY],
-        };
-        for point in corners {
-            for axis in 0..2 {
-                area.low[axis] = area.low[axis].min(point.position[axis]);
-                area.high[axis] = area.high[axis].max(point.position[axis]);
-            }
-            area.altitudes_m[0] = area.altitudes_m[0].min(point.altitude_m);
-            area.altitudes_m[1] = area.altitudes_m[1].max(point.altitude_m);
-        }
+        let coarse_m = square.frame.east_m_per_unit / grid.pixels as f64 * grid.hum_spacing as f64;
+        let area = ReceiverArea::from_points(corners.iter().map(|p| (p.position, p.altitude_m)));
         let lists: Vec<_> = square
             .aircraft
             .par_iter()
@@ -121,7 +108,7 @@ impl FlightBoxes {
         square: &Square,
         request: &FlightRequest,
     ) -> Result<[FlightSums; 2], String> {
-        let mut total = [[[0.0; PERIODS]; 2]; 2];
+        let mut total = [FlightSums::default(); 2];
         let point = request.point;
         let heard = tiles_heard(square, point.position, request.within_m);
         if !self.hears_any(&heard, request.weights) {
@@ -154,11 +141,10 @@ impl FlightBoxes {
                     &horizons,
                     (indices, &weight, request.within_m),
                 );
-                for (totals, values) in band_total.iter_mut().zip([sums.0, sums.1]) {
-                    for (sum, value) in totals.iter_mut().zip(values) {
-                        *sum += value;
-                    }
-                }
+                band_total.add(FlightSums {
+                    energy: sums.0,
+                    energy_times_lambda: sums.1,
+                });
             }
         }
         Ok(total)

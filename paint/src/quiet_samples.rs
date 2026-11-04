@@ -5,11 +5,11 @@
 //! rejected patches reuse their exact lattice and probe results. Half-phon and half-dB checks match the stored steps,
 //! an empirical safeguard verified against the independent etalon, not a bound on unsampled rays.
 
-use crate::blocks::meets;
+use crate::blocks::{Block, meets};
 use crate::exact::{LAYERS, Point};
+use crate::levels::{Painted, SILENCE, cell};
 use crate::paint::{
-    PASS_BLOCKS, Painted, SILENCE, bilinear, cell, metres_at, rectangle_at, runs_within,
-    shortest_pixel_side_metres,
+    PASS_BLOCKS, bilinear, metres_at, rectangle_at, runs_within, shortest_pixel_side_metres,
 };
 use crate::points::PointPainter;
 use rayon::prelude::*;
@@ -60,7 +60,12 @@ impl QuietSamples {
         self.accepted.iter().filter(|&&accepted| accepted).count()
     }
 
-    fn probe_rejections(&self, [i, j]: [usize; 2], (x, y): (usize, usize), heard: &Painted) -> u8 {
+    fn agrees_with_probe(
+        &self,
+        [i, j]: [usize; 2],
+        (x, y): (usize, usize),
+        heard: &Painted,
+    ) -> bool {
         // A one-pixel interval has no independent interior probe.
         if x <= self.axis[i]
             || x >= self.axis[i + 1]
@@ -70,26 +75,11 @@ impl QuietSamples {
                 .iter()
                 .any(|&at| self.values[at].is_none())
         {
-            return 1;
+            return false;
         }
         let blended = self.at(x, y);
-        u8::from(!loudness_agrees(LAYERS, heard.1[LAYERS], blended.1[LAYERS])) << 1
-            | u8::from(
-                (0..LAYERS).any(|layer| !loudness_agrees(layer, heard.1[layer], blended.1[layer])),
-            ) << 2
-            | u8::from(!energy_agrees(heard.0.iter().sum(), blended.0.iter().sum())) << 3
-            | u8::from((0..LAYERS).any(|layer| !energy_agrees(heard.0[layer], blended.0[layer])))
-                << 4
-    }
-
-    #[cfg(test)]
-    fn agrees_with_probe(
-        &self,
-        patch: [usize; 2],
-        position: (usize, usize),
-        heard: &Painted,
-    ) -> bool {
-        self.probe_rejections(patch, position, heard) == 0
+        agrees_with_interpolation(&heard.1, &blended.1)
+            && energies_agree_within_half_decibel(&heard.0, &blended.0)
     }
 
     fn sample_index(&self, x: usize, y: usize) -> Option<usize> {
@@ -125,7 +115,7 @@ impl QuietSamples {
 /// Each block's exact samples and checked patches; rejected patches retain their other pixels.
 pub(crate) struct SampledBlocks {
     pub blocks: Vec<(usize, QuietSamples)>,
-    pub rejections: [usize; 8],
+    pub admissions: Vec<(usize, Block)>,
 }
 
 pub(crate) fn sample_block_pixels(
@@ -148,7 +138,7 @@ pub(crate) fn sample_block_pixels(
     let sampled = painter.in_passes(passes, |range| {
         let chunk = &block_ids[range];
         let mut accepted = Vec::new();
-        let mut rejections = [0usize; 8];
+        let mut retain = vec![true; chunk.len()];
         let blocks: Vec<_> = chunk
             .par_iter()
             .map_init(Vec::new, |near, &at| painter.block(near, at))
@@ -194,11 +184,12 @@ pub(crate) fn sample_block_pixels(
                 for (cell, (&(x, y), probe)) in positions[25..].iter().zip(&heard[25..]).enumerate()
                 {
                     let Some(heard) = probe else {
-                        rejections[0] += 1;
                         continue;
                     };
                     let (i, j) = (cell % 4, cell / 4);
-                    let mut rejected = sampled.probe_rejections([i, j], (x, y), heard);
+                    if !sampled.agrees_with_probe([i, j], (x, y), heard) {
+                        continue;
+                    }
                     let (base_x, base_y) = ((at % side) * b, (at / side) * b);
                     let (low, high) = rectangle_at(
                         square,
@@ -212,30 +203,31 @@ pub(crate) fn sample_block_pixels(
                         let [a, b] = square.candidates[source as usize].ends_m;
                         meets(a, b, low, high)
                     });
-                    rejected |= u8::from(near) << 5;
-                    rejected |= u8::from(!square.obstacles.has_no_screening_edges(low, high)) << 6;
-                    for (reason, count) in rejections[..7].iter_mut().enumerate() {
-                        *count += usize::from(rejected & (1 << reason) != 0);
-                    }
-                    rejections[7] += usize::from(rejected == 1 << 4);
-                    sampled.accepted[cell] = rejected == 0;
+                    sampled.accepted[cell] =
+                        !near && square.obstacles.has_no_screening_edges(low, high);
                 }
+                retain[run.start + slot] = !sampled.complete();
                 if sampled.values.iter().any(Option::is_some) {
                     accepted.push((at, sampled));
                 }
             }
         }
-        Ok((accepted, rejections))
+        let admissions = chunk
+            .iter()
+            .copied()
+            .zip(blocks)
+            .zip(retain)
+            .filter_map(|(block, retain)| retain.then_some(block))
+            .collect::<Vec<_>>();
+        Ok((accepted, admissions))
     })?;
-    let mut rejections = [0; 8];
     let mut blocks = Vec::new();
-    for (_, (accepted, counts)) in sampled {
+    let mut admissions = Vec::new();
+    for (_, (accepted, retained)) in sampled {
+        admissions.extend(retained);
         blocks.extend(accepted);
-        for (total, count) in rejections.iter_mut().zip(counts) {
-            *total += count;
-        }
     }
-    Ok(SampledBlocks { blocks, rejections })
+    Ok(SampledBlocks { blocks, admissions })
 }
 
 fn lattice_corners([i, j]: [usize; 2]) -> [usize; 4] {
@@ -278,7 +270,6 @@ fn energy_agrees(heard: f64, blended: f64) -> bool {
             || (heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log10()).abs() <= 0.5))
 }
 
-#[cfg(test)]
 fn energies_agree_within_half_decibel(heard: &[f64; LAYERS], blended: &[f64; LAYERS]) -> bool {
     (0..LAYERS).all(|layer| energy_agrees(heard[layer], blended[layer]))
         && energy_agrees(heard.iter().sum(), blended.iter().sum())
@@ -299,7 +290,6 @@ fn loudness_agrees(layer: usize, heard: f64, blended: f64) -> bool {
     heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log2()).abs() <= 0.5
 }
 
-#[cfg(test)]
 fn agrees_with_interpolation(heard: &[f64; LAYERS + 1], blended: &[f64; LAYERS + 1]) -> bool {
     (0..=LAYERS).all(|layer| loudness_agrees(layer, heard[layer], blended[layer]))
 }

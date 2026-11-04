@@ -25,13 +25,29 @@ use tiles::geo::TileId;
 
 /// The flights heard at a point: their energy and their energy times Kurze's lambda per period
 /// (both add up over boxes, and blend between points; their ratio is the flights' line's lambda).
-pub type FlightSums = [[f64; PERIODS]; 2];
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FlightSums {
+    pub energy: [f64; PERIODS],
+    pub energy_times_lambda: [f64; PERIODS],
+}
+
+impl FlightSums {
+    pub fn add(&mut self, other: Self) {
+        for p in 0..PERIODS {
+            self.energy[p] += other.energy[p];
+            self.energy_times_lambda[p] += other.energy_times_lambda[p];
+        }
+    }
+}
 
 /// Blends four points' flights (north-west, north-east, south-west, south-east) bilinearly.
 pub(crate) fn blend_flights(corners: [FlightSums; 4], fx: f64, fy: f64) -> FlightSums {
-    std::array::from_fn(|kind| {
-        std::array::from_fn(|p| bilinear(corners.map(|c| c[kind][p]), fx, fy))
-    })
+    FlightSums {
+        energy: std::array::from_fn(|p| bilinear(corners.map(|c| c.energy[p]), fx, fy)),
+        energy_times_lambda: std::array::from_fn(|p| {
+            bilinear(corners.map(|c| c.energy_times_lambda[p]), fx, fy)
+        }),
+    }
 }
 
 /// One aircraft tile a click reads: its place in the square's list, whether its fine boxes (else
@@ -77,7 +93,7 @@ pub(crate) fn rolls_at(square: &Square, point: &Point) -> Result<FlightSums, Str
         (east - point.position[0]).hypot(north - point.position[1]) <= ROLL_REACH_M
     };
     if !square.rolls.iter().any(|roll| within_reach(roll.start)) {
-        return Ok([[0.0; PERIODS]; 2]);
+        return Ok(FlightSums::default());
     }
     let horizons = Horizons::build(
         &square.ground,
@@ -91,7 +107,10 @@ pub(crate) fn rolls_at(square: &Square, point: &Point) -> Result<FlightSums, Str
         altitude_m: point.altitude_m,
     };
     let sums = roll_sums(&square.rolls, &square.frame, receiver, &horizons);
-    Ok([sums.energy, sums.energy_lambda])
+    Ok(FlightSums {
+        energy: sums.energy,
+        energy_times_lambda: sums.energy_lambda,
+    })
 }
 
 /// Adds each request's rolls to its near flights.
@@ -104,11 +123,7 @@ fn add_rolls(
         .zip(requests)
         .try_for_each(|(sums, request)| {
             let rolls = rolls_at(square, request.point)?;
-            for (totals, values) in sums[0].iter_mut().zip(rolls) {
-                for (sum, value) in totals.iter_mut().zip(values) {
-                    *sum += value;
-                }
-            }
+            sums[0].add(rolls);
             Ok(())
         })
 }
@@ -128,21 +143,23 @@ pub(crate) fn aircraft_sums(square: &Square, point: &Point) -> Result<FlightSums
         altitude_m: point.altitude_m,
     };
     let rolls = roll_sums(&square.rolls, &square.frame, receiver, &horizons);
-    let mut total = [rolls.energy, rolls.energy_lambda];
-    for heard in tiles_heard(square, point.position, AIRCRAFT_REACH_M) {
+    let mut total = FlightSums {
+        energy: rolls.energy,
+        energy_times_lambda: rolls.energy_lambda,
+    };
+    for tile in tiles_heard(square, point.position, AIRCRAFT_REACH_M) {
         let sums = tile_flight_sums(
-            &heard.boxes,
-            heard.tile,
+            &tile.boxes,
+            tile.tile,
             &square.frame,
             receiver,
             &horizons,
-            (0..heard.boxes.box_count(), &|_| 1.0, AIRCRAFT_REACH_M),
+            (0..tile.boxes.box_count(), &|_| 1.0, AIRCRAFT_REACH_M),
         );
-        for (totals, values) in total.iter_mut().zip([sums.0, sums.1]) {
-            for (sum, value) in totals.iter_mut().zip(values) {
-                *sum += value;
-            }
-        }
+        total.add(FlightSums {
+            energy: sums.0,
+            energy_times_lambda: sums.1,
+        });
     }
     Ok(total)
 }
@@ -156,8 +173,8 @@ pub fn lattice_requests<'a>(
     boxes: &FlightBoxes,
 ) -> Vec<FlightRequest<'a>> {
     let corner_side = grid.pixels / grid.block + 1;
-    let ratio = grid.hum / grid.block;
-    let coarse_side = grid.pixels / grid.hum + 1;
+    let ratio = grid.hum_spacing / grid.block;
+    let coarse_side = grid.pixels / grid.hum_spacing + 1;
     let air_side = grid.pixels / (2 * grid.block) + 1;
     let coarse = (0..coarse_side * coarse_side).map(|at| {
         let (column, row) = (at % coarse_side, at / coarse_side);
@@ -199,11 +216,11 @@ pub(crate) fn flights_at_corners(
 ) -> Result<Vec<FlightSums>, String> {
     let boxes = FlightBoxes::new(square, grid, corners);
     if boxes.occupied.iter().all(|&occupied| !occupied) && square.rolls.is_empty() {
-        return Ok(vec![[[0.0; PERIODS]; 2]; corners.len()]);
+        return Ok(vec![FlightSums::default(); corners.len()]);
     }
     let corner_side = grid.pixels / grid.block + 1;
-    let ratio = grid.hum / grid.block;
-    let coarse_side = grid.pixels / grid.hum + 1;
+    let ratio = grid.hum_spacing / grid.block;
+    let coarse_side = grid.pixels / grid.hum_spacing + 1;
     let air_side = grid.pixels / (2 * grid.block) + 1;
     let requests = lattice_requests(grid, corners, &boxes);
     let mut sums = flight_sums(square, &boxes, &requests, batch)?;
@@ -241,7 +258,7 @@ pub(crate) fn flights_at_corners(
                 blend(column, row, 2, &|i, j| air[(j / 2) * air_side + i / 2][0]);
             let (low, high) = around
                 .iter()
-                .map(|sums| lden_energy(&sums[0]))
+                .map(|sums| lden_energy(&sums.energy))
                 .fold((f64::INFINITY, 0.0f64), |(low, high), value| {
                     (low.min(value), high.max(value))
                 });
@@ -269,13 +286,10 @@ pub(crate) fn flights_at_corners(
             let (distant_energy, _) = blend(column, row, 4 * ratio, &|i, j| {
                 coarse[(j / ratio) * coarse_side + i / ratio][1]
             });
-            std::array::from_fn(|kind| {
-                std::array::from_fn(|period| {
-                    near_energy[at][kind][period]
-                        + far_energy[kind][period]
-                        + distant_energy[kind][period]
-                })
-            })
+            let mut total = near_energy[at];
+            total.add(far_energy);
+            total.add(distant_energy);
+            total
         })
         .collect())
 }

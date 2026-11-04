@@ -9,9 +9,10 @@
 use crate::blocks::{Block, Corner, admission_counts, admit, meets};
 use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Pair, Point, evaluate_all};
 use crate::flights::blend_flights;
-use crate::paint::{Corners, Grid, Painted, corner_weights, rectangle_at};
+use crate::levels::Painted;
+use crate::paint::{Corners, Grid, corner_weights, rectangle_at};
 use crate::passes::paint_passes;
-use crate::sone::{PixelSoundScratch, Rest, pixel_sound};
+use crate::sone::{PixelSoundScratch, SoundBesideExactPairs, pixel_sound};
 use crate::square::Square;
 use physics::bands::{BANDS, PERIODS, lden_energy};
 use popup::percentiles::Resolution;
@@ -93,7 +94,7 @@ impl PointPainter<'_> {
     /// and corner weights it takes. Every outdoor point reaching this stage computes its sound.
     pub fn paint(
         &self,
-        blocks: &[Block],
+        blocks: &[impl std::borrow::Borrow<Block> + Sync],
         points: &[Point],
         places: &[(usize, usize)],
     ) -> Result<Vec<Option<Painted>>, String> {
@@ -106,7 +107,7 @@ impl PointPainter<'_> {
                 if point.own_footprint != 0 {
                     return Vec::new();
                 }
-                (blocks[slot].exact.iter().copied())
+                (blocks[slot].borrow().exact.iter().copied())
                     .filter(|&index| square.loud(index, point.position, &point.bound))
                     .collect()
             })
@@ -142,7 +143,7 @@ impl PointPainter<'_> {
             // sources' energy here against their corners' blend, at most 1. A pixel behind a
             // wall hears its far sources 10-20 dB under that blend, and the left-out blended
             // from the corners put Dobris's total 7 phon over the etalon there.
-            let block = &blocks[slot];
+            let block = blocks[slot].borrow();
             let admitted_here: f64 = (lists[k].iter().zip(&evaluated.pairs[range.clone()]))
                 .filter(|(index, _)| block.admitted.binary_search(index).is_ok())
                 .map(|(_, energy)| lden_energy(&energy.mixed))
@@ -163,7 +164,7 @@ impl PointPainter<'_> {
                         let energy = weights[c] * block.left_out[c][layer][p] * left_reach;
                         steady[layer][p] += energy;
                         let shape = &corners.corner_bands[corner][layer][p];
-                        let sum: f64 = shape.iter().sum();
+                        let sum = corners.corner_band_sums[corner][layer][p];
                         if energy > 0.0 && sum > 0.0 {
                             for b in 0..BANDS {
                                 bands[layer][p][b] += energy * shape[b] / sum;
@@ -172,7 +173,7 @@ impl PointPainter<'_> {
                     }
                 }
             }
-            let rest = Rest {
+            let rest = SoundBesideExactPairs {
                 steady,
                 bands,
                 left_groups: (&block.left_groups, weights),
@@ -183,7 +184,7 @@ impl PointPainter<'_> {
             let layers = crate::levels::layer_energy(
                 square,
                 &rest.steady,
-                &rest.flights[0],
+                &rest.flights.energy,
                 reflection,
                 &lists[k],
                 &evaluated.pairs[range.clone()],

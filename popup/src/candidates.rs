@@ -109,6 +109,11 @@ fn distance_from(receiver: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 
 /// Horizontal distance from the origin to the segment `a`-`b`.
 fn distance_to_segment(a: [f64; 2], b: [f64; 2]) -> f64 {
+    let offset = closest_offset(a, b);
+    offset[0].hypot(offset[1])
+}
+
+fn closest_offset(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let length_sq = dx * dx + dy * dy;
     let t = if length_sq > 0.0 {
@@ -116,12 +121,12 @@ fn distance_to_segment(a: [f64; 2], b: [f64; 2]) -> f64 {
     } else {
         0.0
     };
-    (a[0] + t * dx).hypot(a[1] + t * dy)
+    [a[0] + t * dx, a[1] + t * dy]
 }
 
 impl Candidate {
     /// How the piece spreads (a line carries its power per horizontal metre).
-    fn spread(&self) -> Spread {
+    pub fn spread(&self) -> Spread {
         if self.line {
             let [a, b] = self.ends_m;
             Spread::Line {
@@ -145,12 +150,16 @@ impl Candidate {
 
     /// Horizontal distance from `receiver` (click metres) to the piece.
     pub fn distance_from(&self, receiver: [f64; 2]) -> f64 {
-        let [a, b] = self.ends_m;
-        if self.line {
-            distance_from(receiver, a, b)
-        } else {
-            (a[0] - receiver[0]).hypot(a[1] - receiver[1])
-        }
+        let offset = self.offset_from(receiver);
+        offset[0].hypot(offset[1])
+    }
+
+    /// Offset of the nearest source point, before taking its length.
+    pub fn offset_from(&self, receiver: [f64; 2]) -> [f64; 2] {
+        let [a, b] = self
+            .ends_m
+            .map(|end| [end[0] - receiver[0], end[1] - receiver[1]]);
+        if self.line { closest_offset(a, b) } else { a }
     }
 
     /// The bound per period at horizontal distance `distance_m`.

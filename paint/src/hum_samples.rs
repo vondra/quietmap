@@ -98,7 +98,6 @@ pub(crate) fn sampled_hum(
         })
         .collect();
     let mut quiet = vec![([[0.0; PERIODS]; LAYERS], PointBands::default()); points.len()];
-    let mut traced_round_pairs = 0usize;
     loop {
         let rounds: Vec<_> = samples
             .iter()
@@ -123,7 +122,6 @@ pub(crate) fn sampled_hum(
                     .collect::<Vec<_>>()
             })
             .collect();
-        traced_round_pairs += needed.len();
         for chunk in needed.chunks(PASS_PAIRS) {
             let pairs: Vec<_> = chunk
                 .iter()
@@ -176,14 +174,12 @@ pub(crate) fn sampled_hum(
             }
         }
     }
-    let mut reused_final_pairs = 0usize;
     for sample in &samples {
         let round = sample.finished.as_ref().unwrap();
         for (index, weight) in (0..round.certain.end)
             .map(|index| (index, 1.0))
             .chain(round.weights(&sample.orders))
         {
-            reused_final_pairs += 1;
             let bands = &sample.values[sample.evaluated[index].unwrap()].1;
             for (total, bands) in quiet[sample.point].1[sample.layer].iter_mut().zip(bands) {
                 for (total, band) in total.iter_mut().zip(bands) {
@@ -192,9 +188,6 @@ pub(crate) fn sampled_hum(
             }
         }
     }
-    eprintln!(
-        "qm-paint: hum sample pairs: rounds={traced_round_pairs}, reused final={reused_final_pairs}"
-    );
     for (energy, layers) in &mut quiet {
         for (energy, bands) in energy.iter().zip(layers) {
             for (energy, bands) in energy.iter().zip(bands) {

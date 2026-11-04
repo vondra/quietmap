@@ -5,7 +5,7 @@ use crate::hm3::{
     Metric, TILE_PX, decode_metric_tile, encode_metric_tile, square_path, tiles_per_side,
 };
 use crate::levels::PaintedCells;
-use crate::paint::{Cells, NO_LEVEL, SILENCE};
+use crate::levels::{Cells, NO_LEVEL, SILENCE};
 use rayon::prelude::*;
 use std::io::Write;
 use std::os::unix::fs::FileExt;

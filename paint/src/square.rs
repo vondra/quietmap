@@ -3,7 +3,11 @@
 //! one of its pixels, indexed by place and reach, the aircraft boxes to the aircraft reach and the
 //! runways' rolls to theirs.
 
-use physics::bound::{ReceiverBound, receiver_bound};
+#[path = "source_index.rs"]
+mod source_index;
+use source_index::Index;
+
+use physics::bound::{ReceiverBound, Spread, received_energy_bound, receiver_bound};
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::weather::{PlaceWeather, WeatherTable};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
@@ -19,19 +23,6 @@ use tiles::geo::{LocalFrame, Mercator, TileId};
 use tiles::obstacles::Obstacles;
 use tiles::sources::Sources;
 use tiles::terrain::Terrain;
-
-/// Side of the index's cells (m).
-const INDEX_CELL_M: f64 = 100.0;
-/// The index's reach classes (m): a source sits in the first that covers its reach.
-const REACH_CLASSES_M: [f64; 7] = [
-    250.0,
-    500.0,
-    1_000.0,
-    2_000.0,
-    4_000.0,
-    8_000.0,
-    GROUND_REACH_M,
-];
 
 /// The files of a square's neighbourhood.
 pub struct Files {
@@ -71,17 +62,9 @@ impl Files {
         let ground_rings = rings_for(&frame, GROUND_REACH_M);
         let aircraft_rings = rings_for(&frame, AIRCRAFT_REACH_M);
         let tiles: Vec<TileId> = (0..=aircraft_rings).flat_map(|k| tile.ring(k)).collect();
-        let ring_of = |other: TileId| {
-            let n = i64::from(tiles::geo::TILES_PER_AXIS);
-            let dx = (i64::from(other.x) - i64::from(tile.x) + n / 2).rem_euclid(n) - n / 2;
-            let dy = i64::from(other.y) - i64::from(tile.y);
-            dx.unsigned_abs().max(dy.unsigned_abs()) as u32
-        };
         let square_gap = |other: TileId| {
             // The tile's distance from the square, across the antimeridian too.
-            let n = i64::from(tiles::geo::TILES_PER_AXIS);
-            let dx = (i64::from(other.x) - i64::from(tile.x) + n / 2).rem_euclid(n) - n / 2;
-            let dy = i64::from(other.y) - i64::from(tile.y);
+            let [dx, dy] = other.offset_from(tile);
             let gap = |d: i64| (d.unsigned_abs() as f64 - 1.0).max(0.0);
             (gap(dx) * frame.east_m_per_unit).hypot(gap(dy) * frame.north_m_per_unit)
         };
@@ -100,7 +83,7 @@ impl Files {
                 Kind::Aircraft => square_gap(other) <= FINE_BOXES_WITHIN_M,
                 Kind::AircraftFar => true,
                 Kind::AircraftRolls => square_gap(other) <= ROLL_REACH_M + 1.0,
-                _ => ring_of(other) <= ground_rings,
+                _ => other.ring_distance(tile) <= ground_rings,
             },
         )?;
         Ok(Files {
@@ -132,150 +115,6 @@ pub struct AircraftTile<'a> {
     pub far: Option<Aircraft<'a>>,
 }
 
-/// The candidates by place and reach: per reach class a grid, a point asking each class within
-/// that class's reach.
-pub struct Index {
-    classes: Vec<(f64, Grid)>,
-}
-
-impl Index {
-    fn new(candidates: &[Candidate], reaches: &[f64]) -> Self {
-        let mut members = vec![Vec::new(); REACH_CLASSES_M.len()];
-        for (index, &reach) in reaches.iter().enumerate() {
-            let class = REACH_CLASSES_M
-                .iter()
-                .position(|&class| reach <= class)
-                .unwrap_or(REACH_CLASSES_M.len() - 1);
-            members[class].push(index as u32);
-        }
-        Index {
-            classes: REACH_CLASSES_M
-                .iter()
-                .zip(members)
-                .map(|(&reach, members)| (reach, Grid::new(candidates, members)))
-                .collect(),
-        }
-    }
-
-    /// Every candidate whose reach may cover a point of the rectangle `low`-`high` (frame
-    /// metres): every one loud there, and some not.
-    pub fn reaching(&self, low: [f64; 2], high: [f64; 2], out: &mut Vec<u32>) {
-        out.clear();
-        for (reach, grid) in &self.classes {
-            grid.within(low, high, *reach, out);
-        }
-    }
-
-    /// Every candidate that may lie within `radius_m` of the rectangle, and some farther.
-    pub fn within(&self, low: [f64; 2], high: [f64; 2], radius_m: f64, out: &mut Vec<u32>) {
-        out.clear();
-        for (_, grid) in &self.classes {
-            grid.within(low, high, radius_m, out);
-        }
-    }
-}
-
-/// One reach class's candidates by place: short pieces by the cell of their middle, long ones
-/// always.
-struct Grid {
-    origin: [f64; 2],
-    columns: usize,
-    rows: usize,
-    starts: Vec<u32>,
-    items: Vec<u32>,
-    long: Vec<u32>,
-}
-
-impl Grid {
-    fn new(candidates: &[Candidate], members: Vec<u32>) -> Self {
-        let middle = |index: u32| {
-            let [a, b] = candidates[index as usize].ends_m;
-            [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
-        };
-        let is_long = |index: u32| {
-            let [a, b] = candidates[index as usize].ends_m;
-            (b[0] - a[0]).hypot(b[1] - a[1]) > 2.0 * INDEX_CELL_M
-        };
-        let (long, short): (Vec<u32>, Vec<u32>) =
-            members.into_iter().partition(|&index| is_long(index));
-        let (mut low, mut high) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for &index in &short {
-            let m = middle(index);
-            for axis in 0..2 {
-                low[axis] = low[axis].min(m[axis]);
-                high[axis] = high[axis].max(m[axis]);
-            }
-        }
-        if short.is_empty() {
-            (low, high) = ([0.0; 2], [0.0; 2]);
-        }
-        let columns = ((high[0] - low[0]) / INDEX_CELL_M) as usize + 1;
-        let rows = ((high[1] - low[1]) / INDEX_CELL_M) as usize + 1;
-        let cell = |m: [f64; 2]| {
-            let column = ((m[0] - low[0]) / INDEX_CELL_M) as usize;
-            let row = ((m[1] - low[1]) / INDEX_CELL_M) as usize;
-            row.min(rows - 1) * columns + column.min(columns - 1)
-        };
-        let mut starts = vec![0u32; columns * rows + 1];
-        for &index in &short {
-            starts[cell(middle(index)) + 1] += 1;
-        }
-        for i in 1..starts.len() {
-            starts[i] += starts[i - 1];
-        }
-        let mut next = starts.clone();
-        let mut items = vec![0u32; short.len()];
-        for &index in &short {
-            let slot = &mut next[cell(middle(index))];
-            items[*slot as usize] = index;
-            *slot += 1;
-        }
-        Grid {
-            origin: low,
-            columns,
-            rows,
-            starts,
-            items,
-            long,
-        }
-    }
-
-    /// Appends every member that may lie within `radius_m` of the rectangle `low`-`high`, and
-    /// some farther.
-    fn within(&self, low: [f64; 2], high: [f64; 2], radius_m: f64, out: &mut Vec<u32>) {
-        out.extend_from_slice(&self.long);
-        // A short piece reaches at most a cell from its middle.
-        let reach = radius_m + INDEX_CELL_M;
-        let span = |value: f64, origin: f64, limit: usize| {
-            ((value - origin) / INDEX_CELL_M)
-                .floor()
-                .clamp(0.0, (limit - 1) as f64) as usize
-        };
-        if self.items.is_empty()
-            || high[0] + reach < self.origin[0]
-            || high[1] + reach < self.origin[1]
-        {
-            return;
-        }
-        let (c0, c1) = (
-            span(low[0] - reach, self.origin[0], self.columns),
-            span(high[0] + reach, self.origin[0], self.columns),
-        );
-        let (r0, r1) = (
-            span(low[1] - reach, self.origin[1], self.rows),
-            span(high[1] + reach, self.origin[1], self.rows),
-        );
-        for row in r0..=r1 {
-            let first = row * self.columns;
-            let (from, to) = (
-                self.starts[first + c0] as usize,
-                self.starts[first + c1 + 1] as usize,
-            );
-            out.extend_from_slice(&self.items[from..to]);
-        }
-    }
-}
-
 /// The square read for painting.
 pub struct Square<'a> {
     pub tile: TileId,
@@ -286,6 +125,8 @@ pub struct Square<'a> {
     pub attributes: Attributes,
     pub candidates: Vec<Candidate>,
     pub index: Index,
+    reaches_squared: Vec<f64>,
+    spreads: Vec<Spread>,
     pub aircraft: Vec<AircraftTile<'a>>,
     /// The rolls of the runways within their reach of the square, by path.
     pub rolls: Vec<HeardPath>,
@@ -425,6 +266,12 @@ impl<'a> Square<'a> {
             .map(|candidate| candidate.reach_m(&attributes[candidate.attribute]))
             .collect();
         let index = Index::new(&candidates, &reaches);
+        // Leave roundoff slack at the conservative reach before the full receiver bound.
+        let reaches_squared = reaches
+            .iter()
+            .map(|reach| reach * reach * (1.0 + 64.0 * f64::EPSILON))
+            .collect();
+        let spreads = candidates.iter().map(Candidate::spread).collect();
         Ok(Square {
             tile,
             frame,
@@ -434,6 +281,8 @@ impl<'a> Square<'a> {
             attributes,
             candidates,
             index,
+            reaches_squared,
+            spreads,
             aircraft,
             rolls,
             sources: sources.into_iter().map(|(_, file)| file).collect(),
@@ -444,16 +293,23 @@ impl<'a> Square<'a> {
     /// `receiver`, as the popup decides it: there it is evaluated exactly.
     pub fn loud(&self, index: u32, position: [f64; 2], receiver: &ReceiverBound) -> bool {
         let candidate = &self.candidates[index as usize];
-        let distance = candidate.distance_from(position);
+        let [x, y] = candidate.offset_from(position);
+        if x * x + y * y > self.reaches_squared[index as usize] {
+            return false;
+        }
+        let distance = x.hypot(y);
         let source = &self.attributes[candidate.attribute];
-        distance <= GROUND_REACH_M && loud(&candidate.bound_at_distance(distance, source, receiver))
+        distance <= GROUND_REACH_M
+            && loud(&received_energy_bound(
+                &source.energy,
+                self.spreads[index as usize],
+                distance,
+                receiver,
+            ))
     }
 }
 
 /// Whether `other` lies within `rings` of `tile` (its ground was read).
 fn ground_slot(tile: TileId, other: TileId, rings: u32) -> bool {
-    let n = i64::from(tiles::geo::TILES_PER_AXIS);
-    let dx = (i64::from(other.x) - i64::from(tile.x) + n / 2).rem_euclid(n) - n / 2;
-    let dy = i64::from(other.y) - i64::from(tile.y);
-    dx.unsigned_abs().max(dy.unsigned_abs()) <= u64::from(rings)
+    other.ring_distance(tile) <= rings
 }

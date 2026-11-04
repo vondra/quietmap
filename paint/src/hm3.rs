@@ -93,11 +93,6 @@ fn paeth_prediction(cells: &[u8], at: usize) -> u8 {
     }
 }
 
-/// One served Brotli stream: HM3 version 7, layer byte, then fixed PNG Paeth residuals modulo 256.
-pub fn encode_tile(cells: &[u8], layer: usize) -> Result<Vec<u8>, String> {
-    encode_metric_tile(cells, layer, Metric::Nden)
-}
-
 pub(crate) fn encode_metric_tile(
     cells: &[u8],
     layer: usize,
@@ -128,10 +123,6 @@ pub(crate) fn encode_metric_tile(
     let mut encoded = brotlic::CompressorWriter::with_encoder(encoder, Vec::new());
     encoded.write_all(&predicted).map_err(|e| e.to_string())?;
     encoded.into_inner().map_err(|e| e.to_string())
-}
-
-pub fn decode_tile(encoded: &[u8], layer: usize) -> Result<Vec<u8>, String> {
-    decode_metric_tile(encoded, layer, Metric::Nden)
 }
 
 pub(crate) fn decode_metric_tile(

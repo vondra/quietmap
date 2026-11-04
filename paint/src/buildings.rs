@@ -3,13 +3,12 @@
 //! painted outdoor pixel in front is loudest are painted as points of their blocks, and the loudest
 //! of them from the ground sources gives every pixel of the building its level.
 
-use crate::blocks::Block;
 use crate::exact::{LAYERS, Point};
-use crate::paint::{
-    PASS_BLOCKS, Painted, metres_at, pixel_of, runs_within, shortest_pixel_side_metres,
-};
+use crate::levels::Painted;
+use crate::paint::{PASS_BLOCKS, metres_at, pixel_of, runs_within, shortest_pixel_side_metres};
 use crate::passes::PASSES_AT_ONCE;
 use crate::points::PointPainter;
+use crate::quiet::QuietBlocks;
 use crate::square::Square;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -38,8 +37,8 @@ pub(crate) struct FacadeCandidate {
     exact: bool,
 }
 
-/// Each building's façade receivers to paint (`indoor`: its pixels' places and footprints): of its
-/// exposed receivers inside the square, in the popup's canonical order, the [`FACADE_CANDIDATES`]
+/// Each building's façade receivers to paint (`indoor`: its pixels' places and footprints).
+/// A split footprint ranks its complete façade with the popup; the others keep the [`FACADE_CANDIDATES`]
 /// whose painted pixel half a pixel in front (outward) is loudest from the ground sources; a pixel
 /// around would rank a receiver by a street it does not face (a south façade's corner by the road
 /// east of it, 3.6 dB under the façade's loudest receiver). A building with none keeps no level.
@@ -121,7 +120,7 @@ pub(crate) fn facade_candidates(
 /// passes go at once; the loudest from the ground sources kept.
 pub(crate) fn building_levels(
     painter: &PointPainter,
-    exact_source_counts: &[usize],
+    quiet: &QuietBlocks,
     candidates: Vec<FacadeCandidate>,
 ) -> Result<HashMap<u64, Painted>, String> {
     let (boundary, mut candidates): (Vec<_>, Vec<_>) = candidates
@@ -140,7 +139,7 @@ pub(crate) fn building_levels(
         }
     }
     let bounds: Vec<usize> = (blocks.iter())
-        .map(|(at, range)| range.len() * exact_source_counts[*at])
+        .map(|(at, range)| range.len() * quiet.exact_source_counts[*at])
         .collect();
     let mut footprints = Vec::with_capacity(candidates.len());
     let mut pixels = Vec::with_capacity(candidates.len());
@@ -153,9 +152,9 @@ pub(crate) fn building_levels(
         .collect();
     let most = blocks.len().div_ceil(PASSES_AT_ONCE).min(PASS_BLOCKS);
     let painted = painter.in_passes(runs_within(&bounds, most), |run| {
-        let pass: Vec<Block> = blocks[run.clone()]
+        let pass: Vec<_> = blocks[run.clone()]
             .par_iter()
-            .map_init(Vec::new, |near, (at, _)| painter.block(near, *at))
+            .map_init(Vec::new, |near, (at, _)| quiet.block(painter, near, *at))
             .collect();
         let (first, last) = (&blocks[run.start].1, &blocks[run.end - 1].1);
         let points_run = first.start..last.end;

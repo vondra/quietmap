@@ -8,7 +8,7 @@ fn write(
     out: &Path,
     zoom: u32,
     square: (u32, u32),
-    cells: &crate::paint::Cells,
+    cells: &crate::levels::Cells,
 ) -> Result<(), String> {
     hm3::write(
         out,
@@ -88,7 +88,7 @@ fn kept_regions_pack_the_same_archives_and_a_repainted_square_refolds_its_region
     let merged = tempfile::tempdir().unwrap();
     let regions = tempfile::tempdir().unwrap();
     let cells = |level: u8, at: usize| {
-        let mut cells = vec![[crate::paint::NO_LEVEL; LAYERS + 1]; 1024 * 1024];
+        let mut cells = vec![[crate::levels::NO_LEVEL; LAYERS + 1]; 1024 * 1024];
         for (k, pixel) in cells.iter_mut().enumerate().skip(at).step_by(7) {
             *pixel = [level.wrapping_add((k % 13) as u8); LAYERS + 1];
         }
