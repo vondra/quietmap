@@ -44,6 +44,7 @@ pub(super) fn road(id: i64) -> Road {
         counts: [80.0, 10.0, 5.0, 5.0],
         basis: 2,
         estimated: 0,
+        observation_estimated: 0,
         observation: "station".into(),
         reference: "A1".into(),
         corridor: "A1".into(),

@@ -46,3 +46,25 @@ fn shared_survey_endpoints_have_one_exact_distance_and_conflicting_counts_stay_u
         assert_eq!(piece.source_id, 0);
     }
 }
+
+#[test]
+fn equally_near_survey_endpoints_use_the_support_of_the_whole_mapped_piece() {
+    let mut first = observation();
+    first.identity = "west".into();
+    first.reference_required = false;
+    first.geometry = vec![vec![[-0.01, 0.0], [0.0, 0.0]]];
+    first.search_radius_m = 100.0;
+    let mut second = first.clone();
+    second.identity = "north".into();
+    second.geometry = vec![vec![[0.0, 0.0], [0.0, 0.01]]];
+    second.vehicle_classes = [160.0, 20.0, 10.0, 10.0].map(Some);
+    second.total = Some(200.0);
+    for observations in [vec![first.clone(), second.clone()], vec![second, first]] {
+        let mut piece = road(1);
+        piece.start = (-20.0, -10.0);
+        piece.end = (40.0, -10.0);
+        let matcher = Matcher::new(observations).unwrap();
+        matcher.apply(&mut piece, &model()).unwrap();
+        assert_eq!(piece.observation, "west");
+    }
+}

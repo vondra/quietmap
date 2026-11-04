@@ -127,75 +127,70 @@ pub(super) fn convert(
         .enumerate()
         .map(|(i, s)| (s.id.as_str(), i))
         .collect::<HashMap<_, _>>();
-    let mut paired = HashSet::new();
     let mut rows = Vec::new();
     for section in &sections {
-        if paired.contains(&section.id) {
-            continue;
-        }
         let twin = section
             .twin
             .as_ref()
             .and_then(|id| by_id.get(id.as_str()))
             .map(|i| &sections[*i])
             .filter(|t| section.main && t.main && t.twin.as_deref() == Some(section.id.as_str()));
-        if twin.is_none() && section.main && section.rank == 1 {
-            continue;
-        }
-        paired.insert(section.id.clone());
-        let (mut identities, mut references, mut geometry, mut counts, mut rank) = (
-            vec![section.id.clone()],
-            section.references.clone(),
-            vec![section.geometry.clone()],
-            section.counts,
-            section.rank,
-        );
-        if let Some(twin) = twin {
-            paired.insert(twin.id.clone());
-            identities.push(twin.id.clone());
-            references.extend(twin.references.clone());
-            geometry.push(twin.geometry.clone());
-            rank = rank.max(twin.rank);
-            for (count, extra) in counts.iter_mut().zip(twin.counts) {
-                *count += extra;
+        // Retain each measured direction; a reciprocal sum supports only an undivided mapped road.
+        for twin in std::iter::once(None).chain(twin.filter(|t| section.id < t.id).map(Some)) {
+            let (mut identities, mut references, mut geometry, mut counts, mut rank) = (
+                vec![section.id.clone()],
+                section.references.clone(),
+                vec![section.geometry.clone()],
+                section.counts,
+                section.rank,
+            );
+            if let Some(twin) = twin {
+                identities.push(twin.id.clone());
+                references.extend(twin.references.clone());
+                geometry.push(twin.geometry.clone());
+                rank = rank.max(twin.rank);
+                for (count, extra) in counts.iter_mut().zip(twin.counts) {
+                    *count += extra;
+                }
             }
-        }
-        identities.sort();
-        references.sort();
-        references.dedup();
-        let mut row = recipe.source.observation(
-            inputs,
-            identities.join("-"),
-            if twin.is_some() {
-                CountBasis::BothDirections
+            identities.sort();
+            references.sort();
+            references.dedup();
+            let mut row = recipe.source.observation(
+                inputs,
+                identities.join("-"),
+                if twin.is_some() {
+                    CountBasis::BothDirections
+                } else {
+                    CountBasis::Directional
+                },
+            )?;
+            let total = counts.iter().sum::<f64>();
+            let motorcycle = (total * recipe.motorcycle_share).round().min(counts[0]);
+            row.vehicle_classes = [
+                Some(counts[0] - motorcycle),
+                Some(counts[1]),
+                Some(counts[2]),
+                Some(motorcycle),
+            ];
+            row.total = Some(total);
+            row.estimated_classes = 9;
+            row.reference = references.join(";");
+            row.reference_required = !section.ramp;
+            row.road_class_mask = if section.ramp {
+                if rank == 0 { 3 << 10 } else { 7 << 10 }
+            } else if rank == 0 {
+                3
             } else {
-                CountBasis::Directional
-            },
-        )?;
-        let total = counts.iter().sum::<f64>();
-        let motorcycle = (total * recipe.motorcycle_share).round().min(counts[0]);
-        row.vehicle_classes = [
-            Some(counts[0] - motorcycle),
-            Some(counts[1]),
-            Some(counts[2]),
-            Some(motorcycle),
-        ];
-        row.total = Some(total);
-        row.estimated_classes = 8;
-        row.reference = references.join(";");
-        row.reference_required = !section.ramp;
-        row.road_class_mask = if section.ramp {
-            if rank == 0 { 3 << 10 } else { 7 << 10 }
-        } else if rank == 0 {
-            3
-        } else {
-            7
-        };
-        row.geometry = geometry;
-        row.search_radius_m = recipe.search_radius_m;
-        row.direction = u8::from(twin.is_none());
-        row.target.minimum_alignment_cosine = recipe.minimum_alignment_cosine;
-        rows.push(row);
+                7
+            };
+            row.geometry = geometry;
+            row.search_radius_m = recipe.search_radius_m;
+            row.direction = u8::from(twin.is_none());
+            row.target.required_oneway = twin.map(|_| false);
+            row.target.minimum_alignment_cosine = recipe.minimum_alignment_cosine;
+            rows.push(row);
+        }
     }
     // The publisher's section identity resolves coincident INWEVA observations deterministically.
     rows.sort_by(|a, b| a.identity.cmp(&b.identity));

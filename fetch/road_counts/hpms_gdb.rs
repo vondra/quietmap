@@ -3,6 +3,7 @@
 use super::{
     Source,
     fields::{GeometryFormat, geometry},
+    hpms_sections::{Section, class_mask, relabel_twins},
     records,
 };
 use crate::{
@@ -30,6 +31,8 @@ pub(super) struct Recipe {
     pub layers: Vec<String>,
     pub search_radius_m: f64,
     pub minimum_alignment_cosine: f64,
+    twin_radius_m: f64,
+    twin_total_ratio_tolerance: f64,
 }
 
 fn actual_count(kind: Option<&str>) -> bool {
@@ -126,11 +129,7 @@ pub(super) fn convert(
             }
             let rank = function as u8 - 1;
             let class = [0, 1, 2, 3, 4, 4, 5][usize::from(rank)];
-            row.road_class_mask = if class == 5 {
-                (1 << 5) | (1 << 9)
-            } else {
-                records::class_mask(Some(rank), facility == 4.0)
-            };
+            row.road_class_mask = class_mask(rank, Some(facility as u8));
             if row.road_class_mask == 0 {
                 continue;
             }
@@ -162,14 +161,28 @@ pub(super) fn convert(
             row.sample.length_m = number("sectionlength")?
                 .filter(|m| *m > 0.0)
                 .map(|m| m * 1609.344);
-            rows.push(row);
+            let points = row.geometry.iter().flatten().collect::<Vec<_>>();
+            let centroid = std::array::from_fn(|axis| {
+                points.iter().map(|p| p[axis]).sum::<f64>() / points.len() as f64
+            });
+            rows.push(Section {
+                row,
+                rank,
+                facility: Some(facility as u8),
+                centroid,
+            });
         }
         eprintln!(
             "road-counts: HPMS layer {name}: {} admitted sections",
             rows.len()
         );
     }
-    Ok(rows)
+    relabel_twins(
+        &mut rows,
+        recipe.twin_radius_m,
+        recipe.twin_total_ratio_tolerance,
+    );
+    Ok(rows.into_iter().map(|section| section.row).collect())
 }
 
 #[cfg(test)]

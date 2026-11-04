@@ -229,7 +229,7 @@ fn original_nodes_connect_across_squares_but_distinct_nodes_conflicts_and_juncti
             restricted_street.access = 2;
             assert_eq!(
                 super::allocation::allocate(&restricted_street, &[], &model).0,
-                filled.counts
+                filled.counts.map(|value| value * 0.5)
             );
         }
         roads

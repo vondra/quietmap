@@ -10,6 +10,8 @@ mod continuity_country_tests;
 mod continuity_scope;
 #[cfg(test)]
 mod continuity_tests;
+#[cfg(test)]
+mod count_scope_tests;
 pub(crate) mod input;
 mod matching;
 #[cfg(test)]
@@ -22,7 +24,7 @@ pub(crate) use matching_distance::flat_distance;
 pub(crate) use matching_distance::great_circle as great_circle_distance;
 pub(crate) use matching_distance::segment_distance;
 pub(crate) use matching_targets::name as canonical_road_name;
-mod model;
+pub(crate) mod model;
 pub(crate) mod observation;
 pub(crate) mod observation_io;
 pub(crate) mod observation_sample;

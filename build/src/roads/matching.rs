@@ -147,8 +147,16 @@ impl Matcher {
         candidates.dedup();
         let mut best: Option<(usize, super::matching_targets::IdentityScore, f64)> = None;
         let mut conflicting = false;
+        let mut best_support = f64::INFINITY;
         for index in candidates {
             let row = &self.observations[index];
+            if row
+                .target
+                .required_oneway
+                .is_some_and(|required| required != (road.direction != 0))
+            {
+                continue;
+            }
             if row.target.excluded_segments.iter().any(|segment| {
                 super::segment_distance(midpoint, segment[0], segment[1])
                     < row.target.exclusion_radius_m
@@ -198,11 +206,30 @@ impl Matcher {
             if !distance.is_finite() || (!row.geometry.is_empty() && distance >= radius) {
                 continue;
             }
+            let support_distance = if best.is_some_and(|(previous, priority, previous_distance)| {
+                row.source_rank == self.observations[previous].source_rank
+                    && identity_priority == priority
+                    && distance == previous_distance
+            }) {
+                super::matching_distance::endpoint_support(row, &points)
+            } else {
+                f64::INFINITY
+            };
             if let Some((previous, priority, previous_distance)) = best {
+                if row.source_rank == self.observations[previous].source_rank
+                    && identity_priority == priority
+                    && distance == previous_distance
+                {
+                    best_support = super::matching_distance::endpoint_support(
+                        &self.observations[previous],
+                        &points,
+                    );
+                }
                 let other = &self.observations[previous];
                 if row.source_rank == other.source_rank
                     && identity_priority == priority
                     && distance == previous_distance
+                    && support_distance == best_support
                     && !row.geometry.is_empty()
                     && !other.geometry.is_empty()
                     && (row.vehicle_classes != other.vehicle_classes
@@ -219,7 +246,9 @@ impl Matcher {
                     || row.source_rank == self.observations[previous].source_rank
                         && (identity_priority > previous_priority
                             || identity_priority == previous_priority
-                                && distance < previous_distance)
+                                && (distance < previous_distance
+                                    || distance == previous_distance
+                                        && support_distance < best_support))
             }) {
                 best = Some((index, identity_priority, distance));
                 conflicting = false;
@@ -243,6 +272,7 @@ impl Matcher {
                 };
             road.counts = counts;
             road.estimated = estimated;
+            road.observation_estimated = estimated;
             road.source_id = row.source_id;
             road.observation_source_id = row.source_id;
             road.observation = row.identity.clone();

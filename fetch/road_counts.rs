@@ -24,6 +24,8 @@ mod gpr;
 mod hpms;
 #[path = "road_counts/hpms_gdb.rs"]
 mod hpms_gdb;
+#[path = "road_counts/hpms_sections.rs"]
+mod hpms_sections;
 #[path = "road_counts/inweva.rs"]
 mod inweva;
 #[path = "road_counts/kvl.rs"]

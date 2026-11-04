@@ -19,6 +19,7 @@ const CONTINUITY_SOURCE: u16 = 12;
 struct Flow {
     counts: [f64; 4],
     basis: u8,
+    observation_estimated: u8,
     source: u16,
     identity: String,
 }
@@ -49,6 +50,7 @@ impl Agreement {
             .then(|| Flow {
                 counts: road.counts,
                 basis: road.basis,
+                observation_estimated: road.observation_estimated,
                 source: road.observation_source_id,
                 identity: road.observation.clone(),
             }),
@@ -150,6 +152,7 @@ impl Plan {
                 road.observation_source_id = fill.flow.source;
                 road.observation = fill.flow.identity.clone();
                 road.estimated = 15;
+                road.observation_estimated = fill.flow.observation_estimated;
                 road.count_origin_measured = true;
             }
         }

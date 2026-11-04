@@ -3,6 +3,7 @@
 use super::{
     Source,
     fields::{GeometryFormat, geometry},
+    hpms_sections::{Section, class_mask, relabel_twins},
 };
 use crate::{
     roads::observation::{CountBasis, Observation},
@@ -12,10 +13,7 @@ use anyhow::{Result, anyhow, ensure};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,13 +27,6 @@ pub(super) struct Recipe {
     minimum_alignment_cosine: f64,
     twin_radius_m: f64,
     twin_total_ratio_tolerance: f64,
-}
-
-struct Section {
-    row: Observation,
-    rank: u8,
-    facility: Option<u8>,
-    centroid: [f64; 2],
 }
 
 fn canonical_json(value: &Value) -> String {
@@ -183,20 +174,7 @@ pub(super) fn convert(
             row.search_radius_m = recipe.search_radius_m;
             row.target.minimum_alignment_cosine = recipe.minimum_alignment_cosine;
             row.target.distance_rule = crate::roads::observation_target::DistanceRule::NearestPiece;
-            row.road_class_mask = (0u8..13)
-                .filter(|c| {
-                    let ramp = *c >= 10;
-                    let mapped = if *c <= 4 {
-                        *c
-                    } else if ramp {
-                        *c - 10
-                    } else {
-                        6
-                    };
-                    ramp == (facility == Some(4)) && mapped.abs_diff(rank) <= 1
-                })
-                .map(|c| 1 << c)
-                .sum();
+            row.road_class_mask = class_mask(rank, facility);
             if row.road_class_mask == 0 {
                 continue;
             }
@@ -212,43 +190,11 @@ pub(super) fn convert(
         terminal && !sections.is_empty(),
         "HPMS needs its declared empty terminal page"
     );
-    relabel_twins(&mut sections, recipe);
+    relabel_twins(
+        &mut sections,
+        recipe.twin_radius_m,
+        recipe.twin_total_ratio_tolerance,
+    );
     sections.sort_by(|a, b| a.row.identity.cmp(&b.row.identity));
     Ok(sections.into_iter().map(|s| s.row).collect())
-}
-
-fn relabel_twins(sections: &mut [Section], recipe: &Recipe) {
-    let mut grid = HashMap::<(i32, i32), Vec<usize>>::new();
-    let cell = |p: [f64; 2]| ((p[0] * 100.0).floor() as i32, (p[1] * 100.0).floor() as i32);
-    for (i, s) in sections
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.facility == Some(6))
-    {
-        grid.entry(cell(s.centroid)).or_default().push(i);
-    }
-    for i in 0..sections.len() {
-        if sections[i].facility != Some(1) {
-            continue;
-        }
-        let s = &sections[i];
-        let (x, y) = cell(s.centroid);
-        let dy = (recipe.twin_radius_m / 110_540.0 * 100.0).ceil() as i32;
-        let dx = (f64::from(dy) / s.centroid[1].to_radians().cos()).ceil() as i32;
-        let twin = (y - dy..=y + dy).any(|y| {
-            (x - dx..=x + dx).any(|x| {
-                grid.get(&(x, y)).into_iter().flatten().any(|j| {
-                    let t = &sections[*j];
-                    t.rank == s.rank
-                        && (s.row.total.unwrap() / t.row.total.unwrap() - 1.0).abs()
-                            <= recipe.twin_total_ratio_tolerance
-                        && crate::roads::great_circle_distance(s.centroid, t.centroid)
-                            <= recipe.twin_radius_m
-                })
-            })
-        });
-        if twin {
-            sections[i].row.count_basis = CountBasis::BothDirections;
-        }
-    }
 }

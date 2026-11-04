@@ -116,8 +116,19 @@ impl Model {
         Ok(())
     }
 
+    pub fn native_class_priors(&self) -> [[f64; 3]; 2] {
+        std::array::from_fn(|row| {
+            let class = row + 3;
+            self.carriageways
+                .get(class)
+                .map_or([self.world[class].iter().sum(); 3], |priors| {
+                    priors[1].map(|cell| cell[1])
+                })
+        })
+    }
+
     pub fn default_traffic(&self, road: &Road) -> TrafficDefault {
-        let one_way = road.direction != 0 && !road.roundabout;
+        let one_way = road.direction != 0;
         for city in [Some(road.country.1), None] {
             if let Some(counts) = self
                 .regions

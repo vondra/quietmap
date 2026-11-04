@@ -109,7 +109,11 @@ fn edition(
             end.map_or([x, y], |(ex, ey)| [(x + ex) / 2.0, (y + ey) / 2.0]),
         )?;
         let reference = strip.replace(route, "$1").to_string();
-        let mut row = source.observation(inputs, index.to_string(), CountBasis::BothDirections)?;
+        let mut row = source.observation(
+            inputs,
+            format!("{}:{index}", recipe.source.input_id),
+            CountBasis::BothDirections,
+        )?;
         row.reference = reference.clone();
         row.reference_required = true;
         row.target.reference_rule = ReferenceRule::Whole;

@@ -52,6 +52,7 @@ fn an_observation_crosses_an_uninterrupted_border_and_coastal_gap() {
     write(&path, columns, ("roads_contract", "country_baked_v1"));
     let mut observation = count(&pieces[0], "one physical count");
     observation.country = u16::from_le_bytes(*b"CZ");
+    observation.estimated_classes = 9;
     let matcher = Matcher::new(vec![observation]).unwrap();
     let selected = crate::dev4::Square { x: 256, y: 255 };
     let plan = continuity::build(
@@ -68,4 +69,6 @@ fn an_observation_crosses_an_uninterrupted_border_and_coastal_gap() {
         [20, 12, 12]
     );
     assert!(roads.iter().all(|r| r.counts == [80.0, 10.0, 5.0, 5.0]));
+    assert!(roads.iter().all(|r| r.observation_estimated == 9));
+    assert_eq!(roads[1].estimated, 15);
 }

@@ -52,12 +52,12 @@ fn sict_parts_share_an_identity_without_losing_the_measured_split_under_legacy_f
         serde_json::to_vec(&json!({"features":[feature(0.0),feature(1.0)]})).unwrap(),
     )
     .unwrap();
-    let recipe=serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"composition_input":"survey","total_field":"total","fallback_shares":[0.795,0.071,0.082,0.052],"search_radius_m":200.0,"estimated_classes":15})).unwrap();
+    let recipe=serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"composition_input":"survey","total_field":"total","fallback_shares":[0.795,0.071,0.082,0.052],"search_radius_m":200.0})).unwrap();
     let rows = sict::convert(&recipe, &inputs, &path).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].geometry.len(), 2);
     assert_eq!(rows[0].vehicle_classes, [80.0, 5.0, 10.0, 5.0].map(Some));
-    assert_eq!(rows[0].estimated_classes, 15);
+    assert_eq!(rows[0].estimated_classes, 0);
 }
 
 #[test]
@@ -81,20 +81,36 @@ fn hpms_truncates_fractional_totals_and_preserves_unknown_direction_and_equal_tw
 }
 
 #[test]
-fn reciprocal_loops_sum_once_and_a_lonely_national_two_way_section_stays_unknown() {
+fn reciprocal_loops_keep_each_direction_and_sum_only_for_an_undivided_mapped_road() {
     let (_directory, inputs) = inputs("NL");
     let source = json!({"input_id":"survey","source_id":1,"source_rank":1});
     let recipe=serde_json::from_value(json!({"source":source,"motorcycle_share":0.01,"search_radius_m":50.0,"minimum_alignment_cosine":0.8660254037844387})).unwrap();
     let feature = |id, twin, reference, counts: [u32; 3]| json!({"properties":{"vbn_id":id,"vbn_id_tgn":twin,"bnsubsrt_b":"HR","afst_mtw":0,"l1_e_wk":counts[0],"l2_e_wk":counts[1],"l3_e_wk":counts[2],"wegnrhmp_b":reference,"wegnrhmp_e":reference},"geometry":{"type":"LineString","coordinates":[[5.0,52.0],[5.001,52.0]]}});
     let rows=inweva::convert(&recipe,&inputs,&json!({"features":[feature("1","2","A1",[100,20,10]),feature("2","1","A1",[200,40,30]),feature("3","","N1",[50,10,5])]})).unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].geometry.len(), 2);
-    assert_eq!(rows[0].count_basis, CountBasis::BothDirections);
+    assert_eq!(rows.len(), 4);
+    let summed = rows.iter().find(|r| r.identity == "1-2").unwrap();
+    assert_eq!(summed.geometry.len(), 2);
+    assert_eq!(summed.count_basis, CountBasis::BothDirections);
+    assert_eq!(summed.target.required_oneway, Some(false));
     assert_eq!(
-        rows[0].vehicle_classes,
+        rows.iter()
+            .filter(|r| r.count_basis == CountBasis::Directional)
+            .count(),
+        3
+    );
+    assert_eq!(
+        rows.iter().find(|r| r.identity == "1").unwrap().total,
+        Some(130.0)
+    );
+    assert_eq!(
+        rows.iter().find(|r| r.identity == "2").unwrap().total,
+        Some(270.0)
+    );
+    assert_eq!(
+        summed.vehicle_classes,
         [Some(296.0), Some(60.0), Some(40.0), Some(4.0)]
     );
-    assert_eq!(rows[0].estimated_classes, 8);
+    assert_eq!(summed.estimated_classes, 9);
     assert_eq!(rows[0].observed_end, "2000-12-31");
     assert_eq!(rows[0].time_basis, TimeBasis::AnnualDaily);
 }
@@ -102,14 +118,17 @@ fn reciprocal_loops_sum_once_and_a_lonely_national_two_way_section_stays_unknown
 #[test]
 fn a_blank_drr_class_is_not_a_measured_zero_even_when_the_legacy_mask_says_fifteen() {
     let (_directory, inputs) = inputs("TH");
-    let recipe=serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"road_class_mask":31,"estimated_classes":15})).unwrap();
+    let recipe = serde_json::from_value(
+        json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"road_class_mask":31}),
+    )
+    .unwrap();
     let data = "road_code,sum_AADT,MC,SV,SVT,TB2,TB3,T4,ART3,ART4,ART5,ART6,BD,DRT\nA,100,0,100,0,0,0,0,0,0,0,0,0,0\nB,100,,100,0,0,0,0,0,0,0,0,0,0\n";
     let rows = thai_drr::convert(&recipe, &inputs, data.as_bytes()).unwrap();
     assert_eq!(rows[0].vehicle_classes[3], Some(0.0));
     assert_eq!(rows[1].vehicle_classes[3], None);
     assert!(
         rows.iter()
-            .all(|r| r.vehicle_classes[0] == Some(100.0) && r.estimated_classes == 15)
+            .all(|r| r.vehicle_classes[0] == Some(100.0) && r.estimated_classes == 0)
     );
 }
 
@@ -134,7 +153,7 @@ fn mlit_uses_declared_objects_and_keeps_the_weekday_basis_of_unlocated_summaries
     let measured = rows.iter().find(|r| r.source_id == 1).unwrap();
     assert_eq!(
         measured.vehicle_classes,
-        [Some(150.0), Some(4.0), Some(11.0), Some(0.0)]
+        [Some(150.0), Some(4.0), Some(11.0), None]
     );
     assert_eq!(measured.time_basis, TimeBasis::WeekdayDaily);
     assert!(measured.geometry.is_empty());

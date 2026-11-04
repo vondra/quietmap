@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 pub(super) struct Recipe {
     pub source: Source,
     road_class_mask: u16,
-    estimated_classes: u8,
 }
 
 pub(super) fn convert(
@@ -80,7 +79,6 @@ pub(super) fn convert(
         row.reference_required = true;
         row.target.reference_rule = crate::roads::observation_target::ReferenceRule::Whole;
         row.road_class_mask = recipe.road_class_mask;
-        row.estimated_classes = recipe.estimated_classes;
         rows.insert(code.to_owned(), row);
     }
     ensure!(!rows.is_empty(), "DRR has no usable count records");

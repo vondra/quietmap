@@ -2,7 +2,7 @@
 
 use super::{
     matching::Candidate,
-    matching_distance::{distance, road_points},
+    matching_distance::{road_points, segment_distance},
     observation::Observation,
 };
 use anyhow::Result;
@@ -84,7 +84,7 @@ pub fn assign(
                     {
                         continue;
                     }
-                    let distance = distance(row, &road, &points);
+                    let distance = segment_distance(row.geometry[0][0], points[0], points[2]);
                     if distance > assignment.clearance_m {
                         continue;
                     }

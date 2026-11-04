@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
 };
 
-pub struct Scope(Vec<[f64; 4]>);
+pub struct Scope(rstar::RTree<rstar::primitives::Rectangle<[f64; 2]>>);
 
 impl Scope {
     pub fn read(paths: &BTreeMap<Square, PathBuf>, selected: &BTreeSet<Square>) -> Result<Self> {
@@ -49,23 +49,36 @@ impl Scope {
                 bounds[3] + reach,
             ]);
         }
-        Ok(Self(boxes))
+        Ok(Self(rstar::RTree::bulk_load(
+            boxes
+                .into_iter()
+                .map(|b| rstar::primitives::Rectangle::from_corners([b[0], b[1]], [b[2], b[3]]))
+                .collect(),
+        )))
     }
 
     pub fn needs(&self, road: &Road) -> bool {
-        self.0.iter().any(|bounds| {
-            [
-                -geometry::EARTH_CIRCUMFERENCE_M,
-                0.0,
-                geometry::EARTH_CIRCUMFERENCE_M,
-            ]
-            .into_iter()
-            .any(|shift| {
-                road.start.0.min(road.end.0) + shift <= bounds[2]
-                    && road.start.0.max(road.end.0) + shift >= bounds[0]
-                    && road.start.1.min(road.end.1) <= bounds[3]
-                    && road.start.1.max(road.end.1) >= bounds[1]
-            })
+        [
+            -geometry::EARTH_CIRCUMFERENCE_M,
+            0.0,
+            geometry::EARTH_CIRCUMFERENCE_M,
+        ]
+        .into_iter()
+        .any(|shift| {
+            let bounds = rstar::AABB::from_corners(
+                [
+                    road.start.0.min(road.end.0) + shift,
+                    road.start.1.min(road.end.1),
+                ],
+                [
+                    road.start.0.max(road.end.0) + shift,
+                    road.start.1.max(road.end.1),
+                ],
+            );
+            self.0
+                .locate_in_envelope_intersecting(&bounds)
+                .next()
+                .is_some()
         })
     }
 }

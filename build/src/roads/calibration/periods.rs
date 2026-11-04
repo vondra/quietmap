@@ -86,11 +86,7 @@ pub fn fit(rows: &[Observation], parameters: &Parameters, directory: &Path) -> R
                 1.0,
             ));
         }
-        let group = match station.class {
-            0 | 10 => 0,
-            1 | 2 | 11 | 12 => 1,
-            _ => 2,
-        };
+        let group = crate::sources::period_shares::road_group(usize::from(station.class));
         countries.insert(station.country);
         for vehicle in 0..2 {
             let hourly = if vehicle == 1 {
@@ -195,7 +191,7 @@ mod tests {
             preparation: None,
         };
         let mut rows = Vec::new();
-        for class in [0, 1, 3] {
+        for class in [0, 2, 3] {
             let mut row = observation();
             row.country = u16::from_le_bytes(*b"US");
             row.identity = class.to_string();

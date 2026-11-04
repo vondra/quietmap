@@ -252,29 +252,32 @@ pub(crate) fn apply(roads: &mut [Road], structures: &Path, model: &DemandModel) 
             continue;
         }
         let street = &streets[&street_keys[index]];
-        let parameters = &model.street;
-        let background = if road.built_up == 2 {
-            if road.class == 9 {
-                parameters.unclassified_urban
-            } else {
-                parameters.residential_urban
-            }
-        } else {
-            parameters.rural
-        };
-        let through = if street.through && road.built_up == 2 {
-            parameters.through_factor
-        } else {
-            1.0
-        };
-        let narrow = if street.one_lane && !street.multi_lane {
-            parameters.single_track_factor
-        } else {
-            1.0
-        };
         let trips = if road.class == 7 {
             row_trips[index].clamp(20.0, 400.0)
         } else {
+            // Without an admitted street fit, retain the common class prior; no measured background is zero.
+            let Some(parameters) = &model.street else {
+                continue;
+            };
+            let background = if road.built_up == 2 {
+                if road.class == 9 {
+                    parameters.unclassified_urban
+                } else {
+                    parameters.residential_urban
+                }
+            } else {
+                parameters.rural
+            };
+            let through = if street.through && road.built_up == 2 {
+                parameters.through_factor
+            } else {
+                1.0
+            };
+            let narrow = if street.one_lane && !street.multi_lane {
+                parameters.single_track_factor
+            } else {
+                1.0
+            };
             background * through * narrow + parameters.demand_scale * street.trips
         };
         let total = trips.round();

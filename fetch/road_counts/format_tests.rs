@@ -120,3 +120,27 @@ fn the_selected_gpr_recipe_names_the_edition_specific_identity_column() {
     assert_eq!(rows[0].identity, "section-a");
     assert_eq!(rows[0].total, Some(100.0));
 }
+
+#[test]
+fn a_counted_slip_is_retained_for_a_nearby_link_without_dividing_its_directional_flow() {
+    let (directory, inputs) = inputs("GB");
+    let path = directory.path().join("counts.csv");
+    std::fs::write(&path, "count_point_id,year,road_category,estimation_method,road_name,longitude,latitude,all_motor_vehicles,cars_and_taxis,LGVs,buses_and_coaches,all_HGVs,two_wheeled_motor_vehicles,link_length_km,start_junction_road_name,end_junction_road_name\n1,2000,TM,Counted,M1,0,0,100,70,10,5,10,5,0.4,slip road,A1\n").unwrap();
+    let recipe = serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"archive_entry":null,"excluded_manual_years":[],"maximum_age_years":10,"major_radius_m":15000.0,"minor_assignment":{"maximum_distance_m":12.0,"clearance_m":20.0},"slip_maximum_length_km":1.0,"slip_junction_pattern":"(?i)ramp|slip","slip_total_ratio":0.25,"slip_neighbor_radius_m":10000.0})).unwrap();
+    let rows = super::dft::convert(&recipe, &inputs, &path).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].count_basis,
+        crate::roads::observation::CountBasis::Directional
+    );
+    assert_eq!(rows[0].road_class_mask & ((1 << 10) - 1), 0);
+    assert_eq!(
+        rows[0]
+            .target
+            .way_assignment
+            .as_ref()
+            .unwrap()
+            .maximum_distance_m,
+        12.0
+    );
+}

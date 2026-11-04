@@ -271,8 +271,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     )?;
     match command.as_str() {
         "tagged-speed-table" => {
-            roads::tagged_speed_fit::fit(&inputs, &out, Path::new(options.get("scratch")?))
-                .map_err(|e| e.to_string())
+            roads::tagged_speed_fit::fit(&inputs, &out).map_err(|e| e.to_string())
         }
         "road-observations" => road_counts::convert(&inputs, &out).map_err(|e| e.to_string()),
         "road-model-tables" => roads::calibration::build(&inputs, &out).map_err(|e| e.to_string()),

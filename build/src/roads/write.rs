@@ -4,7 +4,8 @@ use super::{allocation, input, model::Model, spatial::RoadIndex};
 use anyhow::Result;
 use arrow_array::RecordBatch;
 use arrow_array::{
-    ArrayRef, Float32Array, Float64Array, Int32Array, UInt8Array, UInt16Array, UInt32Array,
+    ArrayRef, Float32Array, Float64Array, Int32Array, StringArray, UInt8Array, UInt16Array,
+    UInt32Array,
 };
 use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema};
@@ -88,6 +89,7 @@ pub fn stage(
     let indices = UInt32Array::from(children.iter().map(|c| c.parent).collect::<Vec<_>>());
     let dropped = [
         "traffic_estimated",
+        "traffic_observation_estimated",
         "traffic_count_basis",
         "traffic_observation_id",
         "traffic_observation_source",
@@ -148,6 +150,42 @@ pub fn stage(
         children.iter().map(|c| c.cross_section).collect::<Vec<_>>(),
     )));
     for (name, column) in [
+        (
+            "traffic_observation_estimated",
+            Arc::new(UInt8Array::from(
+                children
+                    .iter()
+                    .map(|c| roads[c.parent as usize].observation_estimated)
+                    .collect::<Vec<_>>(),
+            )) as ArrayRef,
+        ),
+        (
+            "traffic_count_basis",
+            Arc::new(UInt8Array::from(
+                children
+                    .iter()
+                    .map(|c| roads[c.parent as usize].basis)
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        (
+            "traffic_observation_source",
+            Arc::new(UInt16Array::from(
+                children
+                    .iter()
+                    .map(|c| roads[c.parent as usize].observation_source_id)
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        (
+            "traffic_observation_id",
+            Arc::new(StringArray::from(
+                children
+                    .iter()
+                    .map(|c| roads[c.parent as usize].observation.as_str())
+                    .collect::<Vec<_>>(),
+            )),
+        ),
         (
             "source_id",
             Arc::new(UInt16Array::from(

@@ -44,19 +44,34 @@ pub struct Identity {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Target {
+    #[serde(skip_serializing_if = "is_default")]
+    pub required_oneway: Option<bool>,
+    #[serde(skip_serializing_if = "is_default")]
     pub source_way: Option<i64>,
+    #[serde(skip_serializing_if = "is_default")]
     pub way_assignment: Option<WayAssignment>,
+    #[serde(skip_serializing_if = "is_default")]
     pub proximity: Option<Proximity>,
+    #[serde(skip_serializing_if = "is_default")]
     pub street_assignment: Option<StreetAssignment>,
+    #[serde(skip_serializing_if = "is_default")]
     pub reference_rule: ReferenceRule,
+    #[serde(skip_serializing_if = "is_default")]
     pub reference_rewrites: Vec<ReferenceRewrite>,
+    #[serde(skip_serializing_if = "is_default")]
     pub distance_rule: DistanceRule,
+    #[serde(skip_serializing_if = "is_default")]
     pub identities: Vec<Identity>,
+    #[serde(skip_serializing_if = "is_default")]
     pub reference_fallback: Option<ReferenceFallback>,
+    #[serde(skip_serializing_if = "is_default")]
     pub minimum_alignment_cosine: f64,
+    #[serde(skip_serializing_if = "is_default")]
     pub excluded_segments: Vec<[[f64; 2]; 2]>,
+    #[serde(skip_serializing_if = "is_default")]
     pub exclusion_radius_m: f64,
     /// Polygon, ring, coordinate; the first ring is the exterior and the others are holes.
+    #[serde(skip_serializing_if = "is_default")]
     pub coverage: Vec<Vec<Vec<[f64; 2]>>>,
 }
 
@@ -196,4 +211,8 @@ impl Target {
         );
         Ok(())
     }
+}
+
+pub(super) fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }

@@ -171,10 +171,26 @@ impl Observation {
         let missing = self.vehicle_classes.iter().any(Option::is_none);
         let mut status = self.estimated_classes;
         if missing {
-            let total = to_daily(
-                self.total
-                    .ok_or_else(|| anyhow::anyhow!("missing classes require a total"))?,
-            );
+            let total = if let Some(total) = self.total {
+                to_daily(total)
+            } else {
+                // A survey of cars and lorries does not establish a total including motorcycles.
+                let known_weight: f64 = missing_shares
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| counts[*i].is_some())
+                    .map(|(_, value)| value)
+                    .sum();
+                ensure!(
+                    known_weight > 0.0 || known == 0.0,
+                    "observed classes have no model share"
+                );
+                if known == 0.0 {
+                    0.0
+                } else {
+                    known * weight / known_weight
+                }
+            };
             ensure!(total >= known, "observed classes exceed the total");
             ensure!(
                 weight > 0.0 || total == known,
@@ -248,6 +264,16 @@ mod tests {
     }
 
     #[test]
+    fn missing_motorcycles_are_inferred_without_replacing_the_counted_motor_vehicles() {
+        let mut row = observation();
+        row.vehicle_classes = [Some(80.0), Some(10.0), Some(0.0), None];
+        row.total = None;
+        let (classes, flags) = row.daily_classes([80.0, 10.0, 0.0, 10.0]).unwrap();
+        assert_eq!(classes, [80.0, 10.0, 0.0, 10.0]);
+        assert_eq!(flags, 8);
+    }
+
+    #[test]
     fn intervals_are_observed_time_and_the_state_cutoff_is_exclusive() {
         let row = observation();
         assert!(
@@ -260,7 +286,7 @@ mod tests {
         );
         let mut missing = row.clone();
         missing.total = None;
-        assert!(missing.daily_classes([0.25; 4]).is_err());
+        assert!(missing.daily_classes([0.25; 4]).is_ok());
         missing.total = Some(70.0);
         assert!(missing.daily_classes([0.25; 4]).is_err());
     }

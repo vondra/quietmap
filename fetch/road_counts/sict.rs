@@ -21,7 +21,6 @@ pub(super) struct Recipe {
     total_field: String,
     fallback_shares: [f64; 4],
     search_radius_m: f64,
-    estimated_classes: u8,
 }
 
 pub(super) fn convert(
@@ -121,7 +120,11 @@ pub(super) fn convert(
         .map(Some);
         row.total = Some(total);
         row.geometry = lines;
-        row.estimated_classes = recipe.estimated_classes;
+        row.estimated_classes = if composition.get(id).is_some_and(Option::is_some) {
+            0
+        } else {
+            15
+        };
         row.search_radius_m = recipe.search_radius_m;
         row.road_class_mask = match (p["red_ok"].as_str(), p["operacion"].as_str()) {
             (Some("Federal"), Some("Cuota")) => 3,

@@ -6,11 +6,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Sample {
+    #[serde(skip_serializing_if = "super::observation_target::is_default")]
     pub fit_only: bool,
+    #[serde(skip_serializing_if = "super::observation_target::is_default")]
     pub road_class: Option<u8>,
     /// Unknown, rural, urban; publisher classification, never inferred from the traffic value.
+    #[serde(skip_serializing_if = "super::observation_target::is_default")]
     pub environment: u8,
+    #[serde(skip_serializing_if = "super::observation_target::is_default")]
     pub length_m: Option<f64>,
+    #[serde(skip_serializing_if = "super::observation_target::is_default")]
     pub hourly: Option<Hourly>,
 }
 

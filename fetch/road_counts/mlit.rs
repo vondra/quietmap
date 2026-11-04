@@ -73,11 +73,11 @@ fn observation(
     }
     let medium = (large * recipe.medium_share_of_large).round();
     let mut result = source.observation(inputs, key, CountBasis::BothDirections)?;
-    result.vehicle_classes = [Some(small), Some(medium), Some(large - medium), Some(0.0)];
-    result.total = Some(small + large);
+    result.vehicle_classes = [Some(small), Some(medium), Some(large - medium), None];
+    result.total = None;
     result.time_basis = TimeBasis::WeekdayDaily;
     result.daily_factor = recipe.weekday_to_model_daily;
-    result.estimated_classes = 15;
+    result.estimated_classes = if result.measured { 14 } else { 15 };
     result.road_class_mask = mask;
     Ok(result)
 }

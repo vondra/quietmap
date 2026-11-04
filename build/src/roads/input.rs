@@ -37,6 +37,7 @@ pub struct Road {
     pub counts: [f64; 4],
     pub basis: u8,
     pub estimated: u8,
+    pub observation_estimated: u8,
     pub observation: String,
     pub reference: String,
     pub corridor: String,
@@ -180,6 +181,7 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>> {
                 counts: [0.0; 4],
                 basis: 0,
                 estimated: 15,
+                observation_estimated: 15,
                 observation: String::new(),
                 reference: reference.into(),
                 corridor: if reference.is_empty() {

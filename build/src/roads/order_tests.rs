@@ -157,3 +157,28 @@ fn equal_distance_speed_anchors_follow_the_original_piece_order() {
     super::speed_transitions::apply(&mut roads, &super::tests::model().speed_transitions);
     assert_eq!(roads[1].speed_taper, 122);
 }
+
+#[test]
+fn an_absent_street_fit_keeps_the_global_prior_instead_of_inventing_zero_through_traffic() {
+    let temporary = tempfile::tempdir().unwrap();
+    let structures = temporary.path().join("structures.arrow");
+    write_building(&structures);
+    let path = temporary.path().join("roads.arrow");
+    mapped_streets(&path, false, ["a", "b"]);
+    let batch = input::load(&path).unwrap().remove(0);
+    let mut roads = input::roads(&batch).unwrap();
+    for road in &mut roads {
+        road.class = 5;
+    }
+    let mut model = super::tests::model();
+    model.demand.street = None;
+    crate::traffic::preparation::apply(&mut roads, &structures, &model.demand).unwrap();
+    assert!(roads.iter().all(|road| road.source_id == 0));
+    assert!(roads.iter().all(|road| {
+        super::allocation::allocate(road, &[], &model)
+            .0
+            .iter()
+            .sum::<f64>()
+            > 0.0
+    }));
+}

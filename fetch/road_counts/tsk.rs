@@ -92,8 +92,8 @@ pub(super) fn convert(
                 .source
                 .observation(inputs, street.clone(), CountBasis::StreetCrossSection)?;
         let counts = counts.map(|v| (v / length).round());
-        row.vehicle_classes = [Some(counts[0]), Some(counts[1]), Some(counts[2]), Some(0.0)];
-        row.total = Some(counts.iter().sum());
+        row.vehicle_classes = [Some(counts[0]), Some(counts[1]), Some(counts[2]), None];
+        row.total = None;
         row.time_basis = TimeBasis::WeekdayDaily;
         row.daily_factor = recipe.weekday_to_model_daily;
         row.estimated_classes = 8;

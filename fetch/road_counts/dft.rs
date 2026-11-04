@@ -218,6 +218,10 @@ fn parse(recipe: &Recipe, inputs: &YearInputs, reader: impl Read) -> Result<Vec<
         }
     }
     for (point, ramp) in points.iter_mut().zip(&ramps) {
+        if *ramp {
+            point.row.count_basis = CountBasis::Directional;
+            point.row.target.way_assignment = Some(recipe.minor_assignment.clone());
+        }
         point.row.road_class_mask = (0u8..13)
             .filter(|c| {
                 let mapped = if *c <= 4 {
@@ -233,10 +237,5 @@ fn parse(recipe: &Recipe, inputs: &YearInputs, reader: impl Read) -> Result<Vec<
             .sum();
     }
     ensure!(!points.is_empty(), "DfT input has no admitted observations");
-    Ok(points
-        .into_iter()
-        .zip(ramps)
-        .filter(|(_, ramp)| !*ramp)
-        .map(|(p, _)| p.row)
-        .collect())
+    Ok(points.into_iter().map(|point| point.row).collect())
 }

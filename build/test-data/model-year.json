@@ -422,6 +422,22 @@
       "public_ok": true,
       "depends_on": [],
       "description": "Independent regression values for model branch tests."
+    },
+    {
+      "id": "road-preparation-model",
+      "kind": "road-preparation-model",
+      "region": "world",
+      "publisher": "Test fixture",
+      "url": "https://example.org/fixture",
+      "observed": {
+        "start": "1999",
+        "end": "1999"
+      },
+      "published": null,
+      "licence": "Apache-2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Independent regression values for model branch tests."
     }
   ],
   "unavailable": []

@@ -12,7 +12,7 @@ pub struct DemandModel {
     pub heavy_share: f64,
     pub default_footprint_m2: f64,
     pub trip_rates: Vec<TripRate>,
-    pub street: StreetParameters,
+    pub street: Option<StreetParameters>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -101,14 +101,15 @@ impl DemandModel {
                 TripRate::None => (),
             }
         }
-        let p = &self.street;
-        ensure!(
-            [p.residential_urban, p.unclassified_urban, p.rural]
-                .iter()
-                .all(|v| v.is_finite() && *v >= 0.0)
-                && positive(&[p.through_factor, p.demand_scale, p.single_track_factor]),
-            "invalid street demand parameters"
-        );
+        if let Some(p) = &self.street {
+            ensure!(
+                [p.residential_urban, p.unclassified_urban, p.rural]
+                    .iter()
+                    .all(|v| v.is_finite() && *v >= 0.0)
+                    && positive(&[p.through_factor, p.demand_scale, p.single_track_factor]),
+                "invalid street demand parameters"
+            );
+        }
         Ok(())
     }
     pub fn fleet(&self, country: u16) -> [f64; 2] {

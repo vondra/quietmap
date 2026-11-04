@@ -20,7 +20,8 @@ fn a_point_counts_its_whole_way_but_no_way_when_another_class_is_too_close() {
     let mut counter = count(&piece, "minor");
     counter.reference_required = false;
     counter.search_radius_m = 20.0;
-    counter.target.distance_rule = DistanceRule::PointToPiece;
+    counter.target.distance_rule = DistanceRule::GreatCircle;
+    counter.geometry[0][0][0] += 0.0005;
     counter.target.way_assignment = Some(WayAssignment {
         maximum_distance_m: 12.0,
         clearance_m: 20.0,

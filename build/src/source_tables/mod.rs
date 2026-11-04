@@ -30,6 +30,7 @@ pub const MODEL_KINDS: &[crate::year::Kind] = &[
     crate::year::Kind::RoadClassPriors,
     crate::year::Kind::RoadClassShares,
     crate::year::Kind::RoadPeriodShares,
+    crate::year::Kind::RoadPreparationModel,
     crate::year::Kind::RoadReferenceCounts,
     crate::year::Kind::RuralFreeFlow,
     crate::year::Kind::ServiceCooling,
@@ -91,6 +92,7 @@ pub struct SourceTables {
     pub legal_speeds: CountryTable<[u8; 4]>,
     pub heavy_speeds: CountryTable<f64>,
     pub class_priors: CountryTable<[[f64; 3]; 2]>,
+    pub road_preparation_priors: [[f64; 3]; 2],
     pub class_shares: CountryTable<ClassShares>,
     pub counted_class_shares: Vec<[[f64; 2]; 2]>,
     pub rural_free_flow: f64,
@@ -124,6 +126,9 @@ impl SourceTables {
             legal_speeds: CountryTable::read(inputs, crate::year::Kind::LegalSpeeds)?,
             heavy_speeds: CountryTable::read(inputs, crate::year::Kind::HeavySpeeds)?,
             class_priors: CountryTable::read(inputs, crate::year::Kind::RoadClassPriors)?,
+            road_preparation_priors: crate::roads::model::Model::read(inputs)
+                .map_err(|error| format!("road-preparation-model: {error}"))?
+                .native_class_priors(),
             class_shares: CountryTable::read(inputs, crate::year::Kind::RoadClassShares)?,
             counted_class_shares: read_rows(inputs, crate::year::Kind::CountedClassShares)?,
             rural_free_flow: table::single_row(inputs, crate::year::Kind::RuralFreeFlow)?,

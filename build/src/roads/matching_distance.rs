@@ -181,3 +181,17 @@ fn distance_with_heading(
 pub fn distance_without_heading(row: &Observation, road: &Road, points: &[[f64; 2]; 3]) -> f64 {
     distance_with_heading(row, road, points, false)
 }
+
+/// End-to-end support breaks a midpoint tie without choosing a count by serialization order.
+pub(super) fn endpoint_support(row: &Observation, points: &[[f64; 2]; 3]) -> f64 {
+    [points[0], points[2]]
+        .into_iter()
+        .map(|point| {
+            row.geometry
+                .iter()
+                .flat_map(|part| part.windows(2))
+                .map(|pair| segment_distance(point, pair[0], pair[1]))
+                .fold(f64::INFINITY, f64::min)
+        })
+        .sum()
+}
