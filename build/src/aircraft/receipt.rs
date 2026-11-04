@@ -68,6 +68,16 @@ pub struct DayReceipt {
 }
 
 impl DayReceipt {
+    pub fn check_reuse(&self, scope: &Option<String>, with_secondary: bool) -> Result<(), String> {
+        if self.scope != *scope || (self.secondary.is_some() && !with_secondary) {
+            return Err(format!(
+                "{}: existing aircraft day has different scope or provider selection; use a new output directory",
+                self.day
+            ));
+        }
+        Ok(())
+    }
+
     pub fn primary_missing(day: &str, scope: Option<String>) -> Self {
         DayReceipt {
             day: day.into(),
@@ -76,15 +86,6 @@ impl DayReceipt {
             merge: MergeCounts::default(),
             scope,
         }
-    }
-
-    /// A merged day whose secondary provider was not admitted must be rewritten from the primary
-    /// alone: its interleaved secondary samples split primary pairs and its `~` echoes are gone.
-    /// A merge that kept no secondary content already equals the primary-only day.
-    pub fn needs_primary_only_rewrite(&self, increment_days: &BTreeSet<String>) -> bool {
-        !increment_days.contains(&self.day)
-            && self.secondary.is_some()
-            && (self.merge.secondary_points_kept > 0 || self.merge.secondary_only_addresses > 0)
     }
 }
 

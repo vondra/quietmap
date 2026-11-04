@@ -1,6 +1,25 @@
 //! Raster regressions for temporal masks, native rounding, coverage and publication safety.
 use super::*;
 
+#[test]
+fn interrupted_raster_squares_resume_only_when_all_atomic_bands_are_complete() {
+    let root = tempfile::tempdir().unwrap();
+    for name in BANDS.into_iter().take(3) {
+        write(&root.path().join(name), &[0]).unwrap();
+    }
+    assert!(!square_complete(root.path()).unwrap());
+    assert!(square_receipt(root.path()).is_err());
+    write(&root.path().join("canopy.u8"), &[]).unwrap();
+    crate::pipeline_files::write_json(
+        &root.path().join("complete.json"),
+        &square_receipt(root.path()).unwrap(),
+    )
+    .unwrap();
+    assert!(square_complete(root.path()).unwrap());
+    std::fs::write(root.path().join("dem.u16le"), b"changed").unwrap();
+    assert!(square_complete(root.path()).is_err());
+}
+
 fn raster_source(root: &Path, name: &str, band: Band, data: Vec<f64>) -> Source {
     let step = 1.0 / NODES_PER_DEGREE as f64;
     let dataset = warp::memory(
@@ -77,6 +96,67 @@ fn raw_height_metres_ignore_erroneous_scale_and_round_half_up() {
     );
     let output = dem::build(&[source], one_node()).unwrap();
     assert_eq!(u16::from_le_bytes(output.try_into().unwrap()), 3001);
+}
+
+#[test]
+fn flight_height_cache_uses_the_native_dem_and_only_fills_missing_squares() {
+    let root = tempfile::tempdir().unwrap();
+    let source = raster_source(
+        root.path(),
+        "height.tif",
+        Band::GroundHeight,
+        vec![100.1; 4],
+    );
+    let square = Square { x: 256, y: 256 };
+    let expected = dem::build(&[source], z9_raster_window(square)).unwrap();
+    let source = raster_source(
+        root.path(),
+        "height.tif",
+        Band::GroundHeight,
+        vec![100.1; 4],
+    );
+    let raw = ground::GroundHeights::from_sources(
+        vec![source],
+        vec![1.0; 360 * 180],
+        root.path().join("cache"),
+        2,
+    )
+    .unwrap();
+    let (generated, duplicate) = rayon::join(|| raw.square(square), || raw.square(square));
+    let generated = generated.unwrap();
+    assert_eq!(generated, duplicate.unwrap());
+    assert_eq!(std::fs::read(&generated).unwrap(), expected);
+    let terrain = crate::aircraft::dem::TerrainHeights::new(crate::dev4::Dev4 {
+        prepared: Default::default(),
+        rasters: root.path().join("selected"),
+    })
+    .with_raw_heights(Some(raw));
+    assert_eq!(
+        terrain.height_m(-0.00001, 0.00001, &mut None).unwrap(),
+        100.2
+    );
+    let path = root.path().join("selected/z9/256/256/dem.u16le");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, [0]).unwrap();
+    let corrupt = crate::aircraft::dem::TerrainHeights::new(crate::dev4::Dev4 {
+        prepared: Default::default(),
+        rasters: root.path().join("selected"),
+    })
+    .with_raw_heights(Some(
+        ground::GroundHeights::from_sources(
+            vec![raster_source(
+                root.path(),
+                "height.tif",
+                Band::GroundHeight,
+                vec![100.1; 4],
+            )],
+            vec![1.0; 360 * 180],
+            root.path().join("cache"),
+            1,
+        )
+        .unwrap(),
+    ));
+    assert!(corrupt.height_m(-0.00001, 0.00001, &mut None).is_err());
 }
 
 #[test]

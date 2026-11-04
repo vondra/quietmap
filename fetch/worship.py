@@ -1,4 +1,4 @@
-"""Places of worship, bell towers and minarets of an OpenStreetMap extract (`worship.sh`), one line
+"""Places of worship, bell towers and minarets of OpenStreetMap (`qm-build worship`), one line
 each: `lat lon religion kind height_m denomination` (tab-separated, sorted by latitude then
 longitude), the point of a node or the mean of an outline's vertices. Kinds: cathedral, church,
 chapel, bell_tower, minaret, other; religion as tagged (a mosque building or a minaret: muslim),

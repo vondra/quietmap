@@ -3,6 +3,7 @@ use super::{
     movements::Stop,
     network::{distance, project},
 };
+use crate::dev4::column;
 use arrow_array::{
     Array, Float64Array, Int32Array, Int64Array, ListArray, RecordBatch, StringArray, UInt8Array,
 };
@@ -35,12 +36,6 @@ pub struct Routes {
     cells: HashMap<(i32, i32), Vec<usize>>,
 }
 
-fn column<'a, T: Array + 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T, String> {
-    batch
-        .column_by_name(name)
-        .and_then(|array| array.as_any().downcast_ref())
-        .ok_or_else(|| format!("source routes lack {name}"))
-}
 fn list<T: Array + 'static>(
     batch: &RecordBatch,
     name: &str,

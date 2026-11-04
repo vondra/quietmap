@@ -1,4 +1,4 @@
-//! Places of worship, bell towers and minarets of OpenStreetMap (`fetch/worship.sh`) by z9 square,
+//! Places of worship, bell towers and minarets of OpenStreetMap (`qm-build worship`) by z9 square,
 //! and what they form on the ground: the sites within [`SITE_REACH_M`] of each other are one place
 //! (a node and its building, a church and its bell tower, a mosque and its minaret), sounding from
 //! the building nearest them.

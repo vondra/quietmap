@@ -235,7 +235,7 @@ pub fn build(
         Places,
     ),
     squares: &[Square],
-    out: &Path,
+    (terrain, out): (&Path, &Path),
 ) -> Result<usize, String> {
     crate::ships::check_squares(ships, squares)?;
     places.facilities.require_source_context(squares)?;
@@ -252,7 +252,7 @@ pub fn build(
                 (dev4, climate, network, turbines, water, ships, tables),
                 (airport_traffic, road_traffic, bus, places),
                 square,
-                out,
+                (terrain, out),
             )
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -291,7 +291,7 @@ fn build_square(
         Places,
     ),
     square: Square,
-    out: &Path,
+    (terrain, out): (&Path, &Path),
 ) -> Result<(usize, decks::DeckCounts), String> {
     let owned = |item: &Converted| Square::of(item.tile) == square;
     let mut converted = Vec::new();
@@ -303,7 +303,7 @@ fn build_square(
     around.dedup();
     let industrial_sites = industry::site_outlines(places.facilities, &around)?;
     let reach = Reach::of_square(square);
-    let decks = decks::Decks::of_square(dev4, square, out)?;
+    let decks = decks::Decks::of_square(dev4, square, terrain)?;
     let mut water_tiles = water.tiles();
     for neighbour in square.with_neighbours() {
         let road_reach = (neighbour != square).then_some(reach);

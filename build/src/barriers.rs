@@ -35,6 +35,16 @@ pub struct Barriers {
 }
 
 impl Barriers {
+    pub fn from_year(inputs: &crate::year::YearInputs) -> Result<Self, String> {
+        let mut result = Self::default();
+        for path in inputs.barrier_paths()? {
+            for (square, walls) in Self::load(path)?.by_square {
+                result.by_square.entry(square).or_default().extend(walls);
+            }
+        }
+        Ok(result)
+    }
+
     /// Reads `barriers.txt`: `source height_m lat lon lat lon ...` per line (tab-separated).
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path)

@@ -160,9 +160,11 @@ fn every_manifest_kind_region_and_dependency_is_valid() {
         }
     }
     let kinds = include_str!("../../frontend/scripts/input-kinds.ts");
-    for kind in kind::ALL {
-        assert!(kinds.contains(&format!("\"{kind}\"")));
-    }
+    assert_eq!(
+        kinds,
+        Kind::typescript(),
+        "regenerate with qm-build input-kinds"
+    );
     let mut value = serde_json::to_value(json!({"kind":"prepare-road-typo"})).unwrap();
     assert!(serde_json::from_value::<Kind>(value["kind"].take()).is_err());
     let mut m = manifest();

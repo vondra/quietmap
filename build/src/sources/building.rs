@@ -101,7 +101,7 @@ pub fn building_emission(
     let emitted = match row.class {
         class if is_home(class) => {
             let (dwellings, _) =
-                building_load(tables, row.class, row.storeys.max(1), Some(area_m2));
+                building_load(&tables.trips, row.class, row.storeys.max(1), Some(area_m2));
             let uses = dwelling_plant(tables, country_iso, climate.degree_days(lat, lon));
             Emitted::Steady(plant_sound_power(&uses, dwellings)?)
         }

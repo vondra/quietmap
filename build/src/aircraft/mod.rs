@@ -7,7 +7,7 @@ mod altitude;
 mod archive;
 mod catalog;
 mod day;
-mod dem;
+pub(crate) mod dem;
 mod echoes;
 mod filters;
 pub mod flat;
@@ -27,11 +27,12 @@ pub mod tracks;
 
 /// The flags of a written segment, for the readers of the day files (the aircraft boxes).
 pub use filters::MIN_SEGMENT_LENGTH_M;
+pub(crate) use receipt::Admission;
 pub use segments::{HELICOPTER_DESCENT, IS_DEPARTURE, ON_GROUND, SECONDARY_ONLY};
 
 use crate::dev4::Dev4;
-use day::{Inputs, extract_day, read_receipt, write_receipt};
-use receipt::{DayReceipt, admit};
+use day::{Inputs, extract_day, read_receipt};
+use receipt::admit;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Instant;
@@ -117,6 +118,7 @@ pub struct Run<'a> {
     pub out: &'a Path,
     /// National terrain models laid over the dev4 heights.
     pub national: Vec<crate::terrain::national::NationalHeights>,
+    pub raw_heights: Option<crate::rasters::ground::GroundHeights>,
 }
 
 /// `qm-build aircraft-segments`: extract every requested day not yet complete, then admit.
@@ -129,7 +131,8 @@ pub fn run(run: Run) -> Result<(), String> {
             prepared: Default::default(),
             rasters: run.rasters.to_path_buf(),
         })
-        .with_national(run.national),
+        .with_national(run.national)
+        .with_raw_heights(run.raw_heights),
         geoid: geoid::Geoid::read(run.geoid)?,
         scope,
     };
@@ -137,12 +140,7 @@ pub fn run(run: Run) -> Result<(), String> {
     let mut failed = Vec::new();
     for day in &run.days.requested {
         if let Some(receipt) = read_receipt(run.out, day)? {
-            if receipt.scope != scope_key {
-                return Err(format!(
-                    "{day} was extracted under scope {:?}; rerun under one scope",
-                    receipt.scope
-                ));
-            }
+            receipt.check_reuse(&scope_key, run.days.increment_candidates.contains(day))?;
             continue;
         }
         let started = Instant::now();
@@ -187,19 +185,8 @@ pub fn run(run: Run) -> Result<(), String> {
         &run.days.increment_candidates,
         &receipts,
     )?;
-    for (day, receipt) in &receipts {
-        if receipt.needs_primary_only_rewrite(&admission.increment_days) {
-            eprintln!("aircraft {day}: secondary provider not admitted, rewriting primary-only");
-            extract_day(&inputs, day, false, run.out)?;
-            let rewritten =
-                read_receipt(run.out, day)?.ok_or_else(|| format!("{day}: no receipt"))?;
-            let kept = DayReceipt {
-                secondary: receipt.secondary.clone(),
-                ..rewritten
-            };
-            write_receipt(run.out, &kept)?;
-        }
-    }
+    // The year command rejects admission differing from its window. Keep the evidence;
+    // rewriting a rejected merge cannot make that immutable manifest valid.
     let path = run.out.join("admission.json");
     std::fs::write(
         &path,

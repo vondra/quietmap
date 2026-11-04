@@ -2,7 +2,7 @@
 use serde::Deserialize;
 
 macro_rules! kinds {
-    ($($variant:ident => $name:literal),+ $(,)?) => {
+    ($($variant:ident => $name:literal $( [ $intermediate:ident ] )?),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
         pub enum Kind { $(#[serde(rename = $name)] $variant),+ }
         impl std::fmt::Display for Kind {
@@ -10,37 +10,48 @@ macro_rules! kinds {
                 f.write_str(match self { $(Self::$variant => $name),+ })
             }
         }
-        #[cfg(test)]
-        pub const ALL: &[Kind] = &[$(Kind::$variant),+];
+        impl Kind {
+            pub fn typescript() -> String {
+                let kinds = [$($name),+];
+                let intermediate = [$(($name, kinds!(@intermediate $($intermediate)?))),+]
+                    .into_iter().filter(|(_, intermediate)| *intermediate)
+                    .map(|(name, _)| name).collect::<Vec<_>>();
+                format!("// Generated from build/src/year_kind.rs by qm-build input-kinds.\nexport const INPUT_KINDS = {} as const\nexport type InputKind = typeof INPUT_KINDS[number]\nexport const INTERMEDIATE_KINDS: ReadonlySet<InputKind> = new Set({})\n",
+                    serde_json::to_string_pretty(&kinds[..]).unwrap(),
+                    serde_json::to_string_pretty(&intermediate).unwrap())
+            }
+        }
     };
+    (@intermediate intermediate) => { true };
+    (@intermediate) => { false };
 }
 kinds! {
-    AirportTraffic => "airport-traffic",
-    Barriers => "barriers",
+    AirportTraffic => "airport-traffic" [intermediate],
+    Barriers => "barriers" [intermediate],
     BuildingPlant => "building-plant",
     BuildingRoadModels => "building-road-models",
-    Bus => "bus",
+    Bus => "bus" [intermediate],
     BusModels => "bus-models",
     ChurchBells => "church-bells",
     Climate => "climate",
     CountedClassShares => "counted-class-shares",
     DwellingTrips => "dwelling-trips",
     ElectricCarShare => "electric-car-share",
-    Facilities => "facilities",
+    Facilities => "facilities" [intermediate],
     FacilityModel => "facility-model",
-    FacilityObservations => "facility-observations",
+    FacilityObservations => "facility-observations" [intermediate],
     FineDem => "fine-dem",
     FreightPeriodShares => "freight-period-shares",
-    Geoid => "geoid",
+    Geoid => "geoid" [intermediate],
     HeavySpeeds => "heavy-speeds",
     HotelTripRate => "hotel-trip-rate",
     LegalSpeeds => "legal-speeds",
     ModelObservations => "model-observations",
     MotorcycleShare => "motorcycle-share",
     NationalDem => "national-dem",
-    OsmGeography => "osm-geography",
-    Structures => "structures",
-    StructureObservations => "structure-observations",
+    OsmGeography => "osm-geography" [intermediate],
+    Structures => "structures" [intermediate],
+    StructureObservations => "structure-observations" [intermediate],
     StructureHeightRaster => "structure-height-raster",
     StructureHeightModel => "structure-height-model",
     PrepareBoundaries => "prepare-boundaries",
@@ -49,14 +60,14 @@ kinds! {
     PrepareBuildingHeights => "prepare-building-heights",
     PrepareCrossings => "prepare-crossings",
     PrepareGeography => "prepare-geography",
-    PrepareRegions => "prepare-regions",
+    PrepareRegions => "prepare-regions" [intermediate],
     PrepareOsmSpeeds => "prepare-osm-speeds",
     PrepareGroundHeight => "prepare-ground-height",
     PrepareIndustrialSites => "prepare-industrial-sites",
     PrepareLandCover => "prepare-land-cover",
     PrepareNoiseBarriers => "prepare-noise-barriers",
     PrepareOsm => "prepare-osm",
-    PrepareOsmBoundaries => "prepare-osm-boundaries",
+    PrepareOsmBoundaries => "prepare-osm-boundaries" [intermediate],
     PrepareRailNetwork => "prepare-rail-network",
     PrepareRoadCounts => "prepare-road-counts",
     PrepareRoadHourly => "prepare-road-hourly",
@@ -68,42 +79,42 @@ kinds! {
     PrepareTreeHeight => "prepare-tree-height",
     PrepareTurbines => "prepare-turbines",
     PrepareWeather => "prepare-weather",
-    PrepareWeatherStatistics => "prepare-weather-statistics",
-    Prepared => "prepared",
+    PrepareWeatherStatistics => "prepare-weather-statistics" [intermediate],
+    Prepared => "prepared" [intermediate],
     Primary => "primary",
     RailModel => "rail-model",
     RailFlows => "rail-flows",
     RailFleetRegions => "rail-fleet-regions",
-    RasterMosaic => "raster-mosaic",
-    Rasters => "rasters",
+    RasterMosaic => "raster-mosaic" [intermediate],
+    Rasters => "rasters" [intermediate],
     RegionalVehicleShares => "regional-vehicle-shares",
-    RoadObservations => "road-observations",
-    RoadConversion => "road-conversion",
-    RoadCalibration => "road-calibration",
-    RoadPreparationModel => "road-preparation-model",
+    RoadObservations => "road-observations" [intermediate],
+    RoadConversion => "road-conversion" [intermediate],
+    RoadCalibration => "road-calibration" [intermediate],
+    RoadPreparationModel => "road-preparation-model" [intermediate],
     RoadClassPriors => "road-class-priors",
     RoadClassShares => "road-class-shares",
     RoadPeriodShares => "road-period-shares",
     RoadReferenceCounts => "road-reference-counts",
-    RoadTraffic => "road-traffic",
+    RoadTraffic => "road-traffic" [intermediate],
     RuralFreeFlow => "rural-free-flow",
     Secondary => "secondary",
-    Segments => "segments",
+    Segments => "segments" [intermediate],
     ServiceCooling => "service-cooling",
-    Ships => "ships",
-    Shuffled => "shuffled",
+    Ships => "ships" [intermediate],
+    Shuffled => "shuffled" [intermediate],
     SubdivisionGrids => "subdivision-grids",
     TaggedSpeeds => "tagged-speeds",
     Tent => "tent",
-    Terrain => "terrain",
+    Terrain => "terrain" [intermediate],
     Tiff => "tiff",
     TrainScales => "train-scales",
-    Turbines => "turbines",
+    Turbines => "turbines" [intermediate],
     VenueCustoms => "venue-customs",
     VenueSeating => "venue-seating",
-    Venues => "venues",
-    Water => "water",
-    Weather => "weather",
-    Worship => "worship",
+    Venues => "venues" [intermediate],
+    Water => "water" [intermediate],
+    Weather => "weather" [intermediate],
+    Worship => "worship" [intermediate],
     WorshipCalls => "worship-calls",
 }

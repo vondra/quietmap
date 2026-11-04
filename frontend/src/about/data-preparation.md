@@ -700,10 +700,12 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
 <summary>The builder's code: fetch/, build/, physics/ and tiles/</summary>
 
 - `fetch/` downloads datasets and decodes publisher formats for the Rust builder. The downloads
-  include vessel-presence reports, noise barriers, bus routes, national
-  terrain models, wind turbines, venues, WorldClim, places of worship and the
+  include vessel-presence reports, noise barriers, national
+  terrain models, wind turbines, WorldClim and the
   <abbr title="Trans-European Transport Network">TEN-T</abbr> rail network.
-- `build/` turns the inputs into the tiles and every source's sound power. Its steps include
+- `build/` turns the inputs into the tiles and every source's sound power. The `year` command
+  runs the steps in dependency order. `bus`, `worship` and `venues` extract mapped routes and
+  activities from that year's OpenStreetMap state. Other steps include
   `ships` (monthly occupancy with completed coverage), `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.

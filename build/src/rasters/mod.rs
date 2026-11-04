@@ -1,5 +1,6 @@
 //! Manifest-selected GDAL/PROJ rasters into the four native one-arc-second square bands.
 mod blend;
+mod cache;
 mod canopy;
 pub mod config;
 mod cover;
@@ -7,6 +8,7 @@ mod datum;
 mod dem;
 mod distance;
 mod forest;
+pub(crate) mod ground;
 mod runtime;
 mod source;
 mod warp;
@@ -15,11 +17,40 @@ use crate::dev4::{Square, z9_raster_window};
 use crate::year::YearInputs;
 use chrono::{Datelike, NaiveDate};
 use config::Band;
+use rayon::prelude::*;
 use source::Source;
 use std::io::Write;
 use std::path::Path;
 use tiles::square::SQUARES_PER_AXIS;
 use tiles::terrain::{NODES_PER_DEGREE, Window};
+
+const BANDS: [&str; 4] = ["dem.u16le", "imd.u8", "forest.u8", "canopy.u8"];
+
+fn square_receipt(root: &Path) -> Result<serde_json::Value, String> {
+    BANDS
+        .iter()
+        .map(|name| crate::pipeline_files::stamp(&root.join(name)))
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map(serde_json::Value::from)
+        .map_err(|error| error.to_string())
+}
+
+fn square_complete(root: &Path) -> Result<bool, String> {
+    let path = root.join("complete.json");
+    if !path.exists() {
+        return Ok(false);
+    }
+    let expected: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    if expected != square_receipt(root)? {
+        return Err(format!(
+            "completed raster square changed: {}",
+            root.display()
+        ));
+    }
+    Ok(true)
+}
 
 fn touches_land(coverage: &[f64], window: Window) -> bool {
     let south = (window.north_node - window.rows as i32)
@@ -60,20 +91,30 @@ fn loss_year_before(cutoff: &str) -> Result<i32, String> {
     Ok(cutoff.year() - 1)
 }
 
-pub fn build(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<(), String> {
+pub(super) fn open_sources(
+    inputs: &YearInputs,
+    selected: impl Fn(Band) -> bool,
+) -> Result<Vec<Source>, String> {
     let plan = inputs
         .manifest
         .rasters
         .as_ref()
         .ok_or("year manifest has no raster plan")?;
-    for square in squares {
-        if square.x >= SQUARES_PER_AXIS || square.y >= SQUARES_PER_AXIS {
-            return Err(format!("invalid z9 square {square:?}"));
-        }
-    }
     runtime::configure(inputs, plan)?;
+    open_configured_sources(inputs, selected)
+}
+
+fn open_configured_sources(
+    inputs: &YearInputs,
+    selected: impl Fn(Band) -> bool,
+) -> Result<Vec<Source>, String> {
+    let plan = inputs
+        .manifest
+        .rasters
+        .as_ref()
+        .ok_or("year manifest has no raster plan")?;
     let mut sources = Vec::new();
-    for spec in &plan.sources {
+    for spec in plan.sources.iter().filter(|spec| selected(spec.band)) {
         let observation = inputs
             .manifest
             .inputs
@@ -92,6 +133,10 @@ pub fn build(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<(), 
         sources.push(source);
     }
     sources.sort_by_key(|source| (source.spec.band, source.spec.priority));
+    Ok(sources)
+}
+
+fn land_coverage(sources: &[Source]) -> Result<Vec<f64>, String> {
     let coverage = sources
         .iter()
         .find(|s| s.spec.band == Band::Coverage)
@@ -110,36 +155,57 @@ pub fn build(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<(), 
     if coverage.iter().any(|v| *v != 0.0 && *v != 1.0) {
         return Err("land coverage must explicitly classify every degree".into());
     }
-    let forest_year = loss_year_before(&inputs.manifest.as_of)?;
-    for &square in squares {
-        let window = z9_raster_window(square);
-        eprintln!("raster {}/{}: building four bands", square.x, square.y);
-        let bands = if touches_land(&coverage, window) {
-            let dem = dem::build(&sources, window)?;
-            let (imd, forest) = cover::build(&sources, window, forest_year)?;
-            let canopy = canopy::build(&sources, window)?;
-            [dem, imd, forest, canopy]
-        } else {
-            [Vec::new(), Vec::new(), Vec::new(), Vec::new()]
-        };
-        let root = out
-            .join("z9")
-            .join(square.x.to_string())
-            .join(square.y.to_string());
-        for (name, bytes) in ["dem.u16le", "imd.u8", "forest.u8", "canopy.u8"]
-            .into_iter()
-            .zip(bands)
-        {
-            write(&root.join(name), &bytes)?;
-            eprintln!(
-                "raster {}/{} {name}: {} bytes",
-                square.x,
-                square.y,
-                bytes.len()
-            );
+    Ok(coverage)
+}
+
+pub fn build(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<(), String> {
+    for square in squares {
+        if square.x >= SQUARES_PER_AXIS || square.y >= SQUARES_PER_AXIS {
+            return Err(format!("invalid z9 square {square:?}"));
         }
     }
-    Ok(())
+    let sources = open_sources(inputs, |_| true)?;
+    cache::prepare(inputs, &sources, out)?;
+    let coverage = land_coverage(&sources)?;
+    drop(sources);
+    let forest_year = loss_year_before(&inputs.manifest.as_of)?;
+    // Configure GDAL once above; each worker owns separate datasets and PROJ transformations.
+    squares.par_iter().try_for_each_init(
+        || open_configured_sources(inputs, |_| true),
+        |sources, &square| {
+            let sources = sources.as_ref().map_err(Clone::clone)?;
+            let window = z9_raster_window(square);
+            let land = touches_land(&coverage, window);
+            let root = out
+                .join("z9")
+                .join(square.x.to_string())
+                .join(square.y.to_string());
+            if square_complete(&root)? {
+                return Ok(());
+            }
+            eprintln!("raster {}/{}: building four bands", square.x, square.y);
+            let bands = if land {
+                let dem = dem::build(sources, window)?;
+                let (imd, forest) = cover::build(sources, window, forest_year)?;
+                let canopy = canopy::build(sources, window)?;
+                [dem, imd, forest, canopy]
+            } else {
+                [Vec::new(), Vec::new(), Vec::new(), Vec::new()]
+            };
+            for (name, bytes) in BANDS.into_iter().zip(bands) {
+                write(&root.join(name), &bytes)?;
+                eprintln!(
+                    "raster {}/{} {name}: {} bytes",
+                    square.x,
+                    square.y,
+                    bytes.len()
+                );
+            }
+            crate::pipeline_files::write_json(&root.join("complete.json"), &square_receipt(&root)?)
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]

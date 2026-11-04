@@ -25,6 +25,7 @@ pub fn finalize_square(
     output: &Path,
     square: crate::osm::geometry::Square,
 ) -> Result<usize, String> {
+    std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
     let path = source_dir.join("railways.arrow");
     let Some(table) = crate::dev4::read_table(&path)? else {
         return Ok(0);
@@ -49,7 +50,6 @@ pub fn finalize_square(
         batch = super::horns::append(&batch, crossings)?;
     }
     let ipc = super::encode::encode(&batch)?;
-    std::fs::create_dir_all(output).map_err(|e| e.to_string())?;
     write_atomically(output, &ipc)?;
     Ok(batch.num_rows())
 }

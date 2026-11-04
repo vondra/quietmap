@@ -1,7 +1,7 @@
 // Public source sections and popup citations use the release's year manifests.
 import { globSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { INPUT_KINDS, type InputKind } from './input-kinds.ts'
+import { INPUT_KINDS, INTERMEDIATE_KINDS, type InputKind } from './input-kinds.ts'
 
 export interface Interval { start: string; end: string }
 export interface SourceInput {
@@ -92,10 +92,9 @@ export function renderYearSources(page: string, years: NamedYear[]): string {
     scope.length === 2 && path.split('/').length > 2 ? `The [regional sources](/about/${path.split('/').slice(0, -1).join('/')}#sources-by-year) apply too.` : '',
   ].filter(Boolean).join(' ')
   const sections = [...years].filter(year => year.manifest.built).sort((a, b) => b.name.localeCompare(a.name)).map(({ name, manifest }) => {
-    const intermediate = new Set<InputKind>(['prepared', 'prepare-regions', 'prepare-osm-boundaries', 'osm-geography', 'structure-observations', 'structures', 'road-conversion', 'road-observations', 'road-calibration', 'road-preparation-model', 'rasters', 'airport-traffic', 'road-traffic', 'segments', 'shuffled', 'terrain', 'weather', 'bus', 'worship', 'venues', 'water', 'turbines', 'barriers', 'geoid', 'raster-mosaic', 'ships', 'prepare-weather-statistics', 'facilities', 'facility-observations'])
     const conversion = manifest.inputs.find(input => input.kind === 'road-conversion')
     const selectedRoadCount = (input: SourceInput) => input.kind === 'road-reference-counts' || input.kind === 'prepare-road-counts' && (!conversion || conversion.depends_on.includes(input.id))
-    const inputs = manifest.inputs.filter(input => local(input.region) && !intermediate.has(input.kind)
+    const inputs = manifest.inputs.filter(input => local(input.region) && !INTERMEDIATE_KINDS.has(input.kind)
       && (input.kind !== 'prepare-road-counts' || selectedRoadCount(input))
       && (input.kind !== 'prepare-road-network' || !conversion || conversion.depends_on.includes(input.id)))
     const noRoadCounts = scope.length === 2 && !inputs.some(selectedRoadCount)

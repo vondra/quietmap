@@ -21,6 +21,16 @@ fn xml(value: &str) -> String {
 }
 
 impl Source {
+    pub(super) fn reopen(&self) -> Result<Self, String> {
+        let mut source = Self::open(self.spec.clone(), self.path.clone(), self.observed_year)?;
+        source.antimeridian = self
+            .antimeridian
+            .as_ref()
+            .map(|wrapped| wrapped.reopen().map(Box::new))
+            .transpose()?;
+        Ok(source)
+    }
+
     pub fn open(spec: RasterSource, path: PathBuf, observed_year: i32) -> Result<Self, String> {
         let dataset = Dataset::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         if dataset.raster_count() != 1 {

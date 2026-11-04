@@ -1,5 +1,5 @@
 //! Bars, pubs, nightclubs, beer gardens, restaurants, cafés and fast-food places of OpenStreetMap
-//! (`fetch/venues.sh`) by z9 square, with what the people converter needs of them (research
+//! (`qm-build venues`) by z9 square, with what the people converter needs of them (research
 //! 2026-10-04, people): the seats outside, the hours (the mapped `opening_hours`, else the
 //! country's customs) and the weight of a place in a nightlife cluster.
 

@@ -14,12 +14,23 @@ use tiles::terrain::Terrain;
 struct Ground<'a> {
     root: &'a Path,
     tiles: HashMap<TileId, Option<Terrain>>,
+    coverage: Option<std::collections::BTreeSet<crate::dev4::Square>>,
 }
 
 impl Ground<'_> {
     /// The ground's height at a point (m); a point without a terrain tile is verified ocean.
     fn height_m(&mut self, at: Mercator) -> Result<f64, String> {
         let tile = TileId::containing(at);
+        if self
+            .coverage
+            .as_ref()
+            .is_some_and(|squares| !squares.contains(&crate::dev4::Square::of(tile)))
+        {
+            return Err(format!(
+                "airport roll lies outside completed terrain at {:?}",
+                at.to_degrees()
+            ));
+        }
         if !self.tiles.contains_key(&tile) {
             let read = tiles::square::read_tile(self.root, tile, tiles::Kind::Terrain)?;
             let parsed = read
@@ -47,6 +58,7 @@ pub fn write(
     let mut ground = Ground {
         root: terrain_root,
         tiles: HashMap::new(),
+        coverage: crate::terrain_completion::coverage(terrain_root)?,
     };
     let mut by_tile: BTreeMap<TileId, Vec<Roll>> = BTreeMap::new();
     for (&key, &movements_per_day) in rolls {
@@ -81,4 +93,22 @@ pub fn write(
         .collect();
     tiles::square::write_tiles(out, tiles::Kind::AircraftRolls, &tiles)?;
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_land_outside_partial_terrain_is_not_verified_ocean() {
+        let root = tempfile::tempdir().unwrap();
+        let ocean = Mercator::from_degrees(0.0, 0.0);
+        let mut ground = Ground {
+            root: root.path(),
+            tiles: HashMap::new(),
+            coverage: Some([crate::dev4::Square::of(TileId::containing(ocean))].into()),
+        };
+        assert_eq!(ground.height_m(ocean).unwrap(), 0.0);
+        assert!(ground.height_m(Mercator::from_degrees(51.5, -0.2)).is_err());
+    }
 }

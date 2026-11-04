@@ -84,6 +84,22 @@ impl YearInputs {
         }
     }
 
+    /// An explicitly unavailable national wall supplement leaves the mapped structures intact.
+    pub fn barrier_paths(&self) -> Result<&[PathBuf], String> {
+        if self.paths.contains_key(&Kind::Barriers) {
+            self.paths(Kind::Barriers)
+        } else if self
+            .manifest
+            .unavailable
+            .iter()
+            .any(|input| input.kind == Kind::Barriers)
+        {
+            Ok(&[])
+        } else {
+            Err("declare the national wall supplement or its absence".into())
+        }
+    }
+
     /// An unavailable historical legal table leaves only explicit mapped numeric limits.
     pub fn osm_speed_table(&self) -> Result<Option<&Path>, String> {
         if self.paths.contains_key(&Kind::PrepareOsmSpeeds) {

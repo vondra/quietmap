@@ -16,7 +16,7 @@ mod preparation_buildings;
 pub(crate) mod preparation_model;
 
 use crate::dev4::{Dev4, SQUARES_PER_AXIS, Square, Z30_QUANTUM_M, cell, column, require_stamp};
-use crate::source_tables::SourceTables;
+use crate::source_tables::TripRates;
 use crate::structures::footprint_area_m2;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int32Type, UInt8Type, UInt16Type};
@@ -91,7 +91,7 @@ const HOUSE_UP_TO_STOREYS: u8 = 3;
 /// Trips by mapped use: dwellings per household, hotels by the admitted room-density table,
 /// other uses by floor area or fixed fixtures. An unknown use is a shed, house or flats by size.
 pub(crate) fn building_load(
-    tables: &SourceTables,
+    tables: &TripRates,
     building_type: u8,
     storeys: u8,
     area_m2: Option<f64>,
@@ -127,7 +127,7 @@ pub(crate) fn building_load(
     }
 }
 
-fn trips_per_dwelling(tables: &SourceTables, country_iso: u16) -> f64 {
+fn trips_per_dwelling(tables: &TripRates, country_iso: u16) -> f64 {
     tables
         .dwelling_trips
         .get(country_iso.to_le_bytes())
@@ -235,11 +235,12 @@ pub fn read_grid(out: &Path, square: Square) -> Result<Option<Vec<f32>>, String>
 /// Builds the traffic files of `squares` (a square already written is kept, so a rerun
 /// resumes); returns how many it wrote.
 pub fn build(
-    tables: &SourceTables,
+    tables: &TripRates,
     dev4: &Dev4,
     squares: &[Square],
     out: &Path,
 ) -> Result<usize, String> {
+    std::fs::create_dir_all(out).map_err(|error| error.to_string())?;
     let written = squares
         .par_iter()
         .map(|&square| -> Result<usize, String> {
@@ -309,7 +310,7 @@ fn read_roads(dev4: &Dev4, square: Square) -> Result<Option<Vec<RoadRow>>, Strin
 /// generation skipped those: 2.1 of Bangkok's 2.3 million footprints, 2.5 of Mexico City's 2.7
 /// million, against 3 % of Prague's floor (counted 2026-10-03).
 fn read_buildings(
-    tables: &SourceTables,
+    tables: &TripRates,
     dev4: &Dev4,
     square: Square,
 ) -> Result<Vec<BuildingLoad>, String> {
@@ -410,7 +411,7 @@ fn parking_trip_ends(building: &BuildingLoad, trips_per_dwelling: f64) -> [f64; 
 /// street and in a lot, its dwellings' at its country's trips per dwelling as the grid's (the
 /// square's country, `Dev4::square_country`); the flats' in a cell without buildings.
 pub fn parking_shares(
-    tables: &SourceTables,
+    tables: &TripRates,
     dev4: &Dev4,
     square: Square,
 ) -> Result<Vec<[f32; 2]>, String> {
@@ -458,7 +459,7 @@ fn metres_per_z30(gy: i32) -> f64 {
 }
 
 fn square_traffic(
-    tables: &SourceTables,
+    tables: &TripRates,
     dev4: &Dev4,
     square: Square,
 ) -> Result<Option<SquareTraffic>, String> {
@@ -500,7 +501,7 @@ impl Loads {
 }
 
 fn assign(
-    tables: &SourceTables,
+    tables: &TripRates,
     roads: &[RoadRow],
     buildings: &[BuildingLoad],
     scale: f64,
@@ -879,7 +880,7 @@ mod tests {
 
     #[test]
     fn homes_and_shops_make_dev4s_trips() {
-        let tables = SourceTables::test_fixture();
+        let tables = &crate::source_tables::SourceTables::test_fixture().trips;
         assert_eq!(building_load(tables, 11, 2, Some(150.0)), (2.0, 0.0));
         assert_eq!(building_load(tables, 0, 4, Some(400.0)), (20.0, 0.0));
         assert_eq!(
@@ -965,7 +966,7 @@ mod tests {
     /// dwelling's trips at its country's rate, Czechia's 3.4 a day as China's 1.38.
     #[test]
     fn houses_park_on_their_plots_and_flats_on_the_street() {
-        let tables = SourceTables::test_fixture();
+        let tables = &crate::source_tables::SourceTables::test_fixture().trips;
         let load = |(dwellings, trips)| BuildingLoad {
             at: (0, 0),
             dwellings,
@@ -1014,7 +1015,7 @@ mod tests {
     /// A building over a tunnel joins the street beside it, not the road under the ground.
     #[test]
     fn a_building_over_a_tunnel_joins_its_street() {
-        let tables = SourceTables::test_fixture();
+        let tables = &crate::source_tables::SourceTables::test_fixture().trips;
         let tunnel = RoadRow {
             tunnel: true,
             ..row((0, 0), (1_000, 0), 2)

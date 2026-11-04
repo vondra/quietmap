@@ -2,6 +2,30 @@
 use std::path::PathBuf;
 
 #[test]
+fn an_empty_railway_selection_has_a_completed_output_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let model = super::model::RailModel::read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../years/tables/2026/rail-model.json"),
+    )
+    .unwrap();
+    let output = root.path().join("output/z9/0/0");
+    assert_eq!(
+        super::write::finalize_square(
+            &model,
+            &root.path().join("geography/z9/0/0"),
+            &[],
+            &Default::default(),
+            &output,
+            crate::osm::geometry::Square { x: 0, y: 0 },
+        )
+        .unwrap(),
+        0
+    );
+    assert!(output.is_dir());
+    assert_eq!(std::fs::read_dir(output).unwrap().count(), 0);
+}
+
+#[test]
 fn unknown_is_distinct_from_an_observed_zero() {
     let row = super::movements::Movement {
         missing_calendar_estimate: [0.0; 2],

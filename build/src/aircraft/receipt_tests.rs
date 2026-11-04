@@ -139,26 +139,20 @@ fn unreceipted_days_and_foreign_increment_candidates_are_refused() {
     );
 }
 
-/// A merged day whose secondary was not admitted is rewritten primary-only, unless its merge kept
-/// nothing (then it already is), which makes the repair idempotent.
 #[test]
-fn rejected_merges_need_a_primary_only_rewrite() {
-    let merged = |kept: u64, addresses: u64| DayReceipt {
-        merge: MergeCounts {
-            secondary_points_kept: kept,
-            secondary_only_addresses: addresses,
-            ..MergeCounts::default()
-        },
-        ..day(
-            "2026-05-01",
-            receipt(0, [1000; 24]),
-            Some(receipt(2, [100; 24])),
-        )
-    };
-    let none = BTreeSet::new();
-    assert!(merged(10, 0).needs_primary_only_rewrite(&none));
-    assert!(merged(0, 1).needs_primary_only_rewrite(&none));
-    assert!(!merged(0, 0).needs_primary_only_rewrite(&none));
-    assert!(!merged(10, 1).needs_primary_only_rewrite(&days(&["2026-05-01"])));
-    assert!(!DayReceipt::primary_missing("2026-05-01", None).needs_primary_only_rewrite(&none));
+fn a_merged_day_cannot_be_reused_as_primary_only_after_changing_the_window() {
+    let merged = day(
+        "2026-05-01",
+        receipt(0, [1000; 24]),
+        Some(receipt(2, [100; 24])),
+    );
+    merged.check_reuse(&None, true).unwrap();
+    assert!(merged.check_reuse(&None, false).is_err());
+    assert!(
+        merged
+            .check_reuse(&Some("different scope".into()), true)
+            .is_err()
+    );
+    let primary = day("2026-05-01", receipt(0, [1000; 24]), None);
+    primary.check_reuse(&None, false).unwrap();
 }

@@ -1,4 +1,4 @@
-"""Venues of an OpenStreetMap extract (`venues.sh`), one line each: `lat lon kind outdoor_seating
+"""Venues of an OpenStreetMap extract (`qm-build venues`), one line each: `lat lon kind outdoor_seating
 area_m2 opening_hours name` (tab-separated, sorted by latitude then longitude), the point of a node
 or the mean of an outline's vertices. Kinds: bar, pub, nightclub, biergarten, restaurant, cafe,
 fast_food; outdoor_seating the tag's value, yes for an untagged venue with a mapped terrace

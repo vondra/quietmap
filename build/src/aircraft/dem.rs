@@ -25,6 +25,7 @@ pub struct TerrainHeights {
     rasters: Dev4,
     squares: RwLock<HashMap<Square, Arc<SquareHeights>>>,
     national: Vec<NationalHeights>,
+    raw_heights: Option<crate::rasters::ground::GroundHeights>,
 }
 
 /// The square a flight sampled last: consecutive samples mostly share it.
@@ -36,12 +37,21 @@ impl TerrainHeights {
             rasters,
             squares: RwLock::new(HashMap::new()),
             national: Vec::new(),
+            raw_heights: None,
         }
     }
 
     /// The same heights with national models laid over them.
     pub fn with_national(self, national: Vec<NationalHeights>) -> Self {
         TerrainHeights { national, ..self }
+    }
+
+    /// A scoped trace still needs heights at its remote origin and destination.
+    pub fn with_raw_heights(self, raw: Option<crate::rasters::ground::GroundHeights>) -> Self {
+        Self {
+            raw_heights: raw,
+            ..self
+        }
     }
 
     /// Terrain height in metres at the node nearest to (lat, lon).
@@ -95,7 +105,12 @@ impl TerrainHeights {
         {
             return Ok(heights.clone());
         }
-        let path = self.rasters.raster_file(square, "dem.u16le");
+        let mut path = self.rasters.raster_file(square, "dem.u16le");
+        if !path.exists()
+            && let Some(raw) = &self.raw_heights
+        {
+            path = raw.square(square)?;
+        }
         let file = File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         let length = file
             .metadata()

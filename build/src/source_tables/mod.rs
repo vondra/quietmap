@@ -10,7 +10,9 @@ use crate::year::YearInputs;
 pub use regional_roads::RegionalRoads;
 use serde::Deserialize;
 pub use table::CountryTable;
+mod trips;
 use table::read_rows;
+pub use trips::TripRates;
 
 pub const MODEL_KINDS: &[crate::year::Kind] = &[
     crate::year::Kind::BuildingPlant,
@@ -79,8 +81,7 @@ pub struct SourceTables {
     pub venue_seating: VenueSeating,
     pub worship_calls: CountryTable<WorshipCalls>,
     pub solar_days: Vec<i64>,
-    pub dwelling_trips: CountryTable<f64>,
-    pub hotel_trip_rate: f64,
+    pub trips: TripRates,
     pub road_models: RoadModels,
     pub bus_model: BusModel,
     pub electric_percent: CountryTable<f64>,
@@ -110,8 +111,7 @@ impl SourceTables {
             venue_seating: table::single_row(inputs, crate::year::Kind::VenueSeating)?,
             worship_calls: CountryTable::read(inputs, crate::year::Kind::WorshipCalls)?,
             solar_days: inputs.manifest.solar_days()?,
-            dwelling_trips: CountryTable::read(inputs, crate::year::Kind::DwellingTrips)?,
-            hotel_trip_rate: table::single_row(inputs, crate::year::Kind::HotelTripRate)?,
+            trips: TripRates::read(inputs)?,
             road_models: table::single_row(inputs, crate::year::Kind::BuildingRoadModels)?,
             bus_model: table::single_row(inputs, crate::year::Kind::BusModels)?,
             electric_percent: CountryTable::read(inputs, crate::year::Kind::ElectricCarShare)?,

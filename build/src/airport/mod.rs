@@ -341,6 +341,7 @@ pub fn build(
         rolls_written
     );
     let marker = out.join(COMPLETION_MARKER);
+    std::fs::create_dir_all(out).map_err(|error| error.to_string())?;
     std::fs::write(&marker, note).map_err(|error| format!("{}: {error}", marker.display()))?;
     Ok(by_square.len())
 }

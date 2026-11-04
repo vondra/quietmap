@@ -211,8 +211,10 @@ pub fn convert(
         .any(|row| matches!(row.class, CAR_PARK | CAR_PARK_STREET));
     let budgets = match traffic.filter(|_| parking) {
         Some(dir) => crate::traffic::read_grid(dir, square)?.map(|grid| -> Result<_, String> {
-            let (mut street, mut lots) =
-                ParkingBudget::street_and_lots(&grid, &parking_shares(tables, dev4, square)?);
+            let (mut street, mut lots) = ParkingBudget::street_and_lots(
+                &grid,
+                &parking_shares(&tables.trips, dev4, square)?,
+            );
             for row in &rows {
                 let budget = match row.class {
                     CAR_PARK_STREET => &mut street,

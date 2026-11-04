@@ -1,6 +1,6 @@
 //! OSM building rows and the consumed structures Arrow schema, without the retired runtime index.
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Result, ensure};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Int16Array, Int32Array, Int64Array,
     RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array,
@@ -38,10 +38,7 @@ pub struct OsmBuilding {
 }
 
 pub fn column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T> {
-    batch
-        .column_by_name(name)
-        .and_then(|a| a.as_any().downcast_ref())
-        .ok_or_else(|| anyhow!("invalid {name}"))
+    crate::dev4::column(batch, name).map_err(anyhow::Error::msg)
 }
 
 pub fn read_osm(path: &Path) -> Result<Vec<OsmBuilding>> {

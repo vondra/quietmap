@@ -62,6 +62,10 @@ impl DatumTransform {
                 0 if longitude[i].is_finite()
                     && latitude[i].is_finite()
                     && heights[i].is_finite() => {}
+                // PROJ 9.4 can return NaN with code zero at an exactly missing grid node:
+                // its nodata interpolation divides zero by zero. Only vertical NaN is missing.
+                0 if longitude[i].is_finite() && latitude[i].is_finite() && heights[i].is_nan() => {
+                }
                 // PROJ proj.h: COORD_TRANSFM (2048) + OUTSIDE_GRID (4) / GRID_AT_NODATA (5).
                 2052 | 2053 => heights[i] = f64::NAN,
                 code => {
@@ -115,7 +119,9 @@ pub fn convert(values: &mut [f64], window: Window, source: &Source) -> Result<()
         let mut latitudes =
             vec![(window.north_node as f64 - row as f64) / NODES_PER_DEGREE as f64; indices.len()];
         let mut elevations: Vec<_> = indices.iter().map(|i| heights[*i]).collect();
-        transform.row(&mut longitudes, &mut latitudes, &mut elevations)?;
+        transform
+            .row(&mut longitudes, &mut latitudes, &mut elevations)
+            .map_err(|error| format!("{}: {window:?}, row {row}: {error}", source.spec.input))?;
         for (i, height) in indices.into_iter().zip(elevations) {
             heights[i] = height;
             transformed += usize::from(height.is_finite());
@@ -133,6 +139,70 @@ pub fn convert(values: &mut [f64], window: Window, source: &Source) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_exactly_missing_vertical_node_does_not_abort_valid_neighbours() {
+        use gdal::Metadata;
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("vertical.tif");
+        let mut dataset = gdal::DriverManager::get_driver_by_name("GTiff")
+            .unwrap()
+            .create_with_band_type::<f32, _>(&path, 4, 4, 1)
+            .unwrap();
+        dataset
+            .set_geo_transform(&[-0.5, 1.0, 0.0, 3.5, 0.0, -1.0])
+            .unwrap();
+        dataset.set_projection("EPSG:4326").unwrap();
+        dataset
+            .set_metadata_item("TYPE", "VERTICAL_OFFSET_GEOGRAPHIC_TO_VERTICAL", "")
+            .unwrap();
+        let mut values = vec![-32768.0f32; 16];
+        values[6] = 12.0;
+        let mut band = dataset.rasterband(1).unwrap();
+        band.set_no_data_value(Some(-32768.0)).unwrap();
+        band.write(
+            (0, 0),
+            (4, 4),
+            &mut gdal::raster::Buffer::new((4, 4), values),
+        )
+        .unwrap();
+        dataset.flush_cache().unwrap();
+        drop(dataset);
+        let mut crs = SpatialRef::from_epsg(4326).unwrap();
+        crs.set_axis_mapping_strategy(AxisMappingStrategy::TraditionalGisOrder);
+        let operation = std::ffi::CString::new(format!(
+            "+proj=pipeline +step +proj=unitconvert +xy_in=deg +xy_out=rad +step +proj=vgridshift +grids={} +multiplier=1 +step +proj=unitconvert +xy_in=rad +xy_out=deg",path.display()
+        )).unwrap();
+        let transform = unsafe {
+            let options = gdal_sys::OCTNewCoordinateTransformationOptions();
+            assert!(!options.is_null());
+            assert_ne!(
+                gdal_sys::OCTCoordinateTransformationOptionsSetOperation(
+                    options,
+                    operation.as_ptr(),
+                    0
+                ),
+                0
+            );
+            let handle = gdal_sys::OCTNewCoordinateTransformationEx(
+                crs.to_c_hsrs(),
+                crs.to_c_hsrs(),
+                options,
+            );
+            gdal_sys::OCTDestroyCoordinateTransformationOptions(options);
+            assert!(!handle.is_null());
+            DatumTransform(handle)
+        };
+        let mut longitude = [1.0, 1.25];
+        let mut latitude = [2.0, 2.0];
+        let mut height = [10.0, 10.0];
+        transform
+            .row(&mut longitude, &mut latitude, &mut height)
+            .unwrap();
+        assert!(height[0].is_nan());
+        assert_eq!(height[1], 22.0);
+    }
+
     #[test]
     fn finite_heights_do_not_hide_an_invalid_coordinate() {
         let mut from = SpatialRef::from_epsg(4326).unwrap();

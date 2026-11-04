@@ -1,4 +1,4 @@
-//! The dev4 r260924 z9 tree as a builder input until the builders read the sources themselves:
+//! Prepared spatial inputs retain the r260924 z9 interchange layout:
 //! square paths, Arrow tables, the z30 grid and the one-arc-second raster windows.
 
 use arrow_array::types::ArrowPrimitiveType;
