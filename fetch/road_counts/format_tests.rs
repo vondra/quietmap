@@ -126,7 +126,7 @@ fn a_counted_slip_is_retained_for_a_nearby_link_without_dividing_its_directional
     let (directory, inputs) = inputs("GB");
     let path = directory.path().join("counts.csv");
     std::fs::write(&path, "count_point_id,year,road_category,estimation_method,road_name,longitude,latitude,all_motor_vehicles,cars_and_taxis,LGVs,buses_and_coaches,all_HGVs,HGVs_2_rigid_axle,two_wheeled_motor_vehicles,link_length_km,start_junction_road_name,end_junction_road_name\n1,2000,TM,Counted,M1,0,0,100,70,10,5,10,3,5,0.4,slip road,A1\n").unwrap();
-    let recipe = serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"archive_entry":null,"excluded_manual_years":[],"maximum_age_years":10,"major_radius_m":15000.0,"minor_assignment":{"maximum_distance_m":12.0,"clearance_m":20.0},"slip_maximum_length_km":1.0,"slip_junction_pattern":"(?i)ramp|slip","slip_total_ratio":0.25,"slip_neighbor_radius_m":10000.0})).unwrap();
+    let recipe = serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"excluded_manual_years":[],"maximum_age_years":10,"major_radius_m":15000.0,"minor_assignment":{"maximum_distance_m":12.0,"clearance_m":20.0},"slip_maximum_length_km":1.0,"slip_junction_pattern":"(?i)ramp|slip","slip_total_ratio":0.25,"slip_neighbor_radius_m":10000.0})).unwrap();
     let rows = super::dft::convert(&recipe, &inputs, &path).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].vehicle_classes, [80.0, 8.0, 7.0, 5.0].map(Some));
@@ -152,4 +152,20 @@ fn a_counted_slip_is_retained_for_a_nearby_link_without_dividing_its_directional
             .maximum_distance_m,
         12.0
     );
+}
+
+#[test]
+fn a_three_class_percentage_subtotal_does_not_invent_a_motorcycle_zero_or_share() {
+    let (_, inputs) = super::tests::inputs("CO");
+    let recipe = serde_json::from_value(serde_json::json!({"input_id":"survey","records":"/features","properties":"/properties","identity":"id","reference":null,"geometry":{"format":"geojson"},"source_id":1,"source_rank":1,"country":"CO","measured":true,"count_basis":"both-directions","time_basis":"annual-daily","daily_factor":1.0,"direction":0,"road_class_mask":4,"search_radius_m":50.0,"reference_required":false,"classes":[["car"],["bus"],["truck"],null],"total":"total","total_is_class_subtotal":true,"year_field":null,"estimated_classes":8,"percentages":true,"percentage_total":100})).unwrap();
+    let raw = serde_json::json!({"features":[{"properties":{"id":1,"total":100,"car":80,"bus":5,"truck":15},"geometry":{"type":"Point","coordinates":[0,0]}}]});
+    let rows = fields::observations(&recipe, &raw, &inputs).unwrap();
+    assert_eq!(
+        rows[0].vehicle_classes,
+        [Some(80.0), Some(5.0), Some(15.0), None]
+    );
+    assert_eq!(rows[0].total, None);
+    let (counts, estimated) = rows[0].daily_classes([0.8, 0.05, 0.1, 0.05]).unwrap();
+    assert!(counts[3] > 0.0);
+    assert_eq!(estimated, 8);
 }

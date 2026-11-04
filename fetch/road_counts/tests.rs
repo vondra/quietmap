@@ -30,7 +30,7 @@ fn a_later_publication_does_not_admit_a_future_dft_count_or_relabel_an_estimate_
     let data = "count_point_id,year,road_category,estimation_method,road_name,longitude,latitude,all_motor_vehicles,cars_and_taxis,LGVs,buses_and_coaches,all_HGVs,two_wheeled_motor_vehicles\n1,2000,PA,Estimated,A1,0,0,100,70,10,5,10,5\n1,2001,PA,Counted,A1,0,0,1000,700,100,50,100,50\n2,1999,MCU,Counted,U,1,1,10,7,1,0,1,1\n2,2000,MCU,Estimated,U,1,1,20,14,2,0,2,2\n";
     let file = directory.path().join("counts.csv");
     std::fs::write(&file, data).unwrap();
-    let recipe=serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"archive_entry":null,"excluded_manual_years":[],"maximum_age_years":10,"major_radius_m":15000.0,"minor_assignment":{"maximum_distance_m":12.0,"clearance_m":20.0},"slip_maximum_length_km":1.0,"slip_junction_pattern":"(?i)ramp|slip","slip_total_ratio":0.25,"slip_neighbor_radius_m":10000.0})).unwrap();
+    let recipe=serde_json::from_value(json!({"source":{"input_id":"survey","source_id":1,"source_rank":1},"excluded_manual_years":[],"maximum_age_years":10,"major_radius_m":15000.0,"minor_assignment":{"maximum_distance_m":12.0,"clearance_m":20.0},"slip_maximum_length_km":1.0,"slip_junction_pattern":"(?i)ramp|slip","slip_total_ratio":0.25,"slip_neighbor_radius_m":10000.0})).unwrap();
     let rows = dft::convert(&recipe, &inputs, &file).unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].total, Some(100.0));
@@ -162,10 +162,38 @@ fn mlit_uses_declared_objects_and_keeps_the_weekday_basis_of_unlocated_summaries
     let measured = rows.iter().find(|r| r.source_id == 1).unwrap();
     assert_eq!(measured.vehicle_classes, [Some(150.0), None, None, None]);
     assert_eq!(measured.vehicle_groups[0].count, 15.0);
+    assert!(measured.measured && measured.estimated_classes == 14);
     assert_eq!(measured.time_basis, TimeBasis::WeekdayDaily);
     assert!(measured.geometry.is_empty());
     assert!(
         rows.iter()
+            .filter(|r| r.source_id == 2)
+            .all(|r| !r.measured && r.estimated_classes == 15)
+    );
+    let path = directory.path().join("2000/survey/declared.csv");
+    let mut reader = csv::Reader::from_path(&path).unwrap();
+    let header = reader.headers().unwrap().clone();
+    let records = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    writer.write_record(&header).unwrap();
+    for (i, record) in records.iter().enumerate() {
+        let mut fields = record.iter().map(str::to_owned).collect::<Vec<_>>();
+        if i == 0 {
+            fields[34] = "2".into();
+        } else {
+            fields[46].clear();
+        }
+        writer.write_record(fields).unwrap();
+    }
+    std::fs::write(path, writer.into_inner().unwrap()).unwrap();
+    let mixed = mlit::convert(&recipe, &inputs, &directory.path().join("2000/survey")).unwrap();
+    let observed = mixed.iter().find(|r| r.source_id == 1).unwrap();
+    assert!(observed.measured && observed.estimated_classes == 14);
+    assert_eq!(observed.vehicle_classes[0], Some(200.0));
+    assert_eq!(observed.vehicle_groups[0].count, 20.0);
+    assert!(
+        mixed
+            .iter()
             .filter(|r| r.source_id == 2)
             .all(|r| !r.measured && r.estimated_classes == 15)
     );

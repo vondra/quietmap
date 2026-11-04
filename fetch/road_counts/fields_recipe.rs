@@ -29,6 +29,8 @@ pub(super) struct Publisher {
     #[serde(default)]
     pub(super) class_groups: Vec<(u8, Vec<String>)>,
     pub(super) total: Option<String>,
+    #[serde(default)]
+    pub(super) total_is_class_subtotal: bool,
     pub(super) year_field: Option<String>,
     pub(super) estimated_classes: u8,
     #[serde(default)]

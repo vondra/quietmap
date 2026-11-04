@@ -28,6 +28,8 @@ for (const device of ['desktop', 'phone'] as const) {
       ['asia', 'Thailand', 'th', 'vehicle-kilometres', 'Department of Rural Roads'],
       ['asia', 'Japan', 'jp', 'it is not a measured zero', 'MLIT'],
       ['europe', 'Netherlands', 'nl', 'The published all-vehicle total', 'Rijkswaterstaat'],
+      ['europe', 'Sweden', 'se', 'separates cars and motorcycles within the light-vehicle group', 'Trafikverket'],
+      ['south-america', 'Colombia', 'co', 'Motorcycles are missing and are estimated', 'INVIAS'],
       ['europe', 'Italy', 'it', 'daily averages describe November 2015', 'Anas'],
       ['north-america', 'United States', 'us', 'vehicle mix comes from FHWA', 'FHWA'],
     ]) {

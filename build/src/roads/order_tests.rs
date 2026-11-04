@@ -184,7 +184,7 @@ fn an_absent_street_fit_keeps_the_global_prior_instead_of_inventing_zero_through
 }
 
 #[test]
-fn a_service_road_without_assigned_trips_keeps_its_prior_when_no_bounds_are_admitted() {
+fn service_roads_keep_their_prior_when_no_demand_bounds_are_admitted() {
     let temporary = tempfile::tempdir().unwrap();
     let structures = temporary.path().join("structures.arrow");
     write_building(&structures);
@@ -196,7 +196,12 @@ fn a_service_road_without_assigned_trips_keeps_its_prior_when_no_bounds_are_admi
     model.demand.street = None;
     model.demand.service_trip_bounds = None;
     crate::traffic::preparation::apply(&mut roads, &structures, &model.demand).unwrap();
-    assert_eq!(roads[0].counts.iter().sum::<f64>(), 300.0);
-    assert_eq!(roads[0].source_id, 11);
-    assert_eq!(roads[1].source_id, 0);
+    assert!(roads.iter().all(|road| road.source_id == 0));
+    assert!(roads.iter().all(|road| {
+        super::allocation::allocate(road, &[], &model)
+            .0
+            .iter()
+            .sum::<f64>()
+            > 0.0
+    }));
 }

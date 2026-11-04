@@ -11,18 +11,12 @@ use crate::{
 use anyhow::{Result, anyhow, ensure};
 use chrono::Datelike;
 use serde::Deserialize;
-use std::{
-    collections::BTreeMap,
-    io::Read,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{collections::BTreeMap, io::Read, path::Path};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Recipe {
     pub source: Source,
-    archive_entry: Option<String>,
     excluded_manual_years: Vec<i32>,
     maximum_age_years: i32,
     major_radius_m: f64,
@@ -46,24 +40,7 @@ pub(super) fn convert(
     inputs: &YearInputs,
     path: &Path,
 ) -> Result<Vec<Observation>> {
-    if let Some(entry) = &recipe.archive_entry {
-        let mut child = Command::new("unzip")
-            .arg("-p")
-            .arg(path)
-            .arg(entry)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .spawn()?;
-        let result = parse(recipe, inputs, child.stdout.take().unwrap());
-        let status = child.wait()?;
-        ensure!(
-            status.success(),
-            "failed to decode the declared DfT archive entry"
-        );
-        result
-    } else {
-        parse(recipe, inputs, std::fs::File::open(path)?)
-    }
+    parse(recipe, inputs, std::fs::File::open(path)?)
 }
 
 fn parse(recipe: &Recipe, inputs: &YearInputs, reader: impl Read) -> Result<Vec<Observation>> {

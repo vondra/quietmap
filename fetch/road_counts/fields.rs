@@ -248,7 +248,11 @@ pub(super) fn observations(
             reference_required: publisher.reference_required,
             vehicle_classes: counts,
             vehicle_groups: groups,
-            total,
+            total: if publisher.total_is_class_subtotal {
+                None
+            } else {
+                total
+            },
             estimated_classes: publisher.estimated_classes,
             daily_factor: publisher.daily_factor,
             target,

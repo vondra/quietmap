@@ -20,7 +20,6 @@ use std::path::Path;
 pub(super) struct Recipe {
     pub source: Source,
     layer: String,
-    motorcycle_share: f64,
     search_radius_m: f64,
     minimum_alignment_cosine: f64,
 }
@@ -74,13 +73,6 @@ pub(super) fn convert(
         if (counts.iter().flatten().sum::<f64>() - total).abs() > 4.0 {
             continue;
         }
-        let moto = (total * recipe.motorcycle_share).round();
-        let light = total - counts[1].unwrap() - counts[2].unwrap() - moto;
-        if light < 0.0 {
-            continue;
-        }
-        counts[0] = Some(light);
-        counts[3] = Some(moto);
         let directional = matches!(
             string("ROLE")?.as_deref(),
             Some("Syskon fram" | "Syskon bak")
@@ -133,9 +125,18 @@ pub(super) fn convert(
         row.road_class_mask = records::class_mask(None, false);
         row.search_radius_m = recipe.search_radius_m;
         row.target.minimum_alignment_cosine = recipe.minimum_alignment_cosine;
+        // Trafik DPS defines light as all vehicles below 3.5 t; its separate motorcycle series is summer-only.
+        let light_and_motorcycles = total - counts[1].unwrap() - counts[2].unwrap();
+        if light_and_motorcycles < 0.0 {
+            continue;
+        }
         row.total = Some(total);
-        row.vehicle_classes = counts;
-        row.estimated_classes = 8;
+        row.vehicle_classes = [None, counts[1], counts[2], None];
+        row.vehicle_groups = vec![crate::roads::observation_groups::VehicleGroup {
+            classes: 9,
+            count: light_and_motorcycles,
+        }];
+        row.estimated_classes = 9;
         rows.push(row);
     }
     rows.sort_by(|a, b| {

@@ -5,7 +5,7 @@ intro: Anas census on motorways and state roads, passenger timetables for five r
 
 ## Roads
 
-Motorways and state roads: [Anas](https://www.stradeanas.it/) daily traffic census (TGM), one total per counting point. The vehicle split is assumed: 18 % trucks on motorways and trunk roads, 12 % on primary roads, 4 % motorcycles. Milan has counts from the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
+Motorways and state roads: [Anas](https://www.stradeanas.it/) daily traffic census (TGM), one total per counting point. The selected year’s road model estimates the missing vehicle classes; these shares are not counted at the Anas station. Milan has counts from the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
 Motorways run by concession companies (most of the autostrada network, the A4 at Milan included) are not in the Anas census and follow the model of the trips made around them. Other regional and city roads have no counts. Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km.
 

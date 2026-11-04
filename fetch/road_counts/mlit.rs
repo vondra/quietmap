@@ -64,8 +64,13 @@ fn observation(
     mask: u16,
     half: bool,
 ) -> Result<Observation> {
-    let mut small = median(rows.iter().map(|r| r[0]));
-    let mut large = median(rows.iter().map(|r| r[1]));
+    let has_observed_sections = rows.iter().any(|r| r[2] == 1.0);
+    let selected = rows
+        .iter()
+        .filter(|r| !has_observed_sections || r[2] == 1.0)
+        .collect::<Vec<_>>();
+    let mut small = median(selected.iter().map(|r| r[0]));
+    let mut large = median(selected.iter().map(|r| r[1]));
     if half {
         small = (small / 2.0).round();
         large = (large / 2.0).round();
@@ -79,8 +84,7 @@ fn observation(
     result.total = None;
     result.time_basis = TimeBasis::WeekdayDaily;
     result.daily_factor = recipe.weekday_to_model_daily;
-    result.measured =
-        source.source_id == recipe.source.source_id && rows.iter().all(|r| r[2] == 1.0);
+    result.measured = source.source_id == recipe.source.source_id && has_observed_sections;
     result.estimated_classes = if result.measured { 14 } else { 15 };
     result.road_class_mask = mask;
     Ok(result)
@@ -143,7 +147,8 @@ pub(super) fn convert(
                 continue;
             }
             // MLIT kasyo explanation section 19: 1 observed, 2 publisher estimate.
-            let measured = fields[34].trim() == "1" && fields[46].trim() == "1";
+            let flags = [fields[34].trim(), fields[46].trim()];
+            let measured = flags.contains(&"1") && flags.iter().all(|f| matches!(*f, "1" | ""));
             let counts = [small, large, f64::from(measured)];
             admitted += 1;
             for class in target {

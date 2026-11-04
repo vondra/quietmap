@@ -100,6 +100,11 @@ fn observed_zero_missing_class_and_count_scope_survive_arrow_without_future_leak
     let inputs = inputs(directory.path());
     let path = directory.path().join("counts.arrow");
     let mut rows = vec![observation()];
+    rows[0].vehicle_classes = [Some(80.0), None, None, Some(5.0)];
+    rows[0].vehicle_groups = vec![super::observation_groups::VehicleGroup {
+        classes: 6,
+        count: 15.0,
+    }];
     let mut directional = rows[0].clone();
     directional.identity = "reverse".into();
     directional.direction = 2;

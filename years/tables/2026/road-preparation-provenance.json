@@ -40,6 +40,6 @@
   },
   "service_trip_bounds": {
     "source": "Retained producer bounds of 20\u2013400 vehicles/day on service-road building demand; not a measured historical fit.",
-    "historical_policy": "No bounds are admitted for 2024: positive generated trips are retained; no assigned trips leaves the global class prior."
+    "historical_policy": "No bounds are admitted for 2024: service roads retain the global class prior; uncalibrated generated trips do not replace it."
   }
 }

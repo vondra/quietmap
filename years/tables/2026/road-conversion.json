@@ -452,7 +452,6 @@
         "source_rank": 3354011160
       },
       "layer": "TRAFIK_DK_O_105_Trafik",
-      "motorcycle_share": 0.01,
       "search_radius_m": 50,
       "minimum_alignment_cosine": 0.8660254037844387
     },
@@ -599,7 +598,6 @@
         "source_id": 1041,
         "source_rank": 3353936913
       },
-      "archive_entry": null,
       "excluded_manual_years": [
         2020
       ],
@@ -1140,17 +1138,18 @@
       ],
       "total": "conteo",
       "year_field": null,
-      "estimated_classes": 15,
+      "estimated_classes": 8,
       "skip_zero_total": true,
       "minimum_total": 50,
       "percentages": true,
-      "percentage_total": 95,
+      "percentage_total": 100,
       "fixed_fractions": [
         null,
         null,
         null,
-        0.05
-      ]
+        null
+      ],
+      "total_is_class_subtotal": true
     },
     {
       "format": "fields",
