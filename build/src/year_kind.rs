@@ -71,6 +71,7 @@ kinds! {
     Secondary => "secondary",
     Segments => "segments",
     ServiceCooling => "service-cooling",
+    Ships => "ships",
     Shuffled => "shuffled",
     SubdivisionGrids => "subdivision-grids",
     TaggedSpeeds => "tagged-speeds",

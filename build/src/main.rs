@@ -17,6 +17,9 @@ mod obstacles;
 mod period;
 mod rings;
 mod screening;
+#[path = "../../fetch/ships.rs"]
+mod ship_fetch;
+mod ships;
 mod source_outlines;
 mod source_tables;
 mod sources;
@@ -299,6 +302,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             &sources::water::Water::open(
                                 inputs.required(crate::year::Kind::Water)?,
                             )?,
+                            ships::input_root(&inputs)?,
                             &source_tables::SourceTables::read(&inputs)?,
                         ),
                         (
@@ -326,6 +330,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     started.elapsed().as_secs_f64()
                 );
             }
+            Ok(())
+        }
+        "ships" => {
+            let count = ships::build(&inputs, &parse_squares(options.get("squares")?)?, &out)?;
+            eprintln!("ships: {count} occupancy cells");
             Ok(())
         }
         "weather" => weather::build(&inputs, &out),

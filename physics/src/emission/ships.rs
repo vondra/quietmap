@@ -6,9 +6,9 @@ use crate::bands::BANDS;
 
 /// Mean hours in a month: hours present per month over it is the mean number of ships present
 /// (EMODnet vessel density method 5.1).
-const HOURS_PER_MONTH: f64 = 365.25 * 24.0 / 12.0;
+pub const HOURS_PER_MONTH: f64 = 365.25 * 24.0 / 12.0;
 
-/// The acoustic classes, in the order of the `ships.arrow` hour columns.
+/// The acoustic classes, in the order of the ship occupancy hour columns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShipClass {
     /// Cargo, tanker, passenger, high-speed craft, military and unknown ships.

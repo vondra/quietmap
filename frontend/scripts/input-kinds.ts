@@ -56,6 +56,7 @@ export const INPUT_KINDS = [
   "secondary",
   "segments",
   "service-cooling",
+  "ships",
   "shuffled",
   "subdivision-grids",
   "tagged-speeds",

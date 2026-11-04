@@ -145,4 +145,15 @@ mod tests {
         assert!(counts.require("<u4", &[3, 1]).is_err());
         assert!(Array::read(&mut archive, "absent.npy").is_err());
     }
+
+    #[test]
+    fn numpy_payload_must_pass_the_archive_crc_at_eof() {
+        let mut bytes = include_bytes!("fixtures/weather-numpy.zip").to_vec();
+        let directory = bytes.windows(4).position(|b| b == b"PK\x01\x02").unwrap();
+        // The first central-directory entry is counts.npy; its CRC starts at byte 16.
+        assert_eq!(&bytes[directory + 46..directory + 56], b"counts.npy");
+        bytes[directory + 16] ^= 1;
+        let mut archive = ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert!(Array::read(&mut archive, "counts.npy").is_err());
+    }
 }

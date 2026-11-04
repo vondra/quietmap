@@ -81,7 +81,20 @@ fn statistics_admission_checks_dates_completion_identity_digest_and_node_counts(
     Statistics::read(&inputs(&root, &mut manifest)).unwrap();
     let mut changed = manifest.clone();
     changed["inputs"][0]["observed"]["end"] = json!("2001-01-01");
-    assert!(Statistics::read(&inputs(&root, &mut changed)).is_err());
+    let mut raw = manifest["inputs"][0].clone();
+    raw["id"] = json!("raw");
+    raw["kind"] = json!("prepare-weather");
+    raw["conversion"] = serde_json::Value::Null;
+    changed["inputs"].as_array_mut().unwrap().push(raw);
+    changed["inputs"][0]["depends_on"] = json!(["raw"]);
+    let admitted = inputs(&root, &mut changed);
+    assert!(admitted.manifest.admitted("statistics").unwrap());
+    assert!(
+        Statistics::read(&admitted)
+            .err()
+            .unwrap()
+            .contains("future")
+    );
     let mut admitted = inputs(&root, &mut manifest);
     admitted.manifest.inputs[0].conversion.as_mut().unwrap()["sha256"] = json!("bad");
     assert!(

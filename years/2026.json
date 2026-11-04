@@ -61,7 +61,7 @@
         "barriers-va",
         "osm",
         "overture",
-        "gfw",
+        "gfw-presence",
         "barriers-wa",
         "nrw-heights",
         "3dbag",
@@ -1405,7 +1405,80 @@
       "licence": "CC BY 4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Annual vessel density by ship type. Satellite coverage is reduced from June 2024."
+      "description": "Annual vessel density by ship type. Satellite coverage is reduced from June 2024.",
+      "conversion": {
+        "source_id": 9901,
+        "priority": 100,
+        "format": "density-raster",
+        "epsg": 3035,
+        "parts": [
+          {
+            "path": "EMODnet_HA_Vessel_Density_06Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_06Avg/vesseldensity_06_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_08Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_08Avg/vesseldensity_08_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_09Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_09Avg/vesseldensity_09_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_10Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_10Avg/vesseldensity_10_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_11Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_11Avg/vesseldensity_11_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_12Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_12Avg/vesseldensity_12_2024.tif",
+            "class": "large"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_00Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_00Avg/vesseldensity_00_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_01Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_01Avg/vesseldensity_01_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_02Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_02Avg/vesseldensity_02_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_03Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_03Avg/vesseldensity_03_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_07Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_07Avg/vesseldensity_07_2024.tif",
+            "class": "work"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_04Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_04Avg/vesseldensity_04_2024.tif",
+            "class": "leisure"
+          },
+          {
+            "path": "EMODnet_HA_Vessel_Density_05Avg.zip",
+            "member": "EMODnet_HA_Vessel_Density_05Avg/vesseldensity_05_2024.tif",
+            "class": "leisure"
+          }
+        ]
+      }
     },
     {
       "id": "prague-heights",
@@ -1504,20 +1577,59 @@
       "description": "Building footprints missing from OpenStreetMap."
     },
     {
-      "id": "gfw",
+      "id": "gfw-presence",
       "kind": "prepare-ships",
       "region": "world",
       "publisher": "Global Fishing Watch",
       "url": "https://globalfishingwatch.org/our-apis/",
       "observed": {
-        "start": "2026-08-31",
+        "start": "2025-09-01",
         "end": "2026-08-31"
       },
       "published": null,
       "licence": "CC BY-NC 4.0",
       "public_ok": false,
       "depends_on": [],
-      "description": "Vessel-presence v4.0 over the flow window, for seas beyond EMODnet and for inland waterways."
+      "description": "Vessel-presence v4.0 over the flow window, for seas beyond EMODnet and for inland waterways.",
+      "conversion": {
+        "source_id": 9902,
+        "priority": 50,
+        "format": "presence-reports",
+        "window": "window.json",
+        "tiff_member": "layer-activity-data-0/public-global-presence-v4.0.tif",
+        "csv_member": "layer-activity-data-0/public-global-presence-v4.0.csv",
+        "dataset": "public-global-presence:v4.0",
+        "cell_degrees": 0.01,
+        "inventory": {
+          "path": "inventory.json",
+          "sha256": "4749e6cd4d15a206ac65cfeac7829382acbe188605199b2f34b477555cc70274"
+        },
+        "acquisition": {
+          "bounds": [
+            -180,
+            -60,
+            180,
+            84
+          ],
+          "tile_degrees": 8,
+          "classes": {
+            "large": [
+              "cargo",
+              "tanker",
+              "carrier",
+              "bunker",
+              "passenger"
+            ],
+            "work": [
+              "fishing",
+              "support",
+              "gear",
+              "seismic_vessel",
+              "other"
+            ]
+          }
+        }
+      }
     },
     {
       "id": "adsblol",
@@ -8108,6 +8220,25 @@
         "means": "means.npy",
         "receipt": "receipt.json"
       }
+    },
+    {
+      "id": "ships",
+      "kind": "ships",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation#ships",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Mixed; see the source inputs",
+      "public_ok": false,
+      "depends_on": [
+        "emodnet",
+        "gfw-presence"
+      ],
+      "description": "Monthly native-grid vessel occupancy with coverage priority."
     }
   ],
   "unavailable": [],
@@ -8135,6 +8266,7 @@
   },
   "shared": [
     "climate",
+    "emodnet",
     "era5",
     "era5-statistics",
     "geoid",
