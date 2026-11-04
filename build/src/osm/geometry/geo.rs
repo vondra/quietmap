@@ -61,3 +61,31 @@ pub fn cumulative_flat_metres(first_m: f64, points: &[[f64; 2]]) -> Vec<f64> {
     }
     metres
 }
+
+/// A local-metre projection on the shortest longitude arc, including degenerate segments.
+pub fn point_to_segment(
+    point_lat: f64,
+    point_lon: f64,
+    start_lat: f64,
+    start_lon: f64,
+    end_lat: f64,
+    end_lon: f64,
+) -> (f64, f64, f64, f64) {
+    let longitude_metres = m_per_deg_lon(((start_lat + end_lat) / 2.0).to_radians());
+    let bx = wrapped_longitude_delta(start_lon, end_lon) * longitude_metres;
+    let by = (end_lat - start_lat) * M_PER_DEG_LAT;
+    let px = wrapped_longitude_delta(start_lon, point_lon) * longitude_metres;
+    let py = (point_lat - start_lat) * M_PER_DEG_LAT;
+    let squared_length = bx * bx + by * by;
+    let fraction = if squared_length < 1e-10 {
+        0.0
+    } else {
+        ((px * bx + py * by) / squared_length).clamp(0.0, 1.0)
+    };
+    (
+        ((px - fraction * bx).powi(2) + (py - fraction * by).powi(2)).sqrt(),
+        start_lat + fraction * (end_lat - start_lat),
+        interpolate_longitude_short_arc(start_lon, end_lon, fraction),
+        fraction,
+    )
+}

@@ -224,11 +224,67 @@ run. Passenger trains come from public timetables. Freight, which almost no coun
 is estimated, and much of it runs at night.
 
 For the 2026 map, train counts come from <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
-feeds and national timetables, every trip routed along the track network. Freight comes from
-defaults, scaled in 28 European countries and Turkey to the country's official goods
+feeds and national timetables, every trip routed along the track network and averaged over the
+year's observation window. Freight comes from
+defaults calibrated in 28 European countries and Turkey against official goods
 train-kilometres ([Eurostat](https://ec.europa.eu/eurostat/web/transport/database) 2024; the United
 Kingdom 2019). At public level crossings in the United States and Canada, locomotives sound their
 horns.
+
+<details>
+<summary>How timetables become annual train counts</summary>
+
+Service calendars and their additions and cancellations are counted for every day of the
+observation window, including weekends. The sum is divided by the number of days in that window.
+A timetable that covers only part of the window contributes its recorded departures. For the
+missing dates, the map uses that same timetable's mean daily service on its covered dates,
+and keeps this estimated part separate. On a matched line, a covered day with no scheduled
+service counts as zero. A service with no departure on an incomplete calendar has no annual
+timetable estimate and keeps the declared class or corridor model. Zero service remains zero
+when the calendar covers the entire observation window. Lines with no matched timetable also
+retain their class or corridor estimates.
+
+Each operator keeps its own observation horizon and its own estimate, even when several
+operators share one feed. Without a complete declared feed window, its horizon runs from the
+first to the last date defined by its selected service calendars. Seasonal and weekday patterns
+from the same operator share that horizon; separately extending each pattern would count
+seasonal alternatives together.
+A complete published feed window can establish zero service outside an operator's active dates,
+such as a concession handover. Where that metadata overstates the archive's actual coverage,
+the input uses its service-calendar bounds instead; the source description records why.
+A calendar's date range cannot prove that an archive retained every earlier service.
+Even a horizon spanning the whole year can omit trains that no longer run. The estimated
+share identifies missing calendar dates; it is not a measure of overall completeness.
+
+A future-only path makes no zero claim unless the publisher's declared feed window covers
+the entire observation window. Overlapping alternative feeds follow source priority; they
+are not summed or stitched into one calendar. Missing dates in the winning feed remain estimated.
+The available months may have a different service mix from the rest of the year, so an incomplete
+calendar cannot establish the actual full-year mean.
+Where no timetable archive exists for the selected year, the map keeps its declared estimates.
+The train details show how much of a mixed count comes from dates without timetable data.
+
+Observed and calendar-estimated trains use the same modelled day, evening and night shares
+and the same source factor. Class estimates keep their national factors; the annual result
+is not forced to a national total.
+
+For 2026, the window is 1 September 2025 through 31 August 2026. The archived German DELFI
+calendar covers 17 of its 365 days; Switzerland and Austria cover 261. The archived SNCF,
+Transilien, Danish, Luxembourg and Amtrak feeds start after the window, so their scheduled
+services do not contribute to this year's mean. Their lines retain estimates.
+
+Calendar dates, additions and removals follow the
+[GTFS schedule specification](https://gtfs.org/documentation/schedule/reference/).
+The [publisher converters](https://github.com/vondra/quietmap/tree/main/fetch/rail_inputs)
+and [network matcher](https://github.com/vondra/quietmap/tree/main/build/src/railways)
+implement the same year-selected movement format for timetables and other rail observations.
+
+Passenger and freight evidence are selected separately. Domestic national sources take priority
+over general feeds; cross-border services do not replace another country's national counts.
+Counts are assigned to their original track intervals, then shared across parallel tracks once
+for the line. The annual sum retains repeated passages and changes of direction.
+
+</details>
 
 <details>
 <summary>How a train's sound power is computed</summary>

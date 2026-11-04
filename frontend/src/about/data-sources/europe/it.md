@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 70 outside, a motorway 130.
 
 ## Railways
 
-Italy has no national open timetable. Train counts come from five regional feeds, one busy Wednesday:
+Italy has no national open timetable. Train counts come from five regional feeds, averaged over the observation year:
 
 | Feed | Region |
 |---|---|

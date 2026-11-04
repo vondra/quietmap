@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Train and tram counts: national [Peatus timetable](https://peatus.ee/) (Elron trains, Tallinn trams), one busy Wednesday. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train and tram counts: national [Peatus timetable](https://peatus.ee/) (Elron trains, Tallinn trams), averaged over the observation year. Elron covers the full 365-day window in 2026; Tallinn trams cover 335 days, with the rest estimated from their covered-day mean. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 
 ## Homes and places
 

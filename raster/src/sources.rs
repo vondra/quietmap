@@ -133,27 +133,25 @@ fn style(layer: SourceLayer, fields: &[Value]) -> Option<([u8; 4], f64, f64)> {
                 let source = field(&format!("{kind}_source_id")) as u16;
                 (
                     trains,
-                    !GUESSED_TRAIN_SOURCES.contains(&source)
-                        && !TABLE_TRAIN_SOURCES.contains(&source),
+                    if !GUESSED_TRAIN_SOURCES.contains(&source)
+                        && !TABLE_TRAIN_SOURCES.contains(&source)
+                    {
+                        trains * (1.0 - field(&format!("{kind}_missing_calendar_estimate_share")))
+                    } else {
+                        0.0
+                    },
                 )
             });
-            let running: Vec<bool> = kinds
-                .iter()
-                .filter(|(trains, _)| *trains > 0.0)
-                .map(|(_, known)| *known)
-                .collect();
-            let alpha = if running.iter().all(|known| *known) {
+            let total: f64 = kinds.iter().map(|(trains, _)| trains).sum();
+            let timetabled: f64 = kinds.iter().map(|(_, trains)| trains).sum();
+            let alpha = if timetabled == total {
                 COUNTED_ALPHA
-            } else if running.iter().any(|known| *known) {
+            } else if timetabled > 0.0 {
                 MODELLED_ALPHA
             } else {
                 FIXED_ALPHA
             };
-            (
-                kinds.iter().map(|(trains, _)| trains).sum(),
-                &TRAIN_STOPS,
-                alpha,
-            )
+            (total, &TRAIN_STOPS, alpha)
         }
     };
     if value <= 0.0 {
@@ -545,5 +543,24 @@ mod tests {
         );
         assert!(rail("horn", (60.0, 112), (0.0, 0)).is_none());
         assert!(rail("rail", (0.0, 110), (0.0, 0)).is_none());
+        for (share, alpha) in [
+            (0.0, COUNTED_ALPHA),
+            (0.9, MODELLED_ALPHA),
+            (1.0, FIXED_ALPHA),
+        ] {
+            let fields = display(
+                SourceLayer::Railway,
+                &[
+                    ("rail_type", Value::from("rail")),
+                    ("trains_passenger_day", Value::from(50.0)),
+                    ("passenger_source_id", Value::from(100)),
+                    (
+                        "passenger_missing_calendar_estimate_share",
+                        Value::from(share),
+                    ),
+                ],
+            );
+            assert_eq!(style(SourceLayer::Railway, &fields).unwrap().0[3], alpha);
+        }
     }
 }

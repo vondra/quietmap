@@ -14,7 +14,7 @@ Uncounted streets carry the trips their buildings make. Uncounted motorways, tru
 
 ## Railways
 
-24 European countries have a passenger timetable loaded; train counts are those of one busy Wednesday. Great Britain, Romania, Slovenia, Lithuania, Belarus, Moldova, Ukraine and most of the Balkans have none.
+Passenger timetables are averaged over every day of the observation year. Their calendar coverage varies: dates without a timetable use estimated traffic. A feed whose dates fall outside the year contributes no trains. Great Britain, Romania, Slovenia, Lithuania, Belarus, Moldova, Ukraine and most of the Balkans have none.
 
 Lines without a timetable use the class default, in trains per day: main line 80 passenger and 20 freight (24.5 freight in Germany, 5.5 in France, 12.0 in Poland, 13.5 in Czechia, 27.1 in Austria, 31.4 in Switzerland), branch line 30 and 5, industrial siding 15 freight, tram track 120, light rail 80; Russia and Ukraine have their own. In 28 countries the freight defaults are scaled so that each country's lines carry its official goods train-kilometres ([Eurostat](https://ec.europa.eu/eurostat) 2024; Great Britain 2019); Belgium and Greece publish none and keep the defaults' total. In 12 countries the passenger defaults exceed the national passenger train-kilometres and are lowered to them. Lines mapped as passenger-only carry no freight. Track in tunnels emits no noise.
 

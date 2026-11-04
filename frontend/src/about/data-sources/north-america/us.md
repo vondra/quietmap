@@ -1,6 +1,6 @@
 ---
 title: United States
-intro: FHWA HPMS 2022 traffic counts on federal-aid highways, Amtrak timetable, FRA crossing horns, USGS wind turbine database. Local streets are estimated from their buildings; commuter rail and freight use class defaults.
+intro: FHWA HPMS 2022 traffic counts on federal-aid highways, estimated passenger rail traffic, FRA crossing horns, USGS wind turbine database. Local streets are estimated from their buildings; commuter rail and freight use class defaults.
 ---
 
 ## Roads
@@ -19,7 +19,7 @@ Unsigned roads: a primary road 64 km/h in towns, 89 outside (cars drive 75 on a 
 
 ## Railways
 
-Passenger trains: [Amtrak GTFS timetable](https://content.amtrak.com/content/gtfs/GTFS.zip). Commuter rail feeds (LIRR, NJ Transit, Metra, MBTA, Caltrain and others) are not loaded; those lines use the [world railway defaults](/about/data-preparation). Lines without a usage tag use the [unclassified railway default](/about/data-preparation). Surface metro sections are included; see the [railway method](/about/data-preparation).
+The archived [Amtrak timetable](https://content.amtrak.com/content/gtfs/GTFS.zip) starts after the 2026 observation window, so that year uses estimated passenger train counts. Earlier maps integrate the calendar of their own archived feed. Commuter rail feeds (LIRR, NJ Transit, Metra, MBTA, Caltrain and others) are not loaded; those lines use the [world railway defaults](/about/data-preparation). Lines without a usage tag use the [unclassified railway default](/about/data-preparation). Surface metro sections are included; see the [railway method](/about/data-preparation).
 
 Freight: BNSF, Union Pacific, CSX and Norfolk Southern publish no schedules; main lines take the class default of 20 freight trains a day, branches 5.
 

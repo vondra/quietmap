@@ -23,6 +23,7 @@ export interface YearManifest {
   built: boolean
   flows: { start: string; end: string; excluded_days?: string[]; increment_days?: string[] }
   inputs: SourceInput[]
+  railways?: { objects: { input: string; source_id?: number }[] }
   unavailable: { id: string; kind: InputKind; region: string; description: string; depends_on: string[] }[]
   validity?: Record<string, Interval>
   shared?: string[]

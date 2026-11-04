@@ -1,6 +1,6 @@
 ---
 title: Israel
-intro: Train counts from the Ministry of Transport national timetable, passenger only. Main roads use the world defaults; smaller roads are estimated from the buildings around them.
+intro: Estimated train counts in 2026; an archived passenger timetable is available for 2024. Main roads use the world defaults; smaller roads are estimated from the buildings around them.
 ---
 
 ## Roads
@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train counts come from the [Ministry of Transport's national timetable](https://www.gov.il/he/pages/gtfs_general_transit_feed_specifications), which covers every public transport operator. Israel Railways and the Tel Aviv and Jerusalem light rail are used, counted on the busiest Wednesday. Freight is not in the timetable and takes the class defaults.
+The [Ministry of Transport’s national timetable](https://www.gov.il/he/pages/gtfs_general_transit_feed_specifications) covers Israel Railways and the Tel Aviv and Jerusalem light rail. The archive selected for 2026 has no service dates inside that year’s observation window, so train counts use the class defaults. The 2024 map uses its own archived calendar, averaging services over its observation window and estimating missing dates. Freight is not in the timetable and takes the class defaults.
 
 ## Industry
 

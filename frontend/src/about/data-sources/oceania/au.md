@@ -1,6 +1,6 @@
 ---
 title: Australia
-intro: Passenger rail timetables for five states. No traffic counts are loaded; main roads use class defaults. Freight rail uses class defaults.
+intro: Archived passenger rail timetables for five states, with estimates where their calendars do not cover the observation year. No traffic counts are loaded; main roads use class defaults. Freight rail uses class defaults.
 ---
 
 ## Roads
@@ -23,7 +23,7 @@ Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-Passenger trains come from five state timetables.
+Timetables are averaged over the observation year. For 2026, the archived New South Wales, Victoria, Queensland and Western Australia calendars do not cover the observation window, so those lines retain estimates. Adelaide Metro contributes 144 of the 365 days; the remaining dates use estimates. Earlier maps use their own archived feeds.
 
 | State | Feed | What we read |
 |---|---|---|

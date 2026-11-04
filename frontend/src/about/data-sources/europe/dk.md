@@ -1,6 +1,6 @@
 ---
 title: Denmark
-intro: National and municipal road counts (Mastra), one passenger timetable for all rail, turbine ratings from the Energistyrelsen register. Rail freight from the national train-kilometres.
+intro: National and municipal road counts (Mastra), estimated train counts, turbine ratings from the Energistyrelsen register. Rail freight from the national train-kilometres.
 ---
 
 ## Roads
@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train, S-tog, metro and light rail counts: [Rejseplanen timetable](https://www.rejseplanen.info/labs/GTFS.zip), one busy Wednesday. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. Most of the Copenhagen metro runs in tunnels, which emit no noise.
+The archived [Rejseplanen](https://www.rejseplanen.info/labs/GTFS.zip) for trains, S-tog, metro and light rail starts after the 2026 observation window. That year uses estimated train counts. No Danish feed was recovered for the 2024 map, which also uses estimates. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. Most of the Copenhagen metro runs in tunnels, which emit no noise.
 
 ## Industry
 

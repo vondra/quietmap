@@ -19,6 +19,9 @@ mod osm;
 #[path = "../../fetch/osm_regions.rs"]
 mod osm_regions;
 mod period;
+#[path = "../../fetch/rail_inputs.rs"]
+mod rail_inputs;
+mod railways;
 mod rasters;
 mod rings;
 mod screening;
@@ -267,6 +270,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
         Path::new(options.get("sources")?),
     )?;
     match command.as_str() {
+        "rail-movements" => rail_inputs::convert(&inputs, &out, Path::new(options.get("scratch")?)),
+        "prepare-railways" => {
+            railways::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
+        }
         "structure-height-model" => structures::height_calibration::fit(
             &inputs,
             &parse_squares(options.get("squares")?)?,

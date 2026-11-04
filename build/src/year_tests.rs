@@ -176,3 +176,18 @@ fn solar_geometry_is_a_calendar_cycle_including_leap_years() {
     m.as_of = "2002-01-01".into();
     assert_eq!(m.solar_days().unwrap().len(), 73);
 }
+
+#[test]
+fn historical_preparation_admits_rail_inputs_without_admitting_an_unbuilt_whole_tree() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years");
+    let historical = Manifest::read(&root.join("2024.json")).unwrap();
+    assert!(!historical.built);
+    for id in ["rail-movements", "rail-model", "osm-geography"] {
+        assert!(historical.admitted(id).unwrap(), "{id}");
+    }
+    for id in ["prepared", "airport-traffic"] {
+        assert!(!historical.admitted(id).unwrap(), "{id}");
+    }
+    let reference = Manifest::read(&root.join("2026.json")).unwrap();
+    assert!(reference.admitted("prepared").unwrap());
+}

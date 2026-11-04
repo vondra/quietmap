@@ -34,7 +34,7 @@ Unsigned roads: a primary road 60 km/h in towns, 110 outside (cars drive 93 on a
 
 ## Railways
 
-The 2019 archive of the [Buenos Aires Subte GTFS](https://buenosaires.gob.ar/sites/gcaba/files/subte_gtfs.zip) is loaded; of its lines only the Premetro runs on the surface, the underground ones emit nothing. Surface metro sections are included; see the [railway method](/about/data-preparation).
+The 2019 archive of the [Buenos Aires Subte GTFS](https://buenosaires.gob.ar/sites/gcaba/files/subte_gtfs.zip) does not cover the 2026 observation window, so that year uses estimated traffic; of its lines only the Premetro runs on the surface, the underground ones emit nothing. Surface metro sections are included; see the [railway method](/about/data-preparation).
 
 The Trenes Argentinos commuter lines out of Retiro, Once and Constitución and the freight operators publish no loadable feed. All other lines use the [world railway defaults](/about/data-preparation).
 

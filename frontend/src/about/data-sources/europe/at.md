@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-Train and tram counts: [ÖBB timetable](https://data.oebb.at/de/datensaetze~soll-fahrplan-gtfs~), one busy Wednesday. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train and tram counts: [ÖBB timetable](https://data.oebb.at/de/datensaetze~soll-fahrplan-gtfs~), averaged over the observation year. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 
 ## Buildings and terrain
 

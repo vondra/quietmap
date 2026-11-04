@@ -99,7 +99,7 @@ const ROAD: [Field; 19] = [
         },
     ),
 ];
-const RAILWAY: [Field; 17] = [
+const RAILWAY: [Field; 19] = [
     field("name", Text),
     field("ref", Text),
     field("rail_type", Text),
@@ -118,6 +118,8 @@ const RAILWAY: [Field; 17] = [
     field("bridge", Flag),
     field("passenger_source_id", Whole(2)),
     field("freight_source_id", Whole(2)),
+    field("passenger_missing_calendar_estimate_share", Real),
+    field("freight_missing_calendar_estimate_share", Real),
 ];
 const INDUSTRY: [Field; 9] = [
     field("name", Text),

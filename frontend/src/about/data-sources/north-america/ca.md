@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Passenger trains come from eight timetables.
+Eight archived timetables are selected by year. For 2026, VIA Rail covers 15 days, GO Transit one, STM 78 and Calgary seven of the 365-day observation window. The other four calendars do not overlap it. Days without timetable data use estimates.
 
 | Operator | What it covers | Feed |
 |---|---|---|

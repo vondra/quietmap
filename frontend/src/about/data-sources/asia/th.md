@@ -44,7 +44,7 @@ Unsigned roads: a primary road 60 km/h in towns, 80 outside, a motorway 120.
 
 ## Railways
 
-Train counts come from the national [Namtang timetable](https://namtang-api.otp.go.th/download/namtang-gtfs.zip) of the Office of Transport and Traffic Policy and Planning, busiest Wednesday. It covers the State Railway, the BTS Skytrain and the Airport Rail Link; freight is not in it and takes the class defaults.
+Train counts come from the national [Namtang timetable](https://namtang-api.otp.go.th/download/namtang-gtfs.zip) of the Office of Transport and Traffic Policy and Planning, averaged over the observation year. It covers the State Railway, the BTS Skytrain and the Airport Rail Link; freight is not in it and takes the class defaults.
 
 Surface metro sections are included; see the [railway method](/about/data-preparation).
 

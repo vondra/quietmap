@@ -26,7 +26,7 @@ Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-Train, tram and U-Bahn counts: national DELFI timetable from [gtfs.de](https://gtfs.de/en/feeds/de_full/) and [public-transport.earth](https://data.public-transport.earth/gtfs/de), one busy Wednesday. DB InfraGO publishes no freight paths. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train, tram and U-Bahn counts: the national DELFI timetable from [public-transport.earth](https://data.public-transport.earth/gtfs/de) covers 17 of the 365 days in the 2026 observation window. Its services are averaged over the window, with estimated traffic on the missing dates. The separate [gtfs.de](https://gtfs.de/en/feeds/de_full/) archive has no dates inside that window and adds no counts. The 2024 map uses its own archived long-distance, regional and local feeds. DB InfraGO publishes no freight paths. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 
 ## Industry
 
