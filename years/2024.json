@@ -5206,7 +5206,7 @@
         "trip-generation-observations",
         "legal-speeds-osm"
       ],
-      "description": "Length-weighted class totals and independently observed class fractions; equal-station medians from complete hourly days. An unavailable local-street background fit leaves the common class prior in force; only service-road demand uses admitted building trip rates."
+      "description": "Length-weighted class totals and independently observed class fractions; equal-station medians from complete hourly days. Unavailable local-street and service-road demand fits leave the common class prior in force."
     },
     {
       "id": "road-preparation-model",
@@ -5224,7 +5224,7 @@
       "depends_on": [
         "road-calibration"
       ],
-      "description": "Shared road allocation and building demand parameters, with global section priors fitted only from admitted counts."
+      "description": "Shared road allocation parameters; section totals and medium/heavy fractions are fitted from admitted counts, while remaining class estimates use the declared preparation template."
     },
     {
       "id": "road-class-priors",

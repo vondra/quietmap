@@ -288,3 +288,7 @@ pub fn convert(inputs: &YearInputs, output: &Path) -> Result<()> {
     }
     observation_io::write(output, &rows, inputs)
 }
+
+#[cfg(test)]
+#[path = "road_counts/trafik_tests.rs"]
+mod trafik_tests;

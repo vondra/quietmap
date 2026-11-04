@@ -191,6 +191,11 @@ fn mlit_uses_declared_objects_and_keeps_the_weekday_basis_of_unlocated_summaries
     assert!(observed.measured && observed.estimated_classes == 14);
     assert_eq!(observed.vehicle_classes[0], Some(200.0));
     assert_eq!(observed.vehicle_groups[0].count, 20.0);
+    let fallback = mixed.iter().find(|r| r.identity == "class:0").unwrap();
+    assert_eq!(fallback.vehicle_classes[0], Some(150.0));
+    assert_eq!(fallback.vehicle_groups[0].count, 15.0);
+    let link = mixed.iter().find(|r| r.identity == "class-link:0").unwrap();
+    assert_eq!(link.vehicle_classes[0], Some(75.0));
     assert!(
         mixed
             .iter()

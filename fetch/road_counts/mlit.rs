@@ -65,9 +65,10 @@ fn observation(
     half: bool,
 ) -> Result<Observation> {
     let has_observed_sections = rows.iter().any(|r| r[2] == 1.0);
+    let observed_only = source.source_id == recipe.source.source_id && has_observed_sections;
     let selected = rows
         .iter()
-        .filter(|r| !has_observed_sections || r[2] == 1.0)
+        .filter(|r| !observed_only || r[2] == 1.0)
         .collect::<Vec<_>>();
     let mut small = median(selected.iter().map(|r| r[0]));
     let mut large = median(selected.iter().map(|r| r[1]));
@@ -84,7 +85,7 @@ fn observation(
     result.total = None;
     result.time_basis = TimeBasis::WeekdayDaily;
     result.daily_factor = recipe.weekday_to_model_daily;
-    result.measured = source.source_id == recipe.source.source_id && has_observed_sections;
+    result.measured = observed_only;
     result.estimated_classes = if result.measured { 14 } else { 15 };
     result.road_class_mask = mask;
     Ok(result)

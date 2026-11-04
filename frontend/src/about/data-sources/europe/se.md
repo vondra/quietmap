@@ -7,7 +7,7 @@ intro: National road counts (Trafikverket), city traffic counts in Stockholm and
 
 State and municipal roads: [NVDB Trafik](https://www.trafikverket.se/e-tjanster/hamta-data-fran-trafikverket/), the Trafikverket annual-average daily traffic per road link (CC0), with light, medium-heavy and heavy vehicles from sample measurements.
 
-A road takes the nearest measured link part within 50 m running along it; divided-road carriageways carry one direction's flow each. Assessed rather than measured flows are skipped. The selected year’s model separates cars and motorcycles within the light-vehicle group; the measured medium and heavy counts stay unchanged.
+A road takes the nearest measured link part within 50 m running along it; divided-road carriageways carry one direction's flow each. Assessed rather than measured flows are skipped. The selected year’s global road-class model separates cars and motorcycles within the light-vehicle group; the measured medium and heavy counts stay unchanged.
 
 Stockholm and Malmö: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 

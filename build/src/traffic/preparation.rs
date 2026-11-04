@@ -194,6 +194,9 @@ fn accumulate(
 }
 
 pub(crate) fn apply(roads: &mut [Road], structures: &Path, model: &DemandModel) -> Result<()> {
+    if model.street.is_none() && model.service_trip_bounds.is_none() {
+        return Ok(());
+    }
     let mut nodes: Vec<Node> = Vec::new();
     let mut ids = HashMap::new();
     let mut ends = Vec::new();
