@@ -6,6 +6,7 @@ import { QUIET_THRESHOLDS } from '../hooks/useUrlState'
 import type { Metric } from '../lib/hm3-decoder'
 import type { StaySearch } from '../lib/stays'
 import StaySearchFields from './StaySearchFields'
+import { BUTTON } from './ui/button'
 import { Switch } from './ui/switch'
 
 export interface OverlayControlsProps {
@@ -17,6 +18,10 @@ export interface OverlayControlsProps {
   onQuietThresholdChange: (threshold: number) => void
   staysOn: boolean
   onStaysChange: (on: boolean) => void
+  stayMaxPrice: number | null
+  onStayMaxPriceChange: (price: number | null) => void
+  reachLabel: string | null
+  onClearReach: () => void
   staySearch: StaySearch
   onStaySearchChange: (search: StaySearch) => void
 }
@@ -67,7 +72,7 @@ function LoudnessSlider({ metric, value, onChange, testId }: {
 export default function OverlayControls({
   metric, quietClustersEnabled, onQuietClustersChange,
   quietThreshold, onQuietThresholdChange,
-  staysOn, onStaysChange, staySearch, onStaySearchChange,
+  staysOn, onStaysChange, staySearch, onStaySearchChange, stayMaxPrice, onStayMaxPriceChange, reachLabel, onClearReach,
 }: OverlayControlsProps) {
   return (
     <div>
@@ -75,7 +80,7 @@ export default function OverlayControls({
         active={quietClustersEnabled}
         icon={<TreePine className="size-4" />}
         label="Quiet zones"
-        tooltip="Highlight areas where the total noise (all sources) stays below a threshold"
+        tooltip="Highlight areas below the total-noise threshold; places to stay are filtered by the same limit"
         onClick={() => onQuietClustersChange(!quietClustersEnabled)}
       />
       {quietClustersEnabled && (
@@ -89,7 +94,14 @@ export default function OverlayControls({
         tooltip="Hotels and apartments with a room for your dates and their prices (Stay22); click one for its noise"
         onClick={() => onStaysChange(!staysOn)}
       />
-      {staysOn && <StaySearchFields search={staySearch} onChange={onStaySearchChange} />}
+      {staysOn && <StaySearchFields search={staySearch} onChange={onStaySearchChange} maxPrice={stayMaxPrice} onMaxPriceChange={onStayMaxPriceChange} />}
+      {reachLabel && (
+        <div className="ml-7 flex items-center gap-2 py-1 text-xs" data-testid="stay-reach">
+          <span className="min-w-0 flex-1 text-muted-foreground">{reachLabel}</span>
+          <button type="button" aria-label="Clear reachable area" onClick={onClearReach}
+            className={BUTTON}>Clear</button>
+        </div>
+      )}
     </div>
   )
 }

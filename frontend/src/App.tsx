@@ -90,6 +90,7 @@ export default function App() {
   const [dataLayers, setDataLayers] = useState<DataLayerId[]>(initial.dataLayers)
   const [staysOn, setStaysOn] = useState(initial.stays)
   const [staySearch, setStaySearch] = useState<StaySearch>(() => defaultStaySearch())
+  const [stayMaxPrice, setStayMaxPrice] = useState<number | null>(null)
   // The place to stay whose pin opened the popup: shown above the popup until the popup moves.
   const [selectedStay, setSelectedStay] = useState<Stay | null>(null)
 
@@ -166,26 +167,29 @@ export default function App() {
   const popupOpen = detailPosition != null
   const [cardTab, setCardTab] = useState<CardTab | null>(popupOpen ? null : 'layers')
   useEffect(() => setCardTab(popupOpen ? null : 'layers'), [popupOpen])
-  // The area reachable from the open place: whether its panel is open, and the area drawn for a point,
-  // shown while that point is open. A new request (another place's) drops the one before, whose answer
-  // would otherwise land after it.
+  // The reachable area keeps its origin while places inside it are opened. Only another area or
+  // Clear replaces it; a late answer cannot restore a cleared or superseded area.
   const [isochronOpen, setIsochronOpen] = useState(false)
-  const [isochron, setIsochron] = useState<{ at: { lat: number; lng: number }; area: GeoJSON.FeatureCollection } | null>(null)
+  const [isochron, setIsochron] = useState<{ area: GeoJSON.FeatureCollection; label: string } | null>(null)
   const isochronRequest = useRef<AbortController | null>(null)
   const showIsochron = useCallback(async ({ lat, lng, minutes, modes }: IsochronRequest) => {
     isochronRequest.current?.abort()
     const request = new AbortController()
     isochronRequest.current = request
-    setIsochron(null)
+    const label = `${minutes} min from ${detailTitle ?? detailPlaceName ?? `${lat.toFixed(4)}, ${lng.toFixed(4)}`}`
     const url = `/api/isochron?lat=${lat}&lng=${lng}&minutes=${minutes}&modes=${modes.join(',')}`
     const response = await fetch(url, { signal: request.signal }).catch(() => null)
     const answer = await response?.json().catch(() => null) as GeoJSON.FeatureCollection & { error?: string } | null
     if (request.signal.aborted) return
     if (response?.status === 429) throw new Error('Too many areas asked from here. Try again in a minute.')
     if (!response?.ok || !answer?.features) throw new Error(answer?.error ?? 'The map could not be reached. Try again in a minute.')
-    setIsochron({ at: { lat, lng }, area: answer })
+    setIsochron({ area: answer, label })
     const missing = modes.find(mode => !answer.features.some(feature => feature.properties?.mode === mode))
     if (missing) throw new Error(`The area ${missing === 'car' ? 'by car' : 'on foot'} could not be drawn. Try again in a minute.`)
+  }, [detailTitle, detailPlaceName])
+  const clearIsochron = useCallback(() => {
+    isochronRequest.current?.abort()
+    setIsochron(null)
   }, [])
   // The signed-in visitor's recordings and photos of the open place.
   const [media] = useState(() => createMediaKeeper(startRecording))
@@ -301,6 +305,7 @@ export default function App() {
   }, [detailPosition])
 
   const handleDetailPositionChange = useCallback((pos: { lat: number; lng: number } | null) => {
+    isochronRequest.current?.abort()
     activeDetailPosition.current = pos
     detailPositionRef.current = pos
     setDetailPosition(pos)
@@ -319,8 +324,8 @@ export default function App() {
     handleDetailPositionChange({ lat: stay.lat, lng: stay.lng })
     setSelectedStay(stay)
   }, [handleDetailPositionChange])
-  const stays = useMemo(() => (staysOn ? { search: staySearch, onSelect: handleStaySelect } : null),
-    [staysOn, staySearch, handleStaySelect])
+  const stays = useMemo(() => (staysOn ? { search: staySearch, maxPrice: stayMaxPrice, onSelect: handleStaySelect } : null),
+    [staysOn, staySearch, stayMaxPrice, handleStaySelect])
 
   const handleDetailData = useCallback((update: PopupUpdate) => {
     setNoiseDetailData(update)
@@ -380,7 +385,8 @@ export default function App() {
   )
   // Folded, the panel keeps what it holds: its minutes, a request on its way, what went wrong.
   const isochronPanel = detailPosition && <div hidden={!isochronOpen}><IsochronPanel at={detailPosition} onShow={showIsochron} /></div>
-  const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange }
+  const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange,
+    stayMaxPrice, onStayMaxPriceChange: setStayMaxPrice, reachLabel: isochron?.label ?? null, onClearReach: clearIsochron }
 
   return (
     // The app is the box the fixed controls stand in: a phone browser's 100vh reaches under its
@@ -497,7 +503,7 @@ export default function App() {
         detailPosition={detailPosition}
         highlight={highlight}
         segmentFan={fan}
-        isochron={isochron && sameDetailPosition(isochron.at, detailPosition) ? isochron.area : null}
+        isochron={isochron?.area ?? null}
         quietClustersEnabled={quietClustersEnabled}
         metric={metric}
         quietThreshold={quietThreshold}

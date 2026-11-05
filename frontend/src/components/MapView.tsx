@@ -54,7 +54,7 @@ interface MapViewProps {
   heatmapLayers?: Record<string, boolean>
   dataLayers?: DataLayerId[]
   /** The places to stay for the stay searched, when shown; a click on one selects it. */
-  stays?: { search: StaySearch; onSelect: (stay: Stay) => void } | null
+  stays?: { search: StaySearch; maxPrice: number | null; onSelect: (stay: Stay) => void } | null
   /** Hands the parent a function that fires the map's GeolocateControl — the
    *  mobile locate box in the BasemapBar row triggers GPS through it. */
   registerGeolocateTrigger?: (trigger: () => void) => void
@@ -217,7 +217,8 @@ export default function MapView({
         onStaySelect={stays?.onSelect}
       />
       {/* A new search starts from no pins. */}
-      {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} />}
+      {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} maxPrice={stays.maxPrice}
+        area={isochron ?? null} metric={metric} quietThreshold={quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null} />}
       {/* The segments above the opened row's highlight: a style rebuild adds the layers in this
           order. */}
       <IsochronLayer area={isochron ?? null} />

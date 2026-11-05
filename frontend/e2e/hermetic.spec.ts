@@ -453,8 +453,8 @@ test("desktop: the reachable area is drawn from the open place by the button at 
   await expect(panel.getByRole('button', { name: 'Drawing…' })).toBeDisabled()
   // Another place's area asked meanwhile drops the first, whose answer would land after it.
   await page.mouse.click(x + 60, y + 60)
-  await panel.getByRole('button', { name: 'Show area' }).click()
   expect((await dropped).failure()?.errorText).toContain('ABORTED')
+  await panel.getByRole('button', { name: 'Show area' }).click()
   await expect.poll(() => asked).toHaveLength(2)
   await expect(panel.getByRole('button', { name: 'Show area' })).toBeEnabled()
   await expect(panel.getByRole('alert')).toHaveCount(0)

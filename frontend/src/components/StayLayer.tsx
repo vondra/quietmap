@@ -1,8 +1,12 @@
 // Places to stay on the map: a dot for every place with a room for the visitor's stay and its price
 // of a night above it wherever the labels do not collide (the most reviewed first), asked for every
 // view the map settles on, kept while it moves and until its price expires. A click on one opens it
-// (DetailPopup asks `stayAt`). One search per mount: MapView mounts it anew for a new search.
+// (DetailPopup asks `stayAt`). Price, quiet and reach filter those pins locally.
+// One search per mount: MapView mounts it anew for a new search.
 import { useEffect, useMemo, useState } from 'react'
+import { belowPrice, insideReach, stayInView } from '../lib/stay-filters'
+import { useStayNoise } from '../hooks/useStayNoise'
+import type { Metric } from '../lib/hm3-decoder'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import {
@@ -49,7 +53,13 @@ export function stayAt(map: MapLibreMap, point: { x: number; y: number }): Stay 
   return nearest?.stay ?? null
 }
 
-export default function StayLayer({ search }: { search: StaySearch }) {
+export default function StayLayer({ search, maxPrice, area, metric, quietThreshold }: {
+  search: StaySearch
+  maxPrice: number | null
+  area: GeoJSON.FeatureCollection | null
+  metric: Metric
+  quietThreshold: number | null
+}) {
   const { current: mapRef } = useMap()
   const [view, setView] = useState<ViewBox | null>(null)
   const [pins, setPins] = useState<Stay[]>([])
@@ -126,18 +136,23 @@ export default function StayLayer({ search }: { search: StaySearch }) {
     return () => clearTimeout(timer)
   }, [pins])
 
-  const data = useMemo(() => stayFeatures(pins), [pins])
-  // A pin counts in the world copy nearest the view (a view across the antimeridian runs past 180°).
-  const inView = view == null ? 0 : pins.filter(pin => {
-    const lng = pin.lng + 360 * Math.round(((view.west + view.east) / 2 - pin.lng) / 360)
-    return pin.lat >= view.south && pin.lat <= view.north && lng >= view.west && lng <= view.east
-  }).length
+  // Filter before sampling: only affordable, reachable pins need native-resolution noise.
+  // Remote searches keep their pool when a local filter changes, without another Stay22 call.
+  const candidates = useMemo(() => pins.filter(pin => belowPrice(pin, maxPrice) && (!area || insideReach(pin, area))), [pins, maxPrice, area])
+  const noise = useStayNoise(candidates, zoomedIn ? view : null, metric, quietThreshold)
+  const data = useMemo(() => stayFeatures(noise.pins), [noise.pins])
+  const inView = view ? noise.pins.filter(pin => stayInView(pin, view)).length : 0
+  const filtered = maxPrice != null || area != null || quietThreshold != null
   const note =
     view == null ? null
     : !zoomedIn ? 'Zoom in for places to stay'
     : status.failure ? status.failure
     : inView > 0 ? null
+    : noise.loading ? 'Checking noise at places to stay…'
     : status.loading ? 'Finding places to stay…'
+    : noise.unavailable ? 'Noise could not be loaded. Retrying…'
+    : noise.missing ? 'No matching places; some have no mapped noise'
+    : filtered ? 'No places found with these filters'
     : 'No place to stay has a room here for these dates'
 
   return (
@@ -172,7 +187,7 @@ export default function StayLayer({ search }: { search: StaySearch }) {
         <div
           data-testid="stay-note"
           role="status"
-          className="pointer-events-none absolute left-1/2 top-[calc(env(safe-area-inset-top,0px)+4rem)] z-[1] -translate-x-1/2 whitespace-nowrap rounded-full border border-border bg-card/95 px-3 py-1 text-xs text-muted-foreground shadow-md"
+          className="pointer-events-none absolute left-1/2 top-[calc(env(safe-area-inset-top,0px)+4rem)] z-[1] -translate-x-1/2 max-w-[calc(100%-2rem)] text-center rounded-lg border border-border bg-card/95 px-3 py-1 text-xs text-muted-foreground shadow-md"
         >
           {note}
         </div>

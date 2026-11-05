@@ -80,6 +80,17 @@ Advanced shows the data the popup computes over; each layer switched on shows it
 - road traffic (vehicles a day) and trains a day;
 - the other sources: turbines, bells, terraces, car parks, airports.
 
+## Places to stay
+
+Set a maximum price per night in euros for the selected dates and guests. Turn on Quiet zones to
+keep stays within its total-noise limit, and draw a reachable area to keep those inside it too.
+The area keeps its starting point while you open stays; Clear in Layers removes it.
+A place without a quote or mapped noise is excluded when that filter needs it.
+
+The noise filter reads the map at its finest resolution, even when zoomed out. It describes outdoor
+noise averaged over the year, not the room or the dates of the stay. Open a stay for the detailed
+calculation at its point. The offers returned for each view are a selection, not a complete list.
+
 ## How close it comes to the popup
 
 The map should agree with the popup within 1 phon, 7 % of loudness, at any point. The painter is
