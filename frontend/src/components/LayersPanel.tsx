@@ -62,7 +62,7 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
   // handle stays pinned above the scroller, like ControlCard's header.
   return (
     <div
-      className="fixed z-[1002] bg-background shadow-xl border border-border bottom-0 left-0 right-0 rounded-t-xl"
+      className="fixed z-[1002] bg-background shadow-xl border border-border bottom-(--map-footer-height) left-0 right-0 rounded-t-xl"
       style={{ transform, transition }}
     >
       <div

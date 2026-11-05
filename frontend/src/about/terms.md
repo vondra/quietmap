@@ -8,7 +8,7 @@ attribution.
 
 - **You may** link to quietmap.org and embed the map or screenshots in your articles, apps
   and projects, with a visible credit "**quietmap.org**" linking back here, plus
-  "© OpenStreetMap contributors" and the base map's credit from the map's corner.
+  "© OpenStreetMap contributors" and the base map's credit from the bottom of the map.
 - **You may not** bulk-download tiles, scrape or mirror the dataset, or republish a copy of
   the map as your own service. Raw model data is not distributed.
 - **Commercial or high-volume use:** [talk to us first](mailto:info@quietmap.org) — we're

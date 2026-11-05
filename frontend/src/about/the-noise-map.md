@@ -83,9 +83,10 @@ Advanced shows the data the popup computes over; each layer switched on shows it
 ## Places to stay
 
 Set a maximum price per night in euros for the selected dates and guests. Turn on Quiet zones to
-keep stays within its total-noise limit, and draw a reachable area to keep those inside it too.
-The area keeps its starting point while you open stays; Clear in Layers removes it.
-A place without a quote or mapped noise is excluded when that filter needs it.
+keep stays within its total-noise limit. A reachable area shows how far you can travel; stays
+beyond it remain visible. The area keeps its starting point while you open stays; Clear in Layers
+removes it. A place without a quote is excluded by a price limit. The quiet filter hides stays
+where the noise map has no value; clicking the map still calculates noise at that point.
 
 The noise filter reads the map at its finest resolution, even when zoomed out. It describes outdoor
 noise averaged over the year, not the room or the dates of the stay. Open a stay for the detailed

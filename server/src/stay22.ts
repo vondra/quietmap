@@ -78,8 +78,7 @@ interface Stay22Page {
   meta?: { total?: unknown }
 }
 
-/** Stay22 refused the search itself (an impossible date, too many guests): its words go to the
- *  visitor. */
+/** Stay22 refused the search itself (an impossible date, too many guests). */
 export class Stay22Refusal extends Error {}
 
 /** No call goes to Stay22 for `seconds`: it answered 429, a minute's calls are spent, or too many
@@ -152,7 +151,7 @@ async function stay22Page(params: URLSearchParams, apiKey: string, budget: Budge
   })
   const body = await response.json().catch(() => null) as (Stay22Page & { message?: unknown }) | null
   if (response.status === 400) {
-    throw new Stay22Refusal(`Stay22: ${typeof body?.message === 'string' ? body.message : 'the search was refused'}`)
+    throw new Stay22Refusal(typeof body?.message === 'string' ? body.message : 'The accommodation provider refused the search')
   }
   if (response.status === 429) {
     const seconds = retryAfterSeconds(response.headers.get('retry-after'))

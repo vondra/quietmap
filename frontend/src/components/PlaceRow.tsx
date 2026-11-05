@@ -2,8 +2,8 @@
 // open place's pin, the history's clock, the geocoder's magnifier), its name over where it is, its
 // whole-day loudness, and the actions at the end, as wide in every row so that nothing moves between
 // them (two buttons on a touch screen, one on a mouse's): the open place's (the microphone and the
-// camera on a phone), or a history row's cross that forgets it. A press anywhere else in the row opens
-// it. The open place's name is the field it is renamed in, right where it stands: a press puts the
+// camera on a phone), or a history row's cross that forgets it. A press elsewhere in a listed row
+// opens it. The open place's name is the field it is renamed in, right where it stands: a press puts the
 // caret into the name as written.
 import { useRef, useState, type ReactNode } from 'react'
 import { MapPin, X } from 'lucide-react'
@@ -80,7 +80,7 @@ export default function PlaceRow({ at, name, given, proposal, detail, metric, so
   /** An option of the search's list, which the keys move through from the field: its buttons are for
    *  the pointer alone. */
   listed?: boolean
-  onOpen: () => void
+  onOpen?: () => void
   /** Makes the name its field (the open place's row). */
   onRename?: (at: Point, title: string | null) => void
   /** A cross at the end that forgets the place (a history row). */
@@ -92,9 +92,9 @@ export default function PlaceRow({ at, name, given, proposal, detail, metric, so
 }) {
   return (
     <div
-      className={`group flex min-h-12 cursor-pointer items-center gap-1 pr-1 ${highlighted ? 'bg-accent' : 'hover:bg-accent'}`}
+      className={`group flex min-h-11 items-center gap-1 pr-1 ${onOpen ? 'cursor-pointer' : ''} ${highlighted ? 'bg-accent' : 'hover:bg-accent'}`}
       onClick={event => {
-        if (!(event.target as Element).closest('button, input')) onOpen()
+        if (!(event.target as Element).closest('button, input')) onOpen?.()
       }}
     >
       <span className="grid place-items-center self-stretch pl-3 pr-2">

@@ -1,10 +1,10 @@
 // Places to stay on the map: a dot for every place with a room for the visitor's stay and its price
 // of a night above it wherever the labels do not collide (the most reviewed first), asked for every
 // view the map settles on, kept while it moves and until its price expires. A click on one opens it
-// (DetailPopup asks `stayAt`). Price, quiet and reach filter those pins locally.
+// (DetailPopup asks `stayAt`). Price and quiet filter those pins locally.
 // One search per mount: MapView mounts it anew for a new search.
 import { useEffect, useMemo, useState } from 'react'
-import { belowPrice, insideReach, stayInView } from '../lib/stay-filters'
+import { belowPrice, stayInView } from '../lib/stay-filters'
 import { useStayNoise } from '../hooks/useStayNoise'
 import type { Metric } from '../lib/hm3-decoder'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
@@ -53,10 +53,9 @@ export function stayAt(map: MapLibreMap, point: { x: number; y: number }): Stay 
   return nearest?.stay ?? null
 }
 
-export default function StayLayer({ search, maxPrice, area, metric, quietThreshold }: {
+export default function StayLayer({ search, maxPrice, metric, quietThreshold }: {
   search: StaySearch
   maxPrice: number | null
-  area: GeoJSON.FeatureCollection | null
   metric: Metric
   quietThreshold: number | null
 }) {
@@ -136,13 +135,13 @@ export default function StayLayer({ search, maxPrice, area, metric, quietThresho
     return () => clearTimeout(timer)
   }, [pins])
 
-  // Filter before sampling: only affordable, reachable pins need native-resolution noise.
+  // Filter before sampling: only affordable pins need native-resolution noise.
   // Remote searches keep their pool when a local filter changes, without another Stay22 call.
-  const candidates = useMemo(() => pins.filter(pin => belowPrice(pin, maxPrice) && (!area || insideReach(pin, area))), [pins, maxPrice, area])
+  const candidates = useMemo(() => pins.filter(pin => belowPrice(pin, maxPrice)), [pins, maxPrice])
   const noise = useStayNoise(candidates, zoomedIn ? view : null, metric, quietThreshold)
   const data = useMemo(() => stayFeatures(noise.pins), [noise.pins])
   const inView = view ? noise.pins.filter(pin => stayInView(pin, view)).length : 0
-  const filtered = maxPrice != null || area != null || quietThreshold != null
+  const filtered = maxPrice != null || quietThreshold != null
   const note =
     view == null ? null
     : !zoomedIn ? 'Zoom in for places to stay'

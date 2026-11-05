@@ -36,11 +36,11 @@ test('map tap opens the real mobile sheet and layer controls', async ({ page }) 
 
   await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
   await expect(sheet.getByTestId('lden')).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
-  // The base map's credits stay in sight with the sheet open: under the search bar, above the sheet.
+  // Required basemap credits stay below the sheet, away from the search and its addresses.
   const credits = page.locator('.maplibregl-ctrl-attrib')
   const box = async (element: typeof credits) => (await element.boundingBox())!
   await expect(credits).toContainText('OpenStreetMap contributors')
-  expect((await box(credits)).y + (await box(credits)).height).toBeLessThanOrEqual((await box(sheet)).y)
+  expect((await box(credits)).y).toBeGreaterThanOrEqual((await box(sheet)).y + (await box(sheet)).height - 1)
   // The sheet would cover the tapped point (the map's centre): the map moves it up, the view's
   // centre south of it. A finger leaves no hover readout beside the popup.
   const viewLat = () => page.evaluate(() => Number(new URLSearchParams(location.hash.slice(1)).get('lat')))
@@ -76,7 +76,8 @@ test('map tap opens the real mobile sheet and layer controls', async ({ page }) 
   await layersButton.tap()
   const panel = page.locator('[data-testid="layers-panel"]:visible')
   await expect(panel).toBeVisible()
-  expect((await box(credits)).y + (await box(credits)).height).toBeLessThanOrEqual((await box(page.getByRole('button', { name: 'Drag to close' }))).y)
+  const layersSheet = page.getByRole('button', { name: 'Drag to close', exact: true }).locator('..')
+  expect((await box(credits)).y).toBeGreaterThanOrEqual((await box(layersSheet)).y + (await box(layersSheet)).height - 1)
   // Each switch turns its own layer over.
   const road = panel.getByTestId('layer-road')
   const rail = panel.getByTestId('layer-railway')

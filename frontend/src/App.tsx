@@ -519,7 +519,7 @@ export default function App() {
       {!layersOpen && (
         <button
           onClick={() => { setLayersOpen(true); handleNoiseClose() }}
-          className="fixed bottom-[16px] right-[10px] z-[1003] flex h-11 w-11 items-center justify-center rounded-lg bg-background md:hidden"
+          className="fixed bottom-[calc(16px+var(--map-footer-height))] right-[10px] z-[1003] flex h-11 w-11 items-center justify-center rounded-lg bg-background md:hidden"
           style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}
           aria-label="Toggle layers panel"
         >

@@ -91,7 +91,7 @@ export default function OverlayControls({
         active={staysOn}
         icon={<BedDouble className="size-4" />}
         label="Places to stay"
-        tooltip="Hotels and apartments with a room for your dates and their prices (Stay22); click one for its noise"
+        tooltip="Hotels and apartments with a room for your dates and their prices; click one for its noise"
         onClick={() => onStaysChange(!staysOn)}
       />
       {staysOn && <StaySearchFields search={staySearch} onChange={onStaySearchChange} maxPrice={stayMaxPrice} onMaxPriceChange={onStayMaxPriceChange} />}

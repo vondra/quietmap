@@ -115,12 +115,12 @@ test('desktop: a full Stay22 minute is said, and the view asks again after the s
     asked += 1
     return asked === 1
       ? route.fulfill({ status: 503, headers: { 'retry-after': '1' }, contentType: 'application/json',
-        body: JSON.stringify({ error: 'Stay22 takes no more searches this minute; places to stay again in 1 s.' }) })
+        body: JSON.stringify({ error: 'Accommodation search is busy; retrying in 1 s.' }) })
       : route.fulfill({ status: 200, contentType: 'application/json', body: answer() })
   })
   await page.route('**/fonts/**', route => route.fulfill({ status: 200, body: '' }))
   await page.goto(`${mapUrl(POINT)}&stay=1`)
-  await expect(page.getByTestId('stay-note')).toHaveText(/no more searches this minute/)
+  await expect(page.getByTestId('stay-note')).toHaveText('Accommodation search is busy; retrying in 1 s.')
   await expectPinAtCentre(page)
   await expect(page.getByTestId('stay-note')).toHaveCount(0)
   expect(asked).toBe(2)

@@ -17,7 +17,7 @@ const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
 const SHEET_CHROME_PX = 28
 
 /** How far from the viewport's top the opened sheet reaches at most: its body is at most half the
- *  viewport less 16 px (`max-h-[calc(50dvh-16px)]` below), the handle over it. */
+ *  viewport less 16 px and the attribution footer, the handle over it. */
 export function sheetTop(viewportHeight: number): number {
   return viewportHeight / 2 + 16 - SHEET_CHROME_PX
 }
@@ -106,7 +106,7 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
   const transition = dragRef.current.isDragging ? 'none' : 'transform 0.3s ease-out'
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[2000] md:hidden">
+    <div className="fixed bottom-(--map-footer-height) left-0 right-0 z-[2000] md:hidden">
       <div
         data-testid="mobile-detail-sheet"
         className="relative bg-background rounded-t-xl shadow-2xl"
@@ -134,7 +134,7 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
             a fixed cap; the tap now reaches onClick, so this state is real
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
         {stay && <StayHeader stay={stay} />}
-        <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px)]' : 'overflow-hidden max-h-24'}`}>
+        <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px-var(--map-footer-height))]' : 'overflow-hidden max-h-24'}`}>
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

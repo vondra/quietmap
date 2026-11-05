@@ -1,4 +1,4 @@
-// A visitor narrows stays by quote, mapped total and reach, then opens one and clears the area.
+// A visitor narrows stays by quote and mapped total, opens one beyond reach and clears the area.
 import { expect, test, type Page } from '@playwright/test'
 import { HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
 import { PHONE, POINT, TILE_Z, afterPaint, canvasCenter, hm3PixelCenter, installHermeticMap, mapUrl, popupRequests } from './support'
@@ -97,7 +97,7 @@ async function closeLayers(page: Page, phone: boolean) {
 
 for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', () => {
   if (phone) test.use(PHONE)
-  test('price, quiet and reachable area combine; opening a stay preserves the origin', async ({ page }) => {
+  test('price and quiet filter stays; a stay beyond the reachable area remains bookable', async ({ page }) => {
     test.setTimeout(45_000)
     await fixtures(page)
     await page.goto(`${mapUrl(POINT, 'road', TILE_Z - 1)}&stay=1`)
@@ -110,23 +110,33 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
     await closeLayers(page, phone)
     await expect.poll(() => visiblePins(page)).toEqual([true, false, false, false, true, false])
 
-    // A distinct origin: draw a five-minute walk, then explore one of its stays.
+    // A distinct origin: draw a five-minute walk, then explore a stay beyond it.
     const origin = await position(page, { lat: POINT.lat + 0.0015, lng: POINT.lng })
     await page.mouse.click(origin.x, origin.y)
     await page.getByRole('button', { name: 'Reachable area', exact: true }).click()
     const panel = page.getByTestId('isochron-panel').filter({ visible: true })
     await panel.getByRole('button', { name: 'Car', exact: true }).click()
     await panel.getByRole('spinbutton', { name: 'Minutes', exact: true }).fill('5')
+    const fitted = page.waitForResponse(response => new URL(response.url()).pathname === '/api/stay')
     await panel.getByRole('button', { name: 'Show area', exact: true }).click()
-    await expect.poll(() => visiblePins(page)).toEqual([true, false, false, false, false, false])
+    await fitted
+    // The shared URL is debounced; preserve the chosen filters before navigating through it.
+    await expect(page).toHaveURL(url => new URLSearchParams(url.hash.slice(1)).get('qc') === '1')
     await page.getByRole('button', { name: 'Reachable area', exact: true }).click()
-    const at = await position(page, spots[0])
+    // Explore beyond the fitted area, as a visitor panning along the countryside would.
+    await page.evaluate(({ lat, lng, zoom }) => {
+      const params = new URLSearchParams(location.hash.slice(1))
+      params.set('lat', String(lat)); params.set('lng', String(lng)); params.set('z', String(zoom))
+      location.hash = params.toString()
+    }, { lat: POINT.lat, lng: POINT.lng, zoom: TILE_Z })
+    await expect.poll(() => visiblePins(page)).toEqual([true, false, false, false, true, false])
+    const at = await position(page, spots[4])
     await page.mouse.click(at.x, at.y)
-    await expect(page.locator('[data-testid="stay-header"]:visible')).toContainText(spots[0].name)
-    expect((await popupRequests(page)).at(-1)).toEqual({ lat: spots[0].lat, lng: spots[0].lng })
+    await expect(page.locator('[data-testid="stay-header"]:visible')).toContainText(spots[4].name)
+    expect((await popupRequests(page)).at(-1)).toEqual({ lat: spots[4].lat, lng: spots[4].lng })
     await page.screenshot({ path: test.info().outputPath(`${phone ? 'phone' : 'desktop'}-opened-stay.png`) })
     await page.locator('button[aria-label="Close"]:visible').click()
-    await expect.poll(() => visiblePins(page)).toEqual([true, false, false, false, false, false])
+    await expect.poll(() => visiblePins(page)).toEqual([true, false, false, false, true, false])
     await layers(page, phone)
     const reach = page.getByTestId('stay-reach').filter({ visible: true })
     await expect(reach).toContainText('5 min from')

@@ -12,13 +12,14 @@ import HeatmapOverlay from './HeatmapOverlay'
 import { HEATMAP_LAYERS, publishes, sourceOf, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
 import AboutControl from './AboutControl'
+import MapCredits from './MapCredits'
 import IsochronLayer from './IsochronLayer'
 import DataLayersOverlay from './DataLayersOverlay'
 import StayLayer from './StayLayer'
 import type { Stay, StaySearch } from '../lib/stays'
 import type { DataLayerId } from '../lib/data-layers'
 import MapStateSync from './MapStateSync'
-import { DEFAULT_BASEMAP, OSM_CREDIT, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
+import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
 import type { Metric } from '../lib/hm3-decoder'
@@ -154,18 +155,14 @@ export default function MapView({
       onMoveEnd={handleMoveEnd}
       fadeDuration={0}
       maxZoom={16}
-      // The base map's credits, never folded: CARTO asks for its credit "visible on the map, legible,
-      // in any corner. Not hidden, faded or behind a click" (carto.com/attribution), Esri for its
-      // sources' names on the map. They name OpenStreetMap, whose credit the noise model owes too
-      // (`OSM_CREDIT`); every other source of the model is credited on the About pages, the ⓘ
-      // beside them (AboutControl).
-      attributionControl={{ compact: false, customAttribution: OSM_CREDIT }}
+      attributionControl={false}
       // Defaults (deceleration 2500, maxSpeed 1400) give ~1.25 s inertia on a medium
       // flick — too sluggish. 4000 / 1100 lands around ~780 ms, between the default
       // and a Google-Maps-snappy feel.
       dragPan={{ deceleration: 4000, maxSpeed: 1100 }}
     >
       <NavigationControl position="bottom-left" showCompass={false} />
+      <MapCredits />
       <AboutControl />
       {/* Precise location is user-triggered (Google pattern): the initial view
           only approximates from browser language (utils/initial-view.ts); GPS
@@ -218,7 +215,7 @@ export default function MapView({
       />
       {/* A new search starts from no pins. */}
       {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} maxPrice={stays.maxPrice}
-        area={isochron ?? null} metric={metric} quietThreshold={quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null} />}
+        metric={metric} quietThreshold={quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null} />}
       {/* The segments above the opened row's highlight: a style rebuild adds the layers in this
           order. */}
       <IsochronLayer area={isochron ?? null} />
