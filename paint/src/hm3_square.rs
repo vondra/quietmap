@@ -12,6 +12,10 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 pub(crate) const SQUARE_HEADER_BYTES: usize = 14;
+/// 120 phon or dB, past every place painted: no cell of the world reached it when measured, while a
+/// painter's memory fault wrote the top of the scale, 126.5 dB where the exact computation gives 39.7.
+/// Measured, not a physical ceiling: a refused square waits for a person, who reads which it was.
+const FIRST_REFUSED_LEVEL: u8 = 240;
 const NDEN_ONLY_SQUARE_VERSION: u8 = 7;
 const SQUARE_VERSION: u8 = 8;
 
@@ -255,12 +259,25 @@ impl PaintedSquare {
     }
 }
 
+fn refuse_impossible_levels(cells: &Cells) -> Result<(), String> {
+    match cells.iter().position(|pixel| {
+        pixel
+            .iter()
+            .any(|value| (FIRST_REFUSED_LEVEL..SILENCE).contains(value))
+    }) {
+        Some(at) => Err(format!("pixel {at}: a level past any painted place")),
+        None => Ok(()),
+    }
+}
+
 /// Decode every stored quantity; return whether Lden is present, never invent it for old squares.
 pub fn verify(out: &Path, zoom: u32, square: (u32, u32)) -> Result<bool, String> {
     let stored = PaintedSquare::open(out, zoom, square)?;
     let nden = stored.read_cells(Metric::Nden)?;
+    refuse_impossible_levels(&nden)?;
     if stored.has_lden {
         let lden = stored.read_cells(Metric::Lden)?;
+        refuse_impossible_levels(&lden)?;
         for (at, (n, l)) in nden.iter().zip(&lden).enumerate() {
             if n.iter()
                 .chain(l)

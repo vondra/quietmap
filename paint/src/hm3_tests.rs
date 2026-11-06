@@ -198,6 +198,28 @@ fn legacy_fixture_stays_readable_and_keeps_its_nden_streams_when_lden_is_added()
 }
 
 #[test]
+fn a_level_past_any_painted_place_is_refused_in_either_metric() {
+    let out = tempfile::tempdir().unwrap();
+    let mut values = PaintedCells::silence(TILE_PX * TILE_PX);
+    values.nden[7] = [239; LAYERS + 1];
+    values.lden[7] = [239; LAYERS + 1];
+    write(out.path(), 12, (0, 0), &values).unwrap();
+    assert!(verify(out.path(), 12, (0, 0)).unwrap());
+    // The rented machine's fault: Lden at the top of the scale, the layer and the total alike.
+    values.lden[7] = [253; LAYERS + 1];
+    write(out.path(), 12, (1, 0), &values).unwrap();
+    assert!(
+        verify(out.path(), 12, (1, 0))
+            .unwrap_err()
+            .contains("pixel 7: a level past")
+    );
+    values.lden[7] = [239; LAYERS + 1];
+    values.nden[7][0] = 240;
+    write(out.path(), 12, (2, 0), &values).unwrap();
+    assert!(verify(out.path(), 12, (2, 0)).is_err());
+}
+
+#[test]
 fn metric_tags_and_assessment_cannot_be_swapped_or_lost() {
     let cells = vec![100; TILE_PX * TILE_PX];
     let lden = encode_metric_tile(&cells, 0, Metric::Lden).unwrap();
