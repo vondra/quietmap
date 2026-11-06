@@ -1,7 +1,7 @@
 // A contributor's facts as lines, only what its row and class line do not say: a road's speed,
 // traffic (with the dataset behind it) and a surface other than asphalt, a railway's speed and
 // trains (with theirs), a building's floors, height and footprint or an area's size and cars, a
-// site's area or a turbine's rated power, a ship cell's vessels, an airport's movements; then the
+// site's area or a turbine's rated power, a ship cell's vessels; then the
 // source's sound power. A layer without lines of its own lists its fields by name, so a newly added
 // layer shows up before it gets its own wording.
 import type { ReactNode } from 'react'
@@ -176,20 +176,6 @@ function ShipRows({ m }: { m: ContributorMetadata }) {
   return lineRow('Vessels at a time', <HoverText title={cell}>{fmtCount(atATime.reduce((a, b) => a + b, 0))}</HoverText>)
 }
 
-/** An airport's ground operations: its taxiing and rolls come from its flights. */
-function AirportRows({ m }: { m: ContributorMetadata }) {
-  const perDay = (key: string) => `${fmtCount(num(m, key) ?? 0)}/day`
-  const airport = text(m, 'airport')
-  return (
-    <>
-      {airport && lineRow('Airport', airport)}
-      {lineRow('Arrivals', perDay('arrivals_per_day'))}
-      {lineRow('Departures', perDay('departures_per_day'))}
-      {(num(m, 'ground_vehicles_per_day') ?? 0) > 0 && lineRow('Ground vehicles', perDay('ground_vehicles_per_day'))}
-    </>
-  )
-}
-
 // A layer without lines of its own: its fields by name, but for the name and the subtype that the
 // row and its class line show.
 function FieldRows({ m }: { m: ContributorMetadata }) {
@@ -204,7 +190,6 @@ const LAYER_ROWS: Record<string, (props: { m: ContributorMetadata }) => ReactNod
   building: BuildingRows,
   industrial: IndustrialRows,
   ship: ShipRows,
-  aircraft: AirportRows,
 }
 
 /** When a source's stored sound power holds: a venue's people at their busiest, an event while it

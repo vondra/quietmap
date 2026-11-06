@@ -26,7 +26,7 @@
 //! [--threads N] [--national-dem FILE,..]` writes per-day segments, flight tables and receipts
 //! into a scratch directory;
 //! `qm-build airport-traffic --prepared DIR --segments DIR --days D,.. [--increment-days D,..]
-//! --squares X:Y[,X:Y..] --terrain DIR --out DIR` projects the window's ground legs onto the
+//! --squares X:Y[,X:Y..] --terrain DIR --operations FILE --out DIR` projects the window's ground legs onto the
 //! aeroway lines of the squares (and their neighbours) once, one traffic file per square, and
 //! writes the runways' rolls as `aircraft-rolls` square files under `DIR/rolls` on the terrain of
 //! the year root `--terrain`;
@@ -644,12 +644,18 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 prepared: options.get("prepared")?.into(),
                 rasters: PathBuf::new(),
             };
+            let window = sampling_window(&options);
+            let operations = airport::operations::Operations::read(
+                Path::new(options.get("operations")?),
+                &window,
+            )?;
             let written = airport::build(
                 &dev4,
                 Path::new(options.get("segments")?),
-                &sampling_window(&options),
+                &window,
                 &parse_squares(options.get("squares")?)?,
                 (options.terrain(&out)?, &out),
+                &operations,
             )?;
             eprintln!("airport traffic: {written} squares with traffic");
             Ok(())

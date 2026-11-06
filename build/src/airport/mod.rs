@@ -7,9 +7,11 @@
 //! the sources builder. One pass over the days serves every square of the scope.
 
 pub mod file;
+mod frequency;
 pub mod legs;
 pub mod lines;
 pub mod low_ends;
+pub mod operations;
 mod ownership;
 pub mod project;
 pub mod roll_tiles;
@@ -134,7 +136,7 @@ impl Traffic {
         ways: (&Aeroways, &LineIndex, &Runways),
         day: &DayLegs,
         (weight, secondary_weight): (f64, f64),
-    ) {
+    ) -> frequency::ProviderRolls {
         let DayLegs {
             legs,
             low_ends,
@@ -180,18 +182,23 @@ impl Traffic {
             }
         }
         let observed = rolls::observed(stretches, lift_offs);
+        let mut day_rolls = frequency::ProviderRolls::default();
         for movement in rolls::movements(observed, low_ends, runways) {
             let counted = weight_of(movement.secondary_only);
             if counted <= 0.0 || usize::from(movement.period) >= PERIODS {
                 continue;
             }
             self.rolls.entry(movement.key).or_default()[usize::from(movement.period)] += counted;
+            day_rolls[usize::from(movement.secondary_only)]
+                .entry(movement.key)
+                .or_default()[usize::from(movement.period)] += 1.0;
             let airport = runways.airport(movement.key.runway) as usize;
             self.movements[airport][usize::from(!movement.key.landing)] += counted;
         }
         for ((airport, _), primary) in vehicles {
             self.movements[airport as usize][2] += weight_of(!primary);
         }
+        day_rolls
     }
 
     /// A line's sound power per metre (dB re 1 pW/m) per period and band; `-inf` is silence.
@@ -240,6 +247,7 @@ pub fn build(
     window: &Window,
     squares: &[Square],
     (terrain_root, out): (&Path, &Path),
+    operations: &operations::Operations,
 ) -> Result<usize, String> {
     if out.join(COMPLETION_MARKER).exists() {
         return Err(format!("{} holds a complete traffic pass", out.display()));
@@ -287,14 +295,16 @@ pub fn build(
         found.len()
     );
     let mut traffic = Traffic::new(&aeroways);
+    let mut months = frequency::Months::new(window);
     for day in &days {
         let started = std::time::Instant::now();
         let legs = read_day(day)?;
-        traffic.add_day(
+        let rolls = traffic.add_day(
             (&aeroways, &index, &runways),
             &legs,
             day_weights(window, day),
         );
+        months.add(day, rolls);
         eprintln!(
             "airport traffic: {day}: {} ground legs, {} low ends, in {:.1} s",
             legs.legs.len(),
@@ -302,6 +312,10 @@ pub fn build(
             started.elapsed().as_secs_f64()
         );
     }
+    months.write(&aeroways, &runways, out)?;
+    let observed_movements = traffic.movements.clone();
+    months.supplement(operations, &mut traffic, &aeroways, &runways, out)?;
+    frequency::write_totals(&aeroways, &observed_movements, &traffic.movements, out)?;
     let mut by_square: BTreeMap<Square, Vec<LineTraffic>> = BTreeMap::new();
     for (line_index, line) in aeroways.lines.iter().enumerate() {
         let power_db = traffic.power_db(line_index);
@@ -319,7 +333,8 @@ pub fn build(
             ends: line.ends,
             aeroway: line.aeroway,
             airport: aeroways.airports[airport].clone(),
-            movements_per_day: traffic.movements[airport],
+            // These counts drive taxi-event loudness; its observed energy has not been scaled.
+            movements_per_day: observed_movements[airport],
             power_db,
         });
     }

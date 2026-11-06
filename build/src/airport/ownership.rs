@@ -5,6 +5,7 @@ use crate::aircraft::flat::{flat_distance_m, interpolate};
 use crate::dev4::{Dev4, Square, column, degrees_to_z30, text, z30_corner_degrees};
 use crate::sources::cells::{PreparedRing, ring_cell};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 const AERODROME: u8 = 5;
@@ -29,6 +30,32 @@ fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
         b[0] as f32,
         b[1] as f32,
     ))
+}
+
+/// A repeated identifier cannot locate an official count when its mapped aerodromes' existing
+/// search areas are disjoint. Keep observations, but do not send a supplement to a remote namesake.
+pub(super) fn ambiguous_airport_keys(aerodromes: &[Aerodrome]) -> HashSet<String> {
+    let mut by_key: HashMap<&str, Vec<&Aerodrome>> = HashMap::new();
+    for aerodrome in aerodromes {
+        by_key
+            .entry(&aerodrome.airport.key)
+            .or_default()
+            .push(aerodrome);
+    }
+    by_key
+        .into_iter()
+        .filter_map(|(key, matches)| {
+            matches
+                .iter()
+                .enumerate()
+                .any(|(index, a)| {
+                    matches[index + 1..]
+                        .iter()
+                        .any(|b| distance_m(a.centre, b.centre) > a.radius_m + b.radius_m)
+                })
+                .then(|| key.to_string())
+        })
+        .collect()
 }
 
 /// The named aerodromes of one square.
@@ -183,6 +210,30 @@ mod tests {
         let original = airport_of(&pieces, &[]);
         assert_eq!(original, airport_of(&reversed, &[]));
         assert_eq!(original.key, "airstrip 50.00,179.99");
+    }
+
+    #[test]
+    fn a_shared_identifier_cannot_allocate_counts_across_disjoint_aerodromes() {
+        let first = Aerodrome {
+            osm_id: 1,
+            airport: Airport {
+                key: "SHARED".into(),
+                name: String::new(),
+            },
+            centre: [50.0, 14.0],
+            area_m2: 0.0,
+            radius_m: AERODROME_MIN_RADIUS_M,
+            footprint: None,
+        };
+        let mut other = first.clone();
+        other.osm_id = 2;
+        other.centre = [50.01, 14.0];
+        assert!(ambiguous_airport_keys(&[first.clone(), other.clone()]).is_empty());
+        other.centre = [60.0, -150.0];
+        assert_eq!(
+            ambiguous_airport_keys(&[first, other]),
+            HashSet::from(["SHARED".into()])
+        );
     }
 
     #[test]

@@ -84,6 +84,17 @@ the European Union and ESA; all rights reserved).
   receivers at home. Aircraft noise tables: [EASA ANP](https://www.easa.europa.eu/en/domains/environment/policy-support-and-research/aircraft-noise-and-performance-anp-data);
   helicopters: EASA Certification Noise Levels – Helicopters, Issue 52 (source acknowledged as its
   terms require)
+- Airport operations: monthly totals from [CAAC East China](https://hd.caac.gov.cn/HD_XXGK/HD_TJSJ/),
+  fixed-wing air transport from the [UK CAA](https://www.caa.co.uk/data-and-analysis/uk-aviation-market/airports/uk-airport-data/),
+  IFR arrivals and departures from [EUROCONTROL](https://ansperformance.eu/reference/dataset/airport-traffic/),
+  engine-class itinerant movements from [Statistics Canada, Table 23-10-0300-01](https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=2310030001),
+  public air transport from [ANAC](https://www.anac.gov.br/acesso-a-informacao/dados-abertos/areas-de-atuacao/voos-e-operacoes-aereas/dados-estatisticos-do-transporte-aereo),
+  airport counts from [AAI](https://www.aai.aero/en/business-opportunities/aai-traffic-news) and
+  [ACSA](https://www.airports.co.za/airports/or-tambo-international-airport/statistics/aircraft),
+  and civil movements from [Hong Kong CAD](https://www.cad.gov.hk/english/pdf/Stat%20Webpage.xlsx) and
+  [SingStat/CAAS](https://data.gov.sg/datasets/d_98e2567a033e812081b78aabe250fc13/view).
+  Their scopes, attribution and use in [data preparation](/about/data-preparation#aircraft)
+  distinguish published counts from the observed runway and fleet mixture.
 - Ships: **Powered by [Global Fishing Watch](https://globalfishingwatch.org)** (CC BY-NC 4.0) on
   inland waterways and outside European seas; European seas on the [Europe](/about/data-sources/europe)
   page

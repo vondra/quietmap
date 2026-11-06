@@ -3,12 +3,12 @@
 //! taxiways, stopways and airstrips as microsegments of at most 250 m) and the aerodromes of
 //! `airport_areas.arrow`. Everything after this module works on [`Aeroways`].
 
-use super::ownership::{Aerodrome, aerodromes, airport_of};
+use super::ownership::{Aerodrome, aerodromes, airport_of, ambiguous_airport_keys};
 use crate::aircraft::flat::flat_distance_m;
 use crate::dev4::{Dev4, Square, column, z30_corner_degrees};
 use arrow_array::{Int16Array, Int32Array, Int64Array, UInt8Array};
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use tiles::geo::MAX_LATITUDE_DEG;
 
 /// What an aeroway line is: a runway (or an airstrip), where aircraft roll; a stopway, the
@@ -48,6 +48,7 @@ pub struct Airport {
 pub struct Aeroways {
     pub lines: Vec<AerowayLine>,
     pub airports: Vec<Airport>,
+    pub(super) ambiguous_airports: HashSet<String>,
     keys: HashMap<String, u32>,
     /// The aerodromes of the squares and their neighbours (for lines found later).
     pub(super) aerodromes: Vec<Aerodrome>,
@@ -136,6 +137,7 @@ impl Aeroways {
         aeroways
             .aerodromes
             .dedup_by_key(|aerodrome| aerodrome.osm_id);
+        aeroways.ambiguous_airports = ambiguous_airport_keys(&aeroways.aerodromes);
         // Resolve the complete mapped way, including pieces across square boundaries, once.
         let mut runways: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
         for (index, line) in aeroways.lines.iter().enumerate() {

@@ -217,8 +217,9 @@ Riyadh, Tehran, Accra, Moscow Sheremetyevo and Lagos.
   and it carries no airline flight number, else as a generic jet.
 - **Its phases.** On the ground: take-off and landing rolls as Doc 29 computes them, one for each
   runway direction, operation and aircraft class with its movements of an average day. A mapped
-  runway belongs to the aerodrome whose boundary covers most of it; only where no boundary covers
-  it does the nearest aerodrome stand in. A take-off
+  runway belongs to the identified aerodrome whose boundary covers the greatest length of it.
+  Where the boundaries do not identify its airport, the nearest identified aerodrome stands in.
+  A boundary without a name or code cannot establish that identity on its own. A take-off
   runs from the runway's end at take-off thrust and is loudest beside its start, where the
   aircraft is slowest, and heard behind it too; a landing runs from 291 m past the threshold and
   slows to 15 m/s on reverse thrust. Taxiing runs on the runways and taxiways, mapped or found
@@ -230,6 +231,43 @@ Riyadh, Tehran, Accra, Moscow Sheremetyevo and Lagos.
   day, evening and night at the ten distances of the noise tables, and its two loudest flights for
   the popup's list; a box's Lden reads back within 0.25 dB of its flights summed one by one, and so
   does each period.
+- **Missing runway movements.** Published monthly operation counts supplement the take-off and
+  landing rolls where receivers missed traffic. Each input gives the airport, month, reported
+  aircraft class, number of operations and source, including its scope and reuse rights. Classes
+  must not overlap within a month. Each provider's monthly rate uses its own sampled days;
+  without a sample that month, it retains its rate over the window. Published arrivals and
+  departures are compared separately. Where only their total is known, added movements first
+  reduce the imbalance between observed arrivals and departures: aircraft arriving must
+  eventually depart. Changes in aircraft parked between months remain unknown.
+  Added operations retain the observed runway directions, aircraft types and local periods
+  of that operation in the month, then over the window if the month has none. If only the
+  opposite operation was seen, its runway, class and period mixture over the observation window
+  supplies the missing side. An entirely unseen
+  airport or aircraft class remains unallocated. A small sample can misrepresent the airport's
+  runway use, fleet and time of day even when its total count is known. Observed traffic is never removed. The annual estimate retains the original sampling weights, so it can differ from the official
+  count in either direction; monthly sampling variation can also add excess movements. Taxiing and airborne
+  tracks retain their observations; these counts do not establish their missing paths.
+  An identifier shared by geographically separate mapped aerodromes cannot locate a published
+  count: its supplement stays unallocated until the mapped identifiers distinguish them.
+
+The monthly inputs include fixed-wing air transport from the
+[UK CAA](https://www.caa.co.uk/data-and-analysis/uk-aviation-market/airports/uk-airport-data/),
+reported airport totals from [CAAC East China](https://hd.caac.gov.cn/HD_XXGK/HD_TJSJ/),
+[AAI](https://www.aai.aero/en/business-opportunities/aai-traffic-news),
+[ACSA](https://www.airports.co.za/airports/or-tambo-international-airport/statistics/aircraft),
+public air transport stages from [ANAC](https://www.anac.gov.br/acesso-a-informacao/dados-abertos/areas-de-atuacao/voos-e-operacoes-aereas/dados-estatisticos-do-transporte-aereo), and
+[EUROCONTROL IFR arrivals and departures](https://ansperformance.eu/reference/dataset/airport-traffic/).
+Engine-class itinerant counts are adapted from Statistics Canada,
+[Table 23-10-0300-01](https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=2310030001),
+September 2025–August 2026. This does not constitute an endorsement by Statistics Canada of this
+product.
+Civil international movements come from [Hong Kong CAD](https://www.cad.gov.hk/english/pdf/Stat%20Webpage.xlsx).
+Civil arrivals and departures at Changi contain information from
+[SingStat/CAAS aircraft movements](https://data.gov.sg/datasets/d_98e2567a033e812081b78aabe250fc13/view),
+accessed 3 November 2026, under the [Singapore Open Data Licence v1.0](https://developers.data.gov.sg/open-data-licence).
+A broad total uses the observed fixed-wing fleet mixture, which may miss aircraft types.
+Helicopters have no runway-roll model: where a published total includes them, their unknown share
+can overstate the fixed-wing rolls and does not supply the missing helicopter noise.
 
 </details>
 
