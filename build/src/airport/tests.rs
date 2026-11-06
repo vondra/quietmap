@@ -151,6 +151,8 @@ fn traffic_with(
     (legs, low_ends, lift_offs): (&[GroundLeg], &[LowEnd], &[(u64, u16)]),
     weights: (f64, f64),
 ) -> Traffic {
+    let mut owned = aeroways.clone();
+    let aeroways = &mut owned;
     let (index, runways) = (index_of(aeroways), Runways::new(aeroways));
     let mut traffic = Traffic::new(aeroways);
     let day = DayLegs {
@@ -312,7 +314,7 @@ fn a_roll_is_on_the_runway_it_runs_along() {
         square: Square { x: 276, y: 173 },
     };
     aeroways.lines.insert(0, crossing);
-    let runways = Runways::new(&aeroways);
+    let runways = Runways::new(&mut aeroways);
     let b738 = Mover::Aircraft { class: 2 };
     let legs = [leg(1, b738, at(0.0, 200.0), at(0.0, 400.0))];
     let traffic = traffic_of(&aeroways, (&legs, &[]), (1.0, 0.0));

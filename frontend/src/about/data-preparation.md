@@ -216,7 +216,9 @@ Riyadh, Tehran, Accra, Moscow Sheremetyevo and Lagos.
   by its transponder's category, as a Cessna 172 when its median speed in the air is under 140 kt
   and it carries no airline flight number, else as a generic jet.
 - **Its phases.** On the ground: take-off and landing rolls as Doc 29 computes them, one for each
-  runway direction, operation and aircraft class with its movements of an average day. A take-off
+  runway direction, operation and aircraft class with its movements of an average day. A mapped
+  runway belongs to the aerodrome whose boundary covers most of it; only where no boundary covers
+  it does the nearest aerodrome stand in. A take-off
   runs from the runway's end at take-off thrust and is loudest beside its start, where the
   aircraft is slowest, and heard behind it too; a landing runs from 291 m past the threshold and
   slows to 15 m/s on reverse thrust. Taxiing runs on the runways and taxiways, mapped or found

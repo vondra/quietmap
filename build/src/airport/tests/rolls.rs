@@ -28,8 +28,8 @@ fn low_end(flight: u64, first: bool, departure: bool, class: u8, east_m: f64) ->
 /// seen rolling, a helicopter and a climb across the runway get none.
 #[test]
 fn flights_seen_low_along_a_runway_get_the_rolls_they_miss() {
-    let aeroways = airport(10);
-    let runways = Runways::new(&aeroways);
+    let mut aeroways = airport(10);
+    let runways = Runways::new(&mut aeroways);
     let (a320, helicopter, c172) = (class("A320-232"), class("HELICOPTER"), class("CNA172"));
     let ends = [
         low_end(1, true, true, a320, 3_000.0),
@@ -81,7 +81,7 @@ fn flights_seen_low_along_a_runway_get_the_rolls_they_miss() {
 /// runway's end, the landing touching down a quarter in; a helicopter does not roll.
 #[test]
 fn a_roll_runs_from_the_runway_end_or_the_touchdown_point() {
-    let runways = Runways::new(&airport(10));
+    let runways = Runways::new(&mut airport(10));
     let a320 = class("A320-232");
     let key = |forward, landing, class| RollKey {
         runway: 0,
@@ -101,7 +101,7 @@ fn a_roll_runs_from_the_runway_end_or_the_touchdown_point() {
     let landing = runways.path(key(true, true, a320)).unwrap();
     assert!((east_of(landing.start) - 291.0).abs() < 1.0);
     assert!((east_of(landing.end) - 1_691.0).abs() < 1.0);
-    let short = Runways::new(&airport(4));
+    let short = Runways::new(&mut airport(4));
     assert!((short.path(key(true, false, a320)).unwrap().length_m - 1_000.0).abs() < 0.5);
     assert!((short.path(key(true, true, a320)).unwrap().length_m - 750.0).abs() < 0.5);
     assert_eq!(runways.path(key(true, false, class("HELICOPTER"))), None);
@@ -164,7 +164,7 @@ fn where_the_primary_saw_a_movement_its_roll_counts_once() {
 fn rolls_are_written_in_the_tile_of_their_start() {
     let out = std::env::temp_dir().join(format!("qm-roll-tiles-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
-    let runways = Runways::new(&airport(10));
+    let runways = Runways::new(&mut airport(10));
     let a320 = class("A320-232");
     let key = |forward| RollKey {
         runway: 0,
@@ -221,7 +221,7 @@ fn every_class_of_a_runway_direction_rolls_on_one_heading() {
             square: Square { x: 270, y: 148 },
         });
     }
-    let runways = Runways::new(&aeroways);
+    let runways = Runways::new(&mut aeroways);
     let key = |class| RollKey {
         runway: 0,
         forward: true,
@@ -275,7 +275,7 @@ fn a_runway_drawn_as_two_ways_is_one() {
         airport: 0,
         square: Square { x: 276, y: 173 },
     });
-    let runways = Runways::new(&aeroways);
+    let runways = Runways::new(&mut aeroways);
     let a320 = class("A320-232");
     let b738 = Mover::Aircraft { class: a320 };
     let on_the_second_way = leg(1, b738, at(0.0, 1_500.0), at(0.0, 1_750.0));
@@ -328,9 +328,9 @@ fn a_circuits_final_landing_is_not_its_touch_and_go() {
 /// A helicopter's fast leg on a runway taxis: it has no roll to take its sound.
 #[test]
 fn a_helicopter_on_a_runway_taxis() {
-    let aeroways = airport(2);
+    let mut aeroways = airport(2);
     let helicopter = class("HELICOPTER");
-    let runways = Runways::new(&aeroways);
+    let runways = Runways::new(&mut aeroways);
     let hover = leg(
         4,
         Mover::Aircraft { class: helicopter },
@@ -366,7 +366,7 @@ fn a_low_end_far_from_the_middle_fits_at_high_latitude() {
             square: Square { x: 277, y: 60 },
         });
     }
-    let runways = Runways::new(&aeroways);
+    let runways = Runways::new(&mut aeroways);
     let a320 = class("A320-232");
     let landing = LowEnd {
         start: point(-3_000.0),
@@ -536,7 +536,7 @@ fn a_runway_across_the_antimeridian_is_found_from_both_sides() {
             square: Square { x: 511, y: 241 },
         });
     }
-    let runways = Runways::new(&aeroways);
+    let runways = Runways::new(&mut aeroways);
     let a320 = class("A320-232");
     let landing = LowEnd {
         start: point(-1_100.0),

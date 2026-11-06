@@ -48,7 +48,7 @@ fn read(rows: &[Option<Airborne>]) -> (Vec<LowEnd>, HashSet<(u64, u16)>) {
 /// The rolls the ends place on the test runway: (landing, stretch on the ground, primary), the
 /// take-offs first.
 fn rolls_of(ends: &[LowEnd]) -> Vec<(bool, u16, bool)> {
-    let runways = Runways::new(&airport(10));
+    let runways = Runways::new(&mut airport(10));
     let mut rolls: Vec<_> = (movements(Vec::new(), ends, &runways).iter())
         .map(|roll| (roll.key.landing, roll.episode, !roll.secondary_only))
         .collect();
@@ -70,7 +70,7 @@ fn a_turnaround_unseen_on_the_ground_lands_and_takes_off_again() {
     ];
     let (ends, _) = read(&turnaround);
     assert_eq!(rolls_of(&ends), vec![(false, 1, true), (true, 1, true)]);
-    let runways = Runways::new(&airport(10));
+    let runways = Runways::new(&mut airport(10));
     let rolls = movements(Vec::new(), &ends, &runways);
     assert!(
         rolls

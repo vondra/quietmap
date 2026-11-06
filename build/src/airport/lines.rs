@@ -3,19 +3,13 @@
 //! taxiways, stopways and airstrips as microsegments of at most 250 m) and the aerodromes of
 //! `airport_areas.arrow`. Everything after this module works on [`Aeroways`].
 
+use super::ownership::{Aerodrome, aerodromes, airport_of};
 use crate::aircraft::flat::flat_distance_m;
-use crate::dev4::{Dev4, Square, column, text, z30_corner_degrees};
-use arrow_array::{Float32Array, Int16Array, Int32Array, Int64Array, StringArray, UInt8Array};
-use std::collections::HashMap;
+use crate::dev4::{Dev4, Square, column, z30_corner_degrees};
+use arrow_array::{Int16Array, Int32Array, Int64Array, UInt8Array};
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap};
 use tiles::geo::MAX_LATITUDE_DEG;
-
-/// dev4's aeroway code of an aerodrome polygon (`classify::aeroway_type`).
-const AERODROME: u8 = 5;
-/// A line belongs to the nearest aerodrome whose centroid lies within the larger of 6 km and 1.5
-/// radii of a disc of the aerodrome's area (dev4 `aerodrome_radius_m`).
-const AERODROME_MIN_RADIUS_M: f64 = 6_000.0;
-const AERODROME_RADIUS_FACTOR: f64 = 1.5;
 
 /// What an aeroway line is: a runway (or an airstrip), where aircraft roll; a stopway, the
 /// pavement past a runway's end that only an aborted take-off uses; a taxiway (aprons are areas,
@@ -50,26 +44,17 @@ pub struct Airport {
 
 /// The aeroway lines of a set of squares and their airports.
 #[derive(Debug, Default)]
+#[cfg_attr(test, derive(Clone))]
 pub struct Aeroways {
     pub lines: Vec<AerowayLine>,
     pub airports: Vec<Airport>,
     keys: HashMap<String, u32>,
     /// The aerodromes of the squares and their neighbours (for lines found later).
-    aerodromes: Vec<Aerodrome>,
+    pub(super) aerodromes: Vec<Aerodrome>,
 }
 
 /// Discovered lines are cut into pieces of at most this length (m), as dev4 cut OSM lines.
 const PIECE_M: f64 = 250.0;
-
-/// An aerodrome polygon as a candidate airport of lines.
-#[derive(Debug, Clone)]
-struct Aerodrome {
-    osm_id: i64,
-    airport: Airport,
-    /// Latitude and longitude of the centroid.
-    centre: [f64; 2],
-    radius_m: f64,
-}
 
 /// dev4 aeroway codes of lines: runway 0 and airstrip 7, stopway 6, taxiway 1.
 fn aeroway_of(code: u8) -> Option<Aeroway> {
@@ -88,74 +73,6 @@ fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
         b[0] as f32,
         b[1] as f32,
     ))
-}
-
-/// The named aerodromes of one square.
-fn aerodromes(dev4: &Dev4, square: Square) -> Result<Vec<Aerodrome>, String> {
-    let Some(table) = dev4.table(square, "airport_areas.arrow")? else {
-        return Ok(Vec::new());
-    };
-    let context = |error: String| format!("airport_areas.arrow of {square:?}: {error}");
-    let mut found = Vec::new();
-    for batch in &table.batches {
-        let kind = column::<UInt8Array>(batch, "aeroway_type").map_err(context)?;
-        let osm_id = column::<Int64Array>(batch, "osm_id").map_err(context)?;
-        let (gx, gy) = (
-            column::<Int32Array>(batch, "centroid_gx").map_err(context)?,
-            column::<Int32Array>(batch, "centroid_gy").map_err(context)?,
-        );
-        let area = column::<Float32Array>(batch, "area_m2").map_err(context)?;
-        let labels = ["icao", "iata", "name"]
-            .map(|name| column::<StringArray>(batch, name).map_err(context));
-        let [icao, iata, name] = labels;
-        let (icao, iata, name) = (icao?, iata?, name?);
-        for row in 0..batch.num_rows() {
-            if kind.value(row) != AERODROME {
-                continue;
-            }
-            let label = |values: &StringArray| text(values, row).trim().to_string();
-            let name = label(name);
-            let Some(key) = [label(icao), label(iata), name.clone()]
-                .into_iter()
-                .find(|key| !key.is_empty())
-            else {
-                continue;
-            };
-            let (lat, lon) = z30_corner_degrees(gx.value(row), gy.value(row));
-            let area_m2 = crate::dev4::positive(area, row).unwrap_or(0.0);
-            found.push(Aerodrome {
-                osm_id: osm_id.value(row),
-                airport: Airport { key, name },
-                centre: [lat, lon],
-                radius_m: AERODROME_MIN_RADIUS_M
-                    .max(AERODROME_RADIUS_FACTOR * (area_m2 / std::f64::consts::PI).sqrt()),
-            });
-        }
-    }
-    Ok(found)
-}
-
-/// The airport of a line with its middle at `middle`: the nearest aerodrome within its radius (the
-/// first by OSM id on a tie), else an airstrip named by its 0.01 degree cell.
-fn airport_at(middle: [f64; 2], aerodromes: &[Aerodrome]) -> Airport {
-    let mut nearest: Option<(&Aerodrome, f64)> = None;
-    for aerodrome in aerodromes {
-        let distance = distance_m(middle, aerodrome.centre);
-        if distance <= aerodrome.radius_m && nearest.is_none_or(|(_, best)| distance < best) {
-            nearest = Some((aerodrome, distance));
-        }
-    }
-    nearest.map_or_else(
-        || Airport {
-            key: format!(
-                "airstrip {:.2},{:.2}",
-                (middle[0] * 100.0).floor() / 100.0,
-                (middle[1] * 100.0).floor() / 100.0
-            ),
-            name: String::new(),
-        },
-        |(aerodrome, _)| aerodrome.airport.clone(),
-    )
 }
 
 impl Aeroways {
@@ -200,14 +117,7 @@ impl Aeroways {
                     if ends.iter().any(|end| end[0].abs() > MAX_LATITUDE_DEG) {
                         continue;
                     }
-                    let (lat, lon) = crate::aircraft::flat::interpolate(
-                        ends[0][0] as f32,
-                        ends[0][1] as f32,
-                        ends[1][0] as f32,
-                        ends[1][1] as f32,
-                        0.5,
-                    );
-                    let airport = aeroways.intern(airport_at([lat, lon].map(f64::from), &nearby));
+                    let airport = aeroways.intern(airport_of(&[ends], &nearby));
                     aeroways.lines.push(AerowayLine {
                         osm_id: osm_id.value(row),
                         segment: u16::try_from(segment.value(row))
@@ -226,11 +136,40 @@ impl Aeroways {
         aeroways
             .aerodromes
             .dedup_by_key(|aerodrome| aerodrome.osm_id);
+        // Resolve the complete mapped way, including pieces across square boundaries, once.
+        let mut runways: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+        for (index, line) in aeroways.lines.iter().enumerate() {
+            if line.aeroway == Aeroway::Runway {
+                runways.entry(line.osm_id).or_default().push(index);
+            }
+        }
+        for pieces in runways.values() {
+            let mut nearby: Vec<Aerodrome> = pieces
+                .iter()
+                .flat_map(|&index| {
+                    aeroways.lines[index]
+                        .square
+                        .with_neighbours()
+                        .into_iter()
+                        .flat_map(|square| by_square.get(&square).into_iter().flatten().cloned())
+                })
+                .collect();
+            nearby.sort_by_key(|aerodrome| aerodrome.osm_id);
+            nearby.dedup_by_key(|aerodrome| aerodrome.osm_id);
+            let geometry: Vec<_> = pieces
+                .iter()
+                .map(|&index| aeroways.lines[index].ends)
+                .collect();
+            let airport = aeroways.intern(airport_of(&geometry, &nearby));
+            for &index in pieces {
+                aeroways.lines[index].airport = airport;
+            }
+        }
         Ok(aeroways)
     }
 
     /// Adds discovered airstrips (latitude and longitude of both ends) as runway lines cut into
-    /// equal pieces of at most [`PIECE_M`], each strip of the airport its middle belongs to and
+    /// equal pieces of at most [`PIECE_M`], each strip owned from its complete geometry and
     /// each piece in the square of its middle; `square_of` gives a point's square.
     pub fn add_strips(&mut self, strips: &[[[f64; 2]; 2]], square_of: impl Fn([f64; 2]) -> Square) {
         for strip in strips {
@@ -244,10 +183,18 @@ impl Aeroways {
                 );
                 [f64::from(lat), f64::from(lon)]
             };
-            let airport = self.intern(airport_at(at(0.5), &self.aerodromes));
             let pieces = (distance_m(strip[0], strip[1]) / PIECE_M).ceil().max(1.0) as usize;
+            let geometry: Vec<_> = (0..pieces)
+                .map(|piece| {
+                    [
+                        at(piece as f64 / pieces as f64),
+                        at((piece + 1) as f64 / pieces as f64),
+                    ]
+                })
+                .collect();
+            let airport = self.airport_for_geometry(&geometry);
             let osm_id = super::strips::strip_id(strip);
-            for piece in 0..pieces {
+            for (piece, ends) in geometry.into_iter().enumerate() {
                 let (from, to) = (
                     piece as f64 / pieces as f64,
                     (piece + 1) as f64 / pieces as f64,
@@ -255,13 +202,18 @@ impl Aeroways {
                 self.lines.push(AerowayLine {
                     osm_id,
                     segment: piece as u16,
-                    ends: [at(from), at(to)],
+                    ends,
                     aeroway: Aeroway::Runway,
                     airport,
                     square: square_of(at(0.5 * (from + to))),
                 });
             }
         }
+    }
+
+    /// The airport of complete geometry, including joined ways and discovered strips.
+    pub(super) fn airport_for_geometry(&mut self, pieces: &[[[f64; 2]; 2]]) -> u32 {
+        self.intern(airport_of(pieces, &self.aerodromes))
     }
 
     /// The index of an airport, added on first sight (by key; the first name stays).

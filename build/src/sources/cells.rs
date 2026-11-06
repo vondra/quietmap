@@ -65,6 +65,7 @@ fn continuous_metres(ring: &[(i32, i32)]) -> Vec<[f64; 2]> {
 }
 
 /// A ring of three or more vertices in Web Mercator metres with its box, for containment tests.
+#[derive(Debug)]
 pub struct PreparedRing {
     points: Vec<[f64; 2]>,
     bbox: [f64; 4],

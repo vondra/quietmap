@@ -13,6 +13,10 @@ use physics::doc29::npd::Family;
 use physics::doc29::profiles_generated::CLASS_FAMILY;
 use std::collections::{BTreeMap, HashMap};
 
+#[cfg(test)]
+#[path = "runways_tests.rs"]
+mod tests;
+
 /// A low end lies within this distance of a runway's axis (m) and heads within this angle of it.
 const MAX_LATERAL_M: f64 = 150.0;
 const MAX_ANGLE_DEG: f64 = 20.0;
@@ -204,7 +208,7 @@ pub struct RollPath {
 }
 
 impl Runways {
-    pub fn new(aeroways: &Aeroways) -> Self {
+    pub fn new(aeroways: &mut Aeroways) -> Self {
         let mut pieces_of: BTreeMap<i64, (u32, Vec<Piece>)> = BTreeMap::new();
         for line in &aeroways.lines {
             if line.aeroway == Aeroway::Runway {
@@ -252,7 +256,9 @@ impl Runways {
                     });
                     if along {
                         let (a, b) = (root(&mut group, a), root(&mut group, b));
-                        group[b] = a;
+                        // The same joined runway keeps its index and direction regardless
+                        // of the hash map's node order.
+                        group[a.max(b)] = a.min(b);
                     }
                 }
             }
@@ -292,7 +298,39 @@ impl Runways {
                 runways.runways.push(runway);
             }
         }
+        runways.resolve_airports(aeroways);
         runways
+    }
+
+    /// Resolve disagreement between joined ways from every microsegment of their geometry.
+    /// Ground-line events and inferred rolls must use the same owner.
+    fn resolve_airports(&mut self, aeroways: &mut Aeroways) {
+        let mut pieces: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        for (index, line) in aeroways.lines.iter().enumerate() {
+            if line.aeroway == Aeroway::Runway
+                && let Some(&runway) = self.by_way.get(&line.osm_id)
+            {
+                pieces.entry(runway).or_default().push(index);
+            }
+        }
+        for (runway, indices) in pieces {
+            let first = aeroways.lines[indices[0]].airport;
+            if indices
+                .iter()
+                .all(|&index| aeroways.lines[index].airport == first)
+            {
+                continue;
+            }
+            let geometry: Vec<_> = indices
+                .iter()
+                .map(|&index| aeroways.lines[index].ends)
+                .collect();
+            let airport = aeroways.airport_for_geometry(&geometry);
+            self.runways[runway as usize].airport = airport;
+            for index in indices {
+                aeroways.lines[index].airport = airport;
+            }
+        }
     }
 
     /// The airport of runway `runway` (an index into [`Aeroways::airports`]).

@@ -10,6 +10,7 @@ pub mod file;
 pub mod legs;
 pub mod lines;
 pub mod low_ends;
+mod ownership;
 pub mod project;
 pub mod roll_tiles;
 pub mod rolls;
@@ -280,7 +281,7 @@ pub fn build(
     let found = discovery.strips();
     aeroways.add_strips(&found, square_of);
     let index = index_of(&aeroways);
-    let runways = Runways::new(&aeroways);
+    let runways = Runways::new(&mut aeroways);
     eprintln!(
         "airport traffic: {} airstrips missing from OSM",
         found.len()
