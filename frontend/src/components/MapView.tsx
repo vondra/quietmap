@@ -7,7 +7,6 @@ import FlyToLocation from './FlyToLocation'
 import DetailPopup from './DetailPopup'
 import FlightTrackLayer from './FlightTrackLayer'
 import SegmentFanLayer from './SegmentFanLayer'
-import QuietZonesLayer from './QuietZonesLayer'
 import HeatmapOverlay from './HeatmapOverlay'
 import { HEATMAP_LAYERS, publishes, sourceOf, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
@@ -75,6 +74,7 @@ export default function MapView({
   const center = initialCenter ?? [49.8, 15.5]
   const zoom = initialZoom ?? 8
   const bm = basemap ?? DEFAULT_BASEMAP
+  const activeQuietThreshold = quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null
   const [flyToPos, setFlyToPos] = useState<{ lat: number; lng: number } | null>(null)
   const [mapStyle, setMapStyle] = useState<string | StyleSpecification | null>(null)
 
@@ -196,12 +196,10 @@ export default function MapView({
         // trackuserlocationend — without this the row's icon stays blue.
         onError={() => onGeolocateActiveChange?.(false)}
       />
-      {/* Noise heatmap (HM3 tiles out of the pmtiles archives, decoded +
-          energy-summed + palette-mapped in the browser) below the labels,
-          above the basemap, on its own interleaved deck.gl canvas. */}
-      <HeatmapOverlay source={heatmapSource} />
+      {/* Noise and quiet zones share the map's context below data layers and labels. */}
+      <HeatmapOverlay source={heatmapSource} metric={metric}
+        quietThreshold={activeQuietThreshold} />
       <DataLayersOverlay layers={dataLayers ?? []} />
-      <QuietZonesLayer enabled={quietClustersEnabled ?? false} metric={metric} threshold={quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric]} />
       <FlyToLocation location={selectedLocation ?? null} onArrived={handleArrived} />
       <HoverTooltip source={heatmapSource} />
       <DetailPopup
@@ -215,7 +213,7 @@ export default function MapView({
       />
       {/* A new search starts from no pins. */}
       {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} maxPrice={stays.maxPrice}
-        metric={metric} quietThreshold={quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null} />}
+        metric={metric} quietThreshold={activeQuietThreshold} />}
       {/* The segments above the opened row's highlight: a style rebuild adds the layers in this
           order. */}
       <IsochronLayer area={isochron ?? null} />

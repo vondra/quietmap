@@ -80,8 +80,8 @@ async function visiblePins(page: Page) {
     const ctx = c.getContext('2d')!; ctx.drawImage(img, 0, 0)
     return pixels.map(({ x, y }) => {
       const rgb = [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3)
-      // The quiet wash and reachable fill tint the slate core; the basemap, even washed green, cannot match it.
-      return rgb[0] >= 35 && rgb[0] <= 65 && rgb[1] >= 45 && rgb[1] <= 125 && rgb[2] >= 60 && rgb[2] <= 135
+      // Only the reachable fill tints the slate core; the quiet wash stays below the pin.
+      return rgb[0] >= 35 && rgb[0] <= 65 && rgb[1] >= 45 && rgb[1] <= 85 && rgb[2] >= 60 && rgb[2] <= 135
     })
   }, { image: `data:image/png;base64,${shot.toString('base64')}`, pixels })
 }

@@ -80,6 +80,8 @@ Advanced shows the data the popup computes over; each layer switched on shows it
 - road traffic (vehicles a day) and trains a day;
 - the other sources: turbines, bells, terraces, car parks, airports.
 
+Data layers stay above the green quiet zones. On the standard and satellite maps, labels do too.
+
 ## Places to stay
 
 Set a maximum price per night in euros for the selected dates and guests. Turn on Quiet zones to
