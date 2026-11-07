@@ -129,6 +129,37 @@ __device__ int scene_locate(const ObstacleScene& scene, i64 cell_x, i64 cell_y, 
 // A crossing this near a ray's end is the end (walk_crossings).
 #define ENDPOINT_TOLERANCE_M 0.001f
 
+// The f32 filters' error bound from the summed magnitudes of their rounded products. A filtered value
+// is p - q of two f32 products whose factors are f32 inputs or their differences, each difference,
+// product and subtraction rounded once in this order (the _rn intrinsics are neither contracted nor
+// regrouped): it lies within 4u (|p| + |q|) of its exact value (u = 2^-24; Shewchuk 1997, orient2d's
+// bound A, and the subtraction), the f64 tests' value within 1e-15 (|p| + |q|), and a rejecting
+// comparison needs less than 5u of the summed magnitudes: 16u leaves room for the bound's own
+// rounding. 2^-90 covers fast math's flushed subnormals while every factor stays below 2^25, as the
+// scene's steps do (ObstacleScene).
+__device__ __forceinline__ float filter_bound(float magnitude) {
+    return magnitude * 0x1p-20f + 0x1p-90f;
+}
+
+// Whether segment_intersection_t below surely finds no crossing, decided in f32 (consumer cards
+// run f64 at 1/32 to 1/64 of f32): the ray's line misses the edge (u outside [0, 1]) or the edge's
+// line the ray (t outside [0, 1]) by more than the bound, which holds the f64 test's slack. Every
+// other case, hits and near-parallel edges among them, goes to the f64 test unchanged: the same
+// crossings at the same t (a float t would merge a corner clipped within micrometres,
+// tests/corner_rays.rs).
+__device__ __forceinline__ bool segment_surely_missed(float sx, float sy, float dx, float dy, float ax, float ay, float bx, float by) {
+    float ex = __fsub_rn(bx, ax), ey = __fsub_rn(by, ay), wx = __fsub_rn(ax, sx), wy = __fsub_rn(ay, sy);
+    float d1 = __fmul_rn(dx, ey), d2 = __fmul_rn(dy, ex);
+    float t1 = __fmul_rn(wx, ey), t2 = __fmul_rn(wy, ex);
+    float u1 = __fmul_rn(wx, dy), u2 = __fmul_rn(wy, dx);
+    float denominator = d1 - d2;
+    float bound = filter_bound((fabsf(d1) + fabsf(d2)) + (fabsf(t1) + fabsf(t2)) + (fabsf(u1) + fabsf(u2)));
+    if (!(fabsf(denominator) > bound)) return false;
+    float sign = denominator > 0.0f ? 1.0f : -1.0f, reach = fabsf(denominator) + bound;
+    float t_numerator = sign * (t1 - t2), u_numerator = sign * (u1 - u2);
+    return t_numerator < -bound || t_numerator > reach || u_numerator < -bound || u_numerator > reach;
+}
+
 // crossings::segment_intersection_t; false for no crossing.
 __device__ __forceinline__ bool segment_intersection_t(double sx, double sy, double dx, double dy, double ax, double ay, double bx, double by, double* t_out) {
     double ex = bx - ax, ey = by - ay;
@@ -170,31 +201,43 @@ struct Crossing {
     int tie;
 };
 
-// crossings::edge_bounds_roof: a tangent vertex screens as a top but does not enter its ring.
-__device__ double vertex_side(const ObstacleScene& scene, const ObstacleTile& tile, u32 vertex,
-                              double sx, double sy, double dx, double dy) {
+// The sign of crossings::edge_bounds_roof's side of a vertex: from f32 where the filter's bound
+// proves it (the vertex offset + int is exact in f32 below 2^24), else from the f64 value. Its uses,
+// zero tests and the sign of a product of two sides, read the same from signs (a NaN ray has no
+// hit, so no NaN side comes here).
+__device__ int vertex_side_sign(const ObstacleScene& scene, const ObstacleTile& tile, u32 vertex,
+                                float sx, float sy, float dx, float dy) {
     int x, y;
     tile_vertex_local(scene, tile, vertex, &x, &y);
-    return dx * (tile.offset_y + (double)y - sy) - dy * (tile.offset_x + (double)x - sx);
+    float vx = __fadd_rn(tile.offset_x, (float)x), vy = __fadd_rn(tile.offset_y, (float)y);
+    if (fabsf(vx) < 0x1p24f && fabsf(vy) < 0x1p24f) {
+        float p = __fmul_rn(dx, __fsub_rn(vy, sy)), q = __fmul_rn(dy, __fsub_rn(vx, sx));
+        float side = p - q, bound = filter_bound(fabsf(p) + fabsf(q));
+        if (side > bound) return 1;
+        if (side < -bound) return -1;
+    }
+    double side = (double)dx * (tile.offset_y + (double)y - sy) - (double)dy * (tile.offset_x + (double)x - sx);
+    return (side > 0.0) - (side < 0.0);
 }
 
+// crossings::edge_bounds_roof: a tangent vertex screens as a top but does not enter its ring.
 __device__ bool edge_bounds_roof(const ObstacleScene& scene, const ObstacleTile& tile, u32 outline_index,
-                                 const Outline& outline, u32 edge, double sx, double sy, double dx, double dy) {
+                                 const Outline& outline, u32 edge, float sx, float sy, float dx, float dy) {
     if (outline.kind == OUTLINE_KIND_WALL) return false;
-    double a = vertex_side(scene, tile, edge, sx, sy, dx, dy);
-    double b = vertex_side(scene, tile, edge + 1, sx, sy, dx, dy);
-    if (a != 0.0 && b != 0.0) return true;
+    int a = vertex_side_sign(scene, tile, edge, sx, sy, dx, dy);
+    int b = vertex_side_sign(scene, tile, edge + 1, sx, sy, dx, dy);
+    if (a != 0 && b != 0) return true;
     u32 end = outline_index + 1 < tile.outline_count
         ? tile_outline(scene, tile, outline_index + 1).first_vertex : tile.vertex_count;
     u32 distinct = end - outline.first_vertex - 1;
-    u32 vertex = ((a == 0.0 ? edge : edge + 1) - outline.first_vertex) % distinct;
-    double before = 0.0, after = 0.0;
+    u32 vertex = ((a == 0 ? edge : edge + 1) - outline.first_vertex) % distinct;
+    int before = 0, after = 0;
     for (u32 offset = 1; offset < distinct; offset++) {
-        if (before == 0.0) before = vertex_side(scene, tile, outline.first_vertex + (vertex + distinct - offset) % distinct, sx, sy, dx, dy);
-        if (after == 0.0) after = vertex_side(scene, tile, outline.first_vertex + (vertex + offset) % distinct, sx, sy, dx, dy);
-        if (before != 0.0 && after != 0.0) break;
+        if (before == 0) before = vertex_side_sign(scene, tile, outline.first_vertex + (vertex + distinct - offset) % distinct, sx, sy, dx, dy);
+        if (after == 0) after = vertex_side_sign(scene, tile, outline.first_vertex + (vertex + offset) % distinct, sx, sy, dx, dy);
+        if (before != 0 && after != 0) break;
     }
-    return before * after < 0.0;
+    return before * after < 0;
 }
 
 __device__ __forceinline__ bool crossing_before(const Crossing& a, const Crossing& b) {
@@ -285,10 +328,11 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                             int bx, by;
                             tile_vertex_local(scene, *tile, next, &bx, &by);
                             bool meets = high[0] >= min(ax, bx) && max(ax, bx) >= low[0] && high[1] >= min(ay, by) && max(ay, by) >= low[1];
+                            float a[2] = {offset[0] + (float)ax, offset[1] + (float)ay};
+                            float b[2] = {offset[0] + (float)bx, offset[1] + (float)by};
                             double t;
-                            if (meets && segment_intersection_t(start[0], start[1], delta[0], delta[1],
-                                                                offset[0] + (float)ax, offset[1] + (float)ay,
-                                                                offset[0] + (float)bx, offset[1] + (float)by, &t)
+                            if (meets && !segment_surely_missed(start[0], start[1], delta[0], delta[1], a[0], a[1], b[0], b[1])
+                                && segment_intersection_t(start[0], start[1], delta[0], delta[1], a[0], a[1], b[0], b[1], &t)
                                 && t >= t_enter - CELL_WINDOW_SLACK && t <= t_exit + CELL_WINDOW_SLACK
                                 && t > endpoint_t && t < 1.0f - endpoint_t) {
                                 Crossing crossing;
