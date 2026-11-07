@@ -233,7 +233,8 @@ fine terrain of every land tile among them, and take its corners, hum and aircra
 squares paint their pixels at once (a square of many sources alone); two writers publish the squares
 before. The exact pairs, the hum's sampled pairs, the aircraft boxes' sums at the block corners'
 lattices and every pixel's loudness run on the first CUDA card (`paint-gpu/kernels/`, the popup's
-physics in single precision, with fast math except the loudness, each function citing its Rust) or
+physics in single precision, with fast math except the loudness; a ray's crossing of a building's
+edge is found in double wherever single precision cannot rule it out; each function cites its Rust) or
 on the cores. The runway rolls, the flight spectra, the loudness at open blocks' corners and a
 building across the square's edge stay on the cores. A square's samples, then its pixels, then its
 façades run in passes, four at once, at most two launching their pairs on the card while the
