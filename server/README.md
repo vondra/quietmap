@@ -1,8 +1,8 @@
 # Server routes for the map, heatmap archives and streamed point answers
 
 Fastify on Node 24 (TypeScript run as is, no build step). It serves the built map, the heatmap
-tiles, the data layers, the geocoder proxies, the places to stay, the optional sign-in and the
-streamed popup:
+tiles, the data layers, the geocoder proxies, the area reachable from a place, the places to stay,
+the optional sign-in and the streamed popup:
 
 | route | answer |
 |---|---|
@@ -12,6 +12,7 @@ streamed popup:
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
 | `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
 | `GET /api/search?q=&lat=&lon=`, `GET /api/reverse?lat=&lon=` | address suggestions and place names (public Photon geocoder) |
+| `GET /api/isochron?lat=&lng=&minutes=&modes=` | the area reachable from a point in `minutes` (a whole number from 1 to 120) on foot and by car (`modes`: `walk`, `car` or both, comma separated), drawn by the Valhalla router of `QM_VALHALLA_URL`: a GeoJSON FeatureCollection of one polygon a mode, each with `{mode, minutes}`, the car's first so that the walk's draws over it; a mode the router failed is left out and the others kept; only the point and the minutes leave; 400 for a wrong query, 502 when no mode was drawn; limited per client like the popup |
 | `GET /api/stay?swlat=&swlng=&nelat=&nelng=&checkin=&checkout=[&adults=][&type=][&minstars=][&minscore=]` | the places to stay with a room in a view (a box within ±180°) for a stay (calendar dates `YYYY-MM-DD`, check-in from today in UTC), hotels or the rest (`type=hotel`, `rental`, both when absent), from Stay22: `{listings, nights, currency, expiresIn, failure}`, each listing at its cheapest supplier's price for the whole stay, all of them gone after `expiresIn` seconds (Stay22's 55 minutes from when they were asked; kept in memory till then, never after, and `no-store`), `failure` saying what part of the search failed when the rest is answered (such an answer is not kept); the view (its middle 16° when wider) is answered for its box moved out to a grid of 1, 2 or 5 times a power of ten, at most a quarter of the view's longer side; 400 for a wrong query or one Stay22 refuses (in its words), 502 when Stay22 fails, 503 without a Stay22 account and, with `Retry-After`, when Stay22 is asked too often: the key's 150 calls a minute are spent, the visitor's 50 of them are (an IPv4 address or an IPv6 /64), four searches run, or Stay22 answered 429 (believed up to a minute); limited per client like the popup |
 | `POST /api/auth/email` `{email}` | mails a sign-in link to `{origin}/signin#{token}`: 204 whether or not the address has an account, and without a mail once the address had its three links of the hour; 400 for no plain-ASCII address, 502 when the mail could not be sent (that link neither works nor counts), 503 once the server sent its 50 sign-in mails of the day; ten a client an hour |
 | `POST /api/auth/link` `{token}` | the address a link signs in, `{email}`, while it works (15 minutes, once): uses nothing; else 404; thirty a client an hour, with the next |
@@ -80,6 +81,7 @@ opened read-only at startup. The browser asks for an outline when the site's row
 | `QM_POPUP_CONCURRENCY` | clicks computed at the same time; default `2` |
 | `QM_NOINDEX` | `1` marks every response `X-Robots-Tag: noindex` (a host search engines must skip) |
 | `QM_PHOTON_URL` | the Photon geocoder's base URL for search and place names; default the public `https://photon.komoot.io` |
+| `QM_VALHALLA_URL` | the Valhalla router's base URL for `/api/isochron`; default FOSSGIS's public `https://valhalla1.openstreetmap.de`, for development only (its terms allow a call a second and no production service) |
 | `STAY22_AID`, `STAY22_API_KEY` | the Stay22 affiliate id and API key the places to stay are searched with; without them `/api/stay` answers 503 (Stay22 answers no search without a key) |
 | `QM_ACCOUNTS_DB` | the optional sign-in's SQLite file: accounts, sessions, links and places; only tokens' SHA-256 are kept |
 | `QM_PUBLIC_ORIGIN` | the map's own origin, e.g. `https://quietmap.org`: the links point there and only its pages change an account |

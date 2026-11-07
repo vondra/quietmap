@@ -89,7 +89,7 @@ fn a_roll_runs_from_the_runway_end_or_the_touchdown_point() {
         landing,
         class,
     };
-    let east_of = |point: [f64; 2]| length_m(at(0.0, 0.0), point);
+    let east_of = |point: [f64; 2]| distance_m(at(0.0, 0.0), point);
     let eastwards = runways.path(key(true, false, a320)).unwrap();
     assert!(east_of(eastwards.start) < 1.0);
     assert!((east_of(eastwards.end) - 1_800.0).abs() < 1.0);
@@ -187,7 +187,10 @@ fn rolls_are_written_in_the_tile_of_their_start() {
             .find(|roll| (roll.heading_rad - heading_rad).abs() < 0.01)
             .expect("the roll");
         let start = tile.to_mercator(roll.start).to_degrees();
-        assert!(length_m([start.0, start.1], [lat, lon]) < 1.0, "{start:?}");
+        assert!(
+            distance_m([start.0, start.1], [lat, lon]) < 1.0,
+            "{start:?}"
+        );
         assert_eq!(roll.length_m, 1_800.0);
         assert_eq!((roll.class, roll.landing, roll.field_m), (a320, false, 0.0));
         assert_eq!(roll.movements_per_day, rolls[&key(forward)]);
@@ -293,7 +296,7 @@ fn a_runway_drawn_as_two_ways_is_one() {
         class: a320,
     };
     let path = runways.path(key).expect("a path");
-    assert!(length_m(path.start, at(0.0, 0.0)) < 1.0, "{path:?}");
+    assert!(distance_m(path.start, at(0.0, 0.0)) < 1.0, "{path:?}");
     assert!((path.length_m - 1_800.0).abs() < 1e-9);
     assert_ne!(
         runways.rolling(9, &leg(2, b738, at(0.0, 1_000.0), at(400.0, 1_000.0)), a320),

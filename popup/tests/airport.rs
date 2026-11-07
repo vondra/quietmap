@@ -4,6 +4,7 @@
 
 use physics::bands::{BANDS, PERIODS};
 use physics::doc29::box_sums::{BoxSums, SegmentEnergies};
+use physics::doc29::profiles_generated::profile_idx;
 use physics::doc29::segment::{AircraftType, SegmentEmission};
 use physics::doc29::thrust::SegmentFlight;
 use physics::weather::{COLUMNS, ROWS, SECTORS, WeatherNode, encode as encode_weather};
@@ -38,8 +39,12 @@ fn departure_box() -> AircraftBox {
         acceleration_ms2: None,
         height_above_field_m: 600.0,
     };
-    let emission =
-        SegmentEmission::new(&AircraftType::from_designator("A320"), &flight, false).unwrap();
+    let emission = SegmentEmission::new(
+        &AircraftType::of(profile_idx("A320"), "A320"),
+        &flight,
+        false,
+    )
+    .unwrap();
     let mut sums = BoxSums::default();
     sums.add(
         &SegmentEnergies::of(&emission.npd_distance_levels()),

@@ -147,11 +147,11 @@ fn every_direct_case_matches_iso_tr_17534_4_within_a_tenth_of_a_decibel() {
         let base: [f64; NUM_BANDS] = std::array::from_fn(|band| {
             case.sound_power_db - (20.0 * direct.log10() + 11.0) - alpha[band] * direct / 1000.0
         });
-        for (state, reference) in [
-            (MeteorologicalState::Homogeneous, case.lh),
-            (MeteorologicalState::Favourable, case.lf),
+        let [homogeneous, favourable] = state_boundaries(&path, &mut scratch);
+        for (state, boundary, reference) in [
+            (MeteorologicalState::Homogeneous, homogeneous, case.lh),
+            (MeteorologicalState::Favourable, favourable, case.lf),
         ] {
-            let boundary = state_boundary(&path, state, &mut scratch);
             for band in 0..NUM_BANDS {
                 let level = base[band] - boundary.attenuation_db[band];
                 if !level.is_finite() || (level - reference[band]).abs() > 0.1 {

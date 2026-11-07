@@ -1,8 +1,8 @@
-//! The size of an aircraft box (PLAN section 5): a web-map cell horizontally and a slab of the
-//! same edge vertically, counted as clearance above the highest terrain within one edge. The edge
-//! grows with clearance so that one edge spans at most `BOX_EDGE_LEVEL_STEP_DB` of the sizing
-//! slope at that clearance (the slant to a receiver right below), never finer than the first
-//! layer of about 50 m: nearer the ground the altitude error of the data dominates anyway.
+//! The size of an aircraft box: a web-map cell horizontally and a slab of the same edge vertically,
+//! counted as clearance above the highest terrain within one edge. The edge grows with clearance so
+//! that one edge spans at most `BOX_EDGE_LEVEL_STEP_DB` of the sizing slope at that clearance (the
+//! slant to a receiver right below), never finer than the first layer of about 50 m: nearer the
+//! ground the altitude error of the data dominates anyway.
 
 use super::npd::{
     METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, NPD_LAST_DISTANCE_M, NPD_NEAREST_SLANT_M,

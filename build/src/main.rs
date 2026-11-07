@@ -142,7 +142,6 @@ fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
         .collect()
 }
 
-/// The sampling window: `--days` (baseline) and `--increment-days`, comma separated.
 /// The national terrain models of `--national-dem FILE,..` (none without it).
 fn national_models(options: &Arguments) -> Result<Vec<terrain::national::NationalHeights>, String> {
     options
@@ -155,6 +154,7 @@ fn national_models(options: &Arguments) -> Result<Vec<terrain::national::Nationa
         })
 }
 
+/// The sampling window: `--days` (baseline) and `--increment-days`, comma separated.
 fn sampling_window(options: &Arguments) -> boxes::Window {
     let listed = |key: &str| {
         options
@@ -168,10 +168,8 @@ fn sampling_window(options: &Arguments) -> boxes::Window {
     }
 }
 
-/// The aircraft box rule: `--kind aircraft|aircraft-far`, `--level-step-db` (D) and `--pieces`
-/// (kept per box), else the kind's defaults.
-/// The box rules of `--kind` (a list, `aircraft` by default), with `--level-step-db` and
-/// `--pieces` laid over each.
+/// The box rules of `--kind` (a list of `aircraft` and `aircraft-far`, `aircraft` by default),
+/// with `--level-step-db` (D) and `--pieces` (kept per box) laid over each kind's defaults.
 fn box_rules(options: &Arguments) -> Result<Vec<boxes::BoxRule>, String> {
     options
         .optional("kind")
@@ -240,9 +238,11 @@ fn events_json(events: &boxes::events::EventCounts) -> serde_json::Value {
 }
 
 fn run(arguments: &[String]) -> Result<(), String> {
-    let (command, rest) = arguments
-        .split_first()
-        .ok_or("usage: qm-build dev4|weather|complete|geoid|aircraft-segments|airport-traffic --key value ..")?;
+    let (command, rest) = arguments.split_first().ok_or(concat!(
+        "usage: qm-build source-outlines|dev4|weather|terrain-fine|complete|geoid|",
+        "aircraft-segments|aircraft-shuffle|aircraft-boxes|aircraft-events|aircraft-tracks|",
+        "aircraft-check|traffic|airport-traffic --key value .."
+    ))?;
     let options = Arguments::parse(rest)?;
     let out = PathBuf::from(options.get("out")?);
     match command.as_str() {

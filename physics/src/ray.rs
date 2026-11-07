@@ -105,7 +105,6 @@ struct Roof {
 /// sight in calm air.
 pub struct RayTerms {
     pub transfer: Transfer,
-    pub favourable_probability: [f64; PERIODS],
     pub boundaries: [StateBoundary; 2],
     pub foliage_db: [[f64; BANDS]; 2],
     pub air_db: [f64; BANDS],
@@ -184,7 +183,6 @@ pub fn ray_terms(
             states: [homogeneous, favourable]
                 .map(|state| std::array::from_fn(|band| air[band] * state[band])),
         },
-        favourable_probability,
         boundaries,
         foliage_db,
         air_db,

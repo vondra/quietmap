@@ -227,12 +227,6 @@ impl AtProbabilities {
     }
 }
 
-/// The level exceeded a fraction `exceeded` of the time by a source of mean level `leq_db`: L10 is
-/// `exceeded` = 0.1.
-pub fn exceeded_level_db(leq_db: f64, lambda: f64, exceeded: f64) -> f64 {
-    leq_db + 10.0 * relative_intensity(lambda, 1.0 - exceeded).log10()
-}
-
 #[cfg(test)]
 #[path = "percentile_tests.rs"]
 mod tests;

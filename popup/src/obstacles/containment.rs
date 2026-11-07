@@ -172,7 +172,8 @@ impl<'a> Scene<'a> {
     }
 
     /// Whether a footprint taller than `min_height_m`, other than `ignored`, contains `point`
-    /// (scene steps).
+    /// (scene steps): the direct definition the parity and reflection lattice tests check against.
+    #[cfg(test)]
     pub(super) fn contains_built(
         &self,
         point: [f64; 2],
@@ -184,16 +185,6 @@ impl<'a> Scene<'a> {
         Ok(parities
             .iter()
             .any(|p| p.inside() && Some(p.footprint_id) != ignored))
-    }
-
-    /// Whether this metre point lies in a building above the height gate, excluding one footprint.
-    pub fn contains_building_above(
-        &self,
-        point: [f64; 2],
-        min_height_m: f64,
-        ignored: Option<u64>,
-    ) -> Result<bool, String> {
-        self.contains_built(self.lattice.steps(point), min_height_m, ignored)
     }
 
     /// Whether `point` (click metres) stands inside an enclosed building.

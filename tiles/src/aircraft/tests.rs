@@ -84,14 +84,7 @@ fn boxes_flights_and_pieces_round_trip_within_their_steps() {
         36 + 5 + 3 * 4 + 8 + 2 * (1 + 27) + 6 * 18 + 2 * 19 + 2 * 17
     );
     let parsed = Aircraft::parse(&bytes).unwrap();
-    assert_eq!(
-        (
-            parsed.box_count(),
-            parsed.flight_count(),
-            parsed.piece_count()
-        ),
-        (2, 2, 2)
-    );
+    assert_eq!((parsed.box_count(), parsed.piece_count()), (2, 2));
     let read = parsed.aircraft_box(0);
     let written = &boxes[0];
     assert_eq!(

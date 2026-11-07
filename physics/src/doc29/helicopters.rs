@@ -1,6 +1,6 @@
-//! EASA-certified helicopter levels (PLAN-z13 KEEP) read per type designator (its Stage 1 FIX):
-//! every helicopter shares the helicopter class's NPD shape, shifted so it reads its designator's
-//! certified SEL at 150 m in level flight, climb and descent.
+//! EASA-certified helicopter levels read per type designator: every helicopter shares the
+//! helicopter class's NPD shape, shifted so it reads its designator's certified SEL at 150 m in
+//! level flight, climb and descent.
 //!
 //! Source: EASA Certification Noise Levels - Helicopters, Issue 52 (26 June 2026; reproduction
 //! authorised provided the source is acknowledged), by the method of `HeliLevels` in dev4's

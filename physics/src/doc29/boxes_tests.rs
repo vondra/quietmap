@@ -42,6 +42,7 @@ fn extended_line_bound_keeps_far_low_tracks_on_the_fine_lattice() {
     }
 }
 use crate::doc29::box_sums::{BoxSums, BoxValues, SegmentEnergies};
+use crate::doc29::profiles_generated::profile_idx;
 use crate::doc29::screening::Unscreened;
 use crate::doc29::segment::{
     AircraftType, SegmentEmission, SegmentGeometry, segment_sel_at_receiver,
@@ -61,8 +62,12 @@ fn flight(departure: bool, speed_kt: f64, climb_sine: f64, altitude_m: f64) -> S
 }
 
 fn emission(designator: &str, flight: &SegmentFlight) -> SegmentEmission {
-    SegmentEmission::new(&AircraftType::from_designator(designator), flight, false)
-        .expect("inside the thrust domain")
+    SegmentEmission::new(
+        &AircraftType::of(profile_idx(designator), designator),
+        flight,
+        false,
+    )
+    .expect("inside the thrust domain")
 }
 
 fn kernel_sel(emission: &SegmentEmission, start_m: [f64; 3], end_m: [f64; 3]) -> Option<f64> {
@@ -405,15 +410,21 @@ fn each_period_reads_its_own_installation_mix() {
     let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9);
     assert!(close(sel.installation_fractions[0], [1.0, 0.0, 0.0]));
     assert!(close(sel.installation_fractions[2], [0.0, 0.0, 1.0]));
-    let [east, north, up] = sel.closest.on_line_m;
+    // Each period's installation gain: its energy over that of the same box heard as propellers,
+    // which carry no Delta_I.
+    let propellers = AircraftBoxAtReceiver {
+        installation_shares: [[[0.0, 0.0, 1.0]; 2]; PERIODS],
+        ..at
+    };
+    let propellers = box_sel_at_receiver(&propellers, &Unscreened);
+    let gain = |period: usize| sel.sel_energy[period] / propellers.sel_energy[period];
+    let [start, end] = average_piece_ends(&at, average_length_m(at.levels_db, &at.piece_length_m));
+    let closest = closest_points(start, end);
+    let [east, north, up] = closest.on_line_m;
     let slant = east.hypot(north).hypot(up);
-    let height = sel.closest.height_m;
-    let correction = |installation| installation_energy_gain(installation, height, slant);
-    assert!((sel.installation_energy_gain[0] - correction(Installation::Wing)).abs() < 1e-9);
-    assert!((sel.installation_energy_gain[2] - correction(Installation::Propeller)).abs() < 1e-9);
+    let correction = |installation| installation_energy_gain(installation, closest.height_m, slant);
+    assert!((gain(0) - correction(Installation::Wing)).abs() < 1e-9);
+    assert!((gain(2) - correction(Installation::Propeller)).abs() < 1e-9);
     // 2 km aside at 1,000 m the wing jets' Delta_I is -0.07 dB, the propellers' 0.
-    assert!(
-        (10.0 * (sel.installation_energy_gain[0] / sel.installation_energy_gain[2]).log10()).abs()
-            > 0.05
-    );
+    assert!((10.0 * (gain(0) / gain(2)).log10()).abs() > 0.05);
 }

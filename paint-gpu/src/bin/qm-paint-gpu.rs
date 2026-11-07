@@ -97,14 +97,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
             required("squares")?,
         );
     }
+    let (x, y) = required("square")?
+        .split_once(',')
+        .ok_or("--square is X,Y")?;
+    let tile = TileId {
+        x: x.parse().map_err(|_| "--square x")?,
+        y: y.parse().map_err(|_| "--square y")?,
+    };
     if command == Some("popup") {
-        let (x, y) = required("square")?
-            .split_once(',')
-            .ok_or("--square is X,Y")?;
-        let tile = TileId {
-            x: x.parse().map_err(|_| "--square x")?,
-            y: y.parse().map_err(|_| "--square y")?,
-        };
         return reference::popup_reference(
             &release,
             tile,
@@ -114,13 +114,6 @@ fn run(arguments: &[String]) -> Result<(), String> {
         );
     }
     let weather = WeatherTable::read(&release.weather_path)?;
-    let (x, y) = required("square")?
-        .split_once(',')
-        .ok_or("--square is X,Y")?;
-    let tile = TileId {
-        x: x.parse().map_err(|_| "--square x")?,
-        y: y.parse().map_err(|_| "--square y")?,
-    };
     let pairs = parse("pairs", 20_000)? as usize;
     let started = Instant::now();
     let files = Files::read(&release, tile)?;

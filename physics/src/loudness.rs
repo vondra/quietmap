@@ -6,7 +6,7 @@
 //! slopes, and its area over the critical band rate is the loudness in sone (1 sone: a 1 kHz tone
 //! at 40 dB; twice the sone, twice as loud).
 
-use crate::bands::{BANDS, energy};
+use crate::bands::energy;
 
 /// Third-octave bands of the method, 25 Hz to 12.5 kHz.
 pub const THIRD_OCTAVES: usize = 28;
@@ -181,21 +181,10 @@ pub fn zwicker_loudness_sone(levels: &[f64; THIRD_OCTAVES]) -> f64 {
     total.max(0.0)
 }
 
-/// Third-octave levels of octave band levels 63 Hz to 8 kHz (dB): each octave's energy shared
-/// evenly by its three thirds; 25-40 Hz and 12.5 kHz silent.
-pub fn third_octaves_of_octaves(octaves: &[f64; BANDS]) -> [f64; THIRD_OCTAVES] {
-    let mut thirds = [f64::NEG_INFINITY; THIRD_OCTAVES];
-    for (octave, &level) in octaves.iter().enumerate() {
-        for third in 0..3 {
-            thirds[OCTAVE_START - 1 + 3 * octave + third] = level - 10.0 * 3f64.log10();
-        }
-    }
-    thirds
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bands::BANDS;
 
     fn quiet() -> [f64; THIRD_OCTAVES] {
         [SILENT_DB; THIRD_OCTAVES]
@@ -212,11 +201,16 @@ mod tests {
         one_k[16] = 70.0;
         assert!((zwicker_loudness_sone(&one_k) - 6.944).abs() < 0.005);
         let road = [98.35, 91.1, 89.4, 90.7, 95.6, 92.4, 84.6, 76.2];
+        // Octave levels 63 Hz to 8 kHz as MoSQITo was given them: each octave's energy shared
+        // evenly by its three thirds, 25-40 Hz and 12.5 kHz silent.
         let shifted = |octaves: &[f64; BANDS], offset: f64| {
-            let mut thirds = third_octaves_of_octaves(&octaves.map(|level| level + offset));
-            thirds
-                .iter_mut()
-                .for_each(|level| *level = level.max(SILENT_DB));
+            let mut thirds = quiet();
+            for (octave, level) in octaves.iter().enumerate() {
+                for third in 0..3 {
+                    thirds[OCTAVE_START - 1 + 3 * octave + third] =
+                        (level + offset - 10.0 * 3f64.log10()).max(SILENT_DB);
+                }
+            }
             thirds
         };
         for (offset, sone) in [(-60.0, 2.48), (-40.0, 12.075), (-20.0, 43.34)] {

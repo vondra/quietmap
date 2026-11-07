@@ -2,7 +2,8 @@
 //! line's buffer rectangle runs on that line, and where buffers overlap (parallel taxiways,
 //! corners) the parts are scaled to add up to the leg's length, so no leg counts twice.
 
-use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, flat_distance_m};
+use super::lines::distance_m;
+use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR};
 use std::collections::HashMap;
 
 /// A leg within this distance of a line's axis runs on it (dev4 `AIRPORT_LINE_SNAP_BUFFER_M`).
@@ -157,12 +158,7 @@ impl LineIndex {
         }
         hits.retain(|hit| hit.1 > 0.0);
         let total: f64 = hits.iter().map(|hit| hit.1).sum();
-        let leg = f64::from(flat_distance_m(
-            start[0] as f32,
-            start[1] as f32,
-            end[0] as f32,
-            end[1] as f32,
-        ));
+        let leg = distance_m(start, end);
         if total > leg {
             for hit in hits.iter_mut() {
                 hit.1 *= leg / total;

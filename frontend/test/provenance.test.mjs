@@ -9,7 +9,8 @@ import {
   railTrafficLabel,
   railTrainSourceLine,
   roadCategoryEstimated,
-  roadCategoryLine,
+  ROAD_ESTIMATED_LIGHT,
+  ROAD_ESTIMATED_MOTO,
 } from '../src/components/noise/provenance.ts'
 
 test('rail categories preserve unknown, known zero and fractional estimates', () => {
@@ -44,16 +45,10 @@ test('horn approaches read as soundings, one category', () => {
   )
 })
 
-test('the estimated bitmask marks per-category priors without touching values', () => {
+test('the estimated bitmask marks per-category priors', () => {
   const mixed = { traffic_estimated: 0b1111 }
-  assert.equal(roadCategoryEstimated(mixed, 0b0001), true)
-  assert.equal(roadCategoryEstimated({ traffic_estimated: 0b1000 }, 0b0001), false)
-  assert.equal(roadCategoryLine('Medium', 200, true), 'Medium: 200/day — estimated')
-  // Bit clear keeps a positive value a counted observation...
-  assert.equal(roadCategoryLine('Heavy', 500, false), 'Heavy: 500/day — counted')
-  // ...and only an observed zero reads as "counted zero".
-  assert.equal(roadCategoryLine('Moto', 0, false), 'Moto: 0/day — counted zero')
-  assert.equal(roadCategoryLine('Moto', 0, true), 'Moto: 0/day — estimated')
+  assert.equal(roadCategoryEstimated(mixed, ROAD_ESTIMATED_LIGHT), true)
+  assert.equal(roadCategoryEstimated({ traffic_estimated: ROAD_ESTIMATED_MOTO }, ROAD_ESTIMATED_LIGHT), false)
 })
 
 test('a record names the dataset behind its traffic; a class prior or an unknown id names none', () => {

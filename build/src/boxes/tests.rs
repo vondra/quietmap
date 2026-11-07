@@ -156,7 +156,7 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
         })
         .fold(0.0, f64::max);
     assert!(most > 1.0 && most <= 30.0 * (1.0 + 2.5e-4), "{most}");
-    assert!(aircraft.piece_count() > 0 && aircraft.flight_count() > 0);
+    assert!(aircraft.piece_count() > 0);
     for (receiver, tolerance) in [
         ([0.0, 0.0], 0.5),
         ([1_500.0, 0.0], 0.3),

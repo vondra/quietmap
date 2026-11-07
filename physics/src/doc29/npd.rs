@@ -141,7 +141,9 @@ impl NpdPosition {
         lower + self.fraction * (curve[self.interval + 1] - lower)
     }
 
-    /// A level curve: linear in log distance up to 25,000 ft, then dev4's tail.
+    /// A level curve: linear in log distance up to 25,000 ft (below 200 ft the first interval's
+    /// slope, down to 100 ft), past it dev4's tail
+    /// `L(25,000 ft) - 20 lg(d / 7,620 m) - alpha (d - 7,620 m)`.
     fn level(&self, curve: &[f64; NPD_DISTANCES], tail_absorption_db_per_m: f64) -> f64 {
         if self.slant_m < NPD_LAST_DISTANCE_M {
             return self.linear(curve);
@@ -150,17 +152,6 @@ impl NpdPosition {
             - 20.0 * (self.slant_m / NPD_LAST_DISTANCE_M).log10()
             - tail_absorption_db_per_m * (self.slant_m - NPD_LAST_DISTANCE_M)
     }
-}
-
-/// Level (dB) of an NPD curve at `slant_m`: linear in log distance between the ten distances,
-/// below 200 ft with the first interval's slope down to 100 ft, and past 25,000 ft dev4's tail
-/// `L(25,000 ft) - 20 lg(d / 7,620 m) - alpha (d - 7,620 m)` with `tail_absorption_db_per_m`.
-pub fn curve_level_db(
-    curve: &[f64; NPD_DISTANCES],
-    tail_absorption_db_per_m: f64,
-    slant_m: f64,
-) -> f64 {
-    NpdPosition::at(slant_m).level(curve, tail_absorption_db_per_m)
 }
 
 /// The tail's absorption alpha (dB/m) of a SEL curve (dev4): after removing spherical divergence

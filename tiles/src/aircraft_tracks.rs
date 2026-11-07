@@ -19,6 +19,7 @@
 //! A point keeps the 1e-5 deg lattice point nearest it (within 0.8 m, as the f32 positions it was
 //! read from), so the steps between stored points add no error.
 
+use crate::little_endian::u32_at;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
@@ -165,10 +166,6 @@ pub fn encode(mut parts: Vec<Part>) -> Vec<u8> {
         bytes.extend_from_slice(points);
     }
     bytes
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
 }
 
 /// Where a file's directory and points start and how many point bytes there are, from its length

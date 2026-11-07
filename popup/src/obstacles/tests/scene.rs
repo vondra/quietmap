@@ -139,13 +139,9 @@ fn a_query_needing_an_unread_tile_fails_and_the_skyline_skips_it() {
     let files = stock.files();
     let centre = TileId::containing(stock.frame.origin);
     let mut scene = Scene::new(stock.frame);
-    for (tile, bytes) in &files {
-        match bytes {
-            Some(bytes) if *tile == centre => scene.insert(*tile, Obstacles::parse(bytes).unwrap()),
-            _ if *tile == centre => scene.insert_empty(*tile),
-            _ => {}
-        }
-    }
+    let mut tiles = parsed(&files);
+    tiles.retain(|(tile, _)| *tile == centre);
+    scene.insert_all(tiles);
     let mut out = Vec::new();
     assert!(scene.crossings([0.0, 0.0], [200.0, 0.0], &mut out).is_ok());
     assert_eq!(out.len(), 2);

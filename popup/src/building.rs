@@ -1,8 +1,8 @@
-//! A click inside a building answers at its loudest façade, without indoor attenuation (PLAN-z13
-//! KEEP, dev4 7c533e17): of the CNOSSOS-EU 2.8 façade receivers, the one where the sources with the
-//! greatest bound at any façade sum to the highest Lden wins (ties to the first in canonical order);
-//! the ring loop then answers there with every source. At a façade the own building still screens
-//! what stands behind it, and its footprint does not count for the reflection bonus (2.8).
+//! A click inside a building answers at its loudest façade, without indoor attenuation (as dev4
+//! 7c533e17): of the CNOSSOS-EU 2.8 façade receivers, the one where the sources with the greatest
+//! bound at any façade sum to the highest Lden wins (ties to the first in canonical order); the
+//! ring loop then answers there with every source. At a façade the own building still screens what
+//! stands behind it, and its footprint does not count for the reflection bonus (2.8).
 
 use crate::answer::RECEIVER_HEIGHT_M;
 use crate::candidates::{Attributes, Candidate};

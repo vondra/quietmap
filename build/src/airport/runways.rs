@@ -4,11 +4,9 @@
 //! touchdown point, the class's typical lengths and speeds).
 
 use super::legs::GroundLeg;
-use super::lines::{Aeroway, Aeroways};
+use super::lines::{Aeroway, Aeroways, distance_m};
 use super::low_ends::LowEnd;
-use crate::aircraft::flat::{
-    M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, flat_distance_m, signed_longitude_delta,
-};
+use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, signed_longitude_delta};
 use physics::doc29::npd::Family;
 use physics::doc29::profiles_generated::CLASS_FAMILY;
 use std::collections::{BTreeMap, HashMap};
@@ -275,12 +273,9 @@ impl Runways {
         for (first, joined) in members {
             // The joined ways' two ends farthest apart, in the first way's direction.
             let ends: Vec<[f64; 2]> = joined.iter().flat_map(|&way| ways[way].2).collect();
-            let apart = |a: [f64; 2], b: [f64; 2]| {
-                flat_distance_m(a[0] as f32, a[1] as f32, b[0] as f32, b[1] as f32)
-            };
             let [a, b] = (ends.iter())
                 .flat_map(|&a| ends.iter().map(move |&b| [a, b]))
-                .max_by(|x, y| apart(x[0], x[1]).total_cmp(&apart(y[0], y[1])))
+                .max_by(|x, y| distance_m(x[0], x[1]).total_cmp(&distance_m(y[0], y[1])))
                 .expect("a way has ends");
             let [start, end] = ways[first].2;
             let reversed = Runway::new([a, b], ways[first].1)

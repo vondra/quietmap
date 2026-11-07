@@ -10,7 +10,7 @@ use super::atmosphere::{impedance_adjustment_db, npd_increments_db, rates_db_per
 use super::npd::{METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT};
 use super::roll::{RollKind, RollSegment, roll_segment_sel, roll_speed_correction_db};
 use super::screening::Unscreened;
-use super::segment::{SegmentEmission, SegmentGeometry, segment_sel_at_receiver};
+use super::segment::{SegmentEmission, SegmentGeometry, closest_points, segment_sel_at_receiver};
 use super::spectra_generated::SPECTRA;
 use super::thrust::{MAX_POWER_ROWS, PowerBracket, bracket_of, bracket_power};
 use super::thrust_generated::THRUST;
@@ -171,8 +171,8 @@ fn case_sel_db(case: &str, points: &[[f64; 5]], receiver: [f64; 3], rule: PowerR
                 ground_under_end_m: -receiver[2],
             };
             let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened);
-            let [east, north, up] = sel.closest.on_line_m;
-            (sel.free_sel_db, east.hypot(north).hypot(up))
+            let [east, north, up] = closest_points(geometry.start_m, geometry.end_m).on_line_m;
+            (sel.sel_db, east.hypot(north).hypot(up))
         };
         energy += 10f64.powf((sel_db + atmosphere_difference_db(class, departure, slant)) / 10.0);
     }

@@ -21,7 +21,7 @@ fn a_curve_reads_its_table_value_at_every_npd_distance() {
     let curve = &profile("B738").approach_sel;
     let alpha = tail_absorption_db_per_m(curve);
     for (k, distance_ft) in NPD_DISTANCES_FT.iter().enumerate() {
-        let level = curve_level_db(curve, alpha, feet(*distance_ft));
+        let level = NpdPosition::at(feet(*distance_ft)).level(curve, alpha);
         assert!((level - curve[k]).abs() < 1e-9, "{distance_ft} ft: {level}");
     }
 }
@@ -29,25 +29,25 @@ fn a_curve_reads_its_table_value_at_every_npd_distance() {
 #[test]
 fn between_distances_the_level_stays_between_its_neighbours() {
     let curve = &profile("B738").approach_sel;
-    let level = curve_level_db(curve, 0.0, feet(1_500.0));
+    let level = NpdPosition::at(feet(1_500.0)).level(curve, 0.0);
     assert!(level < curve[3] && level > curve[4], "{level}");
 }
 
 #[test]
 fn below_200_ft_the_first_interval_extrapolates_down_to_100_ft() {
     let curve = &profile("B738").approach_sel;
-    let at_100_ft = curve_level_db(curve, 0.0, feet(100.0));
+    let at_100_ft = NpdPosition::at(feet(100.0)).level(curve, 0.0);
     assert!(
         (at_100_ft - (2.0 * curve[0] - curve[1])).abs() < 1e-9,
         "{at_100_ft}"
     );
-    assert_eq!(curve_level_db(curve, 0.0, 5.0), at_100_ft);
+    assert_eq!(NpdPosition::at(5.0).level(curve, 0.0), at_100_ft);
 }
 
 #[test]
 fn past_25000_ft_the_tail_reads_30_to_45_db_at_15_km() {
     let curve = &PROFILES[0].approach_sel;
-    let level = curve_level_db(curve, tail_absorption_db_per_m(curve), feet(50_000.0));
+    let level = NpdPosition::at(feet(50_000.0)).level(curve, tail_absorption_db_per_m(curve));
     assert!(level > 30.0 && level < 45.0, "{level}");
 }
 
@@ -60,7 +60,7 @@ fn the_tail_is_continuous_at_25000_ft_for_every_profile() {
                 NPD_LAST_DISTANCE_M * (1.0 - 1e-9),
                 NPD_LAST_DISTANCE_M * (1.0 + 1e-9),
             ] {
-                let level = curve_level_db(curve, alpha, slant_m);
+                let level = NpdPosition::at(slant_m).level(curve, alpha);
                 assert!((level - curve[9]).abs() < 1e-6, "{}: {level}", profile.name);
             }
         }
@@ -158,7 +158,8 @@ fn pinned_classes_read_their_anchor_curve_on_row_zero() {
             let curve: [f64; NPD_DISTANCES] = std::array::from_fn(|k| raw[k] + increments[k]);
             for slant_m in [20.0, 150.0, 1_000.0, 7_620.0, 14_000.0] {
                 let reading = read_npd(class, departure, PowerBracket::FIRST_ROW, slant_m);
-                let expected = curve_level_db(&curve, tail_absorption_db_per_m(&curve), slant_m);
+                let expected =
+                    NpdPosition::at(slant_m).level(&curve, tail_absorption_db_per_m(&curve));
                 assert_eq!(reading.sel_db, expected, "class {class}");
             }
         }

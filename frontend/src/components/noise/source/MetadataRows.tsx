@@ -11,7 +11,10 @@ import { wholeRoadPerDay } from '../heard'
 import { HoverText } from '../../ui/info-tip'
 import { subtypeLabel } from '../labels'
 import { fieldText, lineRow } from '../shared'
-import { datasetLine, railDatasetLines, railTrafficDescription, railTrafficLabel, roadCategoryEstimated, type RailTraffic } from '../provenance'
+import {
+  datasetLine, railDatasetLines, railTrafficDescription, railTrafficLabel, roadCategoryEstimated,
+  ROAD_ESTIMATED_HEAVY, ROAD_ESTIMATED_LIGHT, ROAD_ESTIMATED_MEDIUM, ROAD_ESTIMATED_MOTO, type RailTraffic,
+} from '../provenance'
 
 function num(m: ContributorMetadata, key: string): number | null {
   const value = m[key]
@@ -70,7 +73,12 @@ function RoadRows({ m }: { m: ContributorMetadata }) {
   const trafficText = txtTable([
     ...(wholeRoad ? [['Whole road, both ways', `${fmtInt(crossSection)}/day`] as [string, string]] : []),
     'This carriageway:',
-    ...([['Light', light, 1], ['Medium', medium, 2], ['Heavy', heavy, 4], ['Moto', moto, 8]] as const)
+    ...([
+      ['Light', light, ROAD_ESTIMATED_LIGHT],
+      ['Medium', medium, ROAD_ESTIMATED_MEDIUM],
+      ['Heavy', heavy, ROAD_ESTIMATED_HEAVY],
+      ['Moto', moto, ROAD_ESTIMATED_MOTO],
+    ] as const)
       .map(([label, value, bit]) =>
         [`  ${label}`, roadCategoryEstimated(estimated, bit) ? `${fmtInt(value)} est.` : fmtInt(value)] as [string, string],
       ),

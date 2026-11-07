@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 
 use super::*;
+use crate::doc29::profiles_generated::profile_idx;
 use crate::doc29::screening::Unscreened;
 
 /// dev4's receiver-local projection, to keep its test coordinates (lat, lon, altitude).
@@ -48,7 +49,7 @@ fn flight(departure: bool, speed_kt: f64, climb_sine: f64) -> SegmentFlight {
 }
 
 fn emission(designator: &str, flight: &SegmentFlight, descent: bool) -> SegmentEmission {
-    let aircraft = AircraftType::from_designator(designator);
+    let aircraft = AircraftType::of(profile_idx(designator), designator);
     SegmentEmission::new(&aircraft, flight, descent).expect("inside the thrust domain")
 }
 
@@ -128,12 +129,17 @@ fn a_curving_departure_phantom_keeps_its_foot_for_the_sel_only() {
         ..in_the_open(start, end)
     };
     let departure = flight(true, 100.0, 23.0 / 131.0);
-    let sel = segment_sel_at_receiver(&emission("B738", &departure, false), &geometry, &Unscreened);
+    let b738 = emission("B738", &departure, false);
+    let sel = segment_sel_at_receiver(&b738, &geometry, &Unscreened);
+    let closest = closest_points(geometry.start_m, geometry.end_m);
     assert!(
-        sel.closest.along < 0.0 && norm(sel.closest.on_line_m) < 100.0,
-        "{sel:?}"
+        closest.along < 0.0 && norm(closest.on_line_m) < 100.0,
+        "{closest:?}"
     );
-    assert!(norm(sel.closest.on_segment_m) > 5_000.0 && sel.closest.on_segment_m[2] > 1_000.0);
+    assert!(norm(closest.on_segment_m) > 5_000.0 && closest.on_segment_m[2] > 1_000.0);
+    // The kernel reads its NPD at the line's foot, not at the far segment.
+    assert_eq!(sel.npd, b738.read_npd(norm(closest.on_line_m)));
+    assert!(sel.npd.sel_db > b738.read_npd(norm(closest.on_segment_m)).sel_db + 10.0);
     assert!(sel.sel_db.is_finite());
     // Past the end the clamp takes the end point: 800 m above a receiver north of a climb.
     let receiver = [50.02, 14.0, 300.0];
@@ -175,9 +181,11 @@ fn a_nearby_b738_approach_reads_a_plausible_sel() {
         local(receiver, [50.01, 14.0, 900.0]),
     );
     let approach = flight(false, 150.0, -100.0 / 1_100.0);
-    let sel = segment_sel_at_receiver(&emission("B738", &approach, false), &geometry, &Unscreened);
+    let b738 = emission("B738", &approach, false);
+    let sel = segment_sel_at_receiver(&b738, &geometry, &Unscreened);
     assert!(sel.sel_db > 50.0 && sel.sel_db < 110.0, "{}", sel.sel_db);
-    let slant_m = norm(sel.closest.on_line_m);
+    let slant_m = norm(closest_points(geometry.start_m, geometry.end_m).on_line_m);
+    assert_eq!(sel.npd, b738.read_npd(slant_m));
     assert!(slant_m > 100.0 && slant_m < 2_000.0, "{slant_m}");
 }
 
@@ -282,7 +290,7 @@ fn the_npd_distance_levels_are_the_kernel_under_a_long_segment() {
             let geometry = in_the_open([-5e5, 0.0, height_m], [5e5, 0.0, height_m]);
             let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened);
             assert!(
-                (sel.free_sel_db - levels.sel_db[k]).abs() < 1e-3,
+                (sel.sel_db - levels.sel_db[k]).abs() < 1e-3,
                 "{designator} {k}"
             );
             assert_eq!(sel.npd.scaled_distance_m, levels.scaled_distance_m[k]);
@@ -332,19 +340,21 @@ fn screening_takes_the_larger_loss_net_of_lateral_attenuation() {
         );
         let both = FixedHorizons::new(18.0, 18.0);
         let sel = segment_sel_at_receiver(&jet, &geometry, &both);
-        assert!(sel.lateral_attenuation_db > 1.0);
-        let expected = sel.free_sel_db - (18.0 - sel.lateral_attenuation_db);
+        let free_sel_db = segment_sel_at_receiver(&jet, &geometry, &Unscreened).sel_db;
+        let closest = closest_points(geometry.start_m, geometry.end_m);
+        let lateral_attenuation =
+            lateral_attenuation_db(closest.lambda_height_m, closest.lateral_m);
+        assert!(lateral_attenuation > 1.0);
+        let expected = free_sel_db - (18.0 - lateral_attenuation);
         assert!((sel.sel_db - expected).abs() < 1e-9, "{sel:?}");
     }
     let geometry = in_the_open([-4_000.0, 300.0, 500.0], [-3_000.0, 300.0, 520.0]);
     let recording = FixedHorizons::new(2.0, 1.0);
-    let sel = segment_sel_at_receiver(&jet, &geometry, &recording);
+    segment_sel_at_receiver(&jet, &geometry, &recording);
+    let closest = closest_points(geometry.start_m, geometry.end_m);
     let asked = recording.asked.borrow();
-    assert_eq!(
-        *asked,
-        vec![sel.closest.on_line_m, sel.closest.on_segment_m]
-    );
-    assert_ne!(sel.closest.on_line_m, sel.closest.on_segment_m);
+    assert_eq!(*asked, vec![closest.on_line_m, closest.on_segment_m]);
+    assert_ne!(closest.on_line_m, closest.on_segment_m);
 }
 
 #[test]
@@ -357,7 +367,10 @@ fn sources_above_the_screening_ceiling_are_not_screened() {
     };
     let wall = FixedHorizons::new(18.0, 18.0);
     let sel = segment_sel_at_receiver(&jet, &high, &wall);
-    assert_eq!(sel.sel_db, sel.free_sel_db);
+    assert_eq!(
+        sel.sel_db,
+        segment_sel_at_receiver(&jet, &high, &Unscreened).sel_db
+    );
     assert!(wall.asked.borrow().is_empty());
     let lower = SegmentGeometry {
         ground_under_start_m: -100.0,

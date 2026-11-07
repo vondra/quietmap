@@ -58,23 +58,15 @@ fn source_below_mean_plane_with_two_roofs_keeps_every_band_finite() {
         terrain_candidates: &fixture.terrain_candidates,
         obstacle_tops: &fixture.obstacle_tops,
     };
-    for state in [
-        MeteorologicalState::Homogeneous,
-        MeteorologicalState::Favourable,
-    ] {
-        let mut scratch = VerticalPathScratch::default();
-        let boundary = state_boundary(&path, state, &mut scratch);
-        assert_eq!(
-            scratch.path.points.len(),
-            match state {
-                MeteorologicalState::Homogeneous => 2,
-                MeteorologicalState::Favourable => 1,
-            },
-            "{state:?}"
-        );
+    let mut scratch = VerticalPathScratch::default();
+    let boundaries = state_boundaries(&path, &mut scratch);
+    // The homogeneous diffraction points stay in `calm_path`, the favourable ones in `path`.
+    assert_eq!(scratch.calm_path.points.len(), 2);
+    assert_eq!(scratch.path.points.len(), 1);
+    for boundary in &boundaries {
         assert!(
             boundary.attenuation_db.iter().all(|v| v.is_finite()),
-            "{state:?}: {boundary:?}"
+            "{boundary:?}"
         );
     }
 }
@@ -110,23 +102,15 @@ fn mirrored_receiver_below_mean_plane_keeps_every_band_finite() {
         terrain_candidates: &terrain,
         obstacle_tops: &tops,
     };
-    for state in [
-        MeteorologicalState::Homogeneous,
-        MeteorologicalState::Favourable,
-    ] {
-        let mut scratch = VerticalPathScratch::default();
-        let boundary = state_boundary(&path, state, &mut scratch);
-        assert_eq!(
-            scratch.path.points.len(),
-            match state {
-                MeteorologicalState::Homogeneous => 2,
-                MeteorologicalState::Favourable => 1,
-            },
-            "{state:?}"
-        );
+    let mut scratch = VerticalPathScratch::default();
+    let boundaries = state_boundaries(&path, &mut scratch);
+    // The homogeneous diffraction points stay in `calm_path`, the favourable ones in `path`.
+    assert_eq!(scratch.calm_path.points.len(), 2);
+    assert_eq!(scratch.path.points.len(), 1);
+    for boundary in &boundaries {
         assert!(
             boundary.attenuation_db.iter().all(|v| v.is_finite()),
-            "{state:?}: {boundary:?}"
+            "{boundary:?}"
         );
     }
 }

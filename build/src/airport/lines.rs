@@ -67,7 +67,8 @@ fn aeroway_of(code: u8) -> Option<Aeroway> {
     }
 }
 
-fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
+/// The flat distance (m) between two latitude, longitude points (deg), as dev4 measured flights.
+pub(super) fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
     f64::from(flat_distance_m(
         a[0] as f32,
         a[1] as f32,

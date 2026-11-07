@@ -11,6 +11,7 @@ pub mod aircraft_events;
 pub mod aircraft_rolls;
 pub mod aircraft_tracks;
 pub mod geo;
+mod little_endian;
 pub mod obstacles;
 mod rate;
 pub mod sources;

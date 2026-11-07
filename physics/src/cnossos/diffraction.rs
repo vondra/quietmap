@@ -33,7 +33,6 @@ fn ground_split_db(ground_db: f64, mirrored_db: f64, direct_db: f64) -> f64 {
     -20.0 * (1.0 + (amplitude(-ground_db) - 1.0) * amplitude(-(mirrored_db - direct_db))).log10()
 }
 
-/// The boundary term of `path` in `state` over `candidates` (sorted by distance).
 /// What both states share of the direct path: its mean plane geometry, its mean ground factor
 /// and the source's ground factor near it.
 pub(super) struct DirectPath {
@@ -61,6 +60,7 @@ impl DirectPath {
     }
 }
 
+/// The boundary term of `path` in `state` over `candidates` (sorted by distance).
 pub(super) fn boundary_for_candidates(
     path: &VerticalPath<'_>,
     state: MeteorologicalState,
@@ -83,7 +83,6 @@ pub(super) fn boundary_for_candidates(
     let ray = StateRay::between(state, source, receiver);
     let mut boundary = StateBoundary {
         attenuation_db: whole_path,
-        whole_path_ground_db: whole_path,
         ..StateBoundary::default()
     };
     diffraction_path(
@@ -100,7 +99,6 @@ pub(super) fn boundary_for_candidates(
         return boundary;
     };
     let delta = ray.path_difference(source, points, receiver);
-    boundary.path_difference_m = delta;
     let span = if points.len() > 1 {
         points
             .windows(2)

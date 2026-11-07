@@ -184,11 +184,6 @@ impl TileId {
         }
         tiles
     }
-
-    /// Ground width of the tile in metres (east-west at its centre latitude).
-    pub fn width_m(self) -> f64 {
-        LocalFrame::at(self.centre()).east_m_per_unit
-    }
 }
 
 /// A position on the world's int16-step lattice: `x` east and `y` south from the north-west
@@ -217,7 +212,7 @@ impl GlobalSteps {
 }
 
 /// `dx` in tile units taken the short way around the world.
-fn wrap_x(dx: f64) -> f64 {
+pub fn wrap_x(dx: f64) -> f64 {
     let n = f64::from(TILES_PER_AXIS);
     (dx + n / 2.0).rem_euclid(n) - n / 2.0
 }
@@ -342,7 +337,8 @@ mod tests {
 
     #[test]
     fn prague_tile_is_six_kilometres_wide_with_19_cm_steps() {
-        let width = TileId { x: 2212, y: 1387 }.width_m();
+        // East-west at the tile's centre latitude.
+        let width = LocalFrame::at(TileId { x: 2212, y: 1387 }.centre()).east_m_per_unit;
         assert!((6_270.0..6_300.0).contains(&width), "{width}");
         assert!((width / STEPS_PER_TILE - 0.19).abs() < 0.005);
     }

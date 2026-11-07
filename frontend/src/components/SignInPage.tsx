@@ -4,7 +4,7 @@
 // opens the map.
 import { useEffect, useRef, useState } from 'react'
 import { importPlaces, linkEmail, signInWithLink } from '../lib/account'
-import { loadPlaceTitles, loadRecentPlaces } from '../lib/browser-places'
+import { loadBrowserPlaces } from '../lib/browser-places'
 import { setDocumentTitle } from '../utils/page-title'
 import { BUTTON, PRIMARY_BUTTON } from './ui/button'
 
@@ -22,7 +22,6 @@ type Step =
 
 
 const openMap = () => window.location.replace('/')
-const browserPlaces = () => ({ titles: loadPlaceTitles() ?? [], recent: loadRecentPlaces() })
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : 's'}`
 
 export default function SignInPage() {
@@ -52,13 +51,13 @@ export default function SignInPage() {
     setStep({ kind: 'busy' })
     const signedIn = await signInWithLink(TOKEN)
     if (!signedIn) return setStep({ kind: signedIn === false ? 'expired' : 'unreachable' })
-    const { titles, recent } = browserPlaces()
+    const { titles, recent } = loadBrowserPlaces()
     if (titles.length + recent.length === 0) return openMap()
     setStep({ kind: 'add', email, titles: titles.length, recent: recent.length })
   }
   const add = async (email: string) => {
     setStep({ kind: 'busy' })
-    if (await importPlaces(email, browserPlaces())) openMap()
+    if (await importPlaces(email, loadBrowserPlaces())) openMap()
     else setStep({ kind: 'not-added' })
   }
 

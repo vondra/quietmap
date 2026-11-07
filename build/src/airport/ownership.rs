@@ -1,7 +1,7 @@
 //! Aeroway ownership from the mapped aerodrome covering the greatest length of a complete runway.
 
-use super::lines::Airport;
-use crate::aircraft::flat::{flat_distance_m, interpolate};
+use super::lines::{Airport, distance_m};
+use crate::aircraft::flat::interpolate;
 use crate::dev4::{Dev4, Square, column, degrees_to_z30, text, z30_corner_degrees};
 use crate::sources::cells::{PreparedRing, ring_cell};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
@@ -21,15 +21,6 @@ pub(super) struct Aerodrome {
     pub(super) area_m2: f64,
     pub(super) radius_m: f64,
     pub(super) footprint: Option<Arc<PreparedRing>>,
-}
-
-fn distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
-    f64::from(flat_distance_m(
-        a[0] as f32,
-        a[1] as f32,
-        b[0] as f32,
-        b[1] as f32,
-    ))
 }
 
 /// A repeated identifier cannot locate an official count when its mapped aerodromes' existing

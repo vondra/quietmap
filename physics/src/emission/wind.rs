@@ -10,10 +10,9 @@ use crate::bands::BANDS;
 /// Siemens Gamesa SG 6.0-155 AM0 (Ballinagree Wind Farm EIAR, Appendix 7.4 Table 7.4.2).
 const TURBINE_SPECTRUM: [f64; BANDS] = [13.2, 11.1, 7.8, 4.4, 0.0, -3.9, -9.7, -19.4];
 
-/// The annual operating level below the maximum (PLAN-z13 SIMPLIFY, one constant): the Dutch
-/// statutory sum (Reken- en meetvoorschrift windturbines 2011) of dev4's generic sound power
-/// curve over a Rayleigh wind distribution of 7.5 m/s mean is -2.14 dB; the nine published type
-/// curves give -1.2 to -3.4 dB.
+/// The annual operating level below the maximum (one constant): the Dutch statutory sum (Reken- en
+/// meetvoorschrift windturbines 2011) of dev4's generic sound power curve over a Rayleigh wind
+/// distribution of 7.5 m/s mean is -2.14 dB; the nine published type curves give -1.2 to -3.4 dB.
 pub const WIND_DUTY_DB: f64 = -2.14;
 
 /// Rated powers above this (kW) are tag errors and count as unknown (dev4 audit I-10b).

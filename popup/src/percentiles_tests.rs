@@ -5,7 +5,7 @@ use super::*;
 use crate::candidates::DisplayRef;
 use crate::update::Contributor;
 use physics::bands::energy;
-use physics::percentile::{exceeded_level_db, relative_intensity};
+use physics::percentile::relative_intensity;
 
 const BIN_DB: f64 = Resolution::CLICK.bin_db;
 
@@ -191,7 +191,7 @@ fn a_busy_roads_quiet_hours_lower_its_night_l90() {
         )
     };
     let levels = levels(&[road], &busy);
-    let constant_l90 = exceeded_level_db(60.0, 12.0, 0.9);
+    let constant_l90 = 60.0 + 10.0 * relative_intensity(12.0, 0.1).log10();
     assert!(constant_l90 > 59.0, "{constant_l90}");
     assert!(levels.l90[2] < 56.0, "{}", levels.l90[2]);
     assert!(levels.l10[2] > 60.5, "{}", levels.l10[2]);

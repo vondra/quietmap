@@ -2,6 +2,7 @@
 
 use physics::bands::{PERIOD_HOURS, PERIODS};
 use physics::doc29::box_sums::{BoxSums, SegmentEnergies};
+use physics::doc29::profiles_generated::profile_idx;
 use physics::doc29::screening::Unscreened;
 use physics::doc29::segment::{
     AircraftType, SegmentEmission, SegmentGeometry, segment_sel_at_receiver,
@@ -49,8 +50,12 @@ fn departure(east_m: f64) -> (SegmentEmission, [f64; 3], [f64; 3]) {
         acceleration_ms2: None,
         height_above_field_m: 600.0,
     };
-    let emission =
-        SegmentEmission::new(&AircraftType::from_designator("A320"), &flight, false).unwrap();
+    let emission = SegmentEmission::new(
+        &AircraftType::of(profile_idx("A320"), "A320"),
+        &flight,
+        false,
+    )
+    .unwrap();
     (emission, [east_m, -150.0, 588.0], [east_m, 150.0, 612.0])
 }
 

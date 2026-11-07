@@ -2,10 +2,10 @@
 //! day of taxiing becomes sound power per metre, a flight rolling on a runway is one roll of its
 //! runway direction a day, and strips missing from the lines are found in the legs off them.
 
-use super::lines::{AerowayLine, Airport};
+use super::lines::{AerowayLine, Airport, distance_m};
 use super::low_ends::LowEnd;
 use super::*;
-use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, flat_distance_m};
+use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR};
 use physics::emission::airport::GroundVehicle;
 
 const LAT: f64 = 50.105;
@@ -20,15 +20,6 @@ fn offset(north_m: f64, east_m: f64) -> [f64; 2] {
 fn at(north_m: f64, east_m: f64) -> [f64; 2] {
     let [lat, lon] = offset(north_m, east_m);
     [LAT + lat, 14.25 + lon]
-}
-
-fn length_m(start: [f64; 2], end: [f64; 2]) -> f64 {
-    f64::from(flat_distance_m(
-        start[0] as f32,
-        start[1] as f32,
-        end[0] as f32,
-        end[1] as f32,
-    ))
 }
 
 fn projected(lines: &[[[f64; 2]; 2]], start: [f64; 2], end: [f64; 2]) -> Vec<(u32, f64)> {
@@ -46,7 +37,7 @@ fn a_leg_runs_on_a_line_within_the_buffer_rectangle() {
     let (start, end) = (at(30.0, 100.0), at(30.0, 500.0));
     let hits = projected(&line, start, end);
     assert_eq!(hits.len(), 1);
-    assert!((hits[0].1 - length_m(start, end)).abs() < 0.5, "{hits:?}");
+    assert!((hits[0].1 - 400.0).abs() < 0.5, "{hits:?}");
     assert!(projected(&line, at(60.0, 100.0), at(60.0, 500.0)).is_empty());
     let across = projected(&line, at(-100.0, 350.0), at(100.0, 350.0));
     assert!((across[0].1 - 100.0).abs() < 0.5, "{across:?}");
@@ -65,7 +56,8 @@ fn overlapping_buffers_share_a_leg_and_keep_its_length() {
     ];
     let (start, end) = (at(40.0, 100.0), at(40.0, 500.0));
     let hits = projected(&parallel, start, end);
-    let leg = length_m(start, end);
+    let leg = distance_m(start, end);
+    assert!((leg - 400.0).abs() < 0.5, "{leg}");
     assert_eq!(hits.len(), 2);
     let total: f64 = hits.iter().map(|hit| hit.1).sum();
     assert!((total - leg).abs() < 1e-6, "{total} {leg}");
@@ -79,7 +71,7 @@ fn overlapping_buffers_share_a_leg_and_keep_its_length() {
     let hits = projected(&abutting, start, end);
     assert_eq!(hits.len(), 3);
     let total: f64 = hits.iter().map(|hit| hit.1).sum();
-    assert!((total - length_m(start, end)).abs() < 1.0, "{total}");
+    assert!((total - 600.0).abs() < 1.0, "{total}");
 }
 
 #[test]
@@ -446,8 +438,8 @@ fn a_strip_off_every_line_is_found_and_carries_its_landings() {
     } else {
         [found[0][1], found[0][0]]
     };
-    assert!(length_m(west, at(2_000.0, 0.0)) < 50.0, "{west:?}");
-    assert!(length_m(east, at(2_000.0, 800.0)) < 50.0, "{east:?}");
+    assert!(distance_m(west, at(2_000.0, 0.0)) < 50.0, "{west:?}");
+    assert!(distance_m(east, at(2_000.0, 800.0)) < 50.0, "{east:?}");
     let mut aeroways = airport(2);
     aeroways.add_strips(&found, square_of);
     let pieces: Vec<&AerowayLine> = aeroways.lines.iter().filter(|l| l.osm_id < 0).collect();
@@ -455,7 +447,7 @@ fn a_strip_off_every_line_is_found_and_carries_its_landings() {
     assert!(
         pieces
             .iter()
-            .all(|piece| length_m(piece.ends[0], piece.ends[1]) <= 250.0)
+            .all(|piece| distance_m(piece.ends[0], piece.ends[1]) <= 250.0)
     );
     let strip_airport = &aeroways.airports[pieces[0].airport as usize];
     assert!(

@@ -162,14 +162,22 @@ impl Stock {
     fn with_scene<R>(&self, check: impl FnOnce(&Scene) -> R) -> R {
         let files = self.files();
         let mut scene = Scene::new(self.frame);
-        for (tile, bytes) in &files {
-            match bytes {
-                Some(bytes) => scene.insert(*tile, Obstacles::parse(bytes).unwrap()),
-                None => scene.insert_empty(*tile),
-            }
-        }
+        scene.insert_all(parsed(&files));
         check(&scene)
     }
+}
+
+/// Stored tiles as [`Scene::insert_all`] takes them: each parsed, `None` read without obstacles.
+fn parsed(files: &[(TileId, Option<Vec<u8>>)]) -> Vec<(TileId, Option<Obstacles<'_>>)> {
+    files
+        .iter()
+        .map(|(tile, bytes)| {
+            let obstacles = bytes
+                .as_deref()
+                .map(|bytes| Obstacles::parse(bytes).unwrap());
+            (*tile, obstacles)
+        })
+        .collect()
 }
 
 /// The corners of an axis-aligned square, counter-clockwise from the south-west.

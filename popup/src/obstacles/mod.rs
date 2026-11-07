@@ -157,15 +157,6 @@ impl<'a> Scene<'a> {
         }
     }
 
-    pub fn insert(&mut self, tile: TileId, obstacles: Obstacles<'a>) {
-        self.insert_all(vec![(tile, Some(obstacles))]);
-    }
-
-    /// A tile that was read and has no obstacles file.
-    pub fn insert_empty(&mut self, tile: TileId) {
-        self.put(tile, Slot::Empty);
-    }
-
     /// Inserts a ring's tiles (`None`: read, no obstacles file), preparing them in parallel.
     pub fn insert_all(&mut self, tiles: Vec<(TileId, Option<Obstacles<'a>>)>) {
         let lattice = &self.lattice;

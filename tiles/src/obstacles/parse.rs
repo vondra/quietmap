@@ -5,6 +5,7 @@ use super::{
     OUTLINE_BYTES, OutlineKind, OutlineRecord, RUN_BYTES, Run, VERTEX_BYTES,
 };
 use crate::FormatError;
+use crate::little_endian::{u16_at, u32_at};
 
 /// A parsed obstacles tile borrowing its bytes; every index in it was checked by [`Self::parse`].
 #[derive(Clone, Copy)]
@@ -16,14 +17,6 @@ pub struct Obstacles<'a> {
     runs: &'a [u8],
     outlines: &'a [u8],
     vertices: &'a [u8],
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
-}
-
-fn u16_at(bytes: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([bytes[at], bytes[at + 1]])
 }
 
 impl<'a> Obstacles<'a> {

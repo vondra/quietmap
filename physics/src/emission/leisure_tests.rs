@@ -77,7 +77,7 @@ fn pitch_duty_follows_published_use() {
     assert!((lden(&grass) - 83.5).abs() < 0.2 && (lden(&booked) - 93.8).abs() < 0.2);
 }
 
-/// The PLAN-z13 fix: a pitch counts at most 10 ha, other classes keep growing.
+/// A pitch counts at most 10 ha, other classes keep growing.
 #[test]
 fn pitches_stop_growing_at_ten_hectares() {
     for class in [PITCH, ARTIFICIAL_TURF_PITCH] {

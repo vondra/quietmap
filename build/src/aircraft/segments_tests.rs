@@ -210,7 +210,7 @@ fn departures_follow_the_smoothed_acceleration_and_climb() {
     assert!(departures(&jitter, &phases_of(&jitter))[6]);
 }
 
-/// PLAN-z13 fix: the field is the terrain under the takeoff roll, found from the lift-off; a
+/// The field is the terrain under the takeoff roll, found from the lift-off; a
 /// flight first seen airborne has none.
 #[test]
 fn the_departure_field_is_the_terrain_under_the_roll() {
@@ -231,7 +231,7 @@ fn the_departure_field_is_the_terrain_under_the_roll() {
     assert!(departure_field_m(&samples[3..], &on_ground[3..]).is_nan());
 }
 
-/// PLAN-z13 fix: a helicopter's descent is its smoothed rate, not one pair's altitude loss: a
+/// A helicopter's descent is its smoothed rate, not one pair's altitude loss: a
 /// 600 ft/min descent is flagged at 1 s and at 10 s cadence alike, level flight never.
 #[test]
 fn a_helicopter_descent_does_not_depend_on_the_cadence() {

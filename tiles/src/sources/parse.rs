@@ -7,6 +7,7 @@ use super::{
     LEVEL_OFFSET_DB, LINE_BYTES, Layer, MAGIC, POINT_BYTES, Piece,
 };
 use crate::FormatError;
+use crate::little_endian::u32_at;
 use crate::terrain::{HEIGHT_MISSING, height_m_of_code};
 
 fn level_db(code: u16) -> f64 {
@@ -15,10 +16,6 @@ fn level_db(code: u16) -> f64 {
     } else {
         f64::from(code) / 100.0 - LEVEL_OFFSET_DB
     }
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
 }
 
 /// A parsed sources tile borrowing its bytes.

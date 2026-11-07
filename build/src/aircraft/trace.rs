@@ -1,8 +1,8 @@
 //! One aircraft-day of ADS-B: its samples, callsign changes, type and address identity.
 
 /// A surface report: the altitude field was the string "ground", readsb's only on-ground signal.
-/// readsb's flag bit 0 marks a gap of 20 s or more without positions before a point (PLAN-z13:
-/// 906,924 airborne points had been read as ground from it), so it is never read as ground.
+/// readsb's flag bit 0 marks a gap of 20 s or more without positions before a point (906,924
+/// airborne points had been read as ground from it), so it is never read as ground.
 pub const SURFACE_REPORT: u8 = 1 << 0;
 /// A secondary-provider sample kept by the provider union because the primary missed that instant.
 pub const SECONDARY_PROVIDER: u8 = 1 << 1;

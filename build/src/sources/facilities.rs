@@ -4,6 +4,9 @@
 //! stay silent. Every value has an untagged fallback: a missing or unparseable tag is untagged.
 
 use super::cells::PreparedRing;
+use physics::emission::industrial::{
+    SUBSTATION_AUTO, SUBSTATION_DISTRIBUTION, SUBSTATION_MAIN, SUBSTATION_MINOR,
+};
 use std::collections::BTreeMap;
 
 /// A row's retained OSM tags.
@@ -162,15 +165,15 @@ pub fn substation_power(own_tags: &Tags, feed: &SubstationFeed) -> (Option<f64>,
         })
     };
     let class = if is_autotransformer(own_tags) || feed.has_autotransformer {
-        2
+        SUBSTATION_AUTO
     } else if tagged("transmission") {
-        1
+        SUBSTATION_MAIN
     } else if tagged("minor_distribution") && kv < 60.0 {
-        4
+        SUBSTATION_MINOR
     } else if kv >= 220.0 {
-        1
+        SUBSTATION_MAIN
     } else {
-        3
+        SUBSTATION_DISTRIBUTION
     };
     (mva, class)
 }
