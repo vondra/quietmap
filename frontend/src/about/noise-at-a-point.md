@@ -170,7 +170,8 @@ low.
 - **The levels over time.** The moments of a period are spread over ten equally likely states of
   the place's weather, the same for all its rays, as a night's inversion bends them all at once: a
   piece with p = 0.3 is bent down in the three most favourable states. The levels exceeded 5 to 90 %
-  of the time and Nden are computed over every hour and these states; the map takes two of them.
+  of the time and Nden are computed over every hour and these states; the map merges them into two
+  equally likely halves.
 
 </details>
 
@@ -262,8 +263,8 @@ A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of point
 which the receiver sees it is cut into five equal parts, each sending one ray; a piece seen under
 less than 3° sends one. Five rays match a sum of 401 points within 0.1 dB on a 250 m piece. Where
 buildings stand in front of a part spanning 3° or more, the part is split at their edges and every
-hidden stretch and every gap gets rays of its own, one for every 15° of it: a street is heard
-through the gaps between its houses.
+hidden stretch and every gap gets rays of its own, one for every 15° of it and at most nine: a street
+is heard through the gaps between its houses.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 270" role="img" aria-label="A line piece seen from above by the point R: five rays at equal angles where the view is open, and more rays where two houses hide parts of the piece" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -296,9 +297,9 @@ every wall the ray crosses stands at its height. Over this cross-section the pop
 - the spreading of the sound with distance;
 - the air's absorption in each octave band (ISO 9613-1), averaged over 30 years of the place's
   weather;
-- diffraction over the edges that block the line of sight — a hilltop, a roof, a wall — once in
-  calm air and once downwind, where sound bends toward the ground along an arc of at least 1 km
-  radius;
+- diffraction over the edges that block the line of sight — a hilltop, a roof, a wall; beyond 300 m
+  of both ends, the terrain's highest point in each 150 m — once in calm air and once downwind,
+  where sound bends toward the ground along an arc of at least 1 km radius;
 - the ground's effect, on either side of those edges or over the whole ray;
 - the tree crowns the ray passes through (ISO 9613-2, Annex A, which CNOSSOS-EU leaves out): 0.02 dB
   a metre at 63 Hz to 0.12 dB at 8 kHz over at most 200 m, weighted by the tree cover;

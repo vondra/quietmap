@@ -137,17 +137,19 @@ A pixel inside a building shows the building's loudest façade, as the popup doe
 <details>
 <summary>How a tile is painted</summary>
 
-The map is painted in tiles of 1,024 × 1,024 pixels. Every loud source is computed exactly at the
-corners of blocks 16 pixels wide and at every pixel it is near. What is far is blended between the
-corners, and the faint hum of far, quiet sources is computed on a coarser grid.
+The map is painted in squares of 1,024 × 1,024 pixels. Every loud source is computed exactly at the
+corners of blocks 16 pixels wide and at the pixels it is near, or blended from exact samples there
+where the sound is smooth. What is far is blended between the corners, and the faint hum of far,
+quiet sources is computed on a coarser grid.
 
-The tiles are the web map's of zoom 12, each in blocks of 16 × 16 pixels (95 m in London). A ground
+A square is a tile of the web map's zoom 12, in blocks of 16 × 16 pixels (95 m in London). A ground
 source counts as loud at a point where its upper bound there reaches 20 dB.
 
 - At every block corner, each loud source is computed exactly.
-- A block's pixels compute exactly the loud sources that cross the block or one of the eight around
-  it and, layer by layer, the loudest at the block's corners until what each corner leaves out
-  weighs at most 20 % of the layer's loud sources at the block's quietest corner.
+- A block's pixels compute exactly, of the sources loud at the pixel, those that cross the block or
+  one of the eight around it and, layer by layer, the loudest at the block's corners until what
+  each corner leaves out weighs at most 20 % of the layer's loud sources at the block's quietest
+  corner.
 - What is left out is blended between the block's four corners, and weakened at a pixel as much as
   the block's computed far sources are there, as behind a house.
 - The hum, the sources under 20 dB, is estimated with the popup's physics and error budget at
@@ -189,8 +191,9 @@ Buildings and their façade receivers keep the exact computations.
 
 Each block blends only the sources it leaves out, so neighbouring blocks blend different
 remainders; at the corners they share, the exact and the blended sound together meet. Aircraft
-boxes are summed at the hum's 17 × 17 points; their near share is computed every second block corner,
-and between those where the energy varies by more than 1 dB. Their spectra use 33 × 33 points:
+boxes are summed at the hum's 17 × 17 points; their near share, within three hum spacings, is
+computed with the runway rolls every second block corner, and between those where the energy varies
+by more than 1 dB. Their spectra use 33 × 33 points:
 alternating points and cell centres are computed, others blended only where the spectra change
 little and their centre agrees. The square's edges are computed. Cruise boxes use 5 × 5 points
 where screening does not apply, every corner reads the same boxes within reach, and their pieces
@@ -225,13 +228,16 @@ the mean loudness of the pixels under it.
 <summary>The painter's code: paint/ and paint-gpu/, the tiles it writes and its checks</summary>
 
 `paint/` is the method and `paint-gpu/` (`qm-paint`) runs it by squares of zoom 12 in three stages:
-the cores read the next square's tiles once, to the reach of its farthest pixel (the fine terrain
-when a ray first needs it), and take its corners; two squares paint their pixels at once (a square
-of many sources alone); two writers publish the squares before. The exact pairs and the aircraft boxes' sums at the block corners'
-lattices run on the first CUDA card (`paint-gpu/kernels/`, the popup's physics in single
-precision with fast math, each function citing its Rust) or on the cores. Four passes of a square
-run at once, at most two launching their pairs on the card while the others list and sound their
-pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
+the cores read the next square's tiles once, to the reach of its farthest pixel, give the card the
+fine terrain of every land tile among them, and take its corners, hum and aircraft lattices; two
+squares paint their pixels at once (a square of many sources alone); two writers publish the squares
+before. The exact pairs, the hum's sampled pairs, the aircraft boxes' sums at the block corners'
+lattices and every pixel's loudness run on the first CUDA card (`paint-gpu/kernels/`, the popup's
+physics in single precision, with fast math except the loudness, each function citing its Rust) or
+on the cores. The runway rolls, the flight spectra, the loudness at open blocks' corners and a
+building across the square's edge stay on the cores. A square's samples, then its pixels, then its
+façades run in passes, four at once, at most two launching their pairs on the card while the
+others list and sound their pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
 one before.
 The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
 while the card computes the current chunk's loudness.
@@ -243,8 +249,9 @@ interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, t
 `paint/src/flight_spectra.rs`, a
 building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
 `popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs` and `hm3_square.rs`: per layer and the total,
-512 × 512 cells of twice the loudness level in phon (80 one sone, a doubling 20; 254 silence under
-1/16 sone, 255 not assessed). Each tile is compressed when painted: PNG's Paeth predictor uses
+four tiles of zoom 13 of 512 × 512 cells of 80 + 20 log₂ of the loudness in sone, twice the loudness
+level in phon from 1 sone up (80 one sone, a doubling 20; 254 silence under 1/16 sone, 255 not
+assessed). Each tile is compressed when painted: PNG's Paeth predictor uses
 the left, above and upper-left cells (zero outside the tile), and the cell minus that prediction,
 modulo 256, enters one lossless Brotli stream with a 512 KiB window. The painter uses quality 10
 for new tiles; existing streams at other quality settings decode in the same way.
@@ -262,9 +269,9 @@ in each layer and the total; otherwise its remaining pixels are calculated indiv
 The bundle's directory points at compressed tile streams, identical tile grids encoded and stored
 once. Container version 8 holds both quantities; already painted version-7 bundles contain only
 Nden and remain complete. The Nden tile streams keep HM3 version 7; Lden streams use HMD version 1,
-so decibels cannot be mistaken for loudness. Verification decodes both quantities and checks their
-assessment masks and Lden totals. Two writers compress and publish the bundles
-while the next squares are painted; at most six squares' cell buffers are resident (two written,
+so decibels cannot be mistaken for loudness. Verification decodes both quantities, checks their
+assessment masks and Lden totals, and refuses any cell of 120 phon or 120 dB and more. Two
+writers compress and publish the bundles while the next squares are painted; at most six squares' cell buffers are resident (two written,
 two waiting, two painted), and a square is complete only after its bundle is durable
 (`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies
 independent painters' bundles into one tree atomically, without decoding or replacing completed
