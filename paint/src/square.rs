@@ -7,12 +7,11 @@
 mod source_index;
 use source_index::Index;
 
+use crate::inputs::{KINDS, Neighbourhood};
 use physics::bound::{ReceiverBound, Spread, received_energy_bound, receiver_bound};
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::weather::{PlaceWeather, WeatherTable};
-use popup::aircraft::FINE_BOXES_WITHIN_M;
-use popup::aircraft::boxes::AIRCRAFT_REACH_M;
-use popup::aircraft::rolls::{HeardPath, ROLL_REACH_M, prepare as prepare_rolls};
+use popup::aircraft::rolls::{HeardPath, prepare as prepare_rolls};
 use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect, loud};
 use popup::obstacles::Scene;
 use popup::release::{Release, RingFiles};
@@ -30,11 +29,6 @@ pub struct Files {
     ground_rings: u32,
     /// The release's year root, where the rays' ends read the fine terrain when they need it.
     year_root: std::path::PathBuf,
-}
-
-/// The fewest rings around `tile` whose block covers `reach_m` beyond the tile's every edge.
-fn rings_for(frame: &LocalFrame, reach_m: f64) -> u32 {
-    (reach_m / frame.east_m_per_unit.min(frame.north_m_per_unit)).ceil() as u32
 }
 
 /// Distance (m) from `position` (frame metres) to the rectangle of `tile`.
@@ -58,37 +52,20 @@ impl Files {
     /// boxes to theirs: the fine boxes of tiles within their distance of the square, the far ones
     /// of every tile; the rolls of the tiles within their reach.
     pub fn read(release: &Release, tile: TileId) -> Result<Self, String> {
-        let frame = LocalFrame::at(tile.centre());
-        let ground_rings = rings_for(&frame, GROUND_REACH_M);
-        let aircraft_rings = rings_for(&frame, AIRCRAFT_REACH_M);
-        let tiles: Vec<TileId> = (0..=aircraft_rings).flat_map(|k| tile.ring(k)).collect();
-        let square_gap = |other: TileId| {
-            // The tile's distance from the square, across the antimeridian too.
-            let [dx, dy] = other.offset_from(tile);
-            let gap = |d: i64| (d.unsigned_abs() as f64 - 1.0).max(0.0);
-            (gap(dx) * frame.east_m_per_unit).hypot(gap(dy) * frame.north_m_per_unit)
-        };
+        let neighbourhood = Neighbourhood::new(tile);
         let rings = RingFiles::read(
             release,
-            tiles,
-            vec![
-                Kind::Terrain,
-                Kind::Obstacles,
-                Kind::Sources,
-                Kind::Aircraft,
-                Kind::AircraftFar,
-                Kind::AircraftRolls,
-            ],
-            |other, kind| match kind {
-                Kind::Aircraft => square_gap(other) <= FINE_BOXES_WITHIN_M,
-                Kind::AircraftFar => true,
-                Kind::AircraftRolls => square_gap(other) <= ROLL_REACH_M + 1.0,
-                _ => other.ring_distance(tile) <= ground_rings,
-            },
+            neighbourhood.tiles().collect(),
+            // Fine terrain stays lazy on the CPU; the device upload reads it from Ground.
+            KINDS
+                .into_iter()
+                .filter(|&kind| kind != Kind::TerrainFine)
+                .collect(),
+            |other, kind| neighbourhood.contains(other, kind),
         )?;
         Ok(Files {
             rings,
-            ground_rings,
+            ground_rings: neighbourhood.ground_rings,
             year_root: release.year_root.clone(),
         })
     }

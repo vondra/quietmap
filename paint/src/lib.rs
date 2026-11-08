@@ -23,6 +23,7 @@ pub mod hm3;
 mod hm3_square;
 pub mod hum;
 mod hum_samples;
+pub mod inputs;
 pub mod levels;
 mod loudest;
 pub mod merge;
