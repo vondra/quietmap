@@ -36,13 +36,15 @@ struct FlightPoint {
 };
 
 // One point's boxes of one tile, file and band: `count` boxes from `first`, heard within
-// `within_m`, each weighted by `weight` (FLIGHT_WEIGHT_*) at its distance, into sums `sum`.
+// `within_m`, each weighted by `weight` (FLIGHT_WEIGHT_*) at its distance, into sums `sum`: the
+// energy heard and the lambda's weights as `role` (FLIGHT_ROLE_* bits) says.
 struct FlightSegment {
     u32 point;
     u32 sum;
     u32 first;
     u32 count;
     u32 weight;
+    u32 role;
     float within_m;
     float coarse_m;
 };
@@ -237,7 +239,8 @@ __device__ void average_piece_sel(const FlightBox& b, const float* centroid_m, f
 }
 
 // Per segment, a block: its boxes' energies and energies times their flights' Kurze lambda per
-// period (popup::aircraft::boxes::tile_flight_sums) added to its point's `sums` (2 x PERIODS doubles).
+// period (popup::aircraft::boxes::tile_flight_sums) added to its point's `sums` (FLIGHT_SUMS
+// doubles: the energy heard, then the lambda's weights, paint::flights::FlightSums).
 extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint* points, const float* horizons,
                                        const FlightSegment* segments, double* sums) {
     const FlightSegment segment = segments[blockIdx.x];
@@ -280,7 +283,10 @@ extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint
     if (threadIdx.x < 2 * PERIODS) {
         double total = 0.0;
         for (int t = 0; t < FLIGHT_THREADS; t++) total += (double)partial[threadIdx.x][t];
-        atomicAdd(&sums[(u64)segment.sum * 2 * PERIODS + threadIdx.x], total);
+        double* at = sums + (u64)segment.sum * FLIGHT_SUMS;
+        // The energy heard, then the lambda's weights: the energy again and energy times lambda.
+        if (threadIdx.x < PERIODS && (segment.role & FLIGHT_ROLE_ENERGY)) atomicAdd(&at[threadIdx.x], total);
+        if (segment.role & FLIGHT_ROLE_LAMBDA) atomicAdd(&at[PERIODS + threadIdx.x], total);
     }
 }
 

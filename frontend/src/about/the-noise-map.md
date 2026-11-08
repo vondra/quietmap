@@ -197,8 +197,9 @@ by more than 1 dB. Their spectra use 33 × 33 points:
 alternating points and cell centres are computed, others blended only where the spectra change
 little and their centre agrees. The square's edges are computed. Cruise boxes use 5 × 5 points
 where screening does not apply, every corner reads the same boxes within reach, and their pieces
-and average flight lines stay at least 8 km away. Their energies and energies times the flights' rate and passing
-duration are blended to the block corners, keeping how their noise changes over time. The
+and average flight lines stay at least 8 km away. Their energies are blended to the block corners, and so is what
+the flights' lambda is weighted from, keeping how their noise changes over time: the far boxes' energies and
+energies times the flights' rate and passing duration, also where the fine boxes give the energy, and the rolls'. The
 quiet sources may be omitted only when their summed bounds can change a layer's exact loud
 energy by at most 0.1 dB in every period. Otherwise the painter uses the popup's bound-proportional
 sampling and 0.05 dB confidence budget, batches the selected rays on the graphics card and

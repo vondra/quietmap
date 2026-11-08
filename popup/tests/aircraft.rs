@@ -23,6 +23,11 @@ const TILE: TileId = TileId { x: 2212, y: 1387 };
 const RECEIVER_ALTITUDE_M: f64 = 4.0;
 
 fn release_with_boxes(name: &str, tile: TileId, kind: Kind, boxes: &[AircraftBox]) -> PathBuf {
+    release_with_files(name, &[(tile, kind, boxes)])
+}
+
+/// A release of `files`: per tile and kind its boxes.
+fn release_with_files(name: &str, files: &[(TileId, Kind, &[AircraftBox])]) -> PathBuf {
     let root = std::env::temp_dir().join(format!("qm-aircraft-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("2026")).unwrap();
@@ -34,7 +39,9 @@ fn release_with_boxes(name: &str, tile: TileId, kind: Kind, boxes: &[AircraftBox
         ROWS * COLUMNS
     ];
     std::fs::write(root.join("2026").join("weather"), encode_weather(&weather)).unwrap();
-    write_tiles(&root.join("2026"), kind, &[(tile, encode(boxes, &[], &[]))]).unwrap();
+    for &(tile, kind, boxes) in files {
+        write_tiles(&root.join("2026"), kind, &[(tile, encode(boxes, &[], &[]))]).unwrap();
+    }
     tiles::mark_year_complete(&root.join("2026"), "test").unwrap();
     root
 }
@@ -61,14 +68,21 @@ fn departure(east_m: f64) -> (SegmentEmission, [f64; 3], [f64; 3]) {
 
 /// The box of one piece, its centroid in the tile's steps.
 fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> AircraftBox {
+    box_of_flights(&[(*emission, start, end)])
+}
+
+/// The box of one flight a year along each of `pieces` (emission, start, end).
+fn box_of_flights(pieces: &[(SegmentEmission, [f64; 3], [f64; 3])]) -> AircraftBox {
     let mut sums = BoxSums::default();
-    sums.add(
-        &SegmentEnergies::of(&emission.npd_distance_levels()),
-        emission.installation,
-        [1.0, 0.0, 0.0],
-        start,
-        end,
-    );
+    for (emission, start, end) in pieces {
+        sums.add(
+            &SegmentEnergies::of(&emission.npd_distance_levels()),
+            emission.installation,
+            [1.0, 0.0, 0.0],
+            *start,
+            *end,
+        );
+    }
     let values = sums.values().unwrap();
     let steps_per_metre = [
         32_768.0 / LocalFrame::at(TILE.centre()).east_m_per_unit,
@@ -98,7 +112,7 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
         gradient: values.gradient,
         gradient_spread: values.gradient_spread,
         piece_length_m: values.piece_length_m,
-        flights_per_day: [1.0 / 365.25, 0.0, 0.0],
+        flights_per_day: [pieces.len() as f64 / 365.25, 0.0, 0.0],
         energy_db: values.levels_db,
         tail_energy_db: values.tail_levels_db,
         lg_scaled_distance: values.scaled_distance_m.map(f64::log10),
@@ -108,6 +122,12 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
 
 /// The aircraft layer's day energy of a click at the tile centre.
 fn aircraft_day_energy(release: &Release) -> (f64, usize) {
+    let (energy, boxes, _) = aircraft_answer(release);
+    (energy, boxes)
+}
+
+/// The aircraft layer's day energy, boxes heard and own Nden (sone) of a click at the tile centre.
+fn aircraft_answer(release: &Release) -> (f64, usize, f64) {
     let (lat, lon) = TILE.centre().to_degrees();
     let mut last = None;
     answer(
@@ -125,7 +145,11 @@ fn aircraft_day_energy(release: &Release) -> (f64, usize) {
                 .iter()
                 .find(|layer| layer.layer == Layer::Aircraft)
                 .unwrap();
-            last = Some((layer.energy[0], layer.evaluated));
+            last = Some((
+                layer.energy[0],
+                layer.evaluated,
+                layer.nden_sone.unwrap_or(f64::NAN),
+            ));
             Ok(())
         },
     )
@@ -352,4 +376,63 @@ fn every_flight_ring_uses_the_complete_terrain_horizon() {
     .unwrap();
     assert!(updates > 1);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A click hears its tile's fine boxes and reads its far ones for how often the flights pass: two
+/// departures a day 100 m apart, a fine box each, heard as often as the far box holding both says
+/// (their Nden falls when the far box holds one of them a day, at the same energy; it stays when the
+/// far box is 10 dB louder, its lambda weighted by its own energy), and as their own boxes say where
+/// the tile has no far ones.
+#[test]
+fn a_click_reads_how_often_the_flights_pass_from_the_far_boxes() {
+    let [west, east] = [-50.0, 50.0].map(departure);
+    let daily = |pieces: &[(SegmentEmission, [f64; 3], [f64; 3])], flights: f64| AircraftBox {
+        flights_per_day: [flights, 0.0, 0.0],
+        ..box_of_flights(pieces)
+    };
+    let fine = [daily(&[west], 1.0), daily(&[east], 1.0)];
+    let answer = |name: &str, far: Option<(f64, f64)>| {
+        let far = far.map(|(flights, louder_db)| {
+            let mut far = daily(&[west, east], flights);
+            far.energy_db = far
+                .energy_db
+                .map(|levels| levels.map(|level| level + louder_db));
+            far.tail_energy_db = far.tail_energy_db.map(|level| level + louder_db);
+            [far]
+        });
+        let mut files: Vec<(TileId, Kind, &[AircraftBox])> = vec![(TILE, Kind::Aircraft, &fine)];
+        if let Some(far) = &far {
+            files.push((TILE, Kind::AircraftFar, far));
+        }
+        let root = release_with_files(name, &files);
+        let heard = aircraft_answer(&Release::open(&root, "2026").unwrap());
+        std::fs::remove_dir_all(&root).unwrap();
+        heard
+    };
+    let (both, louder, one, own) = (
+        answer("far-both", Some((2.0, 0.0))),
+        answer("far-louder", Some((2.0, 10.0))),
+        answer("far-one", Some((1.0, 0.0))),
+        answer("fine-only", None),
+    );
+    assert_eq!((both.0, both.1), (louder.0, louder.1));
+    assert!(
+        (louder.2 / both.2 - 1.0).abs() < 1e-9,
+        "{} sone vs {}",
+        louder.2,
+        both.2
+    );
+    assert_eq!(
+        (both.0, both.1),
+        (one.0, one.1),
+        "the energy is the fine boxes'"
+    );
+    assert_eq!((both.0, both.1), (own.0, own.1));
+    assert!(both.2 > 1.05 * one.2, "{} sone vs {}", both.2, one.2);
+    assert!(
+        (own.2 / one.2 - 1.0).abs() < 0.02,
+        "{} sone vs {}",
+        own.2,
+        one.2
+    );
 }

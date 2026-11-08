@@ -4,8 +4,9 @@
 //! (`physics::percentile`) at its own lambda = (emitters per metre) x (its distance): vehicles on
 //! a road (the daily flow over the period's share and hours, over the speed), trains on a track
 //! (the period's trains over its hours, over the speed), airport movements on an aeroway (at taxi
-//! speed); the flights heard one more line at the energy-weighted lambda of the boxes and the
-//! runways' roll paths (`crate::aircraft::rolls`, a path's classes one stream); events (church
+//! speed); the flights heard one more line at the energy-weighted lambda of the far boxes and the
+//! runways' roll paths (`crate::aircraft::LambdaSums`, `crate::aircraft::rolls`, a path's classes
+//! one stream); events (church
 //! bells) on for their duty, the share of the period they sound, at their mean over it; industry,
 //! buildings, ships and the unlisted remainder steady at their mean. A road's flow follows the
 //! hours of the day within each period (measured hourly profiles: a night's 3 am carries a fifth

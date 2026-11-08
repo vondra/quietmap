@@ -94,19 +94,16 @@ impl Line {
         })
     }
 
-    /// The flights heard, one line at their energy-weighted lambda (`weather` theirs: the mean in
-    /// either state).
-    pub fn flights(
-        weather: &Weather,
-        (energy, energy_lambda): ([f64; PERIODS], [f64; PERIODS]),
-    ) -> Self {
+    /// The flights heard, one line at `lambda` (`crate::aircraft::LambdaSums`; `weather` theirs:
+    /// the mean in either state).
+    pub fn flights(weather: &Weather, (energy, lambda): ([f64; PERIODS], [f64; PERIODS])) -> Self {
         Line {
             key: u64::MAX,
             energy,
             means: weather_means(weather, energy),
             lambda: std::array::from_fn(|p| {
                 if energy[p] > 0.0 {
-                    energy_lambda[p] / energy[p]
+                    lambda[p]
                 } else {
                     f64::INFINITY
                 }

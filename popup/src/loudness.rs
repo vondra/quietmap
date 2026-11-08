@@ -436,10 +436,8 @@ mod tests {
             (12.0 * road[0].at(50.0) + 4.0 * road[1].at(55.0) + 8.0 * road[2].at(60.0)) / 24.0;
         assert!((steady - expected).abs() < 1e-9);
         let weather = Weather::default();
-        let lane = crate::percentiles::Line::flights(
-            &weather,
-            ([energy(50.0); PERIODS], [energy(50.0) * 1e-3; PERIODS]),
-        );
+        let lane =
+            crate::percentiles::Line::flights(&weather, ([energy(50.0); PERIODS], [1e-3; PERIODS]));
         let rare = own_nden(Some(&lane), [0.0; PERIODS], &road);
         assert!(rare > 0.0 && rare < 0.5 * steady, "{rare} {steady}");
         let over_floor = own_nden(Some(&lane), [energy(45.0); PERIODS], &road);

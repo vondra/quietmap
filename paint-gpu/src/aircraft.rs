@@ -6,7 +6,7 @@
 use crate::device::{Gpu, driver, read_back};
 use cudarc::driver::{CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig};
 use paint::flight_boxes::{FlightBoxes, FlightRequest, FlightWeight};
-use paint::flights::{FlightSums, tiles_heard};
+use paint::flights::{FlightSums, heard_parts, tiles_heard};
 use paint::square::Square;
 use physics::bands::{PERIOD_HOURS, PERIODS, energy};
 use physics::doc29::atmosphere::receiver_impedance_db;
@@ -30,6 +30,9 @@ use tiles::aircraft::Group;
 
 /// Threads of a segment's block (kernels/aircraft.cuh FLIGHT_THREADS).
 const FLIGHT_THREADS: u32 = 128;
+/// Doubles of one point's sums of a band (kernels/aircraft.cuh FLIGHT_SUMS): the energy, then the
+/// lambda's weights, its energy and energy times lambda, per period.
+const SUMS: usize = 3 * PERIODS;
 
 /// kernels/aircraft.cuh FlightBox.
 #[repr(C)]
@@ -74,9 +77,15 @@ pub(crate) struct DeviceFlightSegment {
     first: u32,
     count: u32,
     weight: u32,
+    role: u32,
     within_m: f32,
     coarse_m: f32,
 }
+
+/// What a segment's boxes add to (kernels/aircraft.cuh FLIGHT_ROLE_*): the energy heard, the
+/// lambda's weights (paint::flights::FlightSums), or both.
+const ROLE_ENERGY: u32 = 1;
+const ROLE_LAMBDA: u32 = 2;
 
 // SAFETY: plain records of f32, u32 and u64 fields in the kernel's order (checked by
 // `flight_struct_sizes` when the module loads).
@@ -127,6 +136,9 @@ pub(crate) fn aircraft_constants() -> String {
         format!("#define BUILDING_SECTORS {BUILDING_SECTORS}\n"),
         format!("#define TERRAIN_HORIZON_FLOATS {TERRAIN_HORIZON_FLOATS}\n"),
         format!("#define FLIGHT_THREADS {FLIGHT_THREADS}\n"),
+        format!("#define FLIGHT_SUMS {SUMS}\n"),
+        format!("#define FLIGHT_ROLE_ENERGY {ROLE_ENERGY}u\n"),
+        format!("#define FLIGHT_ROLE_LAMBDA {ROLE_LAMBDA}u\n"),
     ]
     .concat()
 }
@@ -209,7 +221,8 @@ impl DeviceFlightBoxes {
 
 impl Gpu {
     /// The flights of each request on the card (paint::flight_boxes::FlightBoxes::sums on the
-    /// cores): per band its boxes' energy and energy times lambda.
+    /// cores): per band its boxes' energy and the lambda's weights, the far boxes', also of the
+    /// tiles heard in their fine ones.
     pub fn flight_sums(
         &self,
         square: &Square,
@@ -238,28 +251,32 @@ impl Gpu {
                 horizons.write_f32(&mut floats);
                 let mut segments = Vec::new();
                 for tile in heard {
-                    let file = usize::from(!tile.fine);
-                    for band in 0..2 {
-                        let Some(weight) = request.weights[band] else {
-                            continue;
-                        };
-                        let count = flight_boxes.lists[tile.number][file][band].len() as u32;
-                        if count == 0 {
-                            continue;
+                    for (file, _, heard, weighs) in heard_parts(&tile) {
+                        let role =
+                            (u32::from(heard) * ROLE_ENERGY) | (u32::from(weighs) * ROLE_LAMBDA);
+                        for band in 0..2 {
+                            let Some(weight) = request.weights[band] else {
+                                continue;
+                            };
+                            let count = flight_boxes.lists[tile.number][file][band].len() as u32;
+                            if count == 0 {
+                                continue;
+                            }
+                            segments.push(DeviceFlightSegment {
+                                point: slot as u32,
+                                sum: (2 * slot + band) as u32,
+                                first: device_boxes.first[tile.number][file][band],
+                                count,
+                                weight: match weight {
+                                    FlightWeight::One => 0,
+                                    FlightWeight::Far => 1,
+                                    FlightWeight::Near => 2,
+                                },
+                                role,
+                                within_m: request.within_m as f32,
+                                coarse_m: flight_boxes.coarse_m as f32,
+                            });
                         }
-                        segments.push(DeviceFlightSegment {
-                            point: slot as u32,
-                            sum: (2 * slot + band) as u32,
-                            first: device_boxes.first[tile.number][file][band],
-                            count,
-                            weight: match weight {
-                                FlightWeight::One => 0,
-                                FlightWeight::Far => 1,
-                                FlightWeight::Near => 2,
-                            },
-                            within_m: request.within_m as f32,
-                            coarse_m: flight_boxes.coarse_m as f32,
-                        });
                     }
                 }
                 Ok(Some((floats, segments)))
@@ -289,7 +306,7 @@ impl Gpu {
         let points = driver(device.htod_sync_copy(&points))?;
         let segment_count = segments.len() as u32;
         let segments = driver(device.htod_sync_copy(&segments))?;
-        let totals = driver(device.alloc_zeros::<f64>(4 * PERIODS * requests.len()))?;
+        let totals = driver(device.alloc_zeros::<f64>(2 * SUMS * requests.len()))?;
         let stream = self.fork()?;
         let kernel = device
             .get_func("aircraft", "flight_sums")
@@ -300,7 +317,7 @@ impl Gpu {
             shared_mem_bytes: 0,
         };
         // SAFETY: every segment's boxes lie in `boxes` (counted when they were uploaded), its point
-        // in `points`, its horizons in `horizons`, its sums (2 x PERIODS doubles) in `totals`.
+        // in `points`, its horizons in `horizons`, its sums (SUMS doubles) in `totals`.
         driver(unsafe {
             kernel.launch_on_stream(
                 &stream,
@@ -311,10 +328,11 @@ impl Gpu {
         let totals = read_back(&stream, &totals)?;
         for (slot, request_sums) in sums.iter_mut().enumerate() {
             for (band, band_sums) in request_sums.iter_mut().enumerate() {
-                let at = (2 * slot + band) * 2 * PERIODS;
+                let at = (2 * slot + band) * SUMS;
                 for period in 0..PERIODS {
                     band_sums.energy[period] = totals[at + period];
-                    band_sums.energy_times_lambda[period] = totals[at + PERIODS + period];
+                    band_sums.lambda.energy[period] = totals[at + PERIODS + period];
+                    band_sums.lambda.energy_lambda[period] = totals[at + 2 * PERIODS + period];
                 }
             }
         }

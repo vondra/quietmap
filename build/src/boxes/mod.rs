@@ -389,7 +389,7 @@ impl Default for BoxRule {
 }
 
 impl BoxRule {
-    /// The far boxes, read for tiles beyond 3 km of the click.
+    /// The far boxes, read for tiles beyond 3 km of the click and for the flights' lambda everywhere.
     pub fn far() -> Self {
         BoxRule {
             level_step_db: physics::doc29::box_geometry::FAR_BOX_EDGE_LEVEL_STEP_DB,

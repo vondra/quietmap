@@ -213,7 +213,7 @@ and sends a first answer. It reads one more ring of tiles at a time until every 
 within 12 km, every flight within 16 km and every runway roll starting within 8 km is covered,
 sending the whole answer again
 after each ring. At Greenwich in London it
-reads 219 MB in 114 reads, the flight tracks and the weather among them.
+reads 225 MB in 119 reads, the flight tracks and the weather among them.
 
 Every flight uses the same horizon, built once from that terrain and the nearby buildings.
 
@@ -350,7 +350,10 @@ period. Each is a stream of passes at random times, and the source's distance an
 much of the time the level spends at each value (Kurze's statistics of moving sources). A road with
 600 vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m;
 one flight a day 1 km away is near its peak for about half a minute; a take-off passes a house
-100 m beside its start of roll in about 11 seconds, as it sets off from rest. Sources add up only within the same moment, so the sum is taken
+100 m beside its start of roll in about 11 seconds, as it sets off from rest. The flights heard
+and the runways' rolls are one stream, its rate and passing time weighted by sound energy; the
+flights' come from the coarse boxes of airspace everywhere, also where the fine boxes give the
+sound, so the stream does not jump where one gives way to the other. Sources add up only within the same moment, so the sum is taken
 for every hour of road traffic and ten states of the weather; bells, calls, a car park's cars, a
 range's shots, courts, pitches, playgrounds, pools and terraces in use, the guests outside bars
 and restaurants and the plant of shops, offices and restaurants while it runs sound in their share

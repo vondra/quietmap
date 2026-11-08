@@ -4,8 +4,9 @@
 //! reads them for a click. Cruise boxes whose pieces and both average flight lines stay beyond 8 km
 //! use a 5 x 5 lattice only where screening does not apply and every corner reads the same boxes
 //! within reach. The other far boxes use the hum's points and the near ones, with the rolls, every
-//! second block corner, each interpolated where it changes slowly; their linear energies and
-//! energies times the flights' rate and passing duration are blended. Their spectral shares keep
+//! second block corner, each interpolated where it changes slowly; their linear energies and what
+//! the flights' lambda is weighted from (the far boxes' and the rolls', `LambdaSums`) are blended.
+//! Their spectral shares keep
 //! the finer grid at every second block corner, with checked interpolation
 //! ([`crate::flight_spectra`]).
 
@@ -15,48 +16,87 @@ use crate::flight_boxes::{FlightBoxes, FlightRequest, FlightWeight, flight_sums}
 use crate::paint::{Grid, bilinear};
 use crate::square::{Square, gap_to_tile};
 use physics::bands::{PERIODS, lden_energy};
-use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver, tile_flight_sums};
 use popup::aircraft::horizons::Horizons;
-use popup::aircraft::rolls::{ROLL_REACH_M, roll_sums};
+use popup::aircraft::rolls::{ROLL_REACH_M, RollSums, roll_sums};
+use popup::aircraft::{FINE_BOXES_WITHIN_M, LambdaSums};
 use rayon::prelude::*;
 use tiles::aircraft::Aircraft;
 use tiles::geo::TileId;
 
-/// The flights heard at a point: their energy and their energy times Kurze's lambda per period
-/// (both add up over boxes, and blend between points; their ratio is the flights' line's lambda).
+/// The flights heard at a point: their energy per period and what their Kurze lambda is weighted
+/// from (all add up over boxes, and blend between points).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FlightSums {
     pub energy: [f64; PERIODS],
-    pub energy_times_lambda: [f64; PERIODS],
+    pub lambda: LambdaSums,
 }
 
 impl FlightSums {
     pub fn add(&mut self, other: Self) {
         for p in 0..PERIODS {
             self.energy[p] += other.energy[p];
-            self.energy_times_lambda[p] += other.energy_times_lambda[p];
         }
+        self.lambda.add(&other.lambda);
     }
 }
 
 /// Blends four points' flights (north-west, north-east, south-west, south-east) bilinearly.
 pub(crate) fn blend_flights(corners: [FlightSums; 4], fx: f64, fy: f64) -> FlightSums {
+    let blend = |values: [[f64; PERIODS]; 4]| -> [f64; PERIODS] {
+        std::array::from_fn(|p| bilinear(values.map(|value| value[p]), fx, fy))
+    };
     FlightSums {
-        energy: std::array::from_fn(|p| bilinear(corners.map(|c| c.energy[p]), fx, fy)),
-        energy_times_lambda: std::array::from_fn(|p| {
-            bilinear(corners.map(|c| c.energy_times_lambda[p]), fx, fy)
-        }),
+        energy: blend(corners.map(|c| c.energy)),
+        lambda: LambdaSums {
+            energy: blend(corners.map(|c| c.lambda.energy)),
+            energy_lambda: blend(corners.map(|c| c.lambda.energy_lambda)),
+        },
+    }
+}
+
+/// One part of a heard tile's sums (`heard_parts`): `sums` (energy and energy times lambda per
+/// period) as the energy heard if `heard`, as the lambda's weights if `weighs`.
+pub(crate) fn part_sums(
+    (energy, energy_lambda): ([f64; PERIODS], [f64; PERIODS]),
+    heard: bool,
+    weighs: bool,
+) -> FlightSums {
+    FlightSums {
+        energy: if heard { energy } else { [0.0; PERIODS] },
+        lambda: if weighs {
+            (energy, energy_lambda).into()
+        } else {
+            LambdaSums::default()
+        },
     }
 }
 
 /// One aircraft tile a click reads: its place in the square's list, whether its fine boxes (else
-/// its far ones), and those boxes.
+/// its far ones), those boxes, and where they are its fine ones its far ones, which the flights'
+/// lambda is read from (`popup::aircraft::RingTile`; `None`: the heard ones).
 pub struct HeardTile<'a> {
     pub number: usize,
     pub fine: bool,
     pub tile: TileId,
     pub boxes: Aircraft<'a>,
+    pub far: Option<Aircraft<'a>>,
+}
+
+/// The parts of a heard tile's sums: per file read (0 fine, 1 far) its boxes, whether they give
+/// the energy heard and whether the lambda's weights.
+pub fn heard_parts<'a>(
+    tile: &HeardTile<'a>,
+) -> impl Iterator<Item = (usize, Aircraft<'a>, bool, bool)> {
+    let heard = (
+        usize::from(!tile.fine),
+        tile.boxes,
+        true,
+        tile.far.is_none(),
+    );
+    [Some(heard), tile.far.map(|far| (1, far, false, true))]
+        .into_iter()
+        .flatten()
 }
 
 /// The aircraft tiles a click at `position` reads within `within_m`: fine boxes from tiles within
@@ -72,15 +112,16 @@ pub fn tiles_heard<'a>(
             if gap > within_m {
                 return None;
             }
-            let (fine, boxes) = match (gap <= FINE_BOXES_WITHIN_M, tile.fine.as_ref()) {
-                (true, Some(fine)) => (true, fine),
-                _ => (false, tile.far.as_ref()?),
+            let (fine, boxes, far) = match (gap <= FINE_BOXES_WITHIN_M, tile.fine) {
+                (true, Some(fine)) => (true, fine, tile.far),
+                _ => (false, tile.far?, None),
             };
             Some(HeardTile {
                 number,
                 fine,
                 tile: tile.tile,
-                boxes: *boxes,
+                boxes,
+                far,
             })
         })
         .collect()
@@ -106,11 +147,20 @@ pub(crate) fn rolls_at(square: &Square, point: &Point) -> Result<FlightSums, Str
         position: point.position,
         altitude_m: point.altitude_m,
     };
-    let sums = roll_sums(&square.rolls, &square.frame, receiver, &horizons);
-    Ok(FlightSums {
+    Ok(roll_flight_sums(roll_sums(
+        &square.rolls,
+        &square.frame,
+        receiver,
+        &horizons,
+    )))
+}
+
+/// The rolls' sums: their energy is what the lambda is weighted from too.
+fn roll_flight_sums(sums: RollSums) -> FlightSums {
+    FlightSums {
         energy: sums.energy,
-        energy_times_lambda: sums.energy_lambda,
-    })
+        lambda: (sums.energy, sums.energy_lambda).into(),
+    }
 }
 
 /// Adds each request's rolls to its near flights.
@@ -142,24 +192,19 @@ pub(crate) fn aircraft_sums(square: &Square, point: &Point) -> Result<FlightSums
         position: point.position,
         altitude_m: point.altitude_m,
     };
-    let rolls = roll_sums(&square.rolls, &square.frame, receiver, &horizons);
-    let mut total = FlightSums {
-        energy: rolls.energy,
-        energy_times_lambda: rolls.energy_lambda,
-    };
+    let mut total = roll_flight_sums(roll_sums(&square.rolls, &square.frame, receiver, &horizons));
     for tile in tiles_heard(square, point.position, AIRCRAFT_REACH_M) {
-        let sums = tile_flight_sums(
-            &tile.boxes,
-            tile.tile,
-            &square.frame,
-            receiver,
-            &horizons,
-            (0..tile.boxes.box_count(), &|_| 1.0, AIRCRAFT_REACH_M),
-        );
-        total.add(FlightSums {
-            energy: sums.0,
-            energy_times_lambda: sums.1,
-        });
+        for (_, boxes, heard, weighs) in heard_parts(&tile) {
+            let sums = tile_flight_sums(
+                &boxes,
+                tile.tile,
+                &square.frame,
+                receiver,
+                &horizons,
+                (0..boxes.box_count(), &|_| 1.0, AIRCRAFT_REACH_M),
+            );
+            total.add(part_sums(sums, heard, weighs));
+        }
     }
     Ok(total)
 }

@@ -261,8 +261,9 @@ pub(crate) fn pixel_sound(
     // Each layer: its steady rest and its groups, its spectrum the exact bands and the rest's.
     let FlightSums {
         energy: flights,
-        energy_times_lambda: flights_lambda,
+        lambda,
     } = rest.flights;
+    let flights_lambda = lambda.lambda();
     let mut energies = steady;
     for group_sound in groups.values() {
         for (total, value) in energies[group_sound.layer as usize]

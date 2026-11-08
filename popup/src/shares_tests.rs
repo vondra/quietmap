@@ -25,7 +25,7 @@ fn road_curves() -> [Curve; PERIODS] {
 /// A line of passes at `mean_db` with `lambda` emitters within its distance.
 fn passes(weather: &Weather, mean_db: f64, lambda: f64) -> Line {
     let mean = [energy(mean_db); PERIODS];
-    Line::flights(weather, (mean, mean.map(|value| value * lambda)))
+    Line::flights(weather, (mean, [lambda; PERIODS]))
 }
 
 fn weather_of(mean_db: f64) -> Weather {
@@ -138,7 +138,7 @@ fn every_line_and_every_steady_part_has_one_row() {
             serde_json::Value::Null
         })
     };
-    let flights = ([energy(42.0); PERIODS], [energy(42.0) * 0.01; PERIODS]);
+    let flights = ([energy(42.0); PERIODS], [0.01; PERIODS]);
     let weather = flight_weather(&flights);
     let passes = |c: &Group| traffic(c).map(|fields| Passes::read(c.layer, &fields));
     let (lines, remainder) = click_lines(&selections, (&weather, flights), &passes).unwrap();

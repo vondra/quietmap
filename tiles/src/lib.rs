@@ -30,7 +30,8 @@ pub enum Kind {
     Obstacles,
     Sources,
     Aircraft,
-    /// The same format with boxes of a coarser rule, read for tiles beyond 3 km of the click.
+    /// The same format with boxes of a coarser rule, read for tiles beyond 3 km of the click and for
+    /// the flights' lambda everywhere.
     AircraftFar,
     /// What flies over each cell: flights a day above 50, 60 and 70 dB.
     AircraftEvents,
