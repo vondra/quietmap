@@ -7,6 +7,7 @@
 mod source_index;
 use source_index::Index;
 
+use crate::exact::Point;
 use crate::inputs::{KINDS, Neighbourhood};
 use physics::bound::{ReceiverBound, Spread, received_energy_bound, receiver_bound};
 use physics::doc29::atmosphere::PlaceAtmosphere;
@@ -264,6 +265,14 @@ impl<'a> Square<'a> {
             rolls,
             sources: sources.into_iter().map(|(_, file)| file).collect(),
         })
+    }
+
+    /// The distance from `point`'s receiver to candidate `index`'s emitters, as a click's
+    /// contributor takes it (`popup::evaluate::Received::slant_distance_m`).
+    pub fn slant_distance_m(&self, index: u32, point: &Point) -> f64 {
+        let candidate = &self.candidates[index as usize];
+        let height_m = self.attributes[candidate.attribute].height_m;
+        candidate.slant_distance_from(point.position, point.altitude_m, height_m)
     }
 
     /// Whether candidate `index` is loud at `position` (frame metres) for a receiver bounded by

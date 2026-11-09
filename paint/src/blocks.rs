@@ -42,13 +42,13 @@ type IndexSet = HashSet<u32, BuildHasherDefault<IndexHasher>>;
 pub const DROP_BUDGET_FRACTIONS: [f64; LAYERS] = [0.20, 0.05, 0.20, 0.20, 0.20, 0.20];
 
 /// A source loud at a corner: its index, its group, its Lden energy, its energy per period (mixed
-/// and in either weather state) and its distance from the corner.
+/// and in either weather state) and its emitters' distance from the corner's receiver.
 pub(crate) struct Ranked {
     pub index: u32,
     pub group: u64,
     pub lden: f64,
     pub energy: PairEnergy,
-    pub distance_m: f64,
+    pub slant_distance_m: f64,
 }
 
 /// A block corner: per layer every source loud there, loudest first, and the layer's total Lden
@@ -60,13 +60,13 @@ pub(crate) struct Corner {
 }
 
 impl Corner {
-    /// Adds source `index` of `group` and `layer` heard there with `energy` per period,
-    /// `distance_m` away.
+    /// Adds source `index` of `group` and `layer` heard there with `energy` per period, its
+    /// emitters `slant_distance_m` away.
     pub fn add(
         &mut self,
         layer: usize,
         (index, group): (u32, u64),
-        (energy, distance_m): (PairEnergy, f64),
+        (energy, slant_distance_m): (PairEnergy, f64),
     ) {
         let lden = lden_energy(&energy.mixed);
         self.ranked[layer].push(Ranked {
@@ -74,7 +74,7 @@ impl Corner {
             group,
             lden,
             energy,
-            distance_m,
+            slant_distance_m,
         });
         self.totals[layer] += lden;
     }
@@ -214,8 +214,8 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
                     into.states[0][p] += source.energy.states[0][p];
                     into.states[1][p] += source.energy.states[1][p];
                 }
-                if source.distance_m < nearest_m[c] {
-                    (nearest_m[c], group.nearest[c]) = (source.distance_m, index);
+                if source.slant_distance_m < nearest_m[c] {
+                    (nearest_m[c], group.nearest[c]) = (source.slant_distance_m, index);
                 }
             }
             _ => {
@@ -228,7 +228,7 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
                 group.at_corners[c] = source.energy;
                 group.nearest[c] = index;
                 nearest_m = [f64::INFINITY; 4];
-                nearest_m[c] = source.distance_m;
+                nearest_m[c] = source.slant_distance_m;
                 left_groups.push(group);
             }
         }

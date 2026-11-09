@@ -44,6 +44,7 @@ pub(crate) fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) 
             weather
         },
         distance_m,
+        slant_distance_m: distance_m,
         display: DisplayRef {
             ring: 0,
             tile: 0,
@@ -199,7 +200,7 @@ fn a_busy_roads_quiet_hours_lower_its_night_l90() {
 
 /// A car every half hour 4 m away is heard as passes about twice an hour by day; a
 /// motorway's 30,000 vehicles 300 m away run together into a steady sound; industry has no
-/// passes.
+/// passes; a dense road's vehicles run together over its axis, 4 m below the receiver.
 #[test]
 fn a_contributor_is_heard_as_its_passes_or_as_a_steady_sound() {
     let lane = contributor(7, Layer::Road, 40.0, 4.0);
@@ -214,6 +215,15 @@ fn a_contributor_is_heard_as_its_passes_or_as_a_steady_sound() {
     assert!(heard_motorway.steady);
     let industry = contributor(9, Layer::Industry, 45.0, 30.0);
     assert_eq!(passes_at(&industry, &busy), None);
+    // Over a road's axis its vehicles pass 4 m from the receiver, not none: 12,833 an hour at
+    // 50 km/h run together there (Kurze's lambda 1.03), though none is within the horizontal 0 m.
+    let mut axis = contributor(10, Layer::Road, 70.0, 0.0);
+    axis.slant_distance_m = 4.0;
+    let dense = serde_json::json!({"aadt_light": 220_000.0, "speed_kmh": 50.0,
+        "road_class": "primary"});
+    assert!(passes_at(&axis, &dense).unwrap().steady);
+    let line = Line::of(&axis.group(), &Passes::read(Layer::Road, &dense)).unwrap();
+    assert!((line.lambda[0] - 220_000.0 * 0.70 / 12.0 / 3_600.0 / (50.0 / 3.6) * 4.0).abs() < 1e-9);
 }
 
 /// Industry is steady; the same click gives the same levels whatever order the hash maps

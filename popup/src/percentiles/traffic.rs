@@ -42,12 +42,13 @@ pub fn hour_factor(profile: usize, period: usize, slot: usize) -> f64 {
 /// at the taxi emission's reference speed (m/s).
 const MOVEMENT_SPEED_M_S: f64 =
     physics::emission::airport::TAXI_REFERENCE_SPEED_KT * 1_852.0 / 3_600.0;
-/// Emitters closer than this are at this distance (m): a receiver on the line itself.
+/// Emitters closer than this are at this distance (m): a receiver on the line itself, at their
+/// height (an aeroway's taxiing engines stand as high as the receiver).
 const DISTANCE_MIN_M: f64 = 1.0;
 
 /// How a contributor is heard: its passes per hour by day, evening and night (vehicles, trains,
-/// airport movements), and whether at its distance they run together into a steady sound (on
-/// average at least one within its distance by day: Kurze's lambda of at least 1).
+/// airport movements), and whether at its emitters' distance they run together into a steady
+/// sound (on average at least one within that distance by day: Kurze's lambda of at least 1).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Heard {
     pub per_hour: [f64; PERIODS],
@@ -214,9 +215,14 @@ fn railway_traffic(fields: &serde_json::Value) -> Option<([f64; PERIODS], f64, O
     })
 }
 
-/// Kurze's lambda per period: the emitters within the contributor's distance of a line of them.
-pub(super) fn lambda(per_hour: [f64; PERIODS], speed_m_s: f64, distance_m: f64) -> [f64; PERIODS] {
-    per_hour.map(|passes| passes / 3_600.0 / speed_m_s * distance_m.max(DISTANCE_MIN_M))
+/// Kurze's lambda per period: the emitters within the receiver's distance from a line of them
+/// (`slant_distance_m`, to the emitters themselves: about 4 m over a road's axis, not none).
+pub(super) fn lambda(
+    per_hour: [f64; PERIODS],
+    speed_m_s: f64,
+    slant_distance_m: f64,
+) -> [f64; PERIODS] {
+    per_hour.map(|passes| passes / 3_600.0 / speed_m_s * slant_distance_m.max(DISTANCE_MIN_M))
 }
 
 /// How `contributor` is heard, from its display fields: its passes, or its events (church bells
@@ -235,7 +241,7 @@ pub fn passes_at(
         Passes::read(contributor.layer, fields).traffic(contributor.energy)?;
     Some(Heard {
         per_hour,
-        steady: lambda(per_hour, speed, contributor.distance_m)[0] >= STEADY_LAMBDA,
+        steady: lambda(per_hour, speed, contributor.slant_distance_m)[0] >= STEADY_LAMBDA,
     })
 }
 

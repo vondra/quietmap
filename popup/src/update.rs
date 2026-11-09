@@ -44,7 +44,11 @@ pub struct Contributor {
     pub energy: [f64; PERIODS],
     /// Its energy per meteorological state, kept apart by its pieces' favourable shares.
     pub weather: crate::percentiles::Weather,
+    /// Its nearest piece's horizontal distance, as its row shows it.
     pub distance_m: f64,
+    /// Its nearest piece's emitters' distance from the receiver, which its passes are heard at
+    /// (`Received::slant_distance_m`).
+    pub slant_distance_m: f64,
     /// Its loudest piece's display record, and that piece's Lden energy: a group's segments carry
     /// their own flows (a way's AADT 3 to 768 along it at Dobříš), and the loudest is the one its
     /// passes are heard by, whatever order its pieces come in.

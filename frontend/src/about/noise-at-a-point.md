@@ -347,8 +347,11 @@ The map does not know when a car or a plane passed; it knows how many pass and h
 vehicles a day, spread over the hours by measured hourly profiles, a railway's trains by period,
 from timetables where they exist, a flight path's flights and a runway's take-offs and landings by
 period. Each is a stream of passes at random times, and the source's distance and speed tell how
-much of the time the level spends at each value (Kurze's statistics of moving sources). A road with
-600 vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m;
+much of the time the level spends at each value (Kurze's statistics of moving sources). The
+distance runs from the point, 4 m up, to the vehicles or trains where they pass nearest, as if
+they drove on the point's own ground (on a bridge, on its deck): over a road's middle it is about
+4 m, not none; beside a cutting it reads short, beside an embankment long. A road with 600
+vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m;
 one flight a day 1 km away is near its peak for about half a minute; a take-off passes a house
 100 m beside its start of roll in about 11 seconds, as it sets off from rest. The flights heard
 and the runways' rolls are one stream, its rate and passing time weighted by sound energy; the

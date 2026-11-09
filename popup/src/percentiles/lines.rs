@@ -20,15 +20,16 @@ pub struct Line {
 }
 
 /// A source group heard at a place, what its line is made of: its group, layer, energy per period
-/// and weather, its nearest piece's distance and where its display fields are read (a click's
-/// contributor, or a painted pixel's exactly evaluated sources of one group).
+/// and weather, its nearest piece's emitters' distance from the receiver and where its display
+/// fields are read (a click's contributor, or a painted pixel's exactly evaluated sources of one
+/// group).
 #[derive(Clone, Copy)]
 pub struct Group<'a> {
     pub key: u64,
     pub layer: Layer,
     pub energy: [f64; PERIODS],
     pub weather: &'a Weather,
-    pub distance_m: f64,
+    pub slant_distance_m: f64,
     pub display: DisplayRef,
 }
 
@@ -39,7 +40,7 @@ impl crate::update::Contributor {
             layer: self.layer,
             energy: self.energy,
             weather: &self.weather,
-            distance_m: self.distance_m,
+            slant_distance_m: self.slant_distance_m,
             display: self.display,
         }
     }
@@ -74,14 +75,14 @@ impl Line {
             key,
             energy,
             weather,
-            distance_m,
+            slant_distance_m,
             ..
         } = *group;
         let (lambda, profile, duty) = match *passes {
             Passes::Steady(duty) => ([f64::INFINITY; PERIODS], None, duty),
             _ => {
                 let (per_hour, speed, profile) = passes.traffic(energy)?;
-                (lambda(per_hour, speed, distance_m), profile, None)
+                (lambda(per_hour, speed, slant_distance_m), profile, None)
             }
         };
         Some(Line {

@@ -193,7 +193,7 @@ impl PointPainter<'_> {
                 square,
                 &corners.displays,
                 scratch,
-                (point.position, reflection),
+                (point, reflection),
                 (&lists[k][..], &evaluated.pairs[range], &evaluated.bands[k]),
                 (&rest, &corners.flight_spectra.at(x, y)),
             )?;

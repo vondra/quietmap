@@ -114,22 +114,22 @@ its own source selection, façade choice and finer loudness calculation. The sam
 continents except Antarctica, but its percentages are not a population-weighted global error rate.
 Existing tiles can predate the computation tested here.
 
-Of 16,200 sampled points, 6,371 have a stored popup total of at least 1 sone. At those points,
-363 differ by more than 0.5 phon, 57 by more than 1 phon, three by more than 3 phon and none by
+Of 16,200 sampled points, 6,372 have a stored popup total of at least 1 sone. At those points,
+363 differ by more than 0.5 phon, 59 by more than 1 phon, three by more than 3 phon and none by
 more than 6 phon. The mean signed difference is +0.16 phon. By layer:
 
 | Layer | Popup points ≥ 1 sone | More than 1 phon apart |
 |---|---:|---:|
-| Roads | 5,209 | 1.56 % |
+| Roads | 5,209 | 1.59 % |
 | Railways | 833 | 0.12 % |
 | Industry | 904 | 2.32 % |
 | Buildings | 525 | 5.52 % |
 | Ships | 113 | 0.00 % |
 | Aircraft | 1,103 | 0.82 % |
-| Total | 6,371 | 0.89 % |
+| Total | 6,372 | 0.93 % |
 
-Across all points, including those below 1 sone, 1,172 differ by more than 1 phon; the largest
-quiet-total difference is 16.5 phon. There are 56 crossings of the 1-sone boundary beyond its
+Across all points, including those below 1 sone, 1,173 differ by more than 1 phon; the largest
+quiet-total difference is 16.5 phon. There are 55 crossings of the 1-sone boundary beyond its
 half-phon rounding band. No sampled point is missing from the map. Total Lden differs by more
 than 1 dB at 159 of 14,290 points with a nonnegative popup level; the largest difference between
 stored nonnegative values is 14.5 dB. Seventeen nonnegative popup values become below zero in
@@ -148,7 +148,7 @@ outdoor reference evaluates every retained loud ground source and the flights ex
 pixel in each 4 × 4 cell, omitting buildings. It shares the map's background hum, flight spectra
 and loudness resolution, so it cannot reveal an error common to those parts of both computations.
 The independent popup check is needed alongside it. On 11 November, the outdoor total differed
-by more than 1 phon at 130 of 257,377 reference pixels (0.05 %), with a mean difference of −0.07
+by more than 1 phon at 126 of 257,377 reference pixels (0.05 %), with a mean difference of −0.07
 phon and a largest difference of 4.5 phon. Total Lden differed by more than 1 dB at 120 of those
 pixels, with a largest difference of 4 dB. Some individual layers still miss the limits above.
 

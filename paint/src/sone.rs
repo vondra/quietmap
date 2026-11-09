@@ -5,7 +5,7 @@
 //! source left out; the quiet hum held steady with its own bands; the flights one line.
 
 use crate::blocks::LeftGroup;
-use crate::exact::{LAYERS, PairEnergy, PointBands};
+use crate::exact::{LAYERS, PairEnergy, Point, PointBands};
 use crate::flights::FlightSums;
 use crate::square::Square;
 use foldhash::fast::FixedState;
@@ -74,13 +74,14 @@ pub(crate) struct SoundBesideExactPairs<'a> {
     pub flights: FlightSums,
 }
 
-/// One source group's exact pairs at a pixel: its energy and binned weather, its loudest pair's
-/// display record (as a click's contributor) and that pair's Lden energy.
+/// One source group's exact pairs at a pixel: its energy and binned weather, its nearest emitters'
+/// distance from the pixel's receiver, its loudest pair's display record (as a click's contributor)
+/// and that pair's Lden energy.
 struct GroupSound {
     layer: Layer,
     energy: [f64; PERIODS],
     weather: Weather,
-    distance_m: f64,
+    slant_distance_m: f64,
     display: (DisplayRef, f64),
 }
 
@@ -96,7 +97,7 @@ pub(crate) struct PixelSoundScratch {
 pub(crate) fn pixel_ndens(
     square: &Square,
     displays: &Displays,
-    position_reflection: ([f64; 2], f64),
+    point_reflection: (&Point, f64),
     exact: (&[u32], &[PairEnergy], &PointBands),
     rest: (&SoundBesideExactPairs, &[f64; CLASS_THIRDS]),
     resolution: Resolution,
@@ -105,7 +106,7 @@ pub(crate) fn pixel_ndens(
         square,
         displays,
         &mut PixelSoundScratch::default(),
-        position_reflection,
+        point_reflection,
         exact,
         rest,
     )?
@@ -172,14 +173,15 @@ impl PixelSound {
     }
 }
 
-/// What the pixel hears: its exact pairs (candidates and their energies) and their `bands`, the
-/// `rest`, all times its `reflection`; the flights' spectrum `flight_spectrum_db` (unweighted third
-/// octaves from 50 Hz); as each layer's lines over its steady energy and the curves.
+/// What the pixel's `point` hears: its exact pairs (candidates and their energies) and their
+/// `bands`, the `rest`, all times its `reflection`; the flights' spectrum `flight_spectrum_db`
+/// (unweighted third octaves from 50 Hz); as each layer's lines over its steady energy and the
+/// curves.
 pub(crate) fn pixel_sound(
     square: &Square,
     displays: &Displays,
     scratch: &mut PixelSoundScratch,
-    (position, reflection): ([f64; 2], f64),
+    (point, reflection): (&Point, f64),
     (candidates, energies, bands): (&[u32], &[PairEnergy], &PointBands),
     (rest, flight_spectrum_db): (&SoundBesideExactPairs, &[f64; CLASS_THIRDS]),
 ) -> Result<PixelSound, String> {
@@ -193,7 +195,7 @@ pub(crate) fn pixel_sound(
                 layer: candidate.layer,
                 energy: [0.0; PERIODS],
                 weather: Weather::default(),
-                distance_m: f64::INFINITY,
+                slant_distance_m: f64::INFINITY,
                 display: (candidate.display, f64::NEG_INFINITY),
             });
         let lden = lden_energy(&energy.mixed);
@@ -212,9 +214,9 @@ pub(crate) fn pixel_sound(
             *total += value;
         }
         group_sound.weather.add(&mixed, &states);
-        group_sound.distance_m = group_sound
-            .distance_m
-            .min(candidate.distance_from(position));
+        group_sound.slant_distance_m = group_sound
+            .slant_distance_m
+            .min(square.slant_distance_m(index, point));
     }
     // What the block left out of a group sounds with its passes, and leaves the steady rest: its
     // energy, in either weather state, joins the group's line, or is a line of its own taken from
@@ -240,17 +242,17 @@ pub(crate) fn pixel_sound(
         }
         let nearest_m = (group.nearest.iter())
             .filter(|&&index| index != u32::MAX)
-            .map(|&index| square.candidates[index as usize].distance_from(position))
+            .map(|&index| square.slant_distance_m(index, point))
             .fold(f64::INFINITY, f64::min);
         let loudest = &square.candidates[group.loudest as usize];
         let group_sound = groups.entry(group.key).or_insert_with(|| GroupSound {
             layer: loudest.layer,
             energy: [0.0; PERIODS],
             weather: Weather::default(),
-            distance_m: nearest_m,
+            slant_distance_m: nearest_m,
             display: (loudest.display, lden_energy(&left)),
         });
-        group_sound.distance_m = group_sound.distance_m.min(nearest_m);
+        group_sound.slant_distance_m = group_sound.slant_distance_m.min(nearest_m);
         group_sound.weather.add(&left, &states);
         let layer = group_sound.layer as usize;
         for p in 0..PERIODS {
@@ -291,7 +293,7 @@ pub(crate) fn pixel_sound(
             layer: group_sound.layer,
             energy: group_sound.energy,
             weather: &group_sound.weather,
-            distance_m: group_sound.distance_m,
+            slant_distance_m: group_sound.slant_distance_m,
             display: group_sound.display.0,
         })
         .collect();

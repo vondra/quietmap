@@ -141,7 +141,7 @@ pub(crate) fn paint_points(
             let ndens = pixel_ndens(
                 square,
                 displays,
-                (points[k].position, reflection),
+                (&points[k], reflection),
                 (
                     &candidates[range.clone()],
                     &evaluated.pairs[range],
@@ -213,7 +213,7 @@ pub fn sounds_at(
                 square,
                 &displays,
                 &mut PixelSoundScratch::default(),
-                (point.position, point.reflection()),
+                (point, point.reflection()),
                 (&loud, &energies, &bands),
                 (&rest, &flight_spectra.at(at % n, at / n)),
             )

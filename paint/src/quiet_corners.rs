@@ -44,7 +44,7 @@ pub(crate) fn loudness_at_corner(
     crate::sone::pixel_ndens(
         painter.square,
         &corners.displays,
-        (corners.corner_points[at].position, 1.0),
+        (&corners.corner_points[at], 1.0),
         (&[], &[], &crate::exact::PointBands::default()),
         (&rest, &corners.flight_spectra.at(x, y)),
         Resolution::MAP,

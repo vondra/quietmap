@@ -235,11 +235,11 @@ pub fn corners_of(
             for (pair, energy) in pairs.iter().zip(&evaluated.pairs) {
                 let (k, index) = (pair.point, pair.candidate);
                 let candidate = &square.candidates[index as usize];
-                let distance_m = candidate.distance_from(corner_points[k as usize].position);
+                let slant_distance_m = square.slant_distance_m(index, &corner_points[k as usize]);
                 corners[k as usize].add(
                     candidate.layer as usize,
                     (index, candidate.group_key),
-                    (*energy, distance_m),
+                    (*energy, slant_distance_m),
                 );
             }
             let hum_points: Vec<Point> = grid
