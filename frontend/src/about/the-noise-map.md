@@ -99,7 +99,7 @@ calculation at its point. The offers returned for each view are a selection, not
 The map's target is to stay within 1 phon of the popup, about 7 % of loudness. Buildings and
 individual noise layers can differ more.
 
-On 11 November 2026, newly calculated tiles met the 1-phon target at 99.0 % of sampled points
+On 11 November 2026, newly calculated tiles met the 1-phon target at 99.1 % of sampled points
 where the popup gave at least 1 sone, across 54 squares around the world. Differences are larger
 at very quiet points and in individual layers. These checks compare computations;
 [Validation](/about/validation) compares the model with microphone measurements.
@@ -115,21 +115,21 @@ continents except Antarctica, but its percentages are not a population-weighted 
 Existing tiles can predate the computation tested here.
 
 Of 16,200 sampled points, 6,371 have a stored popup total of at least 1 sone. At those points,
-364 differ by more than 0.5 phon, 62 by more than 1 phon, three by more than 3 phon and none by
+363 differ by more than 0.5 phon, 57 by more than 1 phon, three by more than 3 phon and none by
 more than 6 phon. The mean signed difference is +0.16 phon. By layer:
 
 | Layer | Popup points ≥ 1 sone | More than 1 phon apart |
 |---|---:|---:|
-| Roads | 5,209 | 1.54 % |
-| Railways | 833 | 0.96 % |
+| Roads | 5,209 | 1.56 % |
+| Railways | 833 | 0.12 % |
 | Industry | 904 | 2.32 % |
 | Buildings | 525 | 5.52 % |
 | Ships | 113 | 0.00 % |
 | Aircraft | 1,103 | 0.82 % |
-| Total | 6,371 | 0.97 % |
+| Total | 6,371 | 0.89 % |
 
-Across all points, including those below 1 sone, 1,178 differ by more than 1 phon; the largest
-quiet-total difference is 16.5 phon. There are 57 crossings of the 1-sone boundary beyond its
+Across all points, including those below 1 sone, 1,172 differ by more than 1 phon; the largest
+quiet-total difference is 16.5 phon. There are 56 crossings of the 1-sone boundary beyond its
 half-phon rounding band. No sampled point is missing from the map. Total Lden differs by more
 than 1 dB at 159 of 14,290 points with a nonnegative popup level; the largest difference between
 stored nonnegative values is 14.5 dB. Seventeen nonnegative popup values become below zero in
@@ -174,7 +174,8 @@ source counts as loud at a point where its upper bound there reaches 20 dB.
 - A block's pixels compute exactly, of the sources loud at the pixel, those that cross the block or
   one of the eight around it and, layer by layer, the loudest at the block's corners until what
   each corner leaves out weighs at most 20 % of the layer's loud sources at the block's quietest
-  corner.
+  corner, 5 % for the railways: blended between the corners, a railway's few trains are heard at
+  the wrong loudness.
 - What is left out is blended between the block's four corners, and weakened at a pixel as much as
   the block's computed far sources are there, as behind a house.
 - The hum, the sources under 20 dB, is estimated with the popup's physics and error budget at

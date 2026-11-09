@@ -28,13 +28,18 @@ impl Hasher for IndexHasher {
 type IndexSet = HashSet<u32, BuildHasherDefault<IndexHasher>>;
 
 /// A block's corners admit their loudest sources, layer by layer, until the energy each corner has
-/// not admitted is at most this share of the block's quietest corner's: dev1's speed dial
+/// not admitted is at most this share of the block's quietest corner's, per layer in `Layer::ALL`'s
+/// order (road, railway, industry, building, ship, aircraft): dev1's speed dial
 /// (`relevance_partition.rs`; 0.15 chosen by the owner 2026-09-02, on dev1's etalon window
 /// breaking only the railways' rung over 6 dB). 0.20 since 2026-10-13, the owner's choice: with
 /// the left-out's reach on Dobris's four squares 13 % fewer pairs and 7 % less time, the total's
 /// drift within every rung (over 3 phon 0 -> 2 cells), the railway over 1 phon 1.4 -> 2.0 %, the
-/// buildings 0.8 -> 1.1 %; 0.25 no faster.
-pub const DROP_BUDGET_FRACTION: f64 = 0.20;
+/// buildings 0.8 -> 1.1 %; 0.25 no faster. The railways' 0.05 since 2026-11-09: a railway's few
+/// large pieces, left out, are blended from the corners as lines of passes, which read its
+/// loudness wrong where its energy is right (over 1 phon from the v10 etalon at 2.27 % of its
+/// cells, 0.49 % at 0.05, the other layers within 0.01 %, Dobris 2.7 % slower; 0.05 for every
+/// layer would admit 80 % more pieces).
+pub const DROP_BUDGET_FRACTIONS: [f64; LAYERS] = [0.20, 0.05, 0.20, 0.20, 0.20, 0.20];
 
 /// A source loud at a corner: its index, its group, its Lden energy, its energy per period (mixed
 /// and in either weather state) and its distance from the corner.
@@ -132,11 +137,11 @@ fn admission(local: Vec<u32>, corners: [&Corner; 4]) -> (Vec<u32>, Vec<u32>, Ind
     let mut admitted: IndexSet = local.iter().copied().collect();
     let mut exact = local;
     let mut beyond = Vec::new();
-    for layer in 0..LAYERS {
+    for (layer, fraction) in DROP_BUDGET_FRACTIONS.into_iter().enumerate() {
         let quietest = (corners.iter())
             .map(|corner| corner.totals[layer])
             .fold(f64::INFINITY, f64::min);
-        let budget = DROP_BUDGET_FRACTION * quietest;
+        let budget = fraction * quietest;
         for corner in corners {
             let ranked = &corner.ranked[layer];
             let mut unadmitted: f64 = (ranked.iter())
@@ -250,21 +255,17 @@ mod tests {
     use super::*;
     use tiles::sources::Layer;
 
-    /// A corner of road sources, each its own group, the same energy in every period, its index in
-    /// metres away.
-    fn corner(road: Vec<(u32, f64)>) -> Corner {
+    /// A corner of `layer` sources, each its own group, the same energy in every period, its index
+    /// in metres away.
+    fn corner(layer: Layer, sources: Vec<(u32, f64)>) -> Corner {
         let mut corner = Corner::default();
-        for (index, energy) in road {
+        for (index, energy) in sources {
             let group = u64::from(index);
             let energy = PairEnergy {
                 mixed: [energy; PERIODS],
                 states: [[energy; PERIODS]; 2],
             };
-            corner.add(
-                Layer::Road as usize,
-                (index, group),
-                (energy, f64::from(index)),
-            );
+            corner.add(layer as usize, (index, group), (energy, f64::from(index)));
         }
         corner
     }
@@ -272,12 +273,13 @@ mod tests {
     /// dev1's rule: a block keeps its own sources (9), then each corner admits its loudest until
     /// what it has not admitted is within 20 % of the quietest corner's layer. Corners of 93 and
     /// 23 give a budget of 4.6: the loud corners admit both their sources and nothing is left out.
-    /// Four corners of 100 give 20: source 2's 12 is left out, blended from the corners.
+    /// Four corners of 100 give 20: source 2's 12 is left out, blended from the corners; a
+    /// railway's corners of 100 give 5, and source 2 is computed exactly.
     #[test]
     fn a_block_admits_the_loudest_until_the_rest_is_within_the_quietest_corners_budget() {
         let road = Layer::Road as usize;
-        let loud = corner(vec![(1, 80.0), (2, 12.0), (9, 1.0)]);
-        let quiet = corner(vec![(2, 12.0), (1, 10.0), (9, 1.0)]);
+        let loud = corner(Layer::Road, vec![(1, 80.0), (2, 12.0), (9, 1.0)]);
+        let quiet = corner(Layer::Road, vec![(2, 12.0), (1, 10.0), (9, 1.0)]);
         let block = admit(vec![9], [&loud, &loud, &quiet, &quiet]);
         assert_eq!(block.exact, vec![1, 2, 9]);
         assert!(
@@ -287,7 +289,7 @@ mod tests {
                 .all(|corner| corner[road] == [0.0; PERIODS])
         );
         assert!(block.left_groups.is_empty());
-        let even = corner(vec![(1, 88.0), (2, 12.0)]);
+        let even = corner(Layer::Road, vec![(1, 88.0), (2, 12.0)]);
         let block = admit(Vec::new(), [&even; 4]);
         assert_eq!(block.exact, vec![1]);
         assert!(
@@ -307,5 +309,9 @@ mod tests {
             nearest: [2; 4],
         };
         assert_eq!(block.left_groups, vec![left]);
+        let railway = corner(Layer::Railway, vec![(1, 88.0), (2, 12.0)]);
+        let block = admit(Vec::new(), [&railway; 4]);
+        assert_eq!(block.exact, vec![1, 2]);
+        assert!(block.left_groups.is_empty());
     }
 }
