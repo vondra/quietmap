@@ -16,7 +16,7 @@ export default function StayHeader({ stay }: { stay: Stay }) {
       {stay.thumbnail && (
         <img src={stay.thumbnail} alt="" className="h-[72px] w-24 shrink-0 rounded-md bg-muted object-cover" />
       )}
-      <div className="min-w-0 flex-1 pr-5">
+      <div className="min-w-0 flex-1">
         <div className="line-clamp-2 text-sm font-semibold leading-tight text-foreground">{stay.name}</div>
         {(stay.stars != null || stay.score != null) && (
           <div className="mt-0.5 flex items-baseline gap-1.5 text-xs text-muted-foreground">

@@ -4,6 +4,7 @@ import type { Metric } from '../lib/hm3-decoder'
 import { X } from 'lucide-react'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
+import SharePlace from './SharePlace'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import type { Stay } from '../lib/stays'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
@@ -12,9 +13,8 @@ import { ICON_BUTTON } from './ui/button'
 // Lazy popup body: see DetailCard.
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
 
-// The handle over the sheet's body (measured on a 390 x 844 phone: 28 px, the opened sheet reaching
-// 410 px from the top).
-const SHEET_CHROME_PX = 28
+// The handle and touch actions above the sheet's body.
+const SHEET_CHROME_PX = 44
 
 /** How far from the viewport's top the opened sheet reaches at most: its body is at most half the
  *  viewport less 16 px and the attribution footer, the handle over it. */
@@ -31,6 +31,7 @@ interface MobileDetailSheetProps {
   position?: { lat: number; lng: number } | null
   error?: string | null
   onClose: () => void
+  getShareUrl: () => string
   onHighlight: (key: string | null) => void
   calculationOpen: boolean
   onCalculationToggle: () => void
@@ -39,7 +40,7 @@ interface MobileDetailSheetProps {
   stay: Stay | null
 }
 
-export default function MobileDetailSheet({ metric, data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ metric, data, position, error, onClose, getShareUrl, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -114,11 +115,14 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
       >
         {/* A visible way to close it, as the desktop card has; a swipe down on the handle closes it
             too, but nothing on a phone tells that. */}
-        <button type="button" onClick={onClose} aria-label="Close" className={`${ICON_BUTTON} absolute top-0 right-1.5 z-10`}>
-          <X className="size-5" />
-        </button>
+        <div className="absolute top-0 right-1.5 z-10 flex">
+          <SharePlace key={`${position.lat},${position.lng}`} getUrl={getShareUrl} />
+          <button type="button" onClick={onClose} aria-label="Close" className={`${ICON_BUTTON} size-11`}>
+            <X className="size-5" />
+          </button>
+        </div>
         <div
-          className="flex justify-center py-3 cursor-grab"
+          className="flex h-11 items-center justify-center cursor-grab"
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}

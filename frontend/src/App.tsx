@@ -32,7 +32,7 @@ import { defaultStaySearch, freshSearch, type Stay, type StaySearch } from './li
 
 
 export default function App() {
-  const { initial, updateUrl } = useUrlState()
+  const { initial, updateUrl, getShareUrl } = useUrlState()
 
   const [selectedLocation, setSelectedLocation] = useState<SelectedLocation | null>(null)
   // A search's result on its way: its name, for the history when its popup opens there.
@@ -470,6 +470,7 @@ export default function App() {
             position={detailPosition}
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
+            getShareUrl={getShareUrl}
             onHighlight={setHighlighted}
             calculationOpen={calculationOpen && desktop}
             onCalculationToggle={toggleCalculation}
@@ -557,6 +558,7 @@ export default function App() {
         position={detailPosition}
         error={noiseDetailError}
         onClose={handleNoiseClose}
+        getShareUrl={getShareUrl}
         onHighlight={setHighlighted}
         calculationOpen={calculationOpen && !desktop}
         onCalculationToggle={toggleCalculation}

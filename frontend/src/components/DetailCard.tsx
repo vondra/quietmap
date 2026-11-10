@@ -6,6 +6,7 @@ import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
+import SharePlace from './SharePlace'
 import { ICON_BUTTON } from './ui/button'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import type { Stay } from '../lib/stays'
@@ -23,6 +24,7 @@ interface DetailCardProps {
   position?: { lat: number; lng: number } | null
   error?: string | null
   onNoiseClose: () => void
+  getShareUrl: () => string
   onHighlight: (key: string | null) => void
   calculationOpen: boolean
   onCalculationToggle: () => void
@@ -31,7 +33,7 @@ interface DetailCardProps {
   stay: Stay | null
 }
 
-export default function DetailCard({ metric, noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: DetailCardProps) {
+export default function DetailCard({ metric, noiseData, position, error, onNoiseClose, getShareUrl, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
@@ -50,11 +52,14 @@ export default function DetailCard({ metric, noiseData, position, error, onNoise
   // the card used to drag the whole popup left on vertical scroll.
   return (
     <FloatingCard className={`relative p-0 pointer-events-auto min-h-0 overflow-y-auto overflow-x-clip ${calculationOpen ? '' : 'max-h-[50dvh]'}`} ref={scrollRef}>
-      {/* The close floats at the card's head, the loudness beside it, and stays in sight while the
+      {/* The actions float at the card's head, the loudness beside them, and stay in sight while the
           answer scrolls under it. */}
-      <button onClick={onNoiseClose} className={`${ICON_BUTTON} sticky top-0 z-10 float-right m-0.5 bg-card/90`} aria-label="Close">
-        <X className="size-4" />
-      </button>
+      <div className="sticky top-0 z-10 float-right m-0.5 flex bg-card/90">
+        <SharePlace key={`${position.lat},${position.lng}`} getUrl={getShareUrl} />
+        <button onClick={onNoiseClose} className={`${ICON_BUTTON} pointer-coarse:size-11`} aria-label="Close">
+          <X className="size-4 pointer-coarse:size-5" />
+        </button>
+      </div>
       {stay && <StayHeader stay={stay} />}
       {showSkeleton
         ? <DetailSkeleton position={position} error={error} />

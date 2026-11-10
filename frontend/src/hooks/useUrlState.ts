@@ -169,14 +169,19 @@ function buildHash(state: UrlWrite): string {
 
 export function useUrlState() {
   const initial = useMemo(() => parseHash(), [])
+  const latestState = useRef<UrlWrite>(initial)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const updateUrl = useCallback((state: UrlWrite) => {
+    latestState.current = state
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
       window.history.replaceState(null, '', buildHash(state))
     }, 300)
   }, [])
 
-  return { initial, updateUrl }
+  // Share the latest selection even before the address debounce fires, without page query strings.
+  const getShareUrl = useCallback(() => `${window.location.origin}/${buildHash(latestState.current)}`, [])
+
+  return { initial, updateUrl, getShareUrl }
 }

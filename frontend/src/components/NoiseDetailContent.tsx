@@ -146,7 +146,7 @@ export default function NoiseDetailContent({ metric, data, onHighlight, calculat
               )}
           </div>
         ) : <span />}
-        <div className="text-right pr-6 text-xs text-muted-foreground/60 tabular-nums leading-tight">
+        <div className="text-right text-xs text-muted-foreground/60 tabular-nums leading-tight">
           <div>{centerLat.toFixed(4)}, {centerLng.toFixed(4)}</div>
           {data.elevation_m > 0 && <div>{Math.round(data.elevation_m)} m a.s.l.</div>}
           {data.partial && <div data-testid="popup-refining" className="animate-pulse">refining…</div>}

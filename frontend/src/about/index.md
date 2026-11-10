@@ -67,6 +67,11 @@ By design: under 1 sone, about as loud as a quiet room, the map has no colour. A
 **Can I use screenshots or embed the map?**
 Yes, free, with visible "quietmap.org" attribution — details in the [terms of use](/about/terms).
 
+**How can I share or cite a place?**
+Open a place and choose **Share this place** to send or copy its link, keeping the point, zoom,
+noise layers and unit. To cite a result, include quietmap.org, that link, the value and unit,
+and the date you read it; the link shows the latest calculation when opened.
+
 ## Help us make it better
 
 **See something wrong on your street?** Write to [info@quietmap.org](mailto:info@quietmap.org) with the address. Every confirmed report feeds the validation loop — real-world corrections are the most valuable data we get.
