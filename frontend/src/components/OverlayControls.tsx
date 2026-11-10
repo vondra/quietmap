@@ -1,8 +1,7 @@
 // The overlay switches: the quiet zones with their threshold slider, and the places to stay with
 // the stay they are searched for.
-import { useState, useEffect, useRef } from 'react'
 import { BedDouble, TreePine } from 'lucide-react'
-import { QUIET_THRESHOLDS } from '../hooks/useUrlState'
+import { QUIET_THRESHOLDS } from '../lib/url-state'
 import type { Metric } from '../lib/hm3-decoder'
 import type { StaySearch } from '../lib/stays'
 import StaySearchFields from './StaySearchFields'
@@ -48,23 +47,14 @@ function LoudnessSlider({ metric, value, onChange, testId }: {
   metric: Metric; value: number; onChange: (v: number) => void; testId: string
 }) {
   const thresholds = QUIET_THRESHOLDS[metric]
-  const [local, setLocal] = useState(value)
-  const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
-  useEffect(() => { setLocal(value) }, [value])
-  useEffect(() => {
-    if (local === value) return
-    const t = setTimeout(() => onChangeRef.current(local), 300)
-    return () => clearTimeout(t)
-  }, [local, value])
-  const at = Math.max(0, thresholds.findIndex((t) => t === local))
+  const at = Math.max(0, thresholds.findIndex(t => t === value))
   return (
     <div className="flex items-center gap-2 ml-7 mt-0.5 mb-1">
       <span className="text-xs text-muted-foreground shrink-0">below</span>
       <input type="range" data-testid={testId} value={at}
-        onChange={(e) => setLocal(thresholds[parseInt(e.target.value, 10)])} min={0} max={thresholds.length - 1} step={1}
+        onChange={(e) => onChange(thresholds[parseInt(e.target.value, 10)])} min={0} max={thresholds.length - 1} step={1}
         className="flex-1 h-1 accent-primary cursor-pointer" />
-      <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">{local} {metric === 'lden' ? 'dB' : 'sone'}</span>
+      <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">{value} {metric === 'lden' ? 'dB' : 'sone'}</span>
     </div>
   )
 }

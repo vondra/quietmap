@@ -2,7 +2,8 @@
 // passes; nothing for a steady source), how far, and its share of the place's loudness; it opens to
 // its details. A contributor has one, the aircraft layer as a whole has one (it lists no
 // contributors), and so has the rest of the sources, together.
-import { useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
+import { usePopupState } from '../../../hooks/usePopupState'
 import type { Contributor, LayerLevels, TopFlight } from '../../../types/noise'
 import { fmtInt, fmtPercent } from '../../../utils/formatters'
 import { FadingText } from '../../ui/fading-text'
@@ -18,7 +19,8 @@ export function rowRank(share: number | null | undefined, lden: number | null | 
   return share ?? (lden == null ? -Infinity : 10 ** (lden / 10))
 }
 
-function SourceRow({ label, distance, heard, percent, onToggle, children }: {
+function SourceRow({ stateKey, label, distance, heard, percent, onToggle, children }: {
+  stateKey: string
   label: string
   distance: string
   /** Why it is loud, short: how often it passes; none for a steady source. */
@@ -31,7 +33,7 @@ function SourceRow({ label, distance, heard, percent, onToggle, children }: {
   children?: ReactNode
 }) {
   // Keyed by a stable id, so the row stays open across streamed updates.
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = usePopupState<boolean>(stateKey, false)
   return (
     <div className="border-b border-border/50 last:border-b-0">
       <button
@@ -74,6 +76,7 @@ export function ContributorRow({ c, percent, onHighlight, click }: {
 }) {
   return (
     <SourceRow
+      stateKey={`source:${c.id}`}
       label={contributorLabel(c)}
       distance={formatDist(c.distance_m)}
       heard={heardText(c.source_type, c.heard, c.metadata)}
@@ -93,7 +96,7 @@ export function AircraftLayerRow({ layer, percent, flights, onHighlightFlight }:
   onHighlightFlight: (key: string | null) => void
 }) {
   return (
-    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={flightsText(layer.events)} percent={percent}>
+    <SourceRow stateKey="aircraft" label={SOURCE_LABELS.aircraft} distance="" heard={flightsText(layer.events)} percent={percent}>
       <AircraftLayerDetail received={layer} alone={layer.nden_sone} kinds={layer.kinds} events={layer.events} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )
@@ -108,7 +111,7 @@ export function RestRow({ sources, percent, children }: {
   children?: ReactNode
 }) {
   return (
-    <SourceRow label={`Rest (${fmtInt(sources)})`} distance="" heard={null} percent={percent}>
+    <SourceRow stateKey="rest" label={`Rest (${fmtInt(sources)})`} distance="" heard={null} percent={percent}>
       {children && <div className="pl-3">{children}</div>}
     </SourceRow>
   )

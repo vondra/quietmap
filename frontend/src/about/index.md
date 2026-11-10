@@ -68,8 +68,11 @@ By design: under 1 sone, about as loud as a quiet room, the map has no colour. A
 Yes, free, with visible "quietmap.org" attribution — details in the [terms of use](/about/terms).
 
 **How can I share or cite a place?**
-Open a place and choose **Share this place** to send or copy its link, keeping the point, zoom,
-noise layers and unit. To cite a result, include quietmap.org, that link, the value and unit,
+Copy the browser address, or choose **Share this place** at an open place. The link keeps the map
+view, open panels and their scroll positions, source details, layers, unit, quiet threshold, reachable area, and the selected
+stay with its dates, guests and filters. Saved names, history, recordings and account details remain
+private. Offers and noise values are loaded again when the link is opened; a missing offer or
+past dates are explained. To cite a result, include quietmap.org, that link, the value and unit,
 and the date you read it; the link shows the latest calculation when opened.
 
 ## Help us make it better

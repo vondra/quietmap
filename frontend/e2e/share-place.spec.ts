@@ -8,7 +8,7 @@ const badge = (page: Page) => page.getByTestId('noise-badge').filter({ visible: 
 
 for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', () => {
   if (phone) test.use(PHONE)
-  test('copying before the address updates preserves the point, layers and unit for another visitor', async ({ page, context, browser }) => {
+  test('copying the current address preserves the point, layers and unit for another visitor', async ({ page, context, browser }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.addInitScript(() => Object.defineProperty(navigator, 'share', { value: undefined }))
     await installHermeticMap(page, POINT)
@@ -22,7 +22,7 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
     const [point] = await popupRequests(page)
     await sendPopupLine(page, popupUpdate(1, false, point.lat, point.lng, 60))
     await expect(badge(page)).toContainText('60.0 dB')
-    expect(new URL(page.url()).hash).not.toContain('d=')
+    expect(new URL(page.url()).hash).toContain('d=')
     await shareButton(page).click()
     await expect(page.getByRole('status').filter({ visible: true })).toHaveText('Link copied')
     const link = await page.evaluate(() => navigator.clipboard.readText())

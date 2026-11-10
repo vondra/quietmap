@@ -1,5 +1,7 @@
 // The phone layer panel: a bottom sheet with a drag handle.
 import { useState, useRef, useCallback } from 'react'
+import { useViewScroll } from '../hooks/useViewScroll'
+import { useIsDesktop } from '../hooks/useIsDesktop'
 import LayerControlsBody, { type LayerControlsBodyProps } from './LayerControlsBody'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
 
@@ -9,6 +11,7 @@ interface LayersPanelProps extends LayerControlsBodyProps {
 }
 
 export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps) {
+  const scrollRef = useViewScroll('layers', !useIsDesktop())
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
   const dragRef = useRef({ startY: 0, isDragging: false })
@@ -78,7 +81,7 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
         <div className="w-10 h-1 bg-muted-foreground/30 rounded-full" />
       </div>
 
-      <div className="max-h-[60dvh] overflow-y-auto px-4 pb-3 [scrollbar-gutter:stable] scroll-py-1.5">
+      <div data-testid="layers-scroll" ref={scrollRef} className="max-h-[60dvh] overflow-y-auto px-4 pb-3 [scrollbar-gutter:stable] scroll-py-1.5">
         <LayerControlsBody {...body} dividerSpacing="comfortable" />
       </div>
     </div>

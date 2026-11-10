@@ -1,55 +1,33 @@
-// Keeps the map view and the URL hash in step, both ways.
-import { useEffect, useRef, useCallback } from 'react'
+// The settled camera and address stay in step, including orientation and viewport padding.
+import { useEffect } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
-import { parseHash, type UrlState } from '../hooks/useUrlState'
+import { pixelPadding, type MapCamera } from '../lib/url-state'
 
-interface MapStateSyncProps {
-  onViewChange: (lat: number, lng: number, zoom: number) => void
-  onHashState: (next: UrlState) => void
-}
-
-/** URL ↔ map view: debounced moveend → hash, and an external hash change → map. */
-export default function MapStateSync({ onViewChange, onHashState }: MapStateSyncProps) {
+export default function MapStateSync({ view, onViewChange }: { view: MapCamera; onViewChange: (view: MapCamera) => void }) {
   const { current: map } = useMap()
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const handleMove = useCallback(() => {
+  useEffect(() => {
     if (!map) return
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => {
-      const c = map.getCenter()
-      onViewChange(c.lat, c.lng, map.getZoom())
-    }, 200)
+    const move = () => {
+      const canvas = map.getCanvas()
+      const center = map.getCenter(), padding = map.getPadding()
+      onViewChange({ lat: center.lat, lng: center.lng, zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch(),
+        padding: { top: (padding.top ?? 0) / canvas.clientHeight, right: (padding.right ?? 0) / canvas.clientWidth,
+          bottom: (padding.bottom ?? 0) / canvas.clientHeight, left: (padding.left ?? 0) / canvas.clientWidth } })
+    }
+    map.on('moveend', move)
+    return () => { map.off('moveend', move) }
   }, [map, onViewChange])
-
+  const { lat, lng, zoom, bearing, pitch } = view
+  const { top, right, bottom, left } = view.padding
   useEffect(() => {
     if (!map) return
-    map.on('moveend', handleMove)
-    return () => {
-      map.off('moveend', handleMove)
-      if (timerRef.current) clearTimeout(timerRef.current)
-    }
-  }, [map, handleMove])
-
-  // A link pasted into an already open tab (or a history step) fires
-  // hashchange — our own replaceState writes never do. Jump when the hash
-  // names a view the map does not already show at the hash's own precision
-  // (a jump would only echo the hash back), then let App apply the other
-  // tokens; before this the URL changed and the map stayed put (audit
-  // 2026-09-06).
-  useEffect(() => {
-    if (!map) return
-    const onHashChange = () => {
-      const next = parseHash()
-      const c = map.getCenter()
-      const there = c.lat.toFixed(4) === next.lat.toFixed(4) && c.lng.toFixed(4) === next.lng.toFixed(4)
-        && map.getZoom().toFixed(2) === next.zoom.toFixed(2)
-      if (next.hasExplicitView && !there) map.jumpTo({ center: [next.lng, next.lat], zoom: next.zoom })
-      onHashState(next)
-    }
-    window.addEventListener('hashchange', onHashChange)
-    return () => window.removeEventListener('hashchange', onHashChange)
-  }, [map, onHashState])
-
+    const canvas = map.getCanvas()
+    const center = map.getCenter(), currentPadding = map.getPadding()
+    const padding = pixelPadding({ top, right, bottom, left }, canvas.clientWidth, canvas.clientHeight)
+    const same = Math.abs(center.lat - lat) < 0.000001 && Math.abs(center.lng - lng) < 0.000001
+      && Math.abs(map.getZoom() - zoom) < 0.0001 && Math.abs(map.getBearing() - bearing) < 0.0001 && Math.abs(map.getPitch() - pitch) < 0.0001
+    const samePadding = (['top', 'right', 'bottom', 'left'] as const).every(side => Math.abs((currentPadding[side] ?? 0) - padding[side]) < 0.01)
+    if (!same || !samePadding) map.jumpTo({ center: [lng, lat], zoom, bearing, pitch, padding })
+  }, [map, lat, lng, zoom, bearing, pitch, top, right, bottom, left])
   return null
 }

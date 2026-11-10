@@ -5,6 +5,8 @@
 // layers it looked odd). Signed in, the account's tab shows the address's first letter; on a server
 // without the sign-in, or before it has answered, the layers alone.
 import type { KeyboardEvent, ReactNode } from 'react'
+import { useViewScroll } from '../hooks/useViewScroll'
+import { useIsDesktop } from '../hooks/useIsDesktop'
 import { ChevronDown, ChevronUp, Layers3, UserRound } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import LayerControlsBody, { type LayerControlsBodyProps } from './LayerControlsBody'
@@ -19,6 +21,7 @@ export default function ControlCard({ tab, onTabChange, account, onSignOut, onDe
   tab: CardTab | null
   onTabChange: (tab: CardTab | null) => void
 }) {
+  const scrollRef = useViewScroll('layers', useIsDesktop())
   const withAccount = account === null || isSignedIn(account)
   const tabs: CardTab[] = withAccount ? ['layers', 'account'] : ['layers']
   // The tab open while it is there (the account's goes with the sign-in), and the tab the keys are on:
@@ -69,7 +72,7 @@ export default function ControlCard({ tab, onTabChange, account, onSignOut, onDe
       </div>
       {open === 'layers' && (
         // Only the body scrolls when the column squeezes the card (short viewports).
-        <div role="tabpanel" id="card-panel" aria-labelledby="card-tab-layers" className="min-h-0 overflow-y-auto border-t border-border px-2.5 py-1.5 [scrollbar-gutter:stable] scroll-py-1.5">
+        <div data-testid="layers-scroll" ref={scrollRef} role="tabpanel" id="card-panel" aria-labelledby="card-tab-layers" className="min-h-0 overflow-y-auto border-t border-border px-2.5 py-1.5 [scrollbar-gutter:stable] scroll-py-1.5">
           <LayerControlsBody {...layers} dividerSpacing="compact" />
         </div>
       )}

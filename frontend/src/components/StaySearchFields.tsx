@@ -50,13 +50,6 @@ export default function StaySearchFields({ search, onChange, maxPrice, onMaxPric
 }) {
   const [priceText, setPriceText] = useState(maxPrice?.toString() ?? '')
   useEffect(() => { setPriceText(maxPrice?.toString() ?? '') }, [maxPrice])
-  useEffect(() => {
-    const price = priceText === '' ? null : Number(priceText)
-    if (price === maxPrice || (price != null && (!Number.isFinite(price) || price < 0))) return
-    // Like the quiet slider, apply a settled value rather than each digit of a ceiling.
-    const timer = setTimeout(() => onMaxPriceChange(price), 300)
-    return () => clearTimeout(timer)
-  }, [priceText, maxPrice, onMaxPriceChange])
   return (
     <div className="mb-1.5 ml-7 mt-0.5 grid grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 text-xs">
       <span className="text-muted-foreground">Type</span>
@@ -100,7 +93,11 @@ export default function StaySearchFields({ search, onChange, maxPrice, onMaxPric
       <span className="flex min-w-0 items-center gap-1.5">
         <input type="number" inputMode="decimal" aria-label="Maximum price per night in euros"
           min={0} step="any" placeholder="Any" value={priceText} className={DATE_INPUT}
-          onChange={event => setPriceText(event.target.valueAsNumber < 0 ? '' : event.target.value)}
+          onChange={event => {
+            const price = event.target.valueAsNumber
+            setPriceText(price < 0 ? '' : event.target.value)
+            onMaxPriceChange(Number.isFinite(price) && price >= 0 ? price : null)
+          }}
           onBlur={event => {
             const price = event.target.valueAsNumber
             onMaxPriceChange(Number.isFinite(price) && price >= 0 ? price : null)

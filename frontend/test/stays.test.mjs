@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  MAX_PINS, defaultStaySearch, firstCheckin, formatPrice, freshSearch, stayFeatures, stayOfFeature, stayRequests, viewFootprint,
+  MAX_PINS, defaultStaySearch, firstCheckin, formatPrice, stayFeatures, stayOfFeature, stayRequests, viewFootprint,
   withCheckin, withCheckout, withStays,
 } from '../src/lib/stays.ts'
 
@@ -38,14 +38,6 @@ test('a new check-in keeps the stay\'s length; a check-out stays at least a nigh
   assert.deepEqual(withCheckin(search, '2026-12-30'), { ...search, checkin: '2026-12-30', checkout: '2027-01-02' })
   assert.deepEqual(withCheckout(search, '2026-10-20'), { ...search, checkout: '2026-10-20' })
   assert.deepEqual(withCheckout(search, '2026-10-08'), { ...search, checkout: '2026-10-09' })
-})
-
-test('past midnight a search moves to the first check-in Stay22 takes, its length kept; else it stays itself', () => {
-  const search = { kind: 'all', checkin: '2026-10-08', checkout: '2026-10-10', adults: 2, minStars: null, minScore: null }
-  inZone('Europe/Prague', () => {
-    assert.equal(freshSearch(search, new Date('2026-10-08T21:00:00Z')), search)
-    assert.deepEqual(freshSearch(search, new Date('2026-10-09T00:30:00Z')), { ...search, checkin: '2026-10-09', checkout: '2026-10-11' })
-  })
 })
 
 test('a view is its canvas seen straight down, turned by the bearing, in the world copy -180..180', () => {

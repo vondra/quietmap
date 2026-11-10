@@ -10,7 +10,7 @@ import type { Metric } from '../lib/hm3-decoder'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
 import type { Map as MapLibreMap } from 'maplibre-gl'
 import {
-  STAY_DOT_LAYER as DOTS, STAY_MIN_ZOOM, stayFeatures, stayOfFeature, stayRequests, viewFootprint, withStays,
+  firstCheckin, STAY_DOT_LAYER as DOTS, STAY_MIN_ZOOM, stayFeatures, stayOfFeature, stayRequests, viewFootprint, withStays,
   type Stay, type StaySearch, type ViewBox,
 } from '../lib/stays'
 
@@ -94,9 +94,10 @@ export default function StayLayer({ search, maxPrice, metric, quietThreshold }: 
   // Every settled view asks for its places (a box a side of the antimeridian). Each answer adds to
   // the pins, a late one too; the status is the current view's. When Stay22 is asked too often, the
   // view asks again after the seconds the server names.
+  const expiredDates = search.checkin < firstCheckin()
   const zoomedIn = view != null && view.zoom >= STAY_MIN_ZOOM
   useEffect(() => {
-    if (!view || view.zoom < STAY_MIN_ZOOM) return
+    if (!view || view.zoom < STAY_MIN_ZOOM || expiredDates) return
     let current = true
     let retry: ReturnType<typeof setTimeout> | undefined
     const failures: string[] = []
@@ -122,7 +123,7 @@ export default function StayLayer({ search, maxPrice, metric, quietThreshold }: 
       current = false
       clearTimeout(retry)
     }
-  }, [view, search])
+  }, [view, search, expiredDates])
 
   // A pin goes when its price expires (Stay22's lifetime), and the view asks again.
   useEffect(() => {
@@ -137,13 +138,14 @@ export default function StayLayer({ search, maxPrice, metric, quietThreshold }: 
 
   // Filter before sampling: only affordable pins need native-resolution noise.
   // Remote searches keep their pool when a local filter changes, without another Stay22 call.
-  const candidates = useMemo(() => pins.filter(pin => belowPrice(pin, maxPrice)), [pins, maxPrice])
+  const candidates = useMemo(() => expiredDates ? [] : pins.filter(pin => belowPrice(pin, maxPrice)), [pins, maxPrice, expiredDates])
   const noise = useStayNoise(candidates, zoomedIn ? view : null, metric, quietThreshold)
   const data = useMemo(() => stayFeatures(noise.pins), [noise.pins])
   const inView = view ? noise.pins.filter(pin => stayInView(pin, view)).length : 0
   const filtered = maxPrice != null || quietThreshold != null
   const note =
     view == null ? null
+    : expiredDates ? 'These stay dates have passed. Choose new dates.'
     : !zoomedIn ? 'Zoom in for places to stay'
     : status.failure ? status.failure
     : inView > 0 ? null

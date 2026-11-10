@@ -90,14 +90,30 @@ export default function AboutPage({ page }: { page: string }) {
   }, [page])
   const { meta, body } = splitFrontMatter(markdown ?? '')
   useEffect(() => setDocumentTitle([page ? meta.title || null : 'About']), [page, meta.title])
-  // A link to a section (/about/noise-at-a-point#the-weather) lands on it once the text is there:
-  // the browser looked for the section before the page's markdown had loaded.
+  // Open explanations belong to the page address, alongside its section anchor.
   useEffect(() => {
-    if (markdown === null || window.location.hash.length < 2) return
-    try {
-      document.getElementById(decodeURIComponent(window.location.hash.slice(1)))?.scrollIntoView()
-    } catch {
-      // A fragment no escape decodes (#%) names no section; thrown, it blanked the page.
+    if (markdown === null) return
+    const details = [...document.querySelectorAll<HTMLDetailsElement>('.about-prose details[id]')]
+    const read = () => {
+      const opened = new URLSearchParams(location.search).get('open')?.split(',') ?? []
+      for (const detail of details) detail.open = opened.includes(detail.id)
+      try { document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView() } catch { /* No valid section. */ }
+    }
+    const write = (event: Event) => {
+      const url = new URL(location.href)
+      const opened = details.filter(detail => detail.open).map(detail => detail.id).join(',')
+      if (opened === (url.searchParams.get('open') ?? '')) return
+      if (opened) url.searchParams.set('open', opened)
+      else url.searchParams.delete('open')
+      if ((event.target as HTMLDetailsElement).open) url.hash = (event.target as HTMLDetailsElement).id
+      history.replaceState(null, '', url)
+    }
+    read()
+    for (const detail of details) detail.addEventListener('toggle', write)
+    window.addEventListener('popstate', read)
+    return () => {
+      for (const detail of details) detail.removeEventListener('toggle', write)
+      window.removeEventListener('popstate', read)
     }
   }, [markdown])
   const crumbs = breadcrumb(page)

@@ -1,5 +1,7 @@
 // The phone popup's bottom sheet, with a drag handle, a collapsed peek and the streamed answer.
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
+import { useViewScroll } from '../hooks/useViewScroll'
+import { useIsDesktop } from '../hooks/useIsDesktop'
 import type { Metric } from '../lib/hm3-decoder'
 import { X } from 'lucide-react'
 import DetailSkeleton from './DetailSkeleton'
@@ -25,6 +27,8 @@ export function sheetTop(viewportHeight: number): number {
 interface MobileDetailSheetProps {
   /** The quantity the popup leads with. */
   metric: Metric
+  expanded: boolean
+  onExpandedChange: (expanded: boolean) => void
   data: PopupUpdate | null
   // Same contract as DetailCard: the sheet springs open on click (position) with a skeleton and
   // redraws on every streamed update.
@@ -38,10 +42,12 @@ interface MobileDetailSheetProps {
   onFan: (source: string, fan: SegmentFan | null) => void
   /** The place to stay at the point, when its pin opened the popup: above the answer, in the peek. */
   stay: Stay | null
+  stayMessage: string | null
 }
 
-export default function MobileDetailSheet({ metric, data, position, error, onClose, getShareUrl, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: MobileDetailSheetProps) {
-  const [expanded, setExpanded] = useState(false)
+export default function MobileDetailSheet({ metric, expanded, onExpandedChange: setExpanded, data, position, error, onClose, getShareUrl, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, stayMessage }: MobileDetailSheetProps) {
+  const desktop = useIsDesktop()
+  const scrollRef = useViewScroll('detail', !desktop)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
   const dragRef = useRef({ startY: 0, isDragging: false })
@@ -54,7 +60,6 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
   // one point keep whatever the visitor made of the sheet since.
   useEffect(() => {
     if (position) {
-      setExpanded(true)
       setDismissing(false)
       setDragOffset(0)
       if (dismissTimeoutRef.current !== null) {
@@ -138,8 +143,9 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
             a fixed cap; the tap now reaches onClick, so this state is real
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
         {stay && <StayHeader stay={stay} />}
-        <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px-var(--map-footer-height))]' : 'overflow-hidden max-h-24'}`}>
-          {showSkeleton
+        {stayMessage && <p role="status" data-testid="stay-status" className="border-b border-border px-2.5 py-2 text-xs text-muted-foreground">{stayMessage}</p>}
+        <div key={`${position.lat},${position.lng}`} ref={scrollRef} className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px-var(--map-footer-height))]' : 'overflow-hidden max-h-24'}`}>
+          {!desktop && (showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
                 <NoiseDetailContent
@@ -150,7 +156,7 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
                   onCalculationToggle={onCalculationToggle}
                   onFan={onFan}
                 />
-              </Suspense>}
+              </Suspense>)}
         </div>
       </div>
     </div>

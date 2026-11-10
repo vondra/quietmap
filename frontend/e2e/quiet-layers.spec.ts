@@ -71,7 +71,9 @@ async function controls(page: Page, phone: boolean, action: () => Promise<unknow
   const advanced = page.getByRole('button', { name: 'Advanced', exact: true }).filter({ visible: true })
   if (await advanced.getAttribute('aria-expanded') === 'false') await advanced.click()
   await action()
-  await page.getByRole('button', { name: phone ? 'Drag to close' : 'Fold', exact: true }).click()
+  const close = page.getByRole('button', { name: phone ? 'Drag to close' : 'Fold', exact: true })
+  await close.click()
+  await expect(close).toBeHidden()
 }
 
 async function touchGesture(page: Page, start: { x: number; y: number }[], end: { x: number; y: number }[]) {
@@ -176,7 +178,7 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
             [-7.5, 7.5].map(dx => ({ x: centre.x + dx, y: centre.y })))
         } else for (let step = 0; step < 4; step++) {
           await page.getByRole('button', { name: 'Zoom out', exact: true }).click()
-          await expect(page).toHaveURL(new RegExp(`(?:#|&)z=${13 - step}(?:[.]00)?(?:&|$)`))
+          await expect(page).toHaveURL(url => Number(new URLSearchParams(url.hash.slice(1)).get('z')) === 13 - step)
         }
         await expect.poll(() => Number(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('z'))).toBeLessThan(11)
       }

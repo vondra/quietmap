@@ -162,14 +162,14 @@ export async function sendPopupLine(page: Page, line: object): Promise<void> {
   }, JSON.stringify(line))
 }
 
-/** End the latest popup request's stream, as the server does after the final or error line. */
-export async function endPopup(page: Page): Promise<void> {
-  await page.evaluate(() => {
+/** End a request (the latest by default), even when its last line already started another. */
+export async function endPopup(page: Page, index = -1): Promise<void> {
+  await page.evaluate((index) => {
     const { streams } = (window as unknown as { __popup: PopupSeam }).__popup
-    const stream = streams[streams.length - 1]
+    const stream = streams.at(index)!
     stream.open = false
     stream.controller.close()
-  })
+  }, index)
 }
 
 /** The road, railway and total tiles carry their fixture loudness at `point`, their `lden-` ones

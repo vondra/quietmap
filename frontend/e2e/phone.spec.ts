@@ -171,7 +171,7 @@ test('the open place stands under the search field, renamed there; the search li
   await expect.poll(() => popupRequests(page)).toHaveLength(3)
   await expect(options).toHaveCount(0)
   await expect(field).toHaveValue('Above the house')
-  await expect(page).toHaveURL(/z=14\.00/)
+  await expect(page).toHaveURL(url => Number(new URLSearchParams(url.hash.slice(1)).get('z')) === 14)
   await tapAt(-60, -220)
   await expect.poll(() => popupRequests(page)).toHaveLength(4)
   const search = page.getByRole('combobox')

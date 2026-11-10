@@ -24,7 +24,7 @@ const PLACE = {
 }
 
 /** An answer of the one place, whose price lives `expiresIn` seconds more. */
-const answer = (expiresIn = 3300) => JSON.stringify({ listings: [PLACE], nights: 2, currency: 'EUR', expiresIn, failure: null })
+const answer = (expiresIn = 3300, total = 300) => JSON.stringify({ listings: [{ ...PLACE, total }], nights: 2, currency: 'EUR', expiresIn, failure: null })
 
 /** `/api/stay` answers the one place (the first answer living `firstExpiresIn` seconds), and records
  *  what every view asked; the labels' glyphs are answered empty, so nothing leaves the page. */
@@ -32,7 +32,7 @@ async function installStays(page: Page, firstExpiresIn?: number): Promise<URLSea
   const asked: URLSearchParams[] = []
   await page.route('**/api/stay?**', route => {
     asked.push(new URL(route.request().url()).searchParams)
-    return route.fulfill({ status: 200, contentType: 'application/json', body: answer(asked.length === 1 ? firstExpiresIn : undefined) })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: answer(asked.length === 1 ? firstExpiresIn : undefined, firstExpiresIn && asked.length > 1 ? 600 : 300) })
   })
   await page.route('**/fonts/**', route => route.fulfill({ status: 200, body: '' }))
   return asked
@@ -149,7 +149,7 @@ test('desktop: a view across the antimeridian asks for a box on each side', asyn
   expect(sides[1][1]).toBe(180)
 })
 
-test('desktop: a place and its pin go when their price expires, and the view asks again', async ({ page }) => {
+test('desktop: an expired quote is replaced with the new price for the same selected stay', async ({ page }) => {
   await installHermeticMap(page, POINT)
   const asked = await installStays(page, 4)
   await page.goto(`${mapUrl(POINT)}&stay=1`)
@@ -158,8 +158,9 @@ test('desktop: a place and its pin go when their price expires, and the view ask
   await page.mouse.click(x, y)
   const header = page.locator('[data-testid="stay-header"]:visible')
   await expect(header).toContainText('Fixture hotel')
-  await expect(header).toHaveCount(0)
   await expect.poll(() => asked.length).toBeGreaterThan(1)
+  await expect(header.getByTestId('stay-price')).toHaveText('€300 a night · €600 for 2 nights')
+  expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('sid')).toBe(PLACE.id)
 })
 
 test.describe('mobile', () => {

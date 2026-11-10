@@ -12,7 +12,7 @@ export interface LayerControlsBodyProps extends DataLayersSectionProps, OverlayC
 
 export default function LayerControlsBody({
   onMetricChange, heatmapLayers, onHeatmapLayersChange,
-  dataLayers, onDataLayersChange,
+  dataLayers, onDataLayersChange, advanced, onAdvancedChange,
   dividerSpacing = 'compact',
   ...overlays
 }: LayerControlsBodyProps) {
@@ -33,7 +33,7 @@ export default function LayerControlsBody({
 
       <div className={divClass} />
 
-      <DataLayersSection metric={overlays.metric} onMetricChange={onMetricChange} dataLayers={dataLayers} onDataLayersChange={onDataLayersChange} />
+      <DataLayersSection advanced={advanced} onAdvancedChange={onAdvancedChange} metric={overlays.metric} onMetricChange={onMetricChange} dataLayers={dataLayers} onDataLayersChange={onDataLayersChange} />
     </>
   )
 }

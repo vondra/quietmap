@@ -1,6 +1,8 @@
 // The desktop popup card: its head the place's loudness, the close beside it, then the place to stay
 // whose pin opened it, and a skeleton from the click on, then the streamed answer, or the error.
-import { lazy, Suspense, useEffect, useRef } from 'react'
+import { lazy, Suspense } from 'react'
+import { useViewScroll } from '../hooks/useViewScroll'
+import { useIsDesktop } from '../hooks/useIsDesktop'
 import type { Metric } from '../lib/hm3-decoder'
 import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
@@ -31,15 +33,12 @@ interface DetailCardProps {
   onFan: (source: string, fan: SegmentFan | null) => void
   /** The place to stay at the point, when its pin opened the popup. */
   stay: Stay | null
+  stayMessage: string | null
 }
 
-export default function DetailCard({ metric, noiseData, position, error, onNoiseClose, getShareUrl, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: DetailCardProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = 0
-  }, [position])
+export default function DetailCard({ metric, noiseData, position, error, onNoiseClose, getShareUrl, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, stayMessage }: DetailCardProps) {
+  const desktop = useIsDesktop()
+  const scrollRef = useViewScroll('detail', desktop)
 
   // Require an active position for ANY render: a late update resolving after Close must never
   // reopen the card with stale content.
@@ -51,7 +50,7 @@ export default function DetailCard({ metric, noiseData, position, error, onNoise
   // short viewports. overflow-x-clip: nothing inside may pan sideways — a child wider than
   // the card used to drag the whole popup left on vertical scroll.
   return (
-    <FloatingCard className={`relative p-0 pointer-events-auto min-h-0 overflow-y-auto overflow-x-clip ${calculationOpen ? '' : 'max-h-[50dvh]'}`} ref={scrollRef}>
+    <FloatingCard key={`${position.lat},${position.lng}`} className={`relative p-0 pointer-events-auto min-h-0 overflow-y-auto overflow-x-clip ${calculationOpen ? '' : 'max-h-[50dvh]'}`} ref={scrollRef}>
       {/* The actions float at the card's head, the loudness beside them, and stay in sight while the
           answer scrolls under it. */}
       <div className="sticky top-0 z-10 float-right m-0.5 flex bg-card/90">
@@ -61,7 +60,8 @@ export default function DetailCard({ metric, noiseData, position, error, onNoise
         </button>
       </div>
       {stay && <StayHeader stay={stay} />}
-      {showSkeleton
+      {stayMessage && <p role="status" data-testid="stay-status" className="border-b border-border px-2.5 py-2 text-xs text-muted-foreground">{stayMessage}</p>}
+      {desktop && (showSkeleton
         ? <DetailSkeleton position={position} error={error} />
         : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
             <NoiseDetailContent
@@ -72,7 +72,7 @@ export default function DetailCard({ metric, noiseData, position, error, onNoise
               onCalculationToggle={onCalculationToggle}
               onFan={onFan}
             />
-          </Suspense>}
+          </Suspense>)}
     </FloatingCard>
   )
 }

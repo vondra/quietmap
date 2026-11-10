@@ -1,5 +1,5 @@
 // The click's level, source list and detailed calculation, redrawn on every streamed update.
-import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { paletteHex } from '../lib/heatmap-palette'
 import { fmtSone, wholePercents } from '../utils/formatters'
 import { HoverText } from './ui/info-tip'
@@ -41,6 +41,7 @@ const LDEN_TOOLTIP = 'All sources together over the day (EU Directive 2002/49): 
 const LDEN_SHARE_TOOLTIP = LDEN_TOOLTIP + '\nEach row: its share of the sound energy.'
 
 export default function NoiseDetailContent({ metric, data, onHighlight, calculationOpen = false, onCalculationToggle, onFan }: NoiseDetailContentProps) {
+  const revealCalculation = useRef(false)
   const [centerLat, centerLng] = data.center
   const answered = data.total_lden != null && !data.partial
   // The popup sends the ground contributors above its 0 dB display floor; the list ranks what is
@@ -162,14 +163,14 @@ export default function NoiseDetailContent({ metric, data, onHighlight, calculat
                 data-testid="calculation-toggle"
                 aria-expanded={calculationOpen}
                 className="mt-2 flex w-full items-center justify-between rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/40"
-                onClick={onCalculationToggle}
+                onClick={() => { revealCalculation.current = !calculationOpen; onCalculationToggle?.() }}
               >
                 <span>Detailed calculation</span>
                 <Chevron open={calculationOpen} />
               </button>
               {calculationOpen && (
                 <Suspense fallback={<div className="mt-2 text-[11px] text-muted-foreground animate-pulse">…</div>}>
-                  <IntoView>
+                  <IntoView reveal={revealCalculation}>
                     <CalculationDetails data={data} />
                   </IntoView>
                 </Suspense>
@@ -216,9 +217,14 @@ function StatsPanel({ data }: { data: PopupUpdate }) {
 
 /** Brings its content into view once it is shown: the calculation opens below the list, on a phone
  *  far below the fold. Inside the Suspense, so it scrolls when the lazy chunk has arrived. */
-function IntoView({ children }: { children: ReactNode }) {
+function IntoView({ children, reveal }: { children: ReactNode; reveal: RefObject<boolean> }) {
   const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => ref.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }), [])
+  useEffect(() => {
+    if (reveal.current) {
+      reveal.current = false
+      ref.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    }
+  }, [reveal])
   return <div ref={ref} className="scroll-mt-2">{children}</div>
 }
 

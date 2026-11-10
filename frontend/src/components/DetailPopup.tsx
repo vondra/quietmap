@@ -1,11 +1,12 @@
 // The map click that opens the popup (a click on a place to stay opens the place instead, at its
 // point), the clicked-point marker, and the streamed request for it.
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useMap, Source, Layer } from 'react-map-gl/maplibre'
 import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl'
 import type { PopupUpdate } from '../types/noise'
 import { streamPopup } from '../lib/popup-stream'
 import { DESKTOP_QUERY } from '../hooks/useIsDesktop'
+import { sameDetailPosition } from '../lib/url-state'
 import { sheetTop } from './MobileDetailSheet'
 import { stayAt } from './StayLayer'
 import type { Stay } from '../lib/stays'
@@ -41,6 +42,7 @@ export interface DetailPopupProps {
 
 export default function DetailPopup({ isCurrentDetailPosition, detailPosition, triggerPosition, onDetailData, onDetailPositionChange, onDetailError, onStaySelect }: DetailPopupProps) {
   const { current: map } = useMap()
+  const reveal = useRef<{ lat: number; lng: number } | null>(null)
 
   useEffect(() => {
     if (!map) return
@@ -58,10 +60,12 @@ export default function DetailPopup({ isCurrentDetailPosition, detailPosition, t
       }
       const stay = stayAt(map.getMap(), e.point)
       if (stay) {
+        reveal.current = { lat: stay.lat, lng: stay.lng }
         onStaySelect?.(stay)
         return
       }
-      const { lat, lng } = e.lngLat
+      const { lat, lng } = e.lngLat.wrap()
+      reveal.current = { lat, lng }
       onDetailPositionChange?.({ lat, lng })
     }
 
@@ -74,12 +78,19 @@ export default function DetailPopup({ isCurrentDetailPosition, detailPosition, t
   }, [map, onDetailPositionChange, onStaySelect])
 
   useEffect(() => {
-    if (triggerPosition) onDetailPositionChange?.(triggerPosition)
+    if (triggerPosition) {
+      reveal.current = triggerPosition
+      onDetailPositionChange?.(triggerPosition)
+    }
   }, [triggerPosition, onDetailPositionChange])
 
-  // Whatever opened the popup (a tap, a link's `d=`, a place of the history), its point stays in sight.
+  // A new selection is brought into view; a shared address keeps its explicit camera, even
+  // when the sender panned away from the still-open point.
   useEffect(() => {
-    if (detailPosition && map) keepInSight(map.getMap(), detailPosition)
+    if (detailPosition && map && sameDetailPosition(reveal.current, detailPosition)) {
+      reveal.current = null
+      keepInSight(map.getMap(), detailPosition)
+    }
   }, [detailPosition, map])
 
   // One streamed request per clicked point: every line redraws the popup. A new click (or closing

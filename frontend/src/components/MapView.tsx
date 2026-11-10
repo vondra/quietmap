@@ -19,8 +19,9 @@ import type { Stay, StaySearch } from '../lib/stays'
 import type { DataLayerId } from '../lib/data-layers'
 import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
-import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
+import { QUIET_THRESHOLD_DEFAULT } from '../lib/url-state'
 import type { SelectedLocation } from './FlyToLocation'
+import { pixelPadding, type MapCamera } from '../lib/url-state'
 import type { Metric } from '../lib/hm3-decoder'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -32,11 +33,9 @@ const ARRIVED_PX = 2
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
   selectedLocation?: SelectedLocation | null
-  initialCenter?: [number, number]
-  initialZoom?: number
+  view: MapCamera
   basemap?: BasemapId
-  onViewChange?: (lat: number, lng: number, zoom: number) => void
-  onHashState?: (next: UrlState) => void
+  onViewChange: (view: MapCamera) => void
   onDetailData?: (data: PopupUpdate) => void
   onDetailPositionChange?: (pos: { lat: number; lng: number } | null) => void
   onDetailError?: (message: string) => void
@@ -47,6 +46,7 @@ interface MapViewProps {
   segmentFan?: SegmentFan | null
   /** The area reachable from the open place, once drawn. */
   isochron?: GeoJSON.FeatureCollection | null
+  fitIsochron?: boolean
   /** The quantity the heatmap, its hover and the quiet zones show. */
   metric?: Metric
   quietClustersEnabled?: boolean
@@ -66,13 +66,11 @@ interface MapViewProps {
 }
 
 export default function MapView({
-  isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, highlight, segmentFan, isochron,
+  isCurrentDetailPosition, selectedLocation, view,
+  basemap, onViewChange, onDetailData, onDetailPositionChange, onDetailError, detailPosition, highlight, segmentFan, isochron, fitIsochron,
   metric = 'nden', quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers, stays,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
-  const center = initialCenter ?? [49.8, 15.5]
-  const zoom = initialZoom ?? 8
   const bm = basemap ?? DEFAULT_BASEMAP
   const activeQuietThreshold = quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null
   const [flyToPos, setFlyToPos] = useState<{ lat: number; lng: number } | null>(null)
@@ -146,9 +144,12 @@ export default function MapView({
     <Map
       ref={mapRef}
       initialViewState={{
-        latitude: center[0],
-        longitude: center[1],
-        zoom,
+        latitude: view.lat,
+        longitude: view.lng,
+        zoom: view.zoom,
+        bearing: view.bearing,
+        pitch: view.pitch,
+        padding: pixelPadding(view.padding, window.innerWidth, window.innerHeight),
       }}
       style={{ width: '100%', height: '100%' }}
       mapStyle={mapStyle}
@@ -216,10 +217,10 @@ export default function MapView({
         metric={metric} quietThreshold={activeQuietThreshold} />}
       {/* The segments above the opened row's highlight: a style rebuild adds the layers in this
           order. */}
-      <IsochronLayer area={isochron ?? null} />
+      <IsochronLayer area={isochron ?? null} fit={fitIsochron ?? false} />
       <FlightTrackLayer highlight={highlight ?? null} />
       <SegmentFanLayer fan={segmentFan ?? null} />
-      {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}
+      <MapStateSync view={view} onViewChange={onViewChange} />
     </Map>
   )
 }
