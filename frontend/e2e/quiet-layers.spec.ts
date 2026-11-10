@@ -1,7 +1,7 @@
 // Quiet areas preserve data colours and map labels across map styles and tilted views.
 import { expect, test, type Page } from '@playwright/test'
 import { HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
-import { PHONE, POINT, afterPaint, canvasCenter, installHermeticMap, mapUrl, pngCenterPixel } from './support'
+import { PHONE, POINT, afterPaint, canvasCenter, installHermeticMap, mapPixels, mapUrl, pngCenterPixel } from './support'
 
 const TRAFFIC = [40, 80, 200, 255]
 const LABEL = [210, 30, 40, 255]
@@ -101,6 +101,49 @@ async function expectGreen(page: Page) {
 
 for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', () => {
   if (phone) test.use({ ...PHONE, deviceScaleFactor: 2 })
+  test('a reachable area keeps stay pins clear whether drawn late or opened from its address', async ({ page }) => {
+    await fixtures(page)
+    const stayPoint = [POINT.lat, POINT.lng + 0.002] as const
+    await page.route('**/api/stay?**', route => route.fulfill({ json: { listings: [{
+      id: 'area-stay', name: 'Area stay', lat: stayPoint[0], lng: stayPoint[1], total: 200,
+      stars: 4, score: 8, reviews: 100, guests: 2, bedrooms: 1, freeCancellation: false,
+      thumbnail: null, url: 'https://www.stay22.com/allez/roam/area-stay',
+    }], nights: 2, currency: 'EUR', expiresIn: 3600 } }))
+    let draw!: () => void
+    const ready = new Promise<void>(resolve => { draw = resolve })
+    await page.route('**/api/isochron?**', async route => {
+      await ready
+      const x = POINT.lng, y = POINT.lat
+      await route.fulfill({ json: { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { mode: 'walk' },
+        geometry: { type: 'Polygon', coordinates: [[[x - 0.004, y - 0.004], [x + 0.004, y - 0.004], [x + 0.004, y + 0.004], [x - 0.004, y + 0.004], [x - 0.004, y - 0.004]]] } }] } })
+    })
+    await page.goto(`${mapUrl(POINT, 'road', 14)}&stay=1&reach=${POINT.lat},${POINT.lng},12,walk&panel=none`)
+    const pin = async () => (await mapPixels(page, POINT, [stayPoint], 14))[0]
+    const areaBlue = async () => {
+      const [inside, outside] = await mapPixels(page, POINT, [[POINT.lat, POINT.lng - 0.002], [POINT.lat, POINT.lng - 0.006]], 14)
+      return inside[2] - outside[2]
+    }
+    await expect.poll(pin).toEqual([51, 65, 85, 255])
+    const received = page.waitForResponse(response => response.url().includes('/api/isochron?'))
+    draw(); await received
+    await expect.poll(areaBlue).toBeGreaterThan(20)
+    await expect.poll(pin).toEqual([51, 65, 85, 255])
+    for (const name of ['Standard', 'Terrain']) {
+      await page.getByRole('button', { name, exact: true }).filter({ visible: true }).click()
+      const centre = expect.poll(() => centrePixel(page))
+      await (name === 'Standard' ? centre.toEqual(LABEL) : centre.not.toEqual(LABEL))
+      await expect.poll(areaBlue).toBeGreaterThan(20)
+      await expect.poll(pin).toEqual([51, 65, 85, 255])
+    }
+    const selectionPixels = () => mapPixels(page, POINT,
+      [[stayPoint[0], stayPoint[1] - 0.0001], [stayPoint[0], stayPoint[1] + 0.00015]], 14)
+    await page.evaluate(point => { location.hash += `&d=${point.join(',')}` }, [stayPoint[0], stayPoint[1] + 0.0003])
+    await expect.poll(selectionPixels).toEqual([[51, 65, 85, 255], [59, 130, 246, 255]])
+    await page.reload()
+    await expect.poll(areaBlue).toBeGreaterThan(20)
+    await expect.poll(selectionPixels).toEqual([[51, 65, 85, 255], [59, 130, 246, 255]])
+  })
+
   test('quiet zones preserve data colours and labels through toggles and basemap changes', async ({ page }) => {
     test.setTimeout(60_000)
     const errors: string[] = []

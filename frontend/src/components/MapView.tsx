@@ -18,6 +18,7 @@ import StayLayer from './StayLayer'
 import type { Stay, StaySearch } from '../lib/stays'
 import type { DataLayerId } from '../lib/data-layers'
 import MapStateSync from './MapStateSync'
+import PublicOverlayOrder from './PublicOverlayOrder'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT } from '../lib/url-state'
 import type { SelectedLocation } from './FlyToLocation'
@@ -220,6 +221,7 @@ export default function MapView({
       <IsochronLayer area={isochron ?? null} fit={fitIsochron ?? false} />
       <FlightTrackLayer highlight={highlight ?? null} />
       <SegmentFanLayer fan={segmentFan ?? null} />
+      <PublicOverlayOrder />
       <MapStateSync view={view} onViewChange={onViewChange} />
     </Map>
   )

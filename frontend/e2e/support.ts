@@ -298,5 +298,5 @@ export async function mapPixels(
     y: Math.floor(box.height / 2 + (mercatorY(lat) - mercatorY(center.lat)) * worldPixels),
   }))
   await afterPaint(page)
-  return pngPixels(page, await canvas.screenshot(), at)
+  return pngPixels(page, await canvas.screenshot({ scale: 'css' }), at)
 }
