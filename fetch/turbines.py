@@ -1,20 +1,19 @@
 """The wind turbines standing at the planet's date (`turbines.sh`), one line each: `lat lon hub_m
 power_kw source` (tab-separated, sorted by latitude then longitude, 0 when unknown; source `osm`
 or the register that placed it). OpenStreetMap's standing turbines (no lifecycle prefix, key or
-value; a node its point, an outline the mean of its vertices) come first; each register whose
-directory the input tree holds, in turn, pairs its standing turbines one to one with those not
-yet paired, nearest pairs first, within PAIR_M: a pair keeps its position and takes the
+value; a node its point, an outline the mean of its vertices) come first; each admitted register
+(the names after OUT, all when none is given) in turn pairs its standing turbines one to one with
+those not yet paired, nearest pairs first, within PAIR_M: a pair keeps its position and takes the
 register's hub and power where known, an unpaired standing turbine of the register is added, and
 an unpaired OpenStreetMap turbine within GONE_M of one the register calls dismantled is dropped.
 Reads osmium's GeoJSON sequence of the turbines on stdin.
 
-    osmium export turbines.osm.pbf -f geojsonseq -a type,id | python3 turbines.py REGISTERS OUT
+    osmium export turbines.osm.pbf -f geojsonseq -a type,id | python3 turbines.py REGISTERS OUT [NAME ..]
 """
 import csv
 import glob
 import json
 import math
-import os
 import re
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -246,15 +245,14 @@ class Grid:
                     yield d, index
 
 
-def main(registers, out_path):
+def main(registers, out_path, admitted):
     turbines = list(osm_turbines(sys.stdin))
     osm_count = len(turbines)
     paired = [False] * osm_count
     dropped = set()
     for register in REGISTERS:
-        # A year merges only the registers it admits; the others are absent from its input tree.
-        if not os.path.isdir(f'{registers}/{register.__name__}'):
-            print(f'{register.__name__}: not in this input tree', file=sys.stderr)
+        if register.__name__ not in admitted:
+            print(f'{register.__name__}: not admitted for this year', file=sys.stderr)
             continue
         rows = list(register(registers))
         grid = Grid(PAIR_M)
@@ -295,4 +293,9 @@ def main(registers, out_path):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2])
+    # The registers a year admits, all when none is named; each named one must be present.
+    named = sys.argv[3:] or [register.__name__ for register in REGISTERS]
+    unknown = set(named) - {register.__name__ for register in REGISTERS}
+    if unknown:
+        sys.exit(f'unknown registers {sorted(unknown)}')
+    main(sys.argv[1], sys.argv[2], set(named))

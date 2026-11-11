@@ -72,7 +72,9 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
                 .or_default() += 1;
         }
         squares.push([square.x, square.y]);
-        eprintln!("tagged-speed-fit: {}/{}", square.x, square.y);
+        if squares.len() % 4096 == 0 {
+            eprintln!("tagged-speed-fit: {} squares", squares.len());
+        }
     }
     let rows = medians(&histograms).into_iter().map(|(country, value)|
         json!({"country": String::from_utf8_lossy(&country.to_le_bytes()), "value": value}))

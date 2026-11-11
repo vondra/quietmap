@@ -213,7 +213,8 @@
       "depends_on": [
         "osm-geography",
         "segments",
-        "terrain"
+        "terrain",
+        "airport-operations"
       ],
       "description": "To be prepared from this manifest’s admitted inputs. Taxiing and runway movements derived from the admitted flight days."
     },

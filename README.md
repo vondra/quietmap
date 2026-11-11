@@ -37,7 +37,8 @@ The server's routes and settings are in [`server/README.md`](server/README.md).
 ## Prepare a year
 
 Stage the manifest's raw inputs and model tables at `INPUTS/YEAR/ID`, including the
-relative objects named by publisher inventories. Then run the committed builder:
+relative objects named by publisher inventories; a table the run fits from the year's own
+state (its step binds the kind, such as `tagged-speeds`) is not staged. Then run the committed builder:
 
     cargo build --release -p build
     target/release/qm-build year --year years/YEAR.json --sources INPUTS \

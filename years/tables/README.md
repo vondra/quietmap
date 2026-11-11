@@ -243,8 +243,9 @@ and obtains transition limits from the admitted legal-speed table.
 OSM geography and structures, before sources) from numeric limits in the manifest-selected
 mapped OSM geometry. A mapped piece contributes one observation, classified by the same
 settlement polygons and building-density model used by road preparation. A cell needs
-at least 30 pieces. The run publishes the fitted table in the year tree's `tables/`; the
-release commit copies it here. A table fitted on a smaller selection is never pinned into a
+at least 30 pieces; a selection whose roads fill no such cell has no fit and builds no sources.
+The run publishes the fitted table and its support (`tagged-speeds.samples.json`) in the year
+tree's `tables/`; the release commit copies the table here. A table fitted on a smaller selection is never pinned into a
 later run.
 Legal and heavy speed histories retain their source, applicability and validity
 interval (exclusive end). A country lacking a documented historical row retains the

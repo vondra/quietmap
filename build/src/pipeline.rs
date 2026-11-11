@@ -92,6 +92,8 @@ pub(crate) fn build(options: &Arguments) -> Result<()> {
         .iter()
         .map(|s| format!("{}:{}\n", s.x, s.y))
         .collect::<String>();
+    let world = squares.len() == crate::dev4::SQUARES_PER_AXIS.pow(2) as usize
+        && options.optional("boxes").is_none();
     if squares.len() == crate::dev4::SQUARES_PER_AXIS.pow(2) as usize {
         let inputs = crate::year::YearInputs::read(
             manifest_path,
@@ -203,7 +205,18 @@ pub(crate) fn build(options: &Arguments) -> Result<()> {
                         &output,
                         &run.root.join("tables").join(&manifest.year).join(&table),
                     )?;
-                    publish(&output, &run.out.join("tables").join(&table))?;
+                    // Only a world fit is the year's table; a selection's fit stays in its run.
+                    if world {
+                        publish(&output, &run.out.join("tables").join(&table))?;
+                        // The fit's support (its squares and cell counts) goes with the table.
+                        let support = output.with_extension("samples.json");
+                        if support.exists() {
+                            publish(
+                                &support,
+                                &run.out.join("tables").join(format!("{kind}.samples.json")),
+                            )?;
+                        }
+                    }
                 }
             }
             match step.name {

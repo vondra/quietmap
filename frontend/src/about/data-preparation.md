@@ -746,7 +746,8 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
   <abbr title="Trans-European Transport Network">TEN-T</abbr> rail network.
 - `build/` turns the inputs into the tiles and every source's sound power. The `year` command
   runs the steps in dependency order. `bus`, `worship` and `venues` extract mapped routes and
-  activities from that year's OpenStreetMap state. Other steps include
+  activities from that year's OpenStreetMap state; `tagged-speed-table` fits the posted-speed
+  medians from the same state. Other steps include
   `ships` (monthly occupancy with completed coverage), `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.
