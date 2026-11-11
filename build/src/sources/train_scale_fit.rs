@@ -22,10 +22,12 @@ use tiles::sources::GUESSED_TRAIN_SOURCES;
 /// 30-164 freight trains a day in 2023 (mean 107); weighed so, Germany's corridors carry 62 % of its
 /// guessed freight train-km. A judgment on those counts, not a fit to them.
 pub const TEN_T_FREIGHT_WEIGHTS: [f64; 3] = [0.5, 2.0, 4.0];
-/// The national passenger residual sets the guessed passenger factor only where guessed rows run
-/// at least this share of the country's mapped passenger train-km; below it the residual is the
-/// small difference of two large totals (Finland's and Norway's timetables alone exceed theirs).
-const MINIMUM_GUESSED_PASSENGER_SHARE: f64 = 0.25;
+/// Countries whose timetabled rows run at least this share of their mapped passenger train-km
+/// measure how far timetabled rows stray from the national train-km. On the 2026 network the
+/// countries are either timetabled (defaults at most 0.30 of their passenger train-km) or run on
+/// defaults (0.82 and more); any cut of the defaults' share from 0.20 to 0.30 gives a spread of
+/// 0.082 (13 to 15 countries), 0.35 gives 0.076.
+const MINIMUM_TIMETABLED_SHARE: f64 = 0.75;
 
 /// A country's mapped heavy-rail train-km a day as the sources stage reads them: passenger
 /// [observed, guessed], observed freight, and guessed freight by TEN-T tier.
@@ -63,15 +65,59 @@ impl MappedTrainKm {
     }
 }
 
+/// The median of |timetabled / national - 1| passenger train-km over the countries the timetables
+/// cover: the part of a national residual left after the timetables that their own error explains.
+pub(super) fn timetable_spread<'a>(
+    countries: impl Iterator<Item = (&'a MappedTrainKm, &'a NationalTrainKm)>,
+) -> Option<f64> {
+    let mut deviations: Vec<f64> = countries
+        .filter_map(|(mapped, national)| {
+            let [observed, guessed] = mapped.passenger;
+            let (_, national) = national.passenger?;
+            (observed > 0.0
+                && national > 0.0
+                && observed >= MINIMUM_TIMETABLED_SHARE * (observed + guessed))
+                .then(|| (observed / national - 1.0).abs())
+        })
+        .collect();
+    deviations.sort_by(f64::total_cmp);
+    let middle = deviations.len() / 2;
+    match deviations.len() {
+        0 => None,
+        count if count % 2 == 1 => Some(deviations[middle]),
+        _ => Some(0.5 * (deviations[middle - 1] + deviations[middle])),
+    }
+}
+
+/// The factor on guessed passenger trains: the national passenger train-km the timetables leave,
+/// over the guessed, never raised, trusted in proportion to how far that residual exceeds the
+/// timetables' own `spread` (fully from one spread up). Where the timetables alone reach the
+/// national total, it says nothing about the other lines and their defaults stand; without
+/// timetables it is the national total over the guessed.
+fn passenger_factor(mapped: &MappedTrainKm, national: Option<f64>, spread: Option<f64>) -> f64 {
+    let [observed, guessed] = mapped.passenger;
+    let Some(national) = national.filter(|_| guessed > 0.0) else {
+        return 1.0;
+    };
+    let residual = national - observed;
+    let fit = (residual / guessed).clamp(0.0, 1.0);
+    let trust = match spread {
+        _ if observed <= 0.0 => 1.0,
+        Some(spread) if spread > 0.0 => (residual / (spread * observed)).clamp(0.0, 1.0),
+        _ => 0.0,
+    };
+    1.0 - trust * (1.0 - fit)
+}
+
 /// The factors that bring a country's guessed trains to its national train-km: freight to the
 /// goods train-km less the observed freight, weighted by tier (without a published total the mapped
-/// guessed total stays and the weights only move it between tiers); passengers to the passenger
-/// train-km less the observed, never raised. `weights` are the TEN-T ones where the map covers
-/// the country, else one.
+/// guessed total stays and the weights only move it between tiers); passengers by
+/// [`passenger_factor`]. `weights` are the TEN-T ones where the map covers the country, else one.
 pub(super) fn fitted(
     mapped: &MappedTrainKm,
     national: &NationalTrainKm,
     weights: [f64; 3],
+    spread: Option<f64>,
 ) -> TrainScales {
     let guessed_freight: f64 = mapped.freight_guessed.iter().sum();
     let weighted_freight: f64 = mapped
@@ -88,16 +134,11 @@ pub(super) fn fitted(
     } else {
         1.0
     };
-    let [observed, guessed] = mapped.passenger;
-    let passenger = match national.passenger {
-        Some((_, train_km))
-            if guessed > 0.0
-                && guessed >= MINIMUM_GUESSED_PASSENGER_SHARE * (observed + guessed) =>
-        {
-            ((train_km - observed) / guessed).clamp(0.0, 1.0)
-        }
-        _ => 1.0,
-    };
+    let passenger = passenger_factor(
+        mapped,
+        national.passenger.map(|(_, train_km)| train_km),
+        spread,
+    );
     TrainScales {
         scales: [freight, passenger],
         tier_weights: weights,
@@ -228,6 +269,11 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
         let sum = mapped.entry(*country).or_default();
         *sum = sum.merge(train_km);
     }
+    let spread = timetable_spread(
+        mapped
+            .iter()
+            .filter_map(|(country, train_km)| Some((train_km, national.get(country)?))),
+    );
     let mut rows = Vec::new();
     let mut support = Vec::new();
     for (country, train_km) in &mapped {
@@ -247,7 +293,7 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
         } else {
             [1.0; 3]
         };
-        let value = fitted(train_km, &published, weights);
+        let value = fitted(train_km, &published, weights, spread);
         rows.push(json!({"country": code, "value": {"scales": value.scales, "tier_weights": value.tier_weights}}));
     }
     // Every other country keeps its guessed counts; the world row says so and keeps a table of a
@@ -261,7 +307,7 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
         serde_json::to_vec(&json!({
             "unit": "train-km a day", "squares": squares.len(),
             "ten_t_freight_weights": TEN_T_FREIGHT_WEIGHTS,
-            "minimum_guessed_passenger_share": MINIMUM_GUESSED_PASSENGER_SHARE,
+            "minimum_timetabled_share": MINIMUM_TIMETABLED_SHARE, "timetable_spread": spread,
             "national_years": [first.year(), last.year()], "countries": support}))?,
     )?;
     eprintln!(
