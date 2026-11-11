@@ -8,7 +8,7 @@
 
 use crate::blocks::{Block, Corner, admission_counts, admit, meets};
 use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Pair, Point, evaluate_all};
-use crate::flights::blend_flights;
+use crate::flights::{FlightSums, blend_flights};
 use crate::levels::Painted;
 use crate::paint::{Corners, Grid, corner_weights, rectangle_at};
 use crate::passes::paint_passes;
@@ -60,6 +60,17 @@ impl PointPainter<'_> {
         admit(local, around)
     }
 
+    /// A façade point's own admission in block `at`: `heard` (the sources its building's façades
+    /// were ranked by) admitted beside the block's own, and the corners' loudest beyond them, so
+    /// that what the corners blend leaves them out.
+    pub fn facade_block(&self, near: &mut Vec<u32>, at: usize, heard: &[u32]) -> Block {
+        let (mut local, around) = self.block_sources(near, at);
+        local.extend_from_slice(heard);
+        local.sort_unstable();
+        local.dedup();
+        admit(local, around)
+    }
+
     /// How many sources block `at`'s pixels evaluate exactly and whether its corners leave any out
     /// ([`admission_counts`]).
     pub fn block_admission(&self, near: &mut Vec<u32>, at: usize) -> (usize, bool) {
@@ -90,13 +101,15 @@ impl PointPainter<'_> {
     }
 
     /// Each point's paint, `None` for one in a building: `places[k]` is its block's slot among
-    /// `blocks` and the pixel (row-major) whose hum, flights
-    /// and corner weights it takes. Every outdoor point reaching this stage computes its sound.
+    /// `blocks` and the pixel (row-major) whose hum, flights and corner weights it takes; with
+    /// `flights` its own flights instead of the corners'. Every outdoor point reaching this stage
+    /// computes its sound.
     pub fn paint(
         &self,
         blocks: &[impl std::borrow::Borrow<Block> + Sync],
         points: &[Point],
         places: &[(usize, usize)],
+        flights: Option<&[FlightSums]>,
     ) -> Result<Vec<Option<Painted>>, String> {
         let (square, grid, n) = (self.square, self.grid, self.grid.pixels);
         let blocks_per_side = n / grid.block;
@@ -178,7 +191,10 @@ impl PointPainter<'_> {
                 bands,
                 left_groups: (&block.left_groups, weights),
                 left_reach,
-                flights: blend_flights(around.map(|corner| corners.flights[corner]), fx, fy),
+                flights: match flights {
+                    Some(flights) => flights[k],
+                    None => blend_flights(around.map(|corner| corners.flights[corner]), fx, fy),
+                },
             };
             let reflection = point.reflection();
             let layers = crate::levels::layer_energy(

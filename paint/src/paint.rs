@@ -10,12 +10,13 @@
 //! the flights (no source of its own, no wall) blends its corners' ([`crate::quiet`]). Quiet
 //! blocks skip pixel receivers through [`crate::quiet`]; patches away from crossing sources and
 //! screening edges interpolate after their loudness lattice and pixel probe agree within half a phon.
-//! A building's pixels take its loudest façade, painted at its likeliest loudest façade receivers as a
-//! click inside it is answered ([`crate::buildings`]).
+//! A building's pixels take its loudest façade by the popup's rule, painted there as a click inside
+//! it is answered ([`crate::buildings`]).
 
 use crate::blocks::Corner;
-use crate::buildings::{building_levels, facade_candidates, fill_buildings};
+use crate::buildings::{building_levels, fill_buildings};
 use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all, loud_pairs};
+use crate::flight_boxes::FlightBoxes;
 use crate::flight_spectra::FlightSpectra;
 use crate::flights::{FlightSums, flights_at_corners};
 use crate::hum::Hum;
@@ -119,6 +120,8 @@ pub(crate) fn bilinear(corners: [f64; 4], fx: f64, fy: f64) -> f64 {
 pub struct Corners {
     pub(crate) corner_points: Vec<Point>,
     pub(crate) flights: Vec<FlightSums>,
+    /// The square's aircraft boxes, which its façades' flights take too.
+    pub(crate) flight_boxes: FlightBoxes,
     pub(crate) flight_spectra: FlightSpectra,
     pub(crate) hum: Hum,
     pub(crate) displays: Displays,
@@ -137,7 +140,7 @@ pub fn metres_at(square: &Square, n: usize, x: f64, y: f64) -> [f64; 2] {
     })
 }
 
-/// The shorter pixel side, shared by façade ranking and the screening-edge protection.
+/// The shorter pixel side, which the screening-edge protection is measured in.
 pub(crate) fn shortest_pixel_side_metres(square: &Square, pixels: usize) -> f64 {
     let [a, b] = [0.0, 1.0].map(|at| metres_at(square, pixels, at, at));
     (b[0] - a[0]).abs().min((b[1] - a[1]).abs())
@@ -220,7 +223,11 @@ pub fn corners_of(
     let ((flights, flight_spectra), ground) = rayon::join(
         || {
             rayon::join(
-                || flights_at_corners(square, grid, &corner_points, batch),
+                || {
+                    let boxes = FlightBoxes::new(square, grid, &corner_points);
+                    flights_at_corners(square, grid, &corner_points, &boxes, batch)
+                        .map(|flights| (flights, boxes))
+                },
                 || FlightSpectra::from_points(square, n, 2 * grid.block, &spectral_points),
             )
         },
@@ -272,7 +279,7 @@ pub fn corners_of(
             Ok((corners, evaluated.bands, corner_pairs, hum))
         },
     );
-    let (flights, flight_spectra) = (flights?, flight_spectra?);
+    let ((flights, flight_boxes), flight_spectra) = (flights?, flight_spectra?);
     let (mut corners, corner_bands, corner_pairs, hum) = ground?;
     let mut near = Vec::new();
     let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);
@@ -297,6 +304,7 @@ pub fn corners_of(
     Ok(Some(Corners {
         corner_points,
         flights,
+        flight_boxes,
         flight_spectra,
         hum,
         displays: Displays::of(square)?,
@@ -359,7 +367,7 @@ pub fn paint_pixels(
         let points: Vec<Point> = (places.par_iter())
             .map(|&(_, at)| Point::at(square, metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5)))
             .collect::<Result<_, String>>()?;
-        let painted = painter.paint(&pass, &points, &places)?;
+        let painted = painter.paint(&pass, &points, &places, None)?;
         let indoor = (points.iter().zip(&places))
             .filter(|(point, _)| point.own_footprint != 0)
             .map(|(point, &(_, at))| (at, point.own_footprint))
@@ -389,7 +397,6 @@ pub fn paint_pixels(
         .collect();
     let painted = painter.in_passes(runs_within(&bounds, PASS_BLOCKS), pass_of)?;
     let mut pixels: Vec<Option<Painted>> = vec![None; n * n];
-    quiet.fill(&painter, &mut pixels);
     let mut indoor = Vec::new();
     for (_, (outdoor, inside)) in painted {
         indoor.extend(inside);
@@ -397,8 +404,7 @@ pub fn paint_pixels(
             pixels[at] = Some(paint);
         }
     }
-    let candidates = facade_candidates(square, n, &pixels, &indoor)?;
-    let levels = building_levels(&painter, &quiet, candidates)?;
+    let levels = building_levels(&painter, &quiet, &indoor)?;
     fill_buildings(&mut pixels, &indoor, &levels);
     let cells = PaintedCells::from_painted(pixels.into_par_iter().enumerate().map(
         |(at, pixel)| match pixel {

@@ -191,9 +191,9 @@ take the interpolated values too. The other blocks use a 5 × 5 grid, the first 
 among it, with one further pixel probe for each of its sixteen patches. A patch interpolates energy
 and loudness only when its probe agrees within half a phon in the total and in every layer of
 half a sone or more (a tenth of a sone in a quieter layer, which the map shows clear) and within
-half a decibel of Lden, and no source or screening edge crosses it or the margin protecting the
-pixels used to rank façades. The other pixels keep their ray computations; there the exact lattice
-and probe results are reused.
+half a decibel of Lden, and no source or screening edge crosses it or comes within a pixel and
+0.1 m of it.
+The other pixels keep their ray computations; there the exact lattice and probe results are reused.
 Between samples, a shadow cast from outside the patch can still change sharply.
 Buildings and their façade receivers keep the exact computations.
 
@@ -235,16 +235,23 @@ quiet sources may be omitted only when their summed bounds can change a layer's 
 energy by at most 0.1 dB in every period. Otherwise the painter uses the popup's bound-proportional
 sampling and 0.05 dB confidence budget, batches the selected rays on the graphics card and
 applies the sampling weights to their spectra.
-A pixel inside a building shows the building's loudest façade, as the popup
-inside it does: of the receivers 0.1 m in front of its walls, a party wall's left out, the three
-whose painted pixel in front is loudest are computed like pixels, without the building's own
-reflection, and the loudest of them counts. Both choices go by the ground sources, as the popup's
-do: the flights do not pick the façade. A building crossing a painting square's boundary ranks all its exposed
-receivers by the popup's rule, using the 100 ground-source pieces with the greatest bound at any
-façade. Its chosen receiver computes every loud ground source and the flights exactly; only its
-background hum and flight spectrum use the nearest pixel's fields. Both halves therefore choose
-from the complete building, even when its loudest façade is in the neighbouring square. New
-painting uses this rule; existing squares keep their earlier façade choice until repainted.
+A pixel inside a building shows the building's loudest façade, chosen as the popup chooses it: of
+the receivers 0.1 m in front of its walls, a party wall's left out, the one where the 100
+ground-source pieces with the greatest bound at any façade sum to the highest Lden, without the
+façade's own reflection; the flights do not pick the façade. The card sums those pieces at every
+receiver; receivers it puts within 0.01 dB of the loudest are summed again on the cores in double
+precision, as the popup sums them. Of about 67,000 buildings in five squares the card alone chose
+another façade than the cores at 0.12 %, after that at 0.05 %: a rare sum the card misses by more
+can still tip a near tie. The chosen receiver hears its own flights, with its building screening
+part of the sky, and is otherwise computed like a pixel of the block it stands in, except that
+those of the 100 pieces it was chosen by that are loud there count as the block's own: they are
+computed exactly, and the block's corners, behind the building or across it, which may not hear
+what the façade faces, blend none of them. A building crossing
+a painting square's boundary is chosen on the cores among all its receivers and computes every loud
+ground source at its chosen receiver exactly, so that both halves show the same façade, even when
+it is in the neighbouring square; only its background hum and flight spectrum use the nearest
+pixel's fields. New painting uses this rule; existing squares keep their earlier façade choice
+until repainted.
 
 A pixel's loudness is computed as the popup computes it, at a coarser grain: the levels over time
 in steps of 2 dB and four groups of the day's hours, one of the
@@ -272,20 +279,19 @@ before. The exact pairs, the hum's sampled pairs, the aircraft boxes' sums at th
 lattices and every pixel's loudness run on the first CUDA card (`paint-gpu/kernels/`, the popup's
 physics in single precision, with fast math except the loudness; a ray's crossing of a building's
 edge is found in double wherever single precision cannot rule it out; each function cites its Rust) or
-on the cores. The runway rolls, the flight spectra, the loudness at open blocks' corners and a
-building across the square's edge stay on the cores. A square's samples, then its pixels, then its
-façades run in passes, four at once, at most two launching their pairs on the card while the
+on the cores. The runway rolls, the flight spectra, the loudness at open blocks' corners and of a
+building across the square's edge, and the façades' near-ties stay on the cores. A square's
+samples, then its pixels, then its façades' sums and paint run in passes, four at once, at most two launching their pairs on the card while the
 others list and sound their pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
 one before.
 The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
 while the card computes the current chunk's loudness.
-The passes return in spatial order, so equal façade energies keep the same first candidate.
 Each file's header says what it does; the blocks are `paint/src/blocks.rs`, their quiet
 interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, the hum
 `paint/src/hum.rs` and `hum_samples.rs`, the aircraft boxes `paint/src/flights.rs` and
 `flight_boxes.rs` (on the card `paint-gpu/src/aircraft.rs`), the aircraft spectra
 `paint/src/flight_spectra.rs`, a
-building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
+building's façade `paint/src/facade_choice.rs` and `buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
 `popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs` and `hm3_square.rs`: per layer and the total,
 four tiles of zoom 13 of 512 × 512 cells of 80 + 20 log₂ of the loudness in sone, twice the loudness
 level in phon from 1 sone up (80 one sone, a doubling 20; 254 silence under 1/16 sone, 255 not

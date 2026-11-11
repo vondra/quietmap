@@ -1,12 +1,12 @@
 //! Aircraft boxes assigned once to the finest distance lattice any receiver in the square requires.
 
 use crate::exact::{Batch, Point};
-use crate::flights::{FlightSums, HeardTile, heard_parts, part_sums, tiles_heard};
+use crate::flights::{FlightSums, HeardTile, add_rolls, heard_parts, part_sums, tiles_heard};
 use crate::paint::Grid;
 use crate::square::{Square, gap_to_tile};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{
-    AircraftReceiver, ReceiverArea, minimum_box_slant_m, tile_flight_sums,
+    AIRCRAFT_REACH_M, AircraftReceiver, ReceiverArea, minimum_box_slant_m, tile_flight_sums,
 };
 use popup::aircraft::horizons::Horizons;
 use rayon::prelude::*;
@@ -176,4 +176,41 @@ pub(crate) fn flight_sums(
             .map(|request| boxes.sums(square, request))
             .collect(),
     }
+}
+
+/// Requests one call of [`flights_at_points`] sends at most: each carries its horizons, 15 KB,
+/// and a city square's buildings can be 100,000.
+const FLIGHT_REQUESTS_AT_ONCE: usize = 8_192;
+
+/// Every flight at each of `points`, as a click there hears them (`crate::flights::aircraft_sums`):
+/// both bands' boxes within the aircraft reach and the rolls, the boxes on the card when there is
+/// one (`boxes` the square's, which the card holds), [`FLIGHT_REQUESTS_AT_ONCE`] at a time.
+pub(crate) fn flights_at_points(
+    square: &Square,
+    boxes: &FlightBoxes,
+    points: &[Point],
+    batch: Option<&dyn Batch>,
+) -> Result<Vec<FlightSums>, String> {
+    let mut flights = Vec::with_capacity(points.len());
+    for points in points.chunks(FLIGHT_REQUESTS_AT_ONCE) {
+        let requests: Vec<FlightRequest> = (points.iter())
+            .map(|point| FlightRequest {
+                point,
+                weights: boxes
+                    .occupied
+                    .map(|occupied| occupied.then_some(FlightWeight::One)),
+                within_m: AIRCRAFT_REACH_M,
+            })
+            .collect();
+        let mut sums = match boxes.occupied.contains(&true) {
+            true => flight_sums(square, boxes, &requests, batch)?,
+            false => vec![[FlightSums::default(); 2]; points.len()],
+        };
+        add_rolls(square, &mut sums, &requests)?;
+        flights.extend(sums.into_iter().map(|[mut near, far]| {
+            near.add(far);
+            near
+        }));
+    }
+    Ok(flights)
 }

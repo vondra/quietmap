@@ -4,18 +4,18 @@
 //! [`exact`] (the points and the exact evaluation of (point, source) pairs, here or on a card),
 //! [`hum`] (the quiet hum as the popup estimates it, at points about 400 m apart), [`paint`] (the
 //! square's pixels in blocks, as dev1 painted them; a pass's points, `points`; the buildings,
-//! `buildings`; the flights, `flights`), [`etalon`] (every outdoor pixel as the popup answers it,
-//! the painter's reference),
+//! `buildings`, their façades by the popup's rule, `facade_choice`; the flights, `flights`),
+//! [`etalon`] (every outdoor pixel as the popup answers it, the painter's reference),
 //! [`hm3`] and [`pack`] (the map's tiles).
 //!
 //! For visitors, down to this code: the About page The noise map
 //! (`frontend/src/about/the-noise-map.md`).
 
 mod blocks;
-mod boundary_facades;
 mod buildings;
 pub mod etalon;
 pub mod exact;
+mod facade_choice;
 pub mod flight_boxes;
 pub mod flight_spectra;
 pub mod flights;

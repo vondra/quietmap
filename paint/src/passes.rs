@@ -1,4 +1,4 @@
-//! Concurrent GPU passes returned in spatial order, preserving the first façade on an energy tie.
+//! Concurrent GPU passes returned in spatial order, as their callers index the results.
 
 use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,7 +29,7 @@ pub(crate) fn paint_passes<T: Send>(
             })
             .collect::<Result<Vec<_>, String>>()
     })?;
-    // Façade ties keep the first candidate, even when its pass finishes after a later one.
+    // In the runs' order, even when a pass finishes after a later one.
     completed.sort_unstable_by_key(|(run, _)| run.start);
     Ok(completed)
 }

@@ -8,7 +8,7 @@
 
 use crate::exact::{Batch, LAYERS, Point, add_bands, evaluate_all, loud_pairs, whole_energy};
 use crate::flight_spectra::FlightSpectra;
-use crate::flights::aircraft_sums;
+use crate::flights::{FlightSums, aircraft_sums};
 use crate::hum::Hum;
 use crate::levels::Painted;
 use crate::levels::PaintedCells;
@@ -71,10 +71,15 @@ pub fn etalon(
             .filter(|(_, point)| point.own_footprint == 0)
             .collect();
         let (pixels_at, points): (Vec<usize>, Vec<Point>) = outdoor.into_iter().unzip();
+        let flights = || {
+            (points.par_iter())
+                .map(|point| aircraft_sums(square, point))
+                .collect()
+        };
         let painted = paint_points(
             square,
             n,
-            &points,
+            (&points, flights),
             &pixels_at,
             (&hum, &flight_spectra, &displays),
             batch,
@@ -86,26 +91,23 @@ pub fn etalon(
     PaintedCells::from_painted(pixel_layers.into_par_iter())
 }
 
-/// Exact loud sources and flights at arbitrary receivers; only the background fields use their
-/// pixel positions. Shared by the outdoor etalon and façades crossing a square boundary.
+/// Exact loud sources at arbitrary receivers, their flights as `flights` gives them beside the
+/// sources' evaluation; only the background fields use their pixel positions. Shared by the
+/// outdoor etalon and façades crossing a square boundary.
 pub(crate) fn paint_points(
     square: &Square,
     n: usize,
-    points: &[Point],
+    (points, flights): (
+        &[Point],
+        impl FnOnce() -> Result<Vec<FlightSums>, String> + Send,
+    ),
     pixels_at: &[usize],
     background: (&Hum, &FlightSpectra, &Displays),
     batch: Option<&dyn Batch>,
 ) -> Result<Vec<Painted>, String> {
     let (hum, flight_spectra, displays) = background;
     let pairs = loud_pairs(square, points);
-    let (evaluated, flights) = rayon::join(
-        || evaluate_all(square, points, &pairs, batch),
-        || {
-            (points.par_iter())
-                .map(|point| aircraft_sums(square, point))
-                .collect::<Result<Vec<_>, String>>()
-        },
-    );
+    let (evaluated, flights) = rayon::join(|| evaluate_all(square, points, &pairs, batch), flights);
     let (evaluated, flights) = (evaluated?, flights?);
     // The pairs come point by point: each point's run of them.
     let mut starts = vec![0usize; points.len() + 1];

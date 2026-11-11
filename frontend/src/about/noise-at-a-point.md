@@ -190,7 +190,7 @@ The façade point loudest by Lden from the 100 pieces of ground sources with the
 the building (flights do not choose it), among receivers placed as
 <abbr title="Common Noise Assessment Methods in Europe, the EU's method for road, railway and industrial noise">CNOSSOS-EU</abbr>
 places them: every 5 m or less along each façade, 0.1 m in front of the wall and 4 m up, the
-façade's own reflection left out.
+façade's own reflection left out. The map's painter chooses by the same rule.
 
 </details>
 
@@ -417,7 +417,8 @@ legal noise map or a property certificate.
 - `scene.rs`: the ground under a point and along a ray, at every line of the terrain grid it crosses.
 - `evaluate.rs`: one source at the receiver, its rays through `physics/src/ray.rs`, `line.rs`,
   `cnossos/` and `foliage.rs`, and its sound path.
-- `building.rs`: a point inside a building, answered at its loudest façade.
+- `building.rs`: a point inside a building, answered at its loudest façade; the map's painter
+  chooses by the same rule (`paint/src/facade_choice.rs`).
 - `obstacles/reflection.rs`, `obstacles/reflection_coverage.rs`: the same covered area for the popup
   and the painter, tabulated only where the bounds of tall footprints and reachable receiver windows
   intersect; `physics/src/reflection.rs` turns its share into the receiver bonus.

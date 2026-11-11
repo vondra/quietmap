@@ -128,7 +128,9 @@ pub(crate) fn sample_block_pixels(
     let (square, grid) = (painter.square, painter.grid);
     let side = grid.pixels / grid.block;
     let b = grid.block;
-    // The wall can be a whole pixel from the centre of the pixel in front of its façade receiver.
+    // A patch stays computed within a pixel and a façade receiver's offset of a crossing source or a
+    // wall: the margin kept exact the pixels the façades were once ranked by, and it keeps the outdoor
+    // pixels as they were painted until its own measurement.
     let receiver_protection_pixels = 1.0
         + popup::obstacles::FACADE_RECEIVER_OFFSET_M
             / shortest_pixel_side_metres(square, grid.pixels);
@@ -162,7 +164,7 @@ pub(crate) fn sample_block_pixels(
             )
         };
         // Whether block `slot` of the chunk has no exact source and no screening edge across a
-        // rectangle of its pixels (with the façade margin).
+        // rectangle of its pixels (with the margin).
         let clear = |slot: usize, at: usize, low: [usize; 2], high: [usize; 2]| {
             let (low, high) = rectangle_of(at, low, high);
             let near = blocks[slot].exact.iter().any(|&source| {
@@ -343,7 +345,7 @@ fn paint_positions(
             )
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let painted = painter.paint(blocks, &points, &places)?;
+    let painted = painter.paint(blocks, &points, &places, None)?;
     Ok(painted.chunks(positions.len()).map(<[_]>::to_vec).collect())
 }
 

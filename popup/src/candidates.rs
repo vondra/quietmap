@@ -229,7 +229,12 @@ impl Candidate {
 /// Whether a piece whose bound at a receiver is `bound` is loud there: its bound reaches the edge.
 /// The painter evaluates a loud piece exactly and blends the quiet rest (`paint::blocks`).
 pub fn loud(bound: &[f64; PERIODS]) -> bool {
-    lden_energy(bound) >= energy(REACH_EDGE_LDEN_DB)
+    loud_energy(lden_energy(bound))
+}
+
+/// Whether a bound of Lden energy `lden` is [`loud`].
+pub fn loud_energy(lden: f64) -> bool {
+    lden >= energy(REACH_EDGE_LDEN_DB)
 }
 
 /// The attributes of one sources file and its pieces within `reach_m` of the receiver at

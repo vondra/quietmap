@@ -57,6 +57,28 @@ impl Spread {
             }
         }
     }
+
+    /// The divergence's energy factor, [`Spread::divergence_db`] without its logarithm.
+    fn divergence_energy(self, distance_m: f64) -> f64 {
+        match self {
+            Spread::Line { length_m } => {
+                let d = distance_m.max(LINE_PERPENDICULAR_FLOOR_M);
+                (std::f64::consts::PI / d).min(length_m / (d * d)) / POINT_DIVERGENCE_LINEAR
+            }
+            Spread::Point => {
+                let d = distance_m.max(POINT_DISTANCE_FLOOR_M);
+                1.0 / (d * d * POINT_DIVERGENCE_LINEAR)
+            }
+        }
+    }
+}
+
+/// A ceiling of the Lden energy of [`received_energy_bound`] at `distance_m` or farther, at a
+/// receiver whose period gains are at most `gain`: the source's Lden power at that gain and its
+/// divergence there, the air's absorption taken as none, a billionth above for rounding. Cheap
+/// (no logarithm), it skips the sources that cannot rank (`popup::building::facade_sources`).
+pub fn received_lden_ceiling(lden_power: f64, spread: Spread, distance_m: f64, gain: f64) -> f64 {
+    lden_power * gain * spread.divergence_energy(distance_m) * (1.0 + 1e-9)
 }
 
 /// A-weighted linear band energies of an emission (dB per band and period, `-inf` silent): what
@@ -139,6 +161,7 @@ pub fn reach_m(lden_power: f64, spread: Spread, gain_db: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bands::lden_energy;
 
     /// At its reach a source's bound is the edge, for a point, a short piece seen as its power
     /// and a long piece seen as its infinite line.
@@ -180,6 +203,42 @@ mod tests {
             (far - (20.0 * 5_000f64.log10() + 11.0 - 10.0 * 40f64.log10())).abs() < 0.01,
             "{far}"
         );
+    }
+
+    /// The ceiling is never below the bound's Lden energy, near and far, for points and lines,
+    /// and within rounding of it where nothing is absorbed and every period has the largest gain.
+    #[test]
+    fn the_ceiling_bounds_the_bound_from_above() {
+        let mut emission = [[60.0; BANDS]; PERIODS];
+        emission[1] = [55.0; BANDS];
+        let energies = emission_energy(&emission);
+        let lden_power = lden_energy(&energies.map(|bands| bands.iter().sum()));
+        let receiver = receiver_bound([0.4, 0.6, 0.7], 2.0, *crate::atmosphere::ALPHA_DB_PER_KM);
+        let largest = receiver.gain.iter().copied().fold(0.0, f64::max);
+        let unabsorbed = ReceiverBound {
+            gain: [largest; PERIODS],
+            alpha_db_per_km: [0.0; BANDS],
+        };
+        for spread in [
+            Spread::Point,
+            Spread::Line { length_m: 3.0 },
+            Spread::Line { length_m: 400.0 },
+        ] {
+            for distance_m in [0.1, 0.7, 5.0, 60.0, 900.0, 11_000.0] {
+                let ceiling = received_lden_ceiling(lden_power, spread, distance_m, largest);
+                let bound = |at: &ReceiverBound, d: f64| {
+                    lden_energy(&received_energy_bound(&energies, spread, d, at))
+                };
+                for farther in [distance_m, 1.5 * distance_m + 1.0] {
+                    assert!(ceiling >= bound(&receiver, farther), "{spread:?} {farther}");
+                }
+                let tight = bound(&unabsorbed, distance_m);
+                assert!(
+                    (ceiling / tight - 1.0).abs() < 1e-8,
+                    "{spread:?} {distance_m}"
+                );
+            }
+        }
     }
 
     /// A night-only source keeps its night energy (a day-only gate would drop it).

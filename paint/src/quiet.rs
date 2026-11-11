@@ -125,7 +125,6 @@ impl QuietBlocks {
     }
 
     /// A known pixel: sampled source fields, or background Nden corners and the original energy grids.
-    /// The open proof keeps facade ranking out of the background path.
     pub fn paint_at(&self, painter: &PointPainter, at: usize) -> Painted {
         let grid = painter.grid;
         let (x, y) = (at % grid.pixels, at / grid.pixels);
@@ -159,19 +158,5 @@ impl QuietBlocks {
                 .into_par_iter()
                 .map(|at| Some(self.paint_at(painter, at))),
         )
-    }
-
-    /// The sampled blocks' pixels with their energies, which a façade in front of one ranks by.
-    pub fn fill(&self, painter: &PointPainter, pixels: &mut [Option<Painted>]) {
-        let grid = painter.grid;
-        pixels.par_iter_mut().enumerate().for_each(|(at, pixel)| {
-            let (x, y) = (at % grid.pixels, at / grid.pixels);
-            let block = (y / grid.block) * (grid.pixels / grid.block) + x / grid.block;
-            if let Some(paint) = (self.samples[block].as_ref())
-                .and_then(|samples| samples.known_at(x % grid.block, y % grid.block))
-            {
-                *pixel = Some(paint);
-            }
-        });
     }
 }

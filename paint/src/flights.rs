@@ -164,7 +164,7 @@ fn roll_flight_sums(sums: RollSums) -> FlightSums {
 }
 
 /// Adds each request's rolls to its near flights.
-fn add_rolls(
+pub(crate) fn add_rolls(
     square: &Square,
     sums: &mut [[FlightSums; 2]],
     requests: &[FlightRequest],
@@ -257,9 +257,9 @@ pub(crate) fn flights_at_corners(
     square: &Square,
     grid: Grid,
     corners: &[Point],
+    boxes: &FlightBoxes,
     batch: Option<&dyn Batch>,
 ) -> Result<Vec<FlightSums>, String> {
-    let boxes = FlightBoxes::new(square, grid, corners);
     if boxes.occupied.iter().all(|&occupied| !occupied) && square.rolls.is_empty() {
         return Ok(vec![FlightSums::default(); corners.len()]);
     }
@@ -267,8 +267,8 @@ pub(crate) fn flights_at_corners(
     let ratio = grid.hum_spacing / grid.block;
     let coarse_side = grid.pixels / grid.hum_spacing + 1;
     let air_side = grid.pixels / (2 * grid.block) + 1;
-    let requests = lattice_requests(grid, corners, &boxes);
-    let mut sums = flight_sums(square, &boxes, &requests, batch)?;
+    let requests = lattice_requests(grid, corners, boxes);
+    let mut sums = flight_sums(square, boxes, &requests, batch)?;
     // The rolls join the near boxes at every second corner.
     add_rolls(
         square,
@@ -312,9 +312,9 @@ pub(crate) fn flights_at_corners(
         .collect();
     let requests: Vec<FlightRequest> = (near_energy.iter().zip(corners))
         .filter(|(sums, _)| sums.is_none())
-        .map(|(_, corner)| near_request(corner, &boxes))
+        .map(|(_, corner)| near_request(corner, boxes))
         .collect();
-    let mut exact_sums = flight_sums(square, &boxes, &requests, batch)?;
+    let mut exact_sums = flight_sums(square, boxes, &requests, batch)?;
     add_rolls(square, &mut exact_sums, &requests)?;
     let mut exact_sums = exact_sums.into_iter();
     let near_energy: Vec<FlightSums> = near_energy
