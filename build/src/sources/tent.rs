@@ -1,9 +1,10 @@
 //! The TEN-T rail network carrying freight (the GISCO layer of Regulation 1315/2013's maps, EU27,
 //! `fetch/tent.sh`): a heavy rail row whose middle lies within [`MATCH_M`] of a TEN-T freight line
-//! and runs within [`MATCH_ANGLE_DEG`] of it takes that line's tier, the highest of the lines it
-//! matches. The rail converter weighs a country's guessed freight by the tiers.
+//! of its own country and runs within [`MATCH_ANGLE_DEG`] of it takes that line's tier, the highest
+//! of the lines it matches. The rail converter weighs a country's guessed freight by the tiers; a
+//! country the maps do not cover has no tiers, and at a border a row ignores the neighbour's lines.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 /// A row matches a line within this distance (m on the ground) and angle.
@@ -23,11 +24,13 @@ pub enum Tier {
     Corridor = 2,
 }
 
-/// The network's segments (Web Mercator m) with their tiers, indexed by cell.
+/// The network's segments (Web Mercator m) with their tiers and member states (ISO 3166 alpha-2),
+/// indexed by cell.
 #[derive(Default)]
 pub struct FreightNetwork {
-    segments: Vec<([f64; 4], Tier)>,
+    segments: Vec<([f64; 4], Tier, [u8; 2])>,
     cells: HashMap<(i64, i64), Vec<u32>>,
+    countries: BTreeSet<[u8; 2]>,
 }
 
 fn cell(value: f64) -> i64 {
@@ -41,36 +44,43 @@ impl FreightNetwork {
         Self::parse(&text).map_err(|error| format!("{}: {error}", path.display()))
     }
 
-    /// One line string per line: its tier (1 network, 2 corridor) and its vertices `x y ...`.
+    /// One line string per line: its tier (1 network, 2 corridor), its member state and its
+    /// vertices `x y ...`.
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut network = FreightNetwork::default();
         for (number, line) in text.lines().enumerate() {
-            let values = line
-                .split_whitespace()
+            let invalid = || format!("line {}: not a tier, a country and a line", number + 1);
+            let mut fields = line.split_whitespace();
+            let tier = match fields.next() {
+                Some("1") => Tier::Network,
+                Some("2") => Tier::Corridor,
+                _ => return Err(invalid()),
+            };
+            let country = crate::source_tables::country_code(fields.next().unwrap_or_default())
+                .map_err(|_| invalid())?;
+            let vertices = fields
                 .map(|value| value.parse::<f64>())
                 .collect::<Result<Vec<f64>, _>>()
-                .map_err(|_| format!("line {}: not numbers", number + 1))?;
-            let (tier, vertices) = match values.split_first() {
-                Some((&tier, vertices)) if vertices.len() >= 4 && vertices.len() % 2 == 0 => {
-                    (tier, vertices)
-                }
-                _ => return Err(format!("line {}: not a tier and a line", number + 1)),
-            };
-            let tier = match tier as u8 {
-                1 => Tier::Network,
-                2 => Tier::Corridor,
-                _ => return Err(format!("line {}: tier {tier}", number + 1)),
-            };
+                .map_err(|_| invalid())?;
+            if vertices.len() < 4 || vertices.len() % 2 != 0 {
+                return Err(invalid());
+            }
             for pair in vertices.windows(4).step_by(2) {
-                network.add([pair[0], pair[1], pair[2], pair[3]], tier);
+                network.add([pair[0], pair[1], pair[2], pair[3]], tier, country);
             }
         }
         Ok(network)
     }
 
-    fn add(&mut self, [x0, y0, x1, y1]: [f64; 4], tier: Tier) {
+    /// Whether the maps cover `country`, so that its rows have tiers.
+    pub fn covers(&self, country: [u8; 2]) -> bool {
+        self.countries.contains(&country)
+    }
+
+    fn add(&mut self, [x0, y0, x1, y1]: [f64; 4], tier: Tier, country: [u8; 2]) {
+        self.countries.insert(country);
         let index = self.segments.len() as u32;
-        self.segments.push(([x0, y0, x1, y1], tier));
+        self.segments.push(([x0, y0, x1, y1], tier, country));
         for cx in cell(x0.min(x1)) - 1..=cell(x0.max(x1)) + 1 {
             for cy in cell(y0.min(y1)) - 1..=cell(y0.max(y1)) + 1 {
                 self.cells.entry((cx, cy)).or_default().push(index);
@@ -78,8 +88,8 @@ impl FreightNetwork {
         }
     }
 
-    /// The tier of a row from `a` to `b` (Web Mercator m).
-    pub fn tier(&self, a: [f64; 2], b: [f64; 2]) -> Tier {
+    /// The tier of a row of `country` from `a` to `b` (Web Mercator m).
+    pub fn tier(&self, country: [u8; 2], a: [f64; 2], b: [f64; 2]) -> Tier {
         let middle = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
         let latitude = 2.0 * (middle[1] / RADIUS_M).exp().atan() - std::f64::consts::FRAC_PI_2;
         let ground = latitude.cos();
@@ -89,8 +99,8 @@ impl FreightNetwork {
             return best;
         };
         for &index in listed {
-            let ([x0, y0, x1, y1], tier) = self.segments[index as usize];
-            if tier <= best {
+            let ([x0, y0, x1, y1], tier, line_country) = self.segments[index as usize];
+            if tier <= best || line_country != country {
                 continue;
             }
             let (dx, dy) = (x1 - x0, y1 - y0);
@@ -116,9 +126,10 @@ mod tests {
     use super::*;
 
     /// A row along a corridor takes it, also running the other way; one 150 m off, one across the
-    /// line and one beyond its end do not; a network line and a corridor together read corridor.
+    /// line, one beyond its end and one of the neighbouring country beside it do not; a network
+    /// line and a corridor together read corridor.
     #[test]
-    fn rows_take_the_tier_of_the_line_they_run_on() {
+    fn rows_take_the_tier_of_their_countrys_line_they_run_on() {
         // At 50 N one ground metre is 1/cos(50 deg) = 1.556 Mercator metres.
         let y = RADIUS_M
             * (std::f64::consts::FRAC_PI_4 + 25f64.to_radians())
@@ -126,7 +137,7 @@ mod tests {
                 .ln();
         let k = 1.0 / 50f64.to_radians().cos();
         let text = format!(
-            "2 0 {y} {} {y}\n1 0 {} {} {}\n",
+            "2 DE 0 {y} {} {y}\n1 DE 0 {} {} {}\n",
             10_000.0 * k,
             y + 3_000.0 * k,
             10_000.0 * k,
@@ -134,7 +145,7 @@ mod tests {
         );
         let network = FreightNetwork::parse(&text).unwrap();
         let row = |x0: f64, y0: f64, x1: f64, y1: f64| {
-            network.tier([x0 * k, y + y0 * k], [x1 * k, y + y1 * k])
+            network.tier(*b"DE", [x0 * k, y + y0 * k], [x1 * k, y + y1 * k])
         };
         assert_eq!(row(1_000.0, 50.0, 1_200.0, 50.0), Tier::Corridor);
         assert_eq!(row(1_200.0, -80.0, 1_000.0, -80.0), Tier::Corridor);
@@ -146,9 +157,18 @@ mod tests {
             "beyond the end"
         );
         assert_eq!(row(5_000.0, 3_020.0, 5_200.0, 3_020.0), Tier::Network);
-        let both = FreightNetwork::parse(&format!("1 0 {y} 100 {y}\n2 0 {y} 100 {y}\n")).unwrap();
-        assert_eq!(both.tier([20.0, y], [60.0, y]), Tier::Corridor);
-        assert!(FreightNetwork::parse("3 0 0 1 1\n").is_err());
-        assert!(FreightNetwork::parse("1 0 0 1\n").is_err());
+        let swiss = network.tier(
+            *b"CH",
+            [1_000.0 * k, y + 50.0 * k],
+            [1_200.0 * k, y + 50.0 * k],
+        );
+        assert_eq!(swiss, Tier::Off, "a neighbour's line");
+        assert!(network.covers(*b"DE") && !network.covers(*b"CH"));
+        let both =
+            FreightNetwork::parse(&format!("1 DE 0 {y} 100 {y}\n2 DE 0 {y} 100 {y}\n")).unwrap();
+        assert_eq!(both.tier(*b"DE", [20.0, y], [60.0, y]), Tier::Corridor);
+        assert!(FreightNetwork::parse("3 DE 0 0 1 1\n").is_err());
+        assert!(FreightNetwork::parse("1 DE 0 0 1\n").is_err());
+        assert!(FreightNetwork::parse("1 0 0 1 1\n").is_err(), "no country");
     }
 }

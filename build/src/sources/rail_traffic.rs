@@ -1,7 +1,7 @@
 //! Preserve measured and missing-day trains separately through run medians, country scaling and period allocation.
 use super::tent::Tier;
 use crate::dev4::{Table, z30_corner_mercator_m};
-use crate::source_tables::SourceTables;
+use crate::source_tables::{SourceTables, TrainScales};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int32Type, UInt8Type, UInt16Type};
 use arrow_array::{Array, RecordBatch};
@@ -10,20 +10,15 @@ use physics::emission::rail::{FreightRegion, RailType};
 use std::collections::HashMap;
 use tiles::sources::GUESSED_TRAIN_SOURCES;
 
-/// The (freight, passenger) factors of a heavy rail row's guessed counts in its country, the
-/// freight's at the row's TEN-T tier.
-fn train_scales(
-    tables: &SourceTables,
+/// The (freight, passenger) factors of a heavy rail row's guessed counts from its country's
+/// `train-scales` row, the freight's at the row's TEN-T tier.
+pub(super) fn train_scales(
+    model: Option<&TrainScales>,
     kind: RailType,
-    iso: [u8; 2],
     sources: [u16; 2],
     tier: Tier,
 ) -> [f64; 2] {
-    let Some(model) = tables
-        .train_scales
-        .get(iso)
-        .filter(|_| kind == RailType::Rail)
-    else {
+    let Some(model) = model.filter(|_| kind == RailType::Rail) else {
         return [1.0, 1.0];
     };
     let guessed = |source: u16| GUESSED_TRAIN_SOURCES.contains(&source);
@@ -203,8 +198,12 @@ impl Trains {
         tier: Tier,
         region: FreightRegion,
     ) -> ([f64; PERIODS], [f64; PERIODS], [f64; 2]) {
-        let [freight, passenger] =
-            train_scales(tables, kind, iso, [self.source[1], self.source[0]], tier);
+        let [freight, passenger] = train_scales(
+            tables.train_scales.get(iso),
+            kind,
+            [self.source[1], self.source[0]],
+            tier,
+        );
         let mut result = [self.passenger, self.freight];
         let mut estimated_shares = [0.0; 2];
         for (category, scale) in [passenger, freight].into_iter().enumerate() {

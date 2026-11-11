@@ -180,12 +180,21 @@ pub(crate) fn steps() -> Vec<Step> {
             Some(0),
             false,
         ),
+        // A fit of the year's own prepared railways to the national train-km.
+        (
+            "train-scale-table",
+            &["prepared"],
+            Some(TrainScales),
+            None,
+            false,
+        ),
         ("traffic", &["prepared"], Some(RoadTraffic), Some(1), false),
         (
             "sources",
             &[
                 "prepared",
                 "tagged-speed-table",
+                "train-scale-table",
                 "facilities",
                 "traffic",
                 "airport-traffic",

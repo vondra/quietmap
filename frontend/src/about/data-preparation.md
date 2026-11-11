@@ -23,8 +23,8 @@ traffic counts divided by a newer mapped road length cannot supply an earlier ye
 practices apply over their documented validity intervals; a practice measured later, such as church
 bells, calls to prayer or venue hours, holds over the preceding few years unless a source dated
 within them shows a different practice. A table fitted on the year's own mapped state, such as the
-posted-speed medians, is fitted by the year's build after that state is prepared and published with
-the year. A required model table that is missing stops the build. Where a country has no counts,
+posted-speed medians or the railway country factors, is fitted by the year's build after that state
+is prepared and published with the year. A required model table that is missing stops the build. Where a country has no counts,
 the documented world model still applies. Source lists appear only for maps that have been built.
 
 <details>
@@ -312,15 +312,19 @@ for the line. The annual sum retains repeated passages and changes of direction.
   with no typical train of its own, takes the regional train's correction. A heavy train's sound
   power is taken at no less than 50 km/h, a light-rail train's at 30, and freight runs at no more
   than 89 km/h; the trains of a period are spread along the line as CNOSSOS-EU spreads them.
-- **The counts.** A stretch of track between two switches carries one count. Belgium and Greece
-  publish no goods train-kilometres and keep the defaults' total; Switzerland keeps its defaults.
-  In the EU, freight is weighted 4 on a
+- **The counts.** A stretch of track between two switches carries one count. Each year's build
+  scales the default trains on its own prepared network. Default freight is scaled so that a
+  country's lines carry its goods train-kilometres less the counted freight; a country that
+  publishes none (Belgium, Greece) keeps the defaults' total. In the countries of the
   <abbr title="Trans-European Transport Network, the EU's main transport corridors">TEN-T</abbr>
-  core corridor, 2 on another TEN-T line and 0.5 off them within the country's total; in the EU,
-  Switzerland, Norway and Great Britain 37.6 % of it runs between 22 and 06 h, as counted at the
-  German monitors. Default passenger trains are lowered to fit the country's passenger
-  train-kilometres in 12 European countries and Turkey. Lines mapped as passenger-only take no
-  default freight.
+  maps, a line takes the tier of its own country's TEN-T line, and freight is weighted 4 on a core
+  corridor, 2 on another TEN-T line and 0.5 off them within the country's total. Default passenger
+  trains are lowered, never raised, to the passenger train-kilometres the timetables leave, where
+  they run at least a quarter of the country's mapped passenger train-kilometres. The 2026 factors
+  were fitted before this, on the earlier prepared network, to 1.2 times the passenger
+  train-kilometres and without Switzerland. In the EU, Switzerland, Norway and Great Britain
+  37.6 % of freight runs between 22 and 06 h, as counted at the German monitors. Lines mapped as
+  passenger-only take no default freight.
 - **Metro and crossings.** Above-ground metro uses the light-rail model; track underground emits
   nothing outdoors. At a level crossing, horns sound over up to a quarter mile before the crossing,
   for half the crossing's trains in each direction; US quiet zones stay silent, and partial ones at
@@ -749,7 +753,8 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
 - `build/` turns the inputs into the tiles and every source's sound power. The `year` command
   runs the steps in dependency order. `bus`, `worship` and `venues` extract mapped routes and
   activities from that year's OpenStreetMap state; `tagged-speed-table` fits the posted-speed
-  medians from the same state. Other steps include
+  medians from the same state and `train-scale-table` the railway country factors from the
+  prepared railways. Other steps include
   `ships` (monthly occupancy with completed coverage), `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.

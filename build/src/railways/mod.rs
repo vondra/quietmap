@@ -12,7 +12,7 @@ mod matcher;
 mod merge;
 mod model;
 pub(crate) mod movements;
-mod network;
+pub(crate) mod network;
 mod parallel_geometry;
 mod parallel_tracks;
 pub(crate) mod prior_rules;
