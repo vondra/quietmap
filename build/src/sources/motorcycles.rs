@@ -145,6 +145,28 @@ mod tests {
         assert!(counted(20, 0));
         assert!(!counted(0, 15));
     }
+
+    /// Each year's committed table reads as the run will read it: no repeated country, no
+    /// overlapping region, shares and daily use between zero and one.
+    #[test]
+    fn every_year_motorcycle_table_reads_as_a_country_table() {
+        for year in ["2024", "2026"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../years/tables/{year}/motorcycle-share.json"));
+            let table: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let shares =
+                crate::source_tables::CountryTable::<[f64; 2]>::fixture(&table["rows"].to_string());
+            assert!(
+                shares
+                    .values()
+                    .flatten()
+                    .all(|value| (0.0..=1.0).contains(value)),
+                "{year}"
+            );
+            assert!(shares.get(*b"TH").unwrap()[0] > 0.3, "{year}");
+        }
+    }
 }
 
 #[cfg(test)]
