@@ -95,3 +95,43 @@ fn non_finite_heights_are_rejected() {
         assert!(outlines_of(height_m, RowGeometry::Wall(vec![at(0, 0), at(9, 9)])).is_empty());
     }
 }
+
+#[test]
+fn an_oversized_building_part_is_omitted_with_its_holes_everywhere() {
+    let exterior = vec![
+        at(10_000, 65_000),
+        at(46_000, 65_000),
+        at(46_000, 66_000),
+        at(10_000, 66_000),
+        at(10_000, 65_000),
+    ];
+    let crossed = tiles_crossed(&exterior);
+    assert!(
+        crossed
+            .iter()
+            .any(|tile| exterior.iter().all(|&v| tile.local(v).is_some()))
+    );
+    assert!(
+        crossed
+            .iter()
+            .any(|tile| exterior.iter().any(|&v| tile.local(v).is_none()))
+    );
+    let hole = ring(20_000, 65_500, 100);
+    assert!(
+        tiles_crossed(&hole)
+            .iter()
+            .all(|tile| hole.iter().all(|&v| tile.local(v).is_some()))
+    );
+    let valid = ring(90_000, 90_000, 100);
+    let outlines = outlines_of(
+        12.0,
+        building(vec![vec![exterior, hole], vec![valid.clone()]]),
+    );
+    assert_eq!(
+        outlines.len(),
+        1,
+        "partial rings create false indoor pixels; holes must leave with their exterior"
+    );
+    assert_eq!(outlines[0].vertices, valid);
+    assert_eq!(outlines[0].kind, OutlineKind::Exterior);
+}

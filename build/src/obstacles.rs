@@ -3,8 +3,8 @@
 //! lacks ([`crate::barriers`]): for each target square, the outlines of the square and of its eight
 //! neighbours (whose outlines cross into its border tiles), each stored whole in every child tile
 //! whose cells it crosses. A wall longer than a tile's int16 frame (half a tile beyond each edge)
-//! is stored there as its parts inside the frame; a building ring that large is a mapping error
-//! (no building spans kilometres) and is left out, counted on standard error.
+//! is stored there as its parts inside the frame. Screening drops a building part with its holes
+//! everywhere if any crossed tile cannot store it whole; incomplete rings corrupt containment.
 
 use crate::barriers::Barriers;
 use crate::dev4::{Dev4, Square};
@@ -121,7 +121,6 @@ fn tile_outlines(
     let mut order = members.to_vec();
     order.sort_unstable_by_key(|&index| (outlines[index].footprint_id, index));
     let mut stored = Vec::with_capacity(order.len());
-    let mut oversized = 0;
     for index in order {
         let outline = &outlines[index];
         let fail = |what: &str| {
@@ -142,10 +141,7 @@ fn tile_outlines(
             (Some(vertices), _) if vertices.len() <= MAXIMUM_VERTICES => vec![vertices],
             (_, OutlineKind::Wall) => wall_parts(tile, &outline.vertices),
             (Some(_), _) => return Err(fail("has more vertices than an outline holds")),
-            (None, _) => {
-                oversized += 1;
-                Vec::new()
-            }
+            (None, _) => return Err(fail("was admitted without fitting every crossed tile")),
         };
         stored.extend(parts.into_iter().map(|vertices| Outline {
             footprint_id: outline.footprint_id,
@@ -154,12 +150,6 @@ fn tile_outlines(
             height_m: outline.height_m,
             vertices,
         }));
-    }
-    if oversized > 0 {
-        eprintln!(
-            "obstacles {}/{}: {oversized} building rings larger than the tile's frame left out",
-            tile.x, tile.y
-        );
     }
     Ok(stored)
 }

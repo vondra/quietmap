@@ -591,8 +591,10 @@ described under Aircraft, and the runways' rolls.
 - Every emission piece lives in exactly one tile: a line is split at tile edges, a point lies in
   the tile holding it, so the sources of a ring never reach into a ring not yet read. An outline is
   stored whole in every tile whose cells it crosses; a wall longer than the frame is clipped into
-  parts within it, a ring larger than the frame is left out (the builder counts it). Footprint and
-  source ids are global and stable across tiles; holes are kept.
+  parts within it. A building part that cannot fit whole in every crossed tile is omitted everywhere,
+  with its holes, and reported by the builder. Storing only some copies would turn outdoor points
+  into false indoor points. Footprint and source ids are global and stable across tiles;
+  the holes of a stored part are kept.
 - A release is complete when its builder wrote the completion marker last, its first line naming
   the square files' layout. Only then does a missing file or tile mean "empty"; an unfinished build
   or a tree of another layout is never served.
