@@ -85,9 +85,17 @@ pub(crate) fn steps() -> Vec<Step> {
             Some(2),
             false,
         ),
+        // A fit of the year's own surveyed buildings, over the squares structures prepares.
+        (
+            "structure-height-model",
+            &["osm", "structure-observations"],
+            Some(StructureHeightModel),
+            Some(2),
+            false,
+        ),
         (
             "structures",
-            &["osm", "structure-observations"],
+            &["osm", "structure-observations", "structure-height-model"],
             Some(Structures),
             Some(2),
             false,

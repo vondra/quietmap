@@ -8,6 +8,10 @@ use gdal::{
 use geos::{Geom, Geometry};
 use std::path::Path;
 
+/// The lowest relative height that is a roof (the frozen producer's pixel rule): a raster pixel or
+/// a surveyed footprint below it is ground, vegetation or a record without a height.
+pub const MEASURED_ROOF_MINIMUM_M: f32 = 2.0;
+
 pub struct HeightRaster {
     dataset: Dataset,
     transform: CoordTransform,
@@ -62,6 +66,12 @@ impl HeightRaster {
         longitude >= b[0] && longitude <= b[2] && latitude >= b[1] && latitude <= b[3]
     }
 
+    /// Whether its coverage meets a west, south, east, north box in degrees.
+    pub fn overlaps(&self, [west, south, east, north]: [f64; 4]) -> bool {
+        let b = self.coverage;
+        west <= b[2] && b[0] <= east && south <= b[3] && b[1] <= north
+    }
+
     pub fn sample(
         &self,
         geometry: &Geometry,
@@ -108,7 +118,10 @@ impl HeightRaster {
                 }
                 inside += 1;
                 let value = window.data()[(row - r0) * size.0 + col - c0];
-                if value.is_finite() && value >= 2.0 && self.nodata != Some(f64::from(value)) {
+                if value.is_finite()
+                    && value >= MEASURED_ROOF_MINIMUM_M
+                    && self.nodata != Some(f64::from(value))
+                {
                     measured.push(value);
                 }
             }

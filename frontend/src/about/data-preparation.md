@@ -23,9 +23,10 @@ traffic counts divided by a newer mapped road length cannot supply an earlier ye
 practices apply over their documented validity intervals; a practice measured later, such as church
 bells, calls to prayer or venue hours, holds over the preceding few years unless a source dated
 within them shows a different practice. A table fitted on the year's own mapped state, such as the
-posted-speed medians, the railway country factors, a hotel's trips per floor area, the seats
-outside bars and restaurants or the buses on uncounted roads, is fitted by the year's build after
-that state is prepared and published with the year. A required model table that is missing stops
+building heights by floors and footprint area, the posted-speed medians, the railway country
+factors, a hotel's trips per floor area, the seats outside bars and restaurants or the buses on
+uncounted roads, is fitted by the year's build after that state is prepared and published with the
+year. A required model table that is missing stops
 the build. Where a country has no counts, the documented world model still applies. Source lists
 appear only for maps that have been built.
 
@@ -94,16 +95,23 @@ from a raster need at least three valid pixels and 30% valid coverage of the foo
 Registry floor counts fill gaps in mapped counts. A surveyed wall replaces a mapped wall only
 where its start, middle and end coincide within 5 m; crossing walls remain separate.
 
-The year manifest selects the observations and height table. Shared survey caches require a
-publisher edition, and normalized observations carry the year. A missing historical survey
-leaves the next available height estimate. The historical table uses earlier measurements;
-its fit and geographic limits are recorded with the table. Preparing these inputs does not
-establish that the historical map is complete or that changes between years are validated.
+The height-by-area table and the metres a floor are the year's own. The year's build fits them
+after the buildings and surveys are prepared, from every mapped building a survey measures, such
+as Prague's height raster, the Dutch 3DBAG or Japan's PLATEAU cities. Each such building takes
+the roof preparation would read, the raster's mean replaced by a matched survey footprint's height;
+a surveyed roof below 2 m counts as none. Floors give metres a floor by least squares; buildings
+mapping neither height nor floors give a median roof for each fifth of footprint areas.
 
-`qm-build structure-observations` converts publisher objects; `qm-build structures` writes the
-single building-and-wall table. The implementation is in `build/src/structures/` and the
-publisher converters in `fetch/structure_*.rs`. The height table and its derivation are in
-`years/tables/`. The obsolete footprint lookup index is not produced.
+The year manifest selects the observations. Shared survey caches require a publisher edition,
+and normalized observations carry the year. A missing historical survey leaves the next available
+height estimate. Preparing these inputs does not establish that the historical map is complete or
+that changes between years are validated.
+
+`qm-build structure-observations` converts publisher objects; `qm-build structure-height-model`
+fits the height table; `qm-build structures` writes the single building-and-wall table. The
+implementation is in `build/src/structures/` and the publisher converters in
+`fetch/structure_*.rs`. The height table's format and derivation are in `years/tables/`. The
+obsolete footprint lookup index is not produced.
 
 </details>
 
@@ -791,7 +799,8 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
 - `build/` turns the inputs into the tiles and every source's sound power. The `year` command
   runs the steps in dependency order. `bus`, `worship`, `venues` and `lodgings` extract mapped
   routes, activities and the lodgings that state their rooms from that year's OpenStreetMap state;
-  `tagged-speed-table` fits the posted-speed medians and `hotel-trip-rate` a hotel's trips per
+  `structure-height-model` fits the building heights from the surveyed buildings,
+  `tagged-speed-table` the posted-speed medians and `hotel-trip-rate` a hotel's trips per
   floor area from the same state, `train-scale-table` the railway country factors from the
   prepared railways, `venue-seating-table` the seats outside its bars and restaurants from the
   dated seating surveys (`fetch/terrace_surveys.py`) and its mapped places, `building-road-models`

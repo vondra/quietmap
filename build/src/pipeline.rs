@@ -205,7 +205,9 @@ pub(crate) fn build(options: &Arguments) -> Result<()> {
             }
             if let Some(kind) = step.binding {
                 bind(&run, &manifest, kind, &output)?;
-                if crate::source_tables::MODEL_KINDS.contains(&kind) {
+                if crate::source_tables::MODEL_KINDS.contains(&kind)
+                    || crate::year::PREPARATION_TABLE_KINDS.contains(&kind)
+                {
                     let table = format!("{kind}.json");
                     publish(
                         &output,
