@@ -6072,6 +6072,38 @@
         "railway-monitoring"
       ],
       "description": "Networks using the European freight fleet model based on the EBA 2023 observations. Other networks keep the world freight model. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+    },
+    {
+      "id": "3dbag",
+      "kind": "prepare-building-heights",
+      "region": "NL",
+      "publisher": "3DBAG; TU Delft; 3DGI",
+      "url": "https://3dbag.nl/",
+      "observed": {
+        "start": "2025-09-03",
+        "end": "2025-09-03"
+      },
+      "published": null,
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "3DBAG building-height edition of September 2025. A building standing in 2024 keeps its measured height, so the survey holds over 2024-2026."
+    },
+    {
+      "id": "nrw-heights",
+      "kind": "prepare-building-heights",
+      "region": "DE:North Rhine-Westphalia",
+      "publisher": "Geobasis NRW",
+      "url": "https://www.opengeodata.nrw.de/produkte/geobasis/3dg/",
+      "observed": {
+        "start": "2026-05-31",
+        "end": "2026-05-31"
+      },
+      "published": null,
+      "licence": "DL-DE Zero 2.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "LoD1 measured building heights. A building standing in 2024 keeps its measured height, so the survey holds over 2024-2026."
     }
   ],
   "unavailable": [
@@ -6086,20 +6118,6 @@
       "id": "barriers-wa",
       "kind": "prepare-noise-barriers",
       "region": "US:Washington",
-      "description": "No inventory at or before the map date was identified. Only mapped barriers and ordinary building-height inputs remain.",
-      "depends_on": []
-    },
-    {
-      "id": "nrw-heights",
-      "kind": "prepare-building-heights",
-      "region": "DE:North Rhine-Westphalia",
-      "description": "No inventory at or before the map date was identified. Only mapped barriers and ordinary building-height inputs remain.",
-      "depends_on": []
-    },
-    {
-      "id": "3dbag",
-      "kind": "prepare-building-heights",
-      "region": "NL",
       "description": "No inventory at or before the map date was identified. Only mapped barriers and ordinary building-height inputs remain.",
       "depends_on": []
     },
@@ -7817,6 +7835,14 @@
       "end": "2026"
     },
     "raster-us-3dep-1-ak-east": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "3dbag": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "nrw-heights": {
       "start": "2024",
       "end": "2026"
     }
