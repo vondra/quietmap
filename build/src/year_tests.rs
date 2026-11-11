@@ -193,7 +193,10 @@ fn historical_preparation_admission_is_separate_from_release_completion() {
     ] {
         assert!(historical.admitted(id).unwrap(), "{id}");
     }
-    assert!(!historical.admitted("building-road-models").unwrap());
+    assert!(
+        historical.admitted("building-road-models").unwrap(),
+        "fitted by the run"
+    );
     let reference = Manifest::read(&root.join("2026.json")).unwrap();
     assert!(reference.admitted("prepared").unwrap());
 }

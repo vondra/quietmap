@@ -1,4 +1,4 @@
-//! Export mapped routes and activities with the same retained osmium/Python converters.
+//! Export mapped routes, activities and lodgings with the same retained osmium/Python converters.
 use crate::year::{Kind, YearInputs};
 use std::{
     fs,
@@ -31,6 +31,12 @@ pub fn build(kind: &str, inputs: &YearInputs, out: &Path, scratch: &Path) -> Res
             include_str!("../../fetch/venues.py"),
             false,
         ),
+        // Every object that states rooms; the converter keeps the lodgings among them.
+        "lodgings" => (
+            &["nwr/rooms"],
+            include_str!("../../fetch/lodgings.py"),
+            false,
+        ),
         other => return Err(format!("unknown mapped inventory {other}")),
     };
     fs::create_dir(scratch).map_err(|e| e.to_string())?;
@@ -58,6 +64,7 @@ pub fn build(kind: &str, inputs: &YearInputs, out: &Path, scratch: &Path) -> Res
             "-f",
             "geojsonseq",
             "--geometry-types=point,polygon",
+            "--attributes=type,id",
             "-o",
             "-",
         ]);
@@ -95,6 +102,13 @@ mod tests {
 <node id="1" lat="50" lon="14"><tag k="amenity" v="cafe"/></node>
 <node id="2" lat="50.01" lon="14.01"><tag k="amenity" v="place_of_worship"/><tag k="religion" v="christian"/></node>
 <way id="10"><nd ref="1"/><nd ref="2"/></way>
+<node id="3" lat="50.02" lon="14.02"><tag k="tourism" v="hotel"/><tag k="rooms" v=" 12 "/></node>
+<node id="4" lat="50.02" lon="14.021"><tag k="tourism" v="apartment"/><tag k="rooms" v="3"/></node>
+<node id="5" lat="50.03" lon="14.03"/><node id="6" lat="50.03" lon="14.04"/>
+<node id="7" lat="50.04" lon="14.04"/><node id="8" lat="50.04" lon="14.03"><tag k="rooms" v="2"/></node>
+<node id="9" lat="50.05" lon="14.05"><tag k="tourism" v="guest_house"/><tag k="rooms" v="many"/></node>
+<way id="10"><nd ref="1"/><nd ref="2"/></way>
+<way id="11"><nd ref="5"/><nd ref="6"/><nd ref="7"/><nd ref="8"/><nd ref="5"/><tag k="building" v="hotel"/><tag k="rooms" v="40"/></way>
 <relation id="20"><member type="way" ref="10" role=""/><tag k="type" v="route"/><tag k="route" v="bus"/><tag k="interval" v="10"/></relation>
 </osm>"#).unwrap();
         assert!(
@@ -121,5 +135,18 @@ mod tests {
             let rows = fs::read_to_string(out).unwrap();
             assert_eq!(rows.lines().count(), 1, "{kind}: {rows}");
         }
+        // A hotel node and a hotel building that state their rooms, the way at its ring's mean;
+        // an apartment, an untagged vertex and a count in words state none.
+        build(
+            "lodgings",
+            &inputs,
+            &root.join("lodgings"),
+            &root.join("lodgings-scratch"),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("lodgings")).unwrap(),
+            "node\t3\t50.0200000\t14.0200000\t12\nway\t11\t50.0350000\t14.0350000\t40\n"
+        );
     }
 }

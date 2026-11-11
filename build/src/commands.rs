@@ -84,6 +84,9 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
         "road-reference-counts" => {
             sources::road_reference_fit::fit(&inputs, &out).map_err(|e| format!("{e:#}"))
         }
+        "hotel-trip-rate" => {
+            traffic::hotel_trip_rate_fit::fit(&inputs, &out).map_err(|e| format!("{e:#}"))
+        }
         "road-observations" => road_counts::convert(&inputs, &out).map_err(|e| e.to_string()),
         "road-model-tables" => roads::calibration::build(&inputs, &out).map_err(|e| e.to_string()),
         "road-speed-table" => roads::speed_validity::build(&inputs, options.get("kind")?, &out)
@@ -201,7 +204,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
             Ok(())
         }
         "weather" => weather::build(&inputs, &out),
-        "bus" | "worship" | "venues" => {
+        "bus" | "worship" | "venues" | "lodgings" => {
             crate::osm_auxiliary::build(command, &inputs, &out, Path::new(options.get("scratch")?))
         }
         "terrain-fine" => {

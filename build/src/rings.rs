@@ -48,22 +48,26 @@ impl RingIndex {
     /// The id of an outline holding `position` (inside a part's exterior, outside its holes); of
     /// overlapping ones the first added.
     pub fn containing(&self, position: (i32, i32)) -> Option<u64> {
+        self.holding(position).next()
+    }
+
+    /// The ids of every outline holding `position`, in the order they were added.
+    pub fn holding(&self, position: (i32, i32)) -> impl Iterator<Item = u64> + '_ {
         let cell = (position.0 >> CELL_SHIFT, position.1 >> CELL_SHIFT);
         self.cells
-            .get(&cell)?
-            .iter()
+            .get(&cell)
+            .into_iter()
+            .flatten()
             .map(|&at| &self.items[at as usize])
-            .find_map(|(id, parts)| {
-                parts
-                    .iter()
-                    .any(|rings| {
-                        rings
-                            .first()
-                            .is_some_and(|exterior| inside(exterior, position))
-                            && !rings[1..].iter().any(|hole| inside(hole, position))
-                    })
-                    .then_some(*id)
+            .filter(move |(_, parts)| {
+                parts.iter().any(|rings| {
+                    rings
+                        .first()
+                        .is_some_and(|exterior| inside(exterior, position))
+                        && !rings[1..].iter().any(|hole| inside(hole, position))
+                })
             })
+            .map(|(id, _)| *id)
     }
 }
 

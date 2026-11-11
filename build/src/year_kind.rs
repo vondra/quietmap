@@ -47,6 +47,7 @@ kinds! {
     HeavySpeeds => "heavy-speeds",
     HotelTripRate => "hotel-trip-rate",
     LegalSpeeds => "legal-speeds",
+    Lodgings => "lodgings" [intermediate],
     ModelObservations => "model-observations",
     MotorcycleShare => "motorcycle-share",
     NationalDem => "national-dem",
