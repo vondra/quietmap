@@ -1,11 +1,12 @@
-"""The wind turbines standing today (`turbines.sh`), one line each: `lat lon hub_m power_kw source`
-(tab-separated, sorted by latitude then longitude, 0 when unknown; source `osm` or the register
-that placed it). OpenStreetMap's standing turbines (no lifecycle prefix, key or value; a node its
-point, an outline the mean of its vertices) come first; each register in turn pairs its standing
-turbines one to one with those not yet paired, nearest pairs first, within PAIR_M: a pair keeps
-its position and takes the register's hub and power where known, an unpaired standing turbine of
-the register is added, and an unpaired OpenStreetMap turbine within GONE_M of one the register
-calls dismantled is dropped. Reads osmium's GeoJSON sequence of the turbines on stdin.
+"""The wind turbines standing at the planet's date (`turbines.sh`), one line each: `lat lon hub_m
+power_kw source` (tab-separated, sorted by latitude then longitude, 0 when unknown; source `osm`
+or the register that placed it). OpenStreetMap's standing turbines (no lifecycle prefix, key or
+value; a node its point, an outline the mean of its vertices) come first; each register whose
+directory the input tree holds, in turn, pairs its standing turbines one to one with those not
+yet paired, nearest pairs first, within PAIR_M: a pair keeps its position and takes the
+register's hub and power where known, an unpaired standing turbine of the register is added, and
+an unpaired OpenStreetMap turbine within GONE_M of one the register calls dismantled is dropped.
+Reads osmium's GeoJSON sequence of the turbines on stdin.
 
     osmium export turbines.osm.pbf -f geojsonseq -a type,id | python3 turbines.py REGISTERS OUT
 """
@@ -13,6 +14,7 @@ import csv
 import glob
 import json
 import math
+import os
 import re
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -73,7 +75,7 @@ def gdal_open(path, options):
 # Each register: its turbines as (state, lat, lon, hub_m, power_kw), state standing or dismantled
 # (planned and applied-for turbines are not written).
 def uswtdb(registers):
-    (path,) = glob.glob(f'{registers}/uswtdb/uswtdb_V*.csv')
+    (path,) = glob.glob(f'{registers}/uswtdb/uswtdb_[Vv]*.csv')
     for row in csv.DictReader(open(path, encoding='utf-8')):
         yield 'standing', number(row['ylat']), number(row['xlong']), number(row['t_hh']), \
             number(row['t_cap'])
@@ -250,6 +252,10 @@ def main(registers, out_path):
     paired = [False] * osm_count
     dropped = set()
     for register in REGISTERS:
+        # A year merges only the registers it admits; the others are absent from its input tree.
+        if not os.path.isdir(f'{registers}/{register.__name__}'):
+            print(f'{register.__name__}: not in this input tree', file=sys.stderr)
+            continue
         rows = list(register(registers))
         grid = Grid(PAIR_M)
         for index, turbine in enumerate(turbines):

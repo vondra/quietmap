@@ -169,14 +169,17 @@
       "publisher": "OpenStreetMap and national turbine registers",
       "url": "https://www.openstreetmap.org/copyright",
       "observed": {
-        "start": "2025-01-01",
-        "end": "2025-01-01"
+        "start": "2024-11-20",
+        "end": "2024-12-31"
       },
       "published": null,
       "licence": "ODbL; national registers credited separately",
       "public_ok": true,
-      "depends_on": [],
-      "description": "To be prepared from this manifest’s admitted inputs. Standing wind turbines, their rated powers and hub heights."
+      "depends_on": [
+        "osm",
+        "uswtdb-archive"
+      ],
+      "description": "Wind turbines standing in OpenStreetMap immediately before 2025-01-01, paired with the US register of November 2024 for hub heights and rated powers; no other national register has an admitted edition."
     },
     {
       "id": "water",
@@ -494,6 +497,57 @@
       "description": "CGAZ v6.0.0 country and administrative boundaries."
     },
     {
+      "id": "geoboundaries-tha-adm1",
+      "kind": "prepare-boundaries",
+      "region": "TH",
+      "publisher": "geoBoundaries (OpenStreetMap, Wambacher)",
+      "url": "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/THA/ADM1/geoBoundaries-THA-ADM1.geojson",
+      "observed": {
+        "start": "2017",
+        "end": "2017"
+      },
+      "published": "2023-12-13",
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Thai provinces of geoBoundaries gbOpen, release of 13 December 2023, representing 2017."
+    },
+    {
+      "id": "geoboundaries-usa-adm1",
+      "kind": "prepare-boundaries",
+      "region": "US",
+      "publisher": "geoBoundaries (US Census Bureau, MAF/TIGER)",
+      "url": "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/USA/ADM1/geoBoundaries-USA-ADM1_simplified.geojson",
+      "observed": {
+        "start": "2018",
+        "end": "2018"
+      },
+      "published": "2023-12-13",
+      "licence": "Public domain",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "US states of geoBoundaries gbOpen, simplified, release of 13 December 2023, representing 2018."
+    },
+    {
+      "id": "subdivision-grids",
+      "kind": "subdivision-grids",
+      "region": "world",
+      "publisher": "geoBoundaries / national administrative boundaries",
+      "url": "https://www.geoboundaries.org/",
+      "observed": {
+        "start": "2017",
+        "end": "2018"
+      },
+      "published": null,
+      "licence": "ODbL-1.0 (Thai provinces from OpenStreetMap); public domain (US states)",
+      "public_ok": true,
+      "depends_on": [
+        "geoboundaries-tha-adm1",
+        "geoboundaries-usa-adm1"
+      ],
+      "description": "Province (TH, ISO 3166-2) and state (US, FIPS) lookup grids rasterised from the geoBoundaries release of 13 December 2023, used to attach province and state traffic tables."
+    },
+    {
       "id": "emodnet",
       "kind": "prepare-ships",
       "region": "europe",
@@ -701,14 +755,30 @@
       "publisher": "ADSBExchange",
       "url": "https://samples.adsbexchange.com/",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2024-01-01",
+        "end": "2024-12-01"
       },
       "published": null,
       "licence": "ADSBExchange sample terms; no redistribution of raw reports",
       "public_ok": false,
       "depends_on": [],
       "description": "Month-first samples of aircraft absent from the primary archive."
+    },
+    {
+      "id": "airport-operations",
+      "kind": "airport-operations",
+      "region": "world",
+      "publisher": "CAAC East China, UK CAA, EUROCONTROL, Statistics Canada, ANAC, AAI, ACSA, Hong Kong CAD and SingStat/CAAS",
+      "url": "https://ansperformance.eu/reference/dataset/airport-traffic/",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Mixed; each count names its publisher's licence and scope",
+      "public_ok": false,
+      "depends_on": [],
+      "description": "Published monthly runway operations by airport and engine class, which supplement the observed flights where receivers miss them."
     },
     {
       "id": "shuffled",
@@ -7303,15 +7373,6 @@
         "osm",
         "subdivision-grids",
         "building-road-models"
-      ]
-    },
-    {
-      "id": "subdivision-grids",
-      "kind": "subdivision-grids",
-      "region": "world",
-      "description": "To be derived for 2024. Administrative subdivision lookup grids used to attach province and state traffic tables; the original boundary snapshot has no earlier verified vintage.",
-      "depends_on": [
-        "boundaries"
       ]
     },
     {

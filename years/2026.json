@@ -670,16 +670,17 @@
       "publisher": "geoBoundaries / national administrative boundaries",
       "url": "https://www.geoboundaries.org/",
       "observed": {
-        "start": "2023-09-14",
-        "end": "2023-09-14"
+        "start": "2017",
+        "end": "2018"
       },
       "published": null,
-      "licence": "CC BY 4.0",
+      "licence": "ODbL-1.0 (Thai provinces from OpenStreetMap); public domain (US states)",
       "public_ok": true,
       "depends_on": [
-        "boundaries"
+        "geoboundaries-tha-adm1",
+        "geoboundaries-usa-adm1"
       ],
-      "description": "Administrative subdivision lookup grids used to attach province and state traffic tables; the original boundary snapshot has no earlier verified vintage."
+      "description": "Province (TH, ISO 3166-2) and state (US, FIPS) lookup grids rasterised from the geoBoundaries release of 13 December 2023, used to attach province and state traffic tables."
     },
     {
       "id": "building-plant-stocks",
@@ -1022,6 +1023,38 @@
       "public_ok": true,
       "depends_on": [],
       "description": "CGAZ v6.0.0 country and administrative boundaries."
+    },
+    {
+      "id": "geoboundaries-tha-adm1",
+      "kind": "prepare-boundaries",
+      "region": "TH",
+      "publisher": "geoBoundaries (OpenStreetMap, Wambacher)",
+      "url": "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/THA/ADM1/geoBoundaries-THA-ADM1.geojson",
+      "observed": {
+        "start": "2017",
+        "end": "2017"
+      },
+      "published": "2023-12-13",
+      "licence": "ODbL-1.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Thai provinces of geoBoundaries gbOpen, release of 13 December 2023, representing 2017."
+    },
+    {
+      "id": "geoboundaries-usa-adm1",
+      "kind": "prepare-boundaries",
+      "region": "US",
+      "publisher": "geoBoundaries (US Census Bureau, MAF/TIGER)",
+      "url": "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/USA/ADM1/geoBoundaries-USA-ADM1_simplified.geojson",
+      "observed": {
+        "start": "2018",
+        "end": "2018"
+      },
+      "published": "2023-12-13",
+      "licence": "Public domain",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "US states of geoBoundaries gbOpen, simplified, release of 13 December 2023, representing 2018."
     },
     {
       "id": "emodnet",
