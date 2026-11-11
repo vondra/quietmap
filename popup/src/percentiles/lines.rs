@@ -45,22 +45,22 @@ impl crate::update::Contributor {
     }
 }
 
-/// What a line is made of, period by period: its energy, its mean in each of a resolution's merged
-/// weather states and its lambda; its hourly profile and an event's duty.
+/// What a line is made of, period by period: its energy, its mean in each
+/// weather state and its lambda; its hourly profile and an event's duty.
 pub struct LineParts {
     pub energy: [f64; PERIODS],
-    pub means: [Vec<f64>; PERIODS],
+    pub means: [[f64; WEATHER_STATES]; PERIODS],
     pub lambda: [f64; PERIODS],
     pub profile: Option<usize>,
     pub duty: Option<[f64; PERIODS]>,
 }
 
 impl Line {
-    /// Its parts at `states` merged weather states (a port of the distributions reads them).
-    pub fn parts(&self, states: usize) -> LineParts {
+    /// Its parts in the same weather states as the click (a port of the distributions reads them).
+    pub fn parts(&self) -> LineParts {
         LineParts {
             energy: self.energy,
-            means: std::array::from_fn(|p| merged_states(&self.means[p], states)),
+            means: self.means,
             lambda: self.lambda,
             profile: self.profile,
             duty: self.duty,

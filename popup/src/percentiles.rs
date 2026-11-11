@@ -33,9 +33,9 @@ pub use lines::{
 };
 use traffic::lambda;
 pub use traffic::{Heard, Passes, hour_factor, hour_groups, passes_at};
+pub(crate) use weather::favourable_share;
 use weather::weather_means;
-pub(crate) use weather::{WEATHER_STATES, favourable_share};
-pub use weather::{Weather, flight_weather, merged_states};
+pub use weather::{WEATHER_STATES, Weather, flight_weather};
 
 /// The levels (dB, `-inf` silent) exceeded 5, 10, 50 and 90 % of the time per period.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -46,13 +46,11 @@ pub struct Percentiles {
     pub l90: [f64; PERIODS],
 }
 
-/// How finely the level distributions are computed: the grid's step (dB), the equally likely
-/// weather states (the native ten merged into as many) and the hours of a period with a profile
+/// How finely the level distributions are computed: the grid's step (dB) and the hours of a period with a profile
 /// (`None` every hour apart; groups of hours by their flow, each at its hours' mean flow).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Resolution {
     pub bin_db: f64,
-    pub weather_states: usize,
     pub hour_groups: Option<[usize; PERIODS]>,
 }
 
@@ -60,17 +58,13 @@ impl Resolution {
     /// A click's: 0.5 dB, Nden within 0.09 % of 0.1 dB's at 919 points (measured 2026-10-12).
     pub const CLICK: Resolution = Resolution {
         bin_db: 0.5,
-        weather_states: WEATHER_STATES,
         hour_groups: None,
     };
-    /// The map's: 2 dB, two weather states, four, one and three groups of the day's, evening's
-    /// and night's hours. On Dobris's 1,125 popup clicks the painted total is within 1 phon but at
-    /// one cell (1.5), over 0.5 phon at 4.8 %, bias +0.23 phon (1 dB and three states: 1.8 %,
-    /// +0.16 phon); against the sone etalon the drift the same; the painter a tenth faster
-    /// (measured 2026-10-12).
+    /// The map's: 2 dB, the click's weather states, and four, one and three groups of the day's,
+    /// evening's and night's hours. Two weather states mixed rare favourable propagation
+    /// into too much of the day and overstated loudness in the global sample.
     pub const MAP: Resolution = Resolution {
         bin_db: 2.0,
-        weather_states: 2,
         hour_groups: Some([4, 1, 3]),
     };
 }
@@ -97,7 +91,7 @@ pub fn layered_distributions(
 ) -> (Vec<[Distribution; PERIODS]>, [Distribution; PERIODS]) {
     let follows = |lines: &[Line]| lines.iter().any(|line| line.profile.is_some());
     let profiled = layers.iter().any(|(lines, _)| follows(lines));
-    let states = resolution.weather_states;
+    let states = WEATHER_STATES;
     let periods: [(Vec<Distribution>, Distribution); PERIODS] = std::array::from_fn(|p| {
         let (groups, hours) = hour_groups(profiled, p, resolution.hour_groups);
         // A layer none of whose lines follows a profile sounds alike in every group of hours.
@@ -173,8 +167,7 @@ type States = Vec<(Distribution, Option<f64>)>;
 /// period's, and the place's distribution in each state.
 type GroupPart = (f64, Vec<Option<States>>, Vec<Distribution>);
 
-/// One layer's distributions in the hours `slots` of `period`, one per weather state of
-/// `resolution`: its `steady` energy with its moving lines added, their shapes shared by the
+/// One layer's distributions in the hours `slots` of `period`, one per weather state: its `steady` energy with its moving lines added, their shapes shared by the
 /// states; where none moves, that energy.
 fn layer_states(
     lines: &[Line],
@@ -195,23 +188,29 @@ fn layer_states(
     let shapes: Vec<Option<Shape>> = (lines.iter().zip(&factors))
         .map(|(line, &factor)| line.shape(period, factor))
         .collect();
-    let means: Vec<Vec<f64>> = (lines.iter())
-        .map(|line| merged_states(&line.means[period], resolution.weather_states))
-        .collect();
-    (0..resolution.weather_states)
-        .map(|state| {
-            let state_means: Vec<f64> = means.iter().map(|means| means[state]).collect();
-            let moment = moment(lines, &shapes, (&state_means, &factors), steady, period);
-            // What holds steady first: a moving line's quiet moments fall into its bin.
-            let mut sum = Distribution::empty(resolution.bin_db);
-            sum.silent = 1.0;
-            sum = sum.over(moment.floor);
-            for &(_, values, mean) in &moment.moving {
-                sum = sum.with_line((values, mean));
-            }
-            (sum, moment.moving.is_empty().then_some(moment.floor))
-        })
-        .collect()
+    let mut states: States = Vec::with_capacity(WEATHER_STATES);
+    for state in 0..WEATHER_STATES {
+        // Identical source means give the same distribution; keep every state's time weight.
+        if state > 0
+            && lines
+                .iter()
+                .all(|line| line.means[period][state] == line.means[period][state - 1])
+        {
+            states.push(states[state - 1].clone());
+            continue;
+        }
+        let state_means: Vec<f64> = lines.iter().map(|line| line.means[period][state]).collect();
+        let moment = moment(lines, &shapes, (&state_means, &factors), steady, period);
+        // What holds steady first: a moving line's quiet moments fall into its bin.
+        let mut sum = Distribution::empty(resolution.bin_db);
+        sum.silent = 1.0;
+        sum = sum.over(moment.floor);
+        for &(_, values, mean) in &moment.moving {
+            sum = sum.with_line((values, mean));
+        }
+        states.push((sum, moment.moving.is_empty().then_some(moment.floor)));
+    }
+    states
 }
 
 /// A line's moving values in hours of a period, relative to its mean then (each weather state

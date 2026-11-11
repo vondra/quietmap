@@ -84,33 +84,10 @@ pub(super) fn weather_means(
 
 /// Equally likely weather states of the place, one for every ray of it (a night's inversion bends
 /// them alike).
-pub(crate) const WEATHER_STATES: usize = 10;
+pub const WEATHER_STATES: usize = 10;
 /// The flights' weather: their mean in either state.
 pub fn flight_weather(flights: &([f64; PERIODS], [f64; PERIODS])) -> Weather {
     let mut weather = Weather::default();
     weather.add(&flights.0, &[flights.0; 2]);
     weather
-}
-
-/// The native weather states' means merged into `states` equally likely ones, each the mean over
-/// its span of the native ones it covers.
-pub fn merged_states(means: &[f64; WEATHER_STATES], states: usize) -> Vec<f64> {
-    if states == WEATHER_STATES {
-        return means.to_vec();
-    }
-    (0..states)
-        .map(|state| {
-            let (low, high) = (
-                state as f64 / states as f64,
-                (state + 1) as f64 / states as f64,
-            );
-            (0..WEATHER_STATES)
-                .map(|native| {
-                    let from = native as f64 / WEATHER_STATES as f64;
-                    let to = (native + 1) as f64 / WEATHER_STATES as f64;
-                    means[native] * (high.min(to) - low.max(from)).max(0.0) * states as f64
-                })
-                .sum()
-        })
-        .collect()
 }

@@ -425,6 +425,41 @@ mod tests {
         assert!((night - road[2].at(70.0) / 3.0).abs() < 1e-9);
     }
 
+    /// Infrequent favourable propagation must not become a moderate hum over half the day.
+    #[test]
+    fn map_weather_keeps_infrequent_favourable_sound_within_one_phon() {
+        use crate::percentiles::tests::contributor;
+        let road = road_curves();
+        for share in [0.2, 0.3, 0.4, 0.6, 0.7, 0.8] {
+            let (calm, favourable) = (energy(35.0), energy(55.0));
+            let mean = calm + share * (favourable - calm);
+            let mut source = contributor(1, Layer::Industry, 0.0, 300.0);
+            source.energy = [mean; PERIODS];
+            source.weather = Weather::default();
+            source
+                .weather
+                .add(&source.energy, &[[calm; PERIODS], [favourable; PERIODS]]);
+            let line = Line::of(
+                &source.group(),
+                &Passes::read(source.layer, &serde_json::Value::Null),
+            )
+            .unwrap();
+            let at = |resolution| {
+                let distributions = crate::percentiles::distributions_of(
+                    std::slice::from_ref(&line),
+                    [0.0; PERIODS],
+                    resolution,
+                );
+                loudness(&distributions, &road).nden_sone
+            };
+            let difference = 10.0 * (at(Resolution::MAP) / at(Resolution::CLICK)).log2();
+            assert!(
+                difference.abs() <= 1.0,
+                "favourable share {share}: {difference} phon"
+            );
+        }
+    }
+
     /// A source alone: steady, its loudness at its level all day; a car every half hour 4 m away
     /// far under its steady self though its energy is the same; over a steady floor, the floor's
     /// loudness at least.

@@ -99,52 +99,58 @@ calculation at its point. The offers returned for each view are a selection, not
 The map's target is to stay within 1 phon of the popup, about 7 % of loudness. Buildings and
 individual noise layers can differ more.
 
-In November 2026, newly calculated tiles met that target at 1,197 of 1,200 sampled points in four
-squares in central Bohemia. These checks compare computations; [Validation](/about/validation)
-compares the model with microphone measurements.
+On 11 November 2026, newly calculated tiles met the 1-phon target at 99.0 % of sampled points
+where the popup gave at least 1 sone, across 54 squares around the world. Differences are larger
+at very quiet points and in individual layers. These checks compare computations;
+[Validation](/about/validation) compares the model with microphone measurements.
 
 <details>
 <summary>The limits and the last check</summary>
 
-Two checks use the same inputs and four squares. The outdoor reference computes every retained
-loud ground source and the flights exactly at one sampled pixel in each 4 × 4 cell, omitting
-buildings. It shares the map's background hum, flight spectra and loudness grain. The independent
-popup check computes 300 random points in each square, including points inside buildings, with
-the popup's own source selection, façade choice and loudness calculation.
+The independent popup check samples 300 random pixel centres in each of 54 squares, including
+buildings. The squares were drawn from groups with different numbers of sources and calculation
+costs across the world's land and coastal grid, including already painted areas. Each popup uses
+its own source selection, façade choice and finer loudness calculation. The sample covers all
+continents except Antarctica, but its percentages are not a population-weighted global error rate.
+Existing tiles can predate the computation tested here.
 
-The outdoor check targets, for each layer and the total at reference levels of 1 sone or more:
-at most 20 % differing by more than 0.5 phon, 1 % by more than 1 phon, 0.01 % by more than
-3 phon and 0.001 % by more than 6 phon. The last share also counts pixels that cross 1 sone
-from below. The mean bias must stay within ±0.5 phon. At most 0.25 % may cross 1 sone,
-excluding comparisons where both values lie within half a phon of that boundary; a quieter
-pixel may differ by at most 10 phon.
+Of 16,200 sampled points, 6,371 have a stored popup total of at least 1 sone. At those points,
+364 differ by more than 0.5 phon, 62 by more than 1 phon, three by more than 3 phon and none by
+more than 6 phon. The mean signed difference is +0.16 phon. By layer:
 
-The outdoor reference assesses 257,377 pixels. All have a total of at least 1 sone, so this
-sample does not test the total below that level. The total meets the targets: 130 pixels
-(0.05 %) differ by more than 1 phon, one by more than 3 phon, none by more than 6 phon or across
-1 sone; the mean bias is −0.07 phon. By layer, over reference pixels of at least 1 sone:
-
-| Layer | Pixels ≥ 1 sone | More than 1 phon apart |
+| Layer | Popup points ≥ 1 sone | More than 1 phon apart |
 |---|---:|---:|
-| Roads | 188,761 | 0.40 % |
-| Railways | 11,037 | 2.27 % |
-| Industry | 66,611 | 0.39 % |
-| Buildings | 12,902 | 1.70 % |
-| Aircraft | 204,116 | 0.01 % |
-| Total | 257,377 | 0.05 % |
+| Roads | 5,209 | 1.54 % |
+| Railways | 833 | 0.96 % |
+| Industry | 904 | 2.32 % |
+| Buildings | 525 | 5.52 % |
+| Ships | 113 | 0.00 % |
+| Aircraft | 1,103 | 0.82 % |
+| Total | 6,371 | 0.97 % |
 
-Railways and buildings miss the 1-phon target and the boundary-crossing limit. Roads, railways,
-industry and buildings miss the 3-phon target; roads, industry and buildings also miss the
-6-phon target. Quieter railway, industry and building pixels differ by up to 19.5 phon.
+Across all points, including those below 1 sone, 1,178 differ by more than 1 phon; the largest
+quiet-total difference is 16.5 phon. There are 57 crossings of the 1-sone boundary beyond its
+half-phon rounding band. No sampled point is missing from the map. Total Lden differs by more
+than 1 dB at 159 of 14,290 points with a nonnegative popup level; the largest difference between
+stored nonnegative values is 14.5 dB. Seventeen nonnegative popup values become below zero in
+the map, and 27 cross the other way.
 
-The independent popup check's three total-loudness differences over 1 phon are 1.5, 1.5 and
-9.5 phon. The largest is inside a building; the map reads quieter there. The signed mean is
-+0.17 phon. Individual layers have larger differences: up to 31.5 phon for railway noise below
-1 sone in the reference, and 31 phon for industry. For total Lden, 1,199 of the 1,200 points agree
-within 1 dB; the largest difference is 2 dB. No sampled point is missing from the map.
-These four squares do not test ship noise
-of 1 sone or more, and the results are not a worldwide error bound. Existing tiles can predate
-the computation tested here.
+The target for each layer and the total, at reference levels of at least 1 sone, is at most
+20 % differing by more than 0.5 phon, 1 % by more than 1 phon, 0.01 % by more than 3 phon and
+0.001 % by more than 6 phon. The last share also counts pixels crossing 1 sone from below.
+Mean bias must stay within ±0.5 phon. At most 0.25 % may cross 1 sone, excluding comparisons
+where both values lie within half a phon of that boundary; a quieter pixel may differ by at
+most 10 phon. Roads, industry and buildings miss the 1-phon target in this sample. The total
+still misses the 3-phon, boundary-crossing and quiet-pixel limits; some layers have larger tails.
+
+A second check isolates the painting approximations in four squares in central Bohemia. Its
+outdoor reference evaluates every retained loud ground source and the flights exactly at one
+pixel in each 4 × 4 cell, omitting buildings. It shares the map's background hum, flight spectra
+and loudness resolution, so it cannot reveal an error common to those parts of both computations.
+The independent popup check is needed alongside it. On 11 November, the outdoor total differed
+by more than 1 phon at 130 of 257,377 reference pixels (0.05 %), with a mean difference of −0.07
+phon and a largest difference of 4.5 phon. Total Lden differed by more than 1 dB at 120 of those
+pixels, with a largest difference of 4 dB. Some individual layers still miss the limits above.
 
 </details>
 
@@ -235,8 +241,10 @@ from the complete building, even when its loudest façade is in the neighbouring
 painting uses this rule; existing squares keep their earlier façade choice until repainted.
 
 A pixel's loudness is computed as the popup computes it, at a coarser grain: the levels over time
-in steps of 2 dB, two states of the weather, and four groups of the day's hours, one of the
-evening's and three of the night's, where the popup takes 0.5 dB, ten states and every hour. Each
+in steps of 2 dB and four groups of the day's hours, one of the
+evening's and three of the night's, where the popup takes 0.5 dB and every hour. Both use the same
+ten weather states, preserving how long favourable propagation lasts. New painting uses this rule;
+existing squares keep their earlier weather calculation until repainted. Each
 layer and the total are stored in steps of half a phon, 3.5 % of loudness; zoomed out, a pixel is
 the mean loudness of the pixels under it.
 

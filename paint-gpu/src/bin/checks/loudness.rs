@@ -21,10 +21,7 @@ pub(super) fn check_loudness(
     let (mut input, mut offsets) = (Vec::new(), Vec::new());
     for sound in &sounds {
         offsets.push(input.len() as u64);
-        sound.pack(
-            popup::percentiles::Resolution::MAP.weather_states,
-            &mut input,
-        );
+        sound.pack(&mut input);
     }
     let gpu = Gpu::new(device)?;
     let started = Instant::now();

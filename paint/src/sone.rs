@@ -138,15 +138,15 @@ impl PixelSound {
         ndens
     }
 
-    /// The card's input at `states` merged weather states (paint-gpu/kernels/loudness.cuh): per
+    /// The card's input in the click's weather states (paint-gpu/kernels/loudness.cuh): per
     /// layer its steady energy, its line count and its lines; per curve (each layer's, then the
     /// place's) and period its spectrum's shape, NaN for none.
-    pub fn pack(&self, states: usize, out: &mut Vec<f32>) {
+    pub fn pack(&self, out: &mut Vec<f32>) {
         for (lines, steady) in &self.placed {
             out.extend(steady.map(|value| value as f32));
             out.push(lines.len() as f32);
             for line in lines {
-                let parts = line.parts(states);
+                let parts = line.parts();
                 out.extend(parts.energy.map(|value| value as f32));
                 for means in &parts.means {
                     out.extend(means.iter().map(|&value| value as f32));

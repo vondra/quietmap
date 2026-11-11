@@ -199,7 +199,7 @@ impl PointPainter<'_> {
             )?;
             Ok(match self.batch {
                 Some(_) => {
-                    sound.pack(Resolution::MAP.weather_states, input);
+                    sound.pack(input);
                     (k, layers, Loudness::Packed)
                 }
                 None => (k, layers, Loudness::Known(sound.ndens(Resolution::MAP))),

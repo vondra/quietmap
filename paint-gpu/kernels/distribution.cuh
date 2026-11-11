@@ -7,7 +7,7 @@
 // (paint-gpu/src/loudness.rs) from the Rust ones.
 
 // A pixel's input (floats, the host's `pack`): per layer its steady energy per period and its line
-// count, then each line (LOUD_LINE_FLOATS: energy per period, its mean in each merged weather state
+// count, then each line (LOUD_LINE_FLOATS: energy per period, its mean in each weather state
 // per period, lambda per period, hourly profile (-1 none), duty per period (NaN none)); then per
 // curve (the layers' and the place's) and period the spectrum's third-octave levels at 0 dB(A)
 // (the first NaN: no spectrum).

@@ -15,7 +15,8 @@ use physics::percentile::{
 use popup::distribution::{LEVEL_MIN_DB, SPAN_DB, node_probabilities};
 use popup::loudness::{CURVE_HIGH_DB, CURVE_LOW_DB};
 use popup::percentiles::{
-    HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Resolution, hour_factor, hour_groups,
+    HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Resolution, WEATHER_STATES, hour_factor,
+    hour_groups,
 };
 
 const DISTRIBUTION: &str = include_str!("../kernels/distribution.cuh");
@@ -47,9 +48,8 @@ fn tasks() -> Vec<(usize, usize, usize)> {
     (0..PERIODS)
         .flat_map(|period| {
             let groups = hour_groups(true, period, resolution.hour_groups).0.len();
-            (0..groups).flat_map(move |group| {
-                (0..resolution.weather_states).map(move |state| (period, group, state))
-            })
+            (0..groups)
+                .flat_map(move |group| (0..WEATHER_STATES).map(move |state| (period, group, state)))
         })
         .collect()
 }
@@ -122,7 +122,7 @@ fn loudness_constants() -> String {
         format!("#define LOUD_TASKS {}\n", tasks().len()),
         format!("#define LOUD_TASK_WARPS {TASK_WARPS}\n"),
         format!("#define LOUD_LEVEL_MIN_DB ({:?}f)\n", LEVEL_MIN_DB as f32),
-        format!("#define LOUD_STATES {}\n", resolution.weather_states),
+        format!("#define LOUD_STATES {}\n", WEATHER_STATES),
         format!("#define LOUD_NODES {}\n", nodes.len()),
         format!("#define LOUD_TOP_NODE {}\n", nodes.len()),
         format!("#define LOUD_HELD_NODE {}\n", nodes.len() + 1),
