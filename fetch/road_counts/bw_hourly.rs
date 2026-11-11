@@ -118,6 +118,7 @@ pub(super) fn convert(
                 weekday_days: 0,
                 weekday_vehicles: 0.0,
             }),
+            ..Sample::default()
         };
         rows.push(row);
     }

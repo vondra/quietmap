@@ -3,6 +3,42 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
+/// How the publisher chose where to count, as its documentation states: every section of its
+/// network, a random sample of its locations, or sites it selected (permanent stations, a city's
+/// main streets). Only the first two represent the roads of their class that nobody counted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SamplingDesign {
+    #[default]
+    Undeclared,
+    WholeNetwork,
+    RandomSample,
+    SelectedSites,
+}
+
+impl SamplingDesign {
+    /// Its code in the prepared roads' `traffic_observation_design` column.
+    pub fn code(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_code(code: u8) -> Option<Self> {
+        [
+            Self::Undeclared,
+            Self::WholeNetwork,
+            Self::RandomSample,
+            Self::SelectedSites,
+        ]
+        .get(usize::from(code))
+        .copied()
+    }
+
+    /// Whether counts of this design stand for their class's uncounted roads.
+    pub fn represents_its_class(self) -> bool {
+        matches!(self, Self::WholeNetwork | Self::RandomSample)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Sample {
@@ -17,6 +53,8 @@ pub struct Sample {
     pub length_m: Option<f64>,
     #[serde(skip_serializing_if = "super::observation_target::is_default")]
     pub hourly: Option<Hourly>,
+    #[serde(skip_serializing_if = "super::observation_target::is_default")]
+    pub design: SamplingDesign,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

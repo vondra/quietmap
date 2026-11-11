@@ -178,6 +178,15 @@ pub fn stage(
             )),
         ),
         (
+            "traffic_observation_design",
+            Arc::new(UInt8Array::from(
+                children
+                    .iter()
+                    .map(|c| roads[c.parent as usize].observation_design.code())
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        (
             "traffic_count_basis",
             Arc::new(UInt8Array::from(
                 children

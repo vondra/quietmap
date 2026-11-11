@@ -2,6 +2,7 @@
 
 use super::road_traffic::{BuildingTraffic, major_group, thai_rural_road_ref};
 use crate::dev4::{Dev4, Square, require_stamp};
+use crate::roads::observation_sample::SamplingDesign;
 use crate::year::{Kind, YearInputs};
 use anyhow::{Context, Result, anyhow};
 use rayon::prelude::*;
@@ -24,6 +25,8 @@ pub(crate) struct CountedRow {
     pub oneway: bool,
     pub lanes: u8,
     pub rural_network: bool,
+    /// How its publisher chose where to count.
+    pub design: SamplingDesign,
     pub length_m: f64,
     pub total: f64,
     pub around: [f64; 4],
@@ -109,6 +112,7 @@ fn counted_rows(dev4: &Dev4, traffic: &Path, square: Square) -> Result<Vec<Count
             u8s("lanes")?,
         );
         let measured = column(batch, "traffic_observation_measured")?.as_boolean();
+        let design = column(batch, "traffic_observation_design")?.as_primitive::<UInt8Type>();
         let source = column(batch, "source_id")?.as_primitive::<UInt16Type>();
         let country = column(batch, "country_iso")?.as_primitive::<UInt16Type>();
         let length = column(batch, "length_m")?.as_primitive::<Float32Type>();
@@ -153,6 +157,8 @@ fn counted_rows(dev4: &Dev4, traffic: &Path, square: Square) -> Result<Vec<Count
                 oneway: oneway.value(row) != 0,
                 lanes: lanes.value(row),
                 rural_network: thai_rural_road_ref(reference.value(row)),
+                design: SamplingDesign::from_code(design.value(row))
+                    .ok_or_else(|| anyhow!("unknown sampling design {}", design.value(row)))?,
                 length_m: f64::from(length.value(row)),
                 total,
                 around: RADII_M.map(|radius| buildings.around(middle, radius)),

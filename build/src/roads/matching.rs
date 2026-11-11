@@ -277,6 +277,7 @@ impl Matcher {
             road.observation = row.identity.clone();
             road.basis = row.count_basis as u8;
             road.count_origin_measured = row.measured;
+            road.observation_design = row.sample.design;
             road.observation_time_basis = row.time_basis as u8;
         }
         Ok(())

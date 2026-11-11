@@ -41,6 +41,7 @@ pub(super) fn road(id: i64) -> Road {
         source_id: 1,
         observation_source_id: 1,
         count_origin_measured: true,
+        observation_design: Default::default(),
         counts: [80.0, 10.0, 5.0, 5.0],
         basis: 2,
         estimated: 0,

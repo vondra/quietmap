@@ -48,6 +48,8 @@ mod nzta;
 mod pldp;
 #[path = "road_counts/records.rs"]
 mod records;
+#[path = "road_counts/sampling.rs"]
+mod sampling;
 #[path = "road_counts/sasvz.rs"]
 mod sasvz;
 #[path = "road_counts/sict.rs"]
@@ -93,6 +95,7 @@ use std::path::Path;
 #[serde(deny_unknown_fields)]
 struct Recipe {
     objects: Vec<Converter>,
+    sampling: Vec<sampling::Declaration>,
 }
 
 #[derive(Deserialize)]
@@ -130,6 +133,44 @@ enum Converter {
     BwHourly(bw_hourly::Recipe),
 }
 
+impl Converter {
+    /// The publisher input whose records the converter reads.
+    fn input_id(&self) -> &String {
+        match self {
+            Self::Fields(r) => &r.input_id,
+            Self::Inweva(r) => &r.source.input_id,
+            Self::ThaiDrr(r) => &r.source.input_id,
+            Self::Mlit(r) => &r.source.input_id,
+            Self::Tsk(r) => &r.source.input_id,
+            Self::Wien(r) => &r.source.input_id,
+            Self::Bast(r) => &r.source.input_id,
+            Self::BastDaily(r) => &r.source.input_id,
+            Self::Mot(r) => &r.source.input_id,
+            Self::Mop(r) => &r.source.input_id,
+            Self::Hpms(r) => &r.source.input_id,
+            Self::HpmsGdb(r) => &r.source.input_id,
+            Self::Sict(r) => &r.source.input_id,
+            Self::Dft(r) => &r.source.input_id,
+            Self::Nvdb(r) => &r.source.input_id,
+            Self::Kvl(r) => &r.source.input_id,
+            Self::Mastra(r) => &r.source.input_id,
+            Self::Trafik(r) => &r.source.input_id,
+            Self::Djma(r) => &r.source.input_id,
+            Self::Cerema(r) => &r.source.input_id,
+            Self::Gpr(r) => &r.source.input_id,
+            Self::Mitma(r) => &r.source.input_id,
+            Self::Pldp(r) => &r.source.input_id,
+            Self::Sasvz(r) => &r.source.input_id,
+            Self::Anas(r) => &r.source.input_id,
+            Self::Nzta(r) => &r.source.input_id,
+            Self::Tii(r) => &r.source.input_id,
+            Self::City(r) => &r.source.input_id,
+            Self::Tmas(r) => &r.source.input_id,
+            Self::BwHourly(r) => &r.source.input_id,
+        }
+    }
+}
+
 pub fn convert(inputs: &YearInputs, output: &Path) -> Result<()> {
     let path = inputs
         .required(Kind::RoadConversion)
@@ -144,38 +185,7 @@ pub fn convert(inputs: &YearInputs, output: &Path) -> Result<()> {
     ensure!(!recipe.objects.is_empty(), "empty road converter recipe");
     let mut rows = Vec::new();
     for object in recipe.objects {
-        let input_id = match &object {
-            Converter::Fields(r) => &r.input_id,
-            Converter::Inweva(r) => &r.source.input_id,
-            Converter::ThaiDrr(r) => &r.source.input_id,
-            Converter::Mlit(r) => &r.source.input_id,
-            Converter::Tsk(r) => &r.source.input_id,
-            Converter::Wien(r) => &r.source.input_id,
-            Converter::Bast(r) => &r.source.input_id,
-            Converter::BastDaily(r) => &r.source.input_id,
-            Converter::Mot(r) => &r.source.input_id,
-            Converter::Mop(r) => &r.source.input_id,
-            Converter::Hpms(r) => &r.source.input_id,
-            Converter::HpmsGdb(r) => &r.source.input_id,
-            Converter::Sict(r) => &r.source.input_id,
-            Converter::Dft(r) => &r.source.input_id,
-            Converter::Nvdb(r) => &r.source.input_id,
-            Converter::Kvl(r) => &r.source.input_id,
-            Converter::Mastra(r) => &r.source.input_id,
-            Converter::Trafik(r) => &r.source.input_id,
-            Converter::Djma(r) => &r.source.input_id,
-            Converter::Cerema(r) => &r.source.input_id,
-            Converter::Gpr(r) => &r.source.input_id,
-            Converter::Mitma(r) => &r.source.input_id,
-            Converter::Pldp(r) => &r.source.input_id,
-            Converter::Sasvz(r) => &r.source.input_id,
-            Converter::Anas(r) => &r.source.input_id,
-            Converter::Nzta(r) => &r.source.input_id,
-            Converter::Tii(r) => &r.source.input_id,
-            Converter::City(r) => &r.source.input_id,
-            Converter::Tmas(r) => &r.source.input_id,
-            Converter::BwHourly(r) => &r.source.input_id,
-        };
+        let input_id = object.input_id();
         ensure!(
             conversion.depends_on.contains(input_id),
             "converter omits raw dependency {input_id}"
@@ -286,6 +296,7 @@ pub fn convert(inputs: &YearInputs, output: &Path) -> Result<()> {
         eprintln!("road-counts: {input_id}: {} observations", converted.len());
         rows.extend(converted);
     }
+    sampling::apply(&recipe.sampling, &mut rows)?;
     observation_io::write(output, &rows, inputs)
 }
 
