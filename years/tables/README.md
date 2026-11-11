@@ -161,8 +161,11 @@ Asia uses the IEA's regional estimate. Cooling units are those with an outdoor p
 are left out where a survey separates them (Germany; France in 2024). The 2024 table reads the editions
 describing 2024 or earlier: Japan's March 2024 survey, China's 2024 yearbook, the IEA's 2024
 estimates for India and South-East Asia (0.1398 and 0.272), France's 2020 ADEME survey (split and
-reversible units 0.14) and Switzerland's air share of its heat pumps (Federal Office of Energy,
-2023). Service cooling uses the European regional medians, then
+reversible units 0.14), Switzerland's air share of its heat pumps (Federal Office of Energy,
+2023) and, for Europe's air conditioners, the national household surveys in place of the
+coolinggap.eu compilation, which is of 2026 and dates few of its figures. Poland's survey
+separates units mounted outside and central systems from indoor-mounted ones, so it also gives a
+central share. Service cooling uses the European regional medians, then
 HRE's 0.847 saturation from hot-climate US floor shares, also reached by Cyprus and Malta.
 Country, regional and world values are distinct levels of the same table.
 

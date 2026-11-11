@@ -4369,7 +4369,7 @@
       "id": "household-plant-surveys-2024",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "EHPA, EurObserv’ER, Swiss Federal Office of Energy, US EIA, Statistics Canada, Cabinet Office of Japan, National Bureau of Statistics of China, IEA, ADEME, Australian Bureau of Statistics, coolinggap.eu, Verivox, NOVAP and LBNL",
+      "publisher": "EHPA, EurObserv’ER, Swiss Federal Office of Energy, US EIA, Statistics Canada, Cabinet Office of Japan, National Bureau of Statistics of China, IEA, ADEME, the statistical offices of Spain, Poland, the Netherlands, Czechia, Portugal, Greece, Bulgaria and Croatia, Borzen, Australian Bureau of Statistics, coolinggap.eu, Verivox, NOVAP and LBNL",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
         "start": "2014",
@@ -4379,7 +4379,7 @@
       "licence": "Published aggregate observations; publisher terms apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "Household heat-pump and air-conditioning stocks, central-unit shares and operating hours in the editions describing 2024 or earlier: EHPA stock 2024 with EurObserv’ER’s 2023 air share (Switzerland: the Federal Office of Energy’s 2023 heat sources), RECS 2020, Canada 2023, Japan March 2024, China 2024, France’s 2020 ADEME survey, IEA estimates (about 2016–2017; India and South-East Asia 2024), Australia 2014, a German survey of 2023, Norway 2024 and LBNL’s modelled Gulf hours. The coolinggap.eu compilation states its survey year only for Italy (2024) and England (2023–24)."
+      "description": "Household heat-pump and air-conditioning stocks, central-unit shares and operating hours in the editions describing 2024 or earlier: EHPA stock 2024 with EurObserv’ER’s 2023 air share (Switzerland: the Federal Office of Energy’s 2023 heat sources), RECS 2020, Canada 2023, Japan March 2024, China 2024, IEA estimates (about 2016–2017; India and South-East Asia 2024), Australia 2014, a German survey of 2023, Norway 2024 and LBNL’s modelled Gulf hours. European air conditioners from national surveys: Spain 2021, Poland 2024, the Netherlands 2023, Czechia 2021, Portugal 2020, Greece 2024, Bulgaria 2022, Croatia 2022, Slovenia 2022, France 2020; Belgium 2024, Hungary 2022 and Malta 2021 as reported from their statistical offices. The coolinggap.eu compilation (2026) gives Italy (2024) and England (2023–24); its Austrian, Romanian and Swiss values state no survey year."
     },
     {
       "id": "service-cooling-survey",
@@ -6005,7 +6005,7 @@
       "id": "building-plant-stocks",
       "kind": "building-plant",
       "region": "world",
-      "publisher": "EHPA, EurObserv’ER, Swiss Federal Office of Energy, US EIA, Statistics Canada, Cabinet Office of Japan, National Bureau of Statistics of China, IEA, ADEME, Australian Bureau of Statistics, coolinggap.eu, Verivox, NOVAP and LBNL",
+      "publisher": "EHPA, EurObserv’ER, Swiss Federal Office of Energy, US EIA, Statistics Canada, Cabinet Office of Japan, National Bureau of Statistics of China, IEA, ADEME, the statistical offices of Spain, Poland, the Netherlands, Czechia, Portugal, Greece, Bulgaria and Croatia, Borzen, Australian Bureau of Statistics, coolinggap.eu, Verivox, NOVAP and LBNL",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
         "start": "2014",
@@ -6017,7 +6017,7 @@
       "depends_on": [
         "household-plant-surveys-2024"
       ],
-      "description": "Heat pumps and air conditioners per household from the 2024 editions of the plant surveys: outdoor units only, so France’s mobile units are left out; missing countries use their UN M49 region median, then 0 heat pumps and 0.16 cooling units. Central-unit shares and fixed cooling hours are included."
+      "description": "Heat pumps and air conditioners per household from the 2024 editions of the plant surveys: units with an outdoor part where a survey separates the mobile ones (Germany, France, the Netherlands, Belgium, Poland); missing countries use their UN M49 region median, then 0 heat pumps and 0.16 cooling units. Central-unit shares and fixed cooling hours are included."
     },
     {
       "id": "service-cooling-hre",
