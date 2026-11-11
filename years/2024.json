@@ -4365,20 +4365,20 @@
       "description": "Household vehicle trips and occupancy from national travel surveys."
     },
     {
-      "id": "household-plant-surveys",
+      "id": "household-plant-surveys-2024",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "EHPA, EurObserv’ER, EIA and national household surveys",
+      "publisher": "EHPA, EurObserv’ER, Swiss Federal Office of Energy, US EIA, Statistics Canada, Cabinet Office of Japan, National Bureau of Statistics of China, IEA, ADEME, Australian Bureau of Statistics, coolinggap.eu, Verivox, NOVAP and LBNL",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
-        "start": "2016",
+        "start": "2014",
         "end": "2024"
       },
       "published": null,
       "licence": "Published aggregate observations; publisher terms apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "Household heat-pump and air-conditioning stocks, central-unit shares and operating hours."
+      "description": "Household heat-pump and air-conditioning stocks, central-unit shares and operating hours in the editions describing 2024 or earlier: EHPA stock 2024 with EurObserv’ER’s 2023 air share (Switzerland: the Federal Office of Energy’s 2023 heat sources), RECS 2020, Canada 2023, Japan March 2024, China 2024, France’s 2020 ADEME survey, IEA estimates (about 2016–2017; India and South-East Asia 2024), Australia 2014, a German survey of 2023, Norway 2024 and LBNL’s modelled Gulf hours. The coolinggap.eu compilation states its survey year only for Italy (2024) and England (2023–24)."
     },
     {
       "id": "service-cooling-survey",
@@ -5986,19 +5986,19 @@
       "id": "building-plant-stocks",
       "kind": "building-plant",
       "region": "world",
-      "publisher": "EHPA, EurObserv’ER, EIA, national household surveys and coolinggap.eu",
+      "publisher": "EHPA, EurObserv’ER, Swiss Federal Office of Energy, US EIA, Statistics Canada, Cabinet Office of Japan, National Bureau of Statistics of China, IEA, ADEME, Australian Bureau of Statistics, coolinggap.eu, Verivox, NOVAP and LBNL",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
-        "start": "2020",
+        "start": "2014",
         "end": "2024"
       },
       "published": null,
       "licence": "Mixed published survey aggregates; source credits in description",
       "public_ok": true,
       "depends_on": [
-        "household-plant-surveys"
+        "household-plant-surveys-2024"
       ],
-      "description": "Heat pumps and air conditioners per household: EHPA 2024, US RECS 2020 and national surveys; missing countries use their UN M49 region median, then 0 heat pumps and 0.16 cooling units. Central-unit shares and fixed cooling hours are included. The same observations and values apply to the 2024 map; no later mapped network or practice check enters this table."
+      "description": "Heat pumps and air conditioners per household from the 2024 editions of the plant surveys: outdoor units only, so France’s mobile units are left out; missing countries use their UN M49 region median, then 0 heat pumps and 0.16 cooling units. Central-unit shares and fixed cooling hours are included."
     },
     {
       "id": "service-cooling-hre",

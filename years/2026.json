@@ -686,11 +686,11 @@
       "id": "building-plant-stocks",
       "kind": "building-plant",
       "region": "world",
-      "publisher": "EHPA, EurObserv’ER, EIA, national household surveys and coolinggap.eu",
+      "publisher": "EHPA, EurObserv’ER, US EIA, Statistics Canada, Cabinet Office of Japan, National Bureau of Statistics of China, IEA, Australian Bureau of Statistics, coolinggap.eu, Verivox, NOVAP and LBNL",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
-        "start": "2020",
-        "end": "2024"
+        "start": "2014",
+        "end": "2025"
       },
       "published": null,
       "licence": "Mixed published survey aggregates; source credits in description",
@@ -7588,17 +7588,17 @@
       "id": "household-plant-surveys",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "EHPA, EurObserv’ER, EIA and national household surveys",
+      "publisher": "EHPA, EurObserv’ER, US EIA, Statistics Canada, Cabinet Office of Japan, National Bureau of Statistics of China, IEA, Australian Bureau of Statistics, coolinggap.eu, Verivox, NOVAP and LBNL",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
-        "start": "2016",
-        "end": "2024"
+        "start": "2014",
+        "end": "2025"
       },
       "published": null,
       "licence": "Published aggregate observations; publisher terms apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "Household heat-pump and air-conditioning stocks, central-unit shares and operating hours."
+      "description": "Household heat-pump and air-conditioning stocks, central-unit shares and operating hours: EHPA stock 2024 with EurObserv’ER’s 2023 air share, RECS 2020, Canada 2023, Japan March 2025, China 2023, IEA estimates (about 2016–2017; India and South-East Asia 2025), Australia 2014, the coolinggap.eu compilation, a German survey of 2023, Norway 2024 and LBNL’s modelled Gulf hours."
     },
     {
       "id": "service-cooling-survey",

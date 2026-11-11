@@ -52,6 +52,6 @@ Terrain from [MRDEM-30](https://open.canada.ca/data/en/dataset/957782bf-847c-464
 
 ## Homes and places
 
-Homes: heat pumps and air conditioners as Natural Resources Canada counts them. Mosques: only those with a mapped minaret call, once on Fridays. Bars without mapped hours close at 02:00.
+Homes: heat pumps and air conditioners as Statistics Canada's Households and the Environment Survey counts them. Mosques: only those with a mapped minaret call, once on Fridays. Bars without mapped hours close at 02:00.
 
 <!-- YEAR SOURCES -->
