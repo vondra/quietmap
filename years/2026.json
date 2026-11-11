@@ -136,6 +136,7 @@
         "raster-pt-mdt2m",
         "raster-se-mhm",
         "raster-us-3dep-1-ak",
+        "raster-us-3dep-1-ak-east",
         "raster-us-3dep-1-conus",
         "worldcover",
         "worldcover-antimeridian"
@@ -6494,6 +6495,24 @@
       "description": "US-3DEP-1-AK: rolling mosaic (per-tile upstream date in file provenance). Used as the same static reference terrain in both maps; this does not date the terrain to the map year."
     },
     {
+      "id": "raster-us-3dep-1-ak-east",
+      "kind": "raster-mosaic",
+      "region": "US",
+      "publisher": "USGS",
+      "url": "https://www.usgs.gov/3d-elevation-program",
+      "observed": {
+        "start": "2026-09-21",
+        "end": "2026-09-21"
+      },
+      "published": null,
+      "licence": "Public domain",
+      "public_ok": true,
+      "depends_on": [
+        "raster-us-3dep-1-ak"
+      ],
+      "description": "Native pixels of the same observation east of 180°, in their own mosaic so that the western one does not span every longitude."
+    },
+    {
       "id": "raster-ca-mrdem-30",
       "kind": "prepare-ground-height",
       "region": "CA",
@@ -9354,6 +9373,10 @@
     "fine-dem-pt": {
       "start": "2024",
       "end": "2026"
+    },
+    "raster-us-3dep-1-ak-east": {
+      "start": "2024",
+      "end": "2026"
     }
   },
   "shared": [
@@ -9435,6 +9458,7 @@
     "raster-pt-mdt2m",
     "raster-se-mhm",
     "raster-us-3dep-1-ak",
+    "raster-us-3dep-1-ak-east",
     "raster-us-3dep-1-conus",
     "water",
     "weather",
@@ -9792,6 +9816,22 @@
         "vertical_crs": 5703,
         "nodata": -999999.0,
         "priority": 26,
+        "feather_nodes": 224,
+        "datum_area": [
+          -180,
+          50,
+          -126,
+          72
+        ],
+        "datum_horizontal_crs": "EPSG:6318"
+      },
+      {
+        "input": "raster-us-3dep-1-ak-east",
+        "band": "ground-height",
+        "horizontal_crs": "EPSG:4269",
+        "vertical_crs": 5703,
+        "nodata": -999999.0,
+        "priority": 56,
         "feather_nodes": 224,
         "datum_area": [
           -180,
