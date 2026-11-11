@@ -166,7 +166,8 @@
   "1023": {
     "inputs": [
       "cl-mop-red-vial-plan-nacional-de-censos-tmda",
-      "cl-mop-red-vial-plan-nacional-de-censos-tmda-0"
+      "cl-mop-red-vial-plan-nacional-de-censos-tmda-0",
+      "road-counts-cl-censos-2022sur-2023norte-esri-json"
     ],
     "measurement": "derived"
   },
@@ -633,7 +634,8 @@
   "9871": {
     "inputs": [
       "cl-mop-red-vial-plan-nacional-de-censos-tmda",
-      "cl-mop-red-vial-plan-nacional-de-censos-tmda-0"
+      "cl-mop-red-vial-plan-nacional-de-censos-tmda-0",
+      "road-counts-cl-censos-2022sur-2023norte-esri-json"
     ],
     "measurement": "proxy"
   },

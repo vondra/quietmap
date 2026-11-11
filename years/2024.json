@@ -854,8 +854,8 @@
       "publisher": "Dirección Nacional de Vialidad (DNV) / IGN",
       "url": "https://ide.transporte.gob.ar/geoserver/observ/ows",
       "observed": {
-        "start": "2018",
-        "end": "2018"
+        "start": "2026-04-11",
+        "end": "2026-04-11"
       },
       "published": null,
       "licence": "public-data",
@@ -870,8 +870,8 @@
       "publisher": "Dirección Nacional de Vialidad (DNV) / IGN",
       "url": "https://ide.transporte.gob.ar/geoserver/observ/ows",
       "observed": {
-        "start": "2018",
-        "end": "2018"
+        "start": "2026-04-11",
+        "end": "2026-04-11"
       },
       "published": null,
       "licence": "public-data",
@@ -934,8 +934,8 @@
       "publisher": "MOP Dirección de Vialidad",
       "url": "https://rest-sit.mop.gob.cl/arcgis/rest/services/VIALIDAD/Plan_Nacional_de_Censos/MapServer/0",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2026-04-11",
+        "end": "2026-04-11"
       },
       "published": null,
       "licence": "public-data",
@@ -951,7 +951,7 @@
       "url": "https://rest-sit.mop.gob.cl/arcgis/rest/services/VIALIDAD/Plan_Nacional_de_Censos/MapServer/0",
       "observed": {
         "start": "2024",
-        "end": "2024"
+        "end": "2025"
       },
       "published": null,
       "licence": "public-data",
@@ -966,8 +966,8 @@
       "publisher": "INVIAS",
       "url": "https://services6.arcgis.com/kyerLIHvrND0OSya/arcgis/rest/services/TPDS_NUBE/FeatureServer/0",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2008",
+        "end": "2021-12-06"
       },
       "published": null,
       "licence": "public-data",
@@ -1270,8 +1270,8 @@
       "publisher": "MTC Provías (ArcGIS mirror)",
       "url": "https://services6.arcgis.com/G8JFnqCHKQ9vb8YW/arcgis/rest/services/Red_Vial_Nacional_2024_MTC_PROVIAS_GEO_GPS_PERU_Suyo_Pomalia/FeatureServer/0",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2026-04-11",
+        "end": "2026-04-11"
       },
       "published": null,
       "licence": "public-data",
@@ -1334,8 +1334,8 @@
       "publisher": "Saudi Ministry of Transport; Riyadh PMS; atlas (ArcGIS)",
       "url": "https://mot.gov.sa/documents/7507107/7507109/Traffic+density+on+roads.xlsx",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2026-04-11",
+        "end": "2026-04-11"
       },
       "published": null,
       "licence": "open-data",
@@ -2054,8 +2054,8 @@
       "publisher": "NZ Transport Agency; Auckland Transport",
       "url": "https://services.arcgis.com/CXBb7LAjgIIdcsPt/ArcGIS/rest/services/Assets_SHTrafficMonitoringSites/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=0&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2021",
+        "end": "2025"
       },
       "published": null,
       "licence": "Publisher open-data terms",
@@ -2070,8 +2070,8 @@
       "publisher": "NZ Transport Agency; Auckland Transport",
       "url": "https://services.arcgis.com/CXBb7LAjgIIdcsPt/ArcGIS/rest/services/Assets_SHTrafficMonitoringSites/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=2000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2021",
+        "end": "2025"
       },
       "published": null,
       "licence": "Publisher open-data terms",
@@ -2086,8 +2086,8 @@
       "publisher": "NZ Transport Agency; Auckland Transport",
       "url": "https://services.arcgis.com/CXBb7LAjgIIdcsPt/ArcGIS/rest/services/Assets_SHTrafficMonitoringSites/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&orderByFields=OBJECTID&resultOffset=4000&resultRecordCount=2000&f=geojson",
       "observed": {
-        "start": "2024",
-        "end": "2024"
+        "start": "2021",
+        "end": "2025"
       },
       "published": null,
       "licence": "Publisher open-data terms",
@@ -4310,8 +4310,8 @@
       "publisher": "MiD, UK National Travel Survey and NHTS",
       "url": "https://nhts.ornl.gov/",
       "observed": {
-        "start": "2017",
-        "end": "2022"
+        "start": "2016-05-01",
+        "end": "2023-01-31"
       },
       "published": null,
       "licence": "Published aggregate observations; publisher terms apply",
@@ -4326,7 +4326,7 @@
       "publisher": "EHPA, EurObserv’ER, EIA and national household surveys",
       "url": "https://www.eia.gov/consumption/residential/",
       "observed": {
-        "start": "2020",
+        "start": "2016",
         "end": "2024"
       },
       "published": null,
