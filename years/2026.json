@@ -763,21 +763,22 @@
       "id": "bus-models",
       "kind": "bus-models",
       "region": "world",
-      "publisher": "Quiet Map; national road authorities and public transport operators",
+      "publisher": "Quiet Map; public transport operators; OpenStreetMap contributors",
       "url": "https://quietmap.org/about/data-preparation",
       "observed": {
-        "start": "2017",
-        "end": "2026-10-26"
+        "start": "2026-04-20",
+        "end": "2026-11-08"
       },
       "published": null,
       "licence": "Apache-2.0 (derived coefficients); source licences apply to the underlying records",
       "public_ok": true,
       "depends_on": [
-        "bus-training-timetables",
-        "osm",
-        "road-traffic"
+        "bus-timetable-places",
+        "prepared",
+        "road-traffic",
+        "bus"
       ],
-      "description": "Bus frequencies and period shares fitted from 43 timetables and OpenStreetMap routes; the timetables describe 2026."
+      "description": "Buses a day on uncounted roads: one line direction's buses, the exponents of the line directions and of the trip ends within 2 km, the trolleybus weight and the bound on the trip ends (least squares on ln buses over the training places' timetabled rows, every place weighing alike, the weight and bound scanned), the floor of the trip ends' share, that share where buildings are unmapped, the buses' period shares and a coach line's trips, fitted by the year run from the training timetables, the mapped bus lines and the trip ends of the year's buildings."
     },
     {
       "id": "dwelling-trips",
@@ -7738,20 +7739,81 @@
       "description": "Outdoor seats of each surveyed venue (`fetch/terrace_surveys.py`): Madrid's census of premises and terraces of 30 September 2026 (bars, nightclubs, restaurants, cafes and fast-food places) and Melbourne's Census of Land Use and Employment of 2024 (pubs, taverns and bars)."
     },
     {
-      "id": "bus-training-timetables",
+      "id": "bus-timetable-places",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "Public transport operators",
+      "publisher": "Quiet Map; public transport operators",
       "url": "https://quietmap.org/about/data-preparation",
       "observed": {
-        "start": "2026-01-01",
-        "end": "2026-10-26"
+        "start": "2026-04-20",
+        "end": "2026-11-08"
       },
       "published": null,
-      "licence": "Published aggregate observations; publisher terms apply",
+      "licence": "Apache-2.0 (the inventory); source licences apply to the timetables",
+      "public_ok": true,
+      "depends_on": [
+        "ie-timetable-nta-unified",
+        "nl-timetable-nl-netherlands",
+        "fi-timetable-hsl-helsinki",
+        "il-timetable-mot-unified",
+        "ee-timetable-ee-estonia-peatus",
+        "pl-timetable-warsaw-ztm",
+        "ca-timetable-stm-montreal",
+        "be-timetable-delijn-flanders",
+        "no-timetable-no-norway",
+        "bus-timetable-pid-prague-2026-10-25",
+        "bus-timetable-carris-metropolitana-2026-10-26",
+        "bus-timetable-carris-lisbon-2026-10-26"
+      ],
+      "description": "The bus law's training places: 26 cities and rural areas in 11 countries (Ireland: Dublin, Cork, the Midlands, the West; the Netherlands: Eindhoven; Finland: Helsinki; Israel: Tel Aviv, Jerusalem, Haifa, Beersheba, the Galilee; Estonia: Tallinn, Tartu, rural Estonia; Poland: Warsaw; Canada: Montreal; Belgium: Leuven, Bruges; Norway: Oslo, Bergen, Trondheim; Czechia: Prague, Central Bohemia around Dobříš and from Kladno to Mladá Boleslav; Portugal: Lisbon, the Setúbal peninsula), each a bounding box, the first of seven ordinary days and its timetables. The boxes and weeks are those of the October 2026 measurement (Prague's moved a day earlier, as its copy runs no bus on 8 November), whose law was fitted on 35 places where the timetables' shapes follow the mapped streets; nine of them have no timetable describing 2024 (Rejseplanen's Aarhus, Odense and Jutland, Transport for New South Wales's Sydney, Parramatta, Newcastle, the Hunter and the Central West, and Sofia's) and are left out of both years, so the years differ by their timetables and maps, not by their places."
+    },
+    {
+      "id": "bus-timetable-pid-prague-2026-10-25",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Pražská integrovaná doprava (ROPID)",
+      "url": "https://data.pid.cz/PID_GTFS.zip",
+      "observed": {
+        "start": "2025-12-13",
+        "end": "2026-12-12"
+      },
+      "published": null,
+      "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Service frequencies and stop-call periods from 43 public timetables."
+      "description": "Bus timetable (GTFS) of Prague and Central Bohemia, published on 25 October 2026, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-carris-metropolitana-2026-10-26",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "TML - Transportes Metropolitanos de Lisboa",
+      "url": "https://api.carrismetropolitana.pt/v2/gtfs",
+      "observed": {
+        "start": "2026-01-01",
+        "end": "2026-12-31"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Lisbon's metropolitan buses, retrieved on 26 October 2026, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-carris-lisbon-2026-10-26",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Carris",
+      "url": "https://gateway.carris.pt/",
+      "observed": {
+        "start": "2026-06-06",
+        "end": "2026-12-31"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Lisbon's city buses (GTFS v2.11), retrieved on 26 October 2026, read for the bus law's training week."
     },
     {
       "id": "rural-speed-survey",

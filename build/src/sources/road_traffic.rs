@@ -234,11 +234,16 @@ impl BuildingTraffic {
 impl BuildingTraffic {
     /// The share of [`super::bus`]'s buses a street's lines run at `middle` (z30).
     pub fn bus_service(&self, model: &BusModel, middle: (i32, i32)) -> f64 {
-        bus_service_share(model, self.surroundings.around(middle, 2_000.0))
+        bus_service_share(model, self.bus_trip_ends(middle))
+    }
+
+    /// The trip ends within 2 km of `middle` (z30) that set a street's bus service.
+    pub fn bus_trip_ends(&self, middle: (i32, i32)) -> f64 {
+        self.surroundings.around(middle, 2_000.0)
     }
 }
 
-fn bus_service_share(model: &BusModel, trip_ends: f64) -> f64 {
+pub(crate) fn bus_service_share(model: &BusModel, trip_ends: f64) -> f64 {
     (trip_ends.min(model.most_trip_ends) / model.city_trip_ends)
         .powf(model.service_exponent)
         .max(model.least_service)

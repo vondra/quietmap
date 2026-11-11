@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::Path,
 };
-pub(super) fn parse_time(value: &str) -> Result<u32, String> {
+pub(crate) fn parse_time(value: &str) -> Result<u32, String> {
     let parts: Vec<_> = value
         .split(':')
         .map(str::parse::<u32>)

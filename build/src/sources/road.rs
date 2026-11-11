@@ -309,7 +309,7 @@ fn local_motorcycles(
 
 /// Whether dev4 guessed a row's traffic: all four categories estimated by a class prior, a
 /// country default, a classification fallback or the service tree.
-fn guessed(source_id: u16, estimated: u8) -> bool {
+pub(super) fn guessed(source_id: u16, estimated: u8) -> bool {
     estimated == ALL_CATEGORIES_ESTIMATED
         && (GUESSED_SPLIT_SOURCES.contains(&source_id) || source_id == SERVICE_TREE_SOURCE_ID)
 }

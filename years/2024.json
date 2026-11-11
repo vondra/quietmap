@@ -360,6 +360,27 @@
       "description": "Opening hours and terrace customs compiled from national rules and HETUS surveys, checked in October 2026. A practice measured in October 2026 is taken to hold over the preceding years unless a source dated within them shows a different practice; for 2024 none was found."
     },
     {
+      "id": "bus-models",
+      "kind": "bus-models",
+      "region": "world",
+      "publisher": "Quiet Map; public transport operators; OpenStreetMap contributors",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (derived coefficients); source licences apply to the underlying records",
+      "public_ok": true,
+      "depends_on": [
+        "bus-timetable-places",
+        "prepared",
+        "road-traffic",
+        "bus"
+      ],
+      "description": "Buses a day on uncounted roads: one line direction's buses, the exponents of the line directions and of the trip ends within 2 km, the trolleybus weight and the bound on the trip ends (least squares on ln buses over the training places' timetabled rows, every place weighing alike, the weight and bound scanned), the floor of the trip ends' share, that share where buildings are unmapped, the buses' period shares and a coach line's trips, fitted by the year run from the training timetables, the mapped bus lines and the trip ends of the year's buildings."
+    },
+    {
       "id": "venue-seating",
       "kind": "venue-seating",
       "region": "world",
@@ -4523,20 +4544,161 @@
       "description": "Outdoor seats of each surveyed venue (`fetch/terrace_surveys.py`): Madrid's census of premises and terraces of 17 December 2024 (bars, nightclubs, restaurants, cafes and fast-food places) and Melbourne's Census of Land Use and Employment of 2024 (pubs, taverns and bars)."
     },
     {
-      "id": "bus-training-timetables",
+      "id": "bus-timetable-places",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "Public transport operators",
+      "publisher": "Quiet Map; public transport operators",
       "url": "https://quietmap.org/about/data-preparation",
       "observed": {
-        "start": "2026-01-01",
-        "end": "2026-10-26"
+        "start": "2024-08-30",
+        "end": "2024-12-01"
       },
       "published": null,
-      "licence": "Published aggregate observations; publisher terms apply",
+      "licence": "Apache-2.0 (the inventory); source licences apply to the timetables",
+      "public_ok": true,
+      "depends_on": [
+        "gtfs-archive-gtfs-nta-unified-gtfs-realtime-wayback-20240803041220-zip",
+        "gtfs-archive-gtfs-mot-unified-israel-public-transportation-wayback-20240806121526-zip",
+        "gtfs-archive-gtfs-warsaw-ztm-mdb-2092-202409160000-zip",
+        "gtfs-archive-gtfs-stm-montreal-mdb-2126-202412160004-zip",
+        "bus-timetable-netherlands-mdb-1077-202409160023",
+        "bus-timetable-hsl-helsinki-mdb-865-202410140047",
+        "bus-timetable-estonia-mdb-1095-202409160025",
+        "bus-timetable-delijn-flanders-mdb-684-202410140027",
+        "bus-timetable-norway-mdb-1078-202409160041",
+        "bus-timetable-pid-prague-mdb-767-202411250039",
+        "bus-timetable-carris-metropolitana-mdb-2027-202411040016",
+        "bus-timetable-carris-lisbon-mdb-1032-202411040018"
+      ],
+      "description": "The bus law's training places of 2024: the 26 cities and rural areas of the 2026 inventory with their boxes, each with an ordinary week of the 2024 timetable copy retrieved nearest to it (a copy's calendar months ahead is often a placeholder: Carris Metropolitana's of June 2024 ran 13,040 trips a November weekday against 20,540 in its November copy, Estonia's lost Tartu's city lines after the summer). Ireland's archived feed lacks TFI Local Link and the commercial operators, so its rural places read fewer buses than run; Israel's covers 6 August to 5 September 2024, and its week runs from Friday 30 August (five school days). Not in the inventory: Rejseplanen (no extract between June 2023 and January 2025), Transport for New South Wales (its archive needs an account) and Sofia (only a third-party conversion without shapes or day types)."
+    },
+    {
+      "id": "bus-timetable-netherlands-mdb-1077-202409160023",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "OVapi",
+      "url": "https://files.mobilitydatabase.org/mdb-1077/mdb-1077-202409160023/mdb-1077-202409160023.zip",
+      "observed": {
+        "start": "2024-09-12",
+        "end": "2024-12-14"
+      },
+      "published": null,
+      "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Service frequencies and stop-call periods from 43 public timetables."
+      "description": "Bus timetable (GTFS) of the Netherlands, retrieved on 16 September 2024, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-hsl-helsinki-mdb-865-202410140047",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Helsingin seudun liikenne",
+      "url": "https://files.mobilitydatabase.org/mdb-865/mdb-865-202410140047/mdb-865-202410140047.zip",
+      "observed": {
+        "start": "2024-10-11",
+        "end": "2024-12-09"
+      },
+      "published": null,
+      "licence": "CC-BY-4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Helsinki's region, retrieved on 14 October 2024, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-estonia-mdb-1095-202409160025",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Eesti Maanteeamet",
+      "url": "https://files.mobilitydatabase.org/mdb-1095/mdb-1095-202409160025/mdb-1095-202409160025.zip",
+      "observed": {
+        "start": "2024-09-16",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Estonia, retrieved on 16 September 2024, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-delijn-flanders-mdb-684-202410140027",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "De Lijn",
+      "url": "https://files.mobilitydatabase.org/mdb-684/mdb-684-202410140027/mdb-684-202410140027.zip",
+      "observed": {
+        "start": "2024-09-22",
+        "end": "2024-11-30"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Flanders, retrieved on 14 October 2024, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-norway-mdb-1078-202409160041",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Entur",
+      "url": "https://files.mobilitydatabase.org/mdb-1078/mdb-1078-202409160041/mdb-1078-202409160041.zip",
+      "observed": {
+        "start": "2024-09-16",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Norway, retrieved on 16 September 2024, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-pid-prague-mdb-767-202411250039",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Pražská integrovaná doprava (ROPID)",
+      "url": "https://files.mobilitydatabase.org/mdb-767/mdb-767-202411250039/mdb-767-202411250039.zip",
+      "observed": {
+        "start": "2023-12-09",
+        "end": "2024-12-14"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Prague and Central Bohemia, retrieved on 25 November 2024, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-carris-metropolitana-mdb-2027-202411040016",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "TML - Transportes Metropolitanos de Lisboa",
+      "url": "https://files.mobilitydatabase.org/mdb-2027/mdb-2027-202411040016/mdb-2027-202411040016.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Lisbon's metropolitan buses, retrieved on 4 November 2024, read for the bus law's training week."
+    },
+    {
+      "id": "bus-timetable-carris-lisbon-mdb-1032-202411040018",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Carris",
+      "url": "https://files.mobilitydatabase.org/mdb-1032/mdb-1032-202411040018/mdb-1032-202411040018.zip",
+      "observed": {
+        "start": "2024-10-30",
+        "end": "2024-12-15"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Bus timetable (GTFS) of Lisbon's city buses, retrieved on 4 November 2024, read for the bus law's training week."
     },
     {
       "id": "rural-speed-survey",
@@ -7589,17 +7751,6 @@
       "region": "US",
       "description": "FHWA TMAS hourly volumes (time profiles): the available edition is newer than the map date; the remaining admitted sources and defaults apply.",
       "depends_on": []
-    },
-    {
-      "id": "bus-models",
-      "kind": "bus-models",
-      "region": "world",
-      "description": "To be derived for 2024. Bus frequencies and period shares are fitted from timetables matched to OpenStreetMap routes; the 2026 fit's 43 timetables describe 2026. Of its 35 fitted places, nine have no timetable describing 2024: Denmark's Rejseplanen (Aarhus, Odense, Jutland; the first archived extract after June 2023 runs from 2 January 2025), Transport for New South Wales (Sydney, Parramatta, Newcastle, the Hunter and the Central West; its archive needs an account) and Sofia's Urban Mobility Center (only a third-party conversion without shapes or day types); Ireland's archived feed lacks Local Link, Israel's covers only 6 August to 5 September 2024, and Germany's held-out feed has no shapes.",
-      "depends_on": [
-        "bus-training-timetables",
-        "osm",
-        "road-traffic"
-      ]
     },
     {
       "id": "osm-implicit-speeds",

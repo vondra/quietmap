@@ -227,12 +227,21 @@ pub(crate) fn steps() -> Vec<Step> {
             None,
             false,
         ),
+        // A fit of the year's own mapped bus lines and building trips to dated timetables.
+        (
+            "bus-model-table",
+            &["prepared", "traffic", "bus"],
+            Some(BusModels),
+            None,
+            false,
+        ),
         (
             "sources",
             &[
                 "prepared",
                 "tagged-speed-table",
                 "train-scale-table",
+                "bus-model-table",
                 "facilities",
                 "traffic",
                 "building-road-models",
