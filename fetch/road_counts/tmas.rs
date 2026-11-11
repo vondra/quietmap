@@ -170,6 +170,7 @@ pub(super) fn convert(
                     weekday_days: sample.weekday_days,
                     weekday_vehicles: sample.weekday_vehicles,
                 }),
+                ..Sample::default()
             };
             Ok(row)
         })

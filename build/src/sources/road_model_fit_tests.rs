@@ -2,6 +2,7 @@
 //! admits the major-road law only where it predicts a held-out country's counts.
 
 use super::*;
+use crate::roads::observation_sample::SamplingDesign;
 use crate::sources::road_model_rows::enters_fit;
 use crate::sources::road_traffic::{main_prediction, major_group_prediction};
 
@@ -33,6 +34,7 @@ fn tertiary_rows(country: &[u8; 2], shift: f64) -> Vec<CountedRow> {
                 oneway,
                 lanes: 0,
                 rural_network: false,
+                design: SamplingDesign::WholeNetwork,
                 length_m: 100.0,
                 total: (law + shift).exp(),
                 around: [
@@ -149,6 +151,7 @@ fn major_rows(country: &[u8; 2], seed: u64, reflected: bool) -> Vec<CountedRow> 
                 oneway,
                 lanes,
                 rural_network: false,
+                design: SamplingDesign::WholeNetwork,
                 length_m: 50.0 + f64::from(i as u32 % 7),
                 total,
                 around,
@@ -222,4 +225,52 @@ fn a_rural_road_network_fits_its_own_law_apart_from_the_pooled_one() {
     assert_eq!(models.regional_main.len(), 1);
     assert_eq!(models.regional_main[0].country, *b"TH");
     assert_eq!(models.regional_main[0].models[0].intercept, [3.0, 4.0]);
+}
+
+/// A publisher's selected sites (a city's busy streets, permanent stations) count on their own
+/// roads but do not stand for the uncounted roads of their class: tertiary counts four times as
+/// high at Italian stations leave the tertiary law as it is, and still enter the major law,
+/// whose 2026 selected-site residuals lie among the whole networks'.
+#[test]
+fn selected_sites_stay_out_of_the_main_class_laws_but_not_the_major_law() {
+    let mut rows = tertiary_rows(b"CZ", 0.0);
+    rows.extend(tertiary_rows(b"GB", 0.0).into_iter().map(|row| CountedRow {
+        design: SamplingDesign::RandomSample,
+        ..row
+    }));
+    let stations: Vec<CountedRow> = tertiary_rows(b"IT", 4f64.ln())
+        .into_iter()
+        .map(|row| CountedRow {
+            design: SamplingDesign::SelectedSites,
+            ..row
+        })
+        .collect();
+    rows.extend(stations.iter().copied());
+    rows.extend(major_rows(b"CZ", 1, false));
+    let italian_major: Vec<CountedRow> = major_rows(b"IT", 2, false)
+        .into_iter()
+        .map(|row| CountedRow {
+            design: SamplingDesign::SelectedSites,
+            ..row
+        })
+        .collect();
+    rows.extend(italian_major);
+    let (models, support) = fit_models(&rows).unwrap();
+    assert_eq!(models.main[0].intercept, [1.0, 2.0]);
+    let italy = &support["main"][0]["countries"]["IT selected-sites"];
+    assert!(
+        (italy["bias_db"].as_f64().unwrap() - 6.0).abs() < 0.05,
+        "{italy}"
+    );
+    assert_eq!(models.major_countries, vec![*b"CZ", *b"IT"]);
+    assert!(SamplingDesign::RandomSample.represents_its_class());
+    assert!(!SamplingDesign::Undeclared.represents_its_class());
+    for design in [
+        SamplingDesign::Undeclared,
+        SamplingDesign::WholeNetwork,
+        SamplingDesign::RandomSample,
+        SamplingDesign::SelectedSites,
+    ] {
+        assert_eq!(SamplingDesign::from_code(design.code()), Some(design));
+    }
 }

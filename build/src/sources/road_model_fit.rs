@@ -18,17 +18,18 @@ use std::path::Path;
 /// law is extrapolated where few counted roads stand.
 const MAIN_TRIP_END_QUANTILE: f64 = 0.9;
 
-/// The fit of one main class on `rows` at the candidate radius that predicts them best, with its
-/// support: each candidate's weighted mean absolute error and each country's rows, km, bias and
-/// mean absolute error at the chosen one (dB).
+/// The fit of one main class at the candidate radius that predicts best, on the rows of `rows`
+/// whose counts represent their class (a whole network or a random sample), with its support:
+/// each candidate's weighted mean absolute error and, for every row of `rows`, the residuals of
+/// each country and design at the chosen law.
 fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
-    let mut best: Option<(f64, MainModel, Vec<Residual>)> = None;
+    let mut best: Option<(f64, MainModel, usize, f64, Vec<f64>)> = None;
     let mut errors = serde_json::Map::new();
     for radius in MAIN_CANDIDATE_RADII {
         let population: Vec<&CountedRow> = rows
             .iter()
             .copied()
-            .filter(|r| r.around[radius] > 0.0)
+            .filter(|r| r.around[radius] > 0.0 && r.design.represents_its_class())
             .collect();
         let weights = country_weights(
             &population
@@ -45,36 +46,25 @@ fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
             continue;
         };
         let cap = cap.round().max(1.0);
-        let design = |r: &CountedRow| {
-            [
-                f64::from(r.built_up == 1),
-                f64::from(r.built_up == 2),
-                r.around[radius].min(cap).ln(),
-                f64::from(r.oneway),
-            ]
-        };
         let mut equations = NormalEquations::new(4);
         for (r, &w) in population.iter().zip(&weights).filter(|(_, w)| **w > 0.0) {
-            equations.add(&design(r), r.total.ln(), w);
+            equations.add(&main_design(r, radius, cap), r.total.ln(), w);
         }
         if equations.support(0) == 0.0 || equations.support(1) == 0.0 {
             continue;
         }
         let Some(b) = equations.solve() else { continue };
-        let residuals: Vec<Residual> = population
-            .iter()
-            .zip(&weights)
-            .filter(|(_, w)| **w > 0.0)
-            .map(|(r, &w)| {
-                let predicted: f64 = design(r).iter().zip(&b).map(|(x, c)| x * c).sum();
-                (*r, w, r.total.ln() - predicted)
-            })
-            .collect();
-        let error = residuals
-            .iter()
-            .map(|(_, w, e)| w * log_error_db(*e))
-            .sum::<f64>()
-            / residuals.iter().map(|(_, w, _)| w).sum::<f64>();
+        let (sum, weight) =
+            population
+                .iter()
+                .zip(&weights)
+                .fold((0.0, 0.0), |(sum, weight), (r, &w)| {
+                    (
+                        sum + w * log_error_db(main_residual(r, radius, cap, &b)),
+                        weight + w,
+                    )
+                });
+        let error = sum / weight;
         errors.insert(format!("{}", RADII_M[radius]), json!(error));
         let model = MainModel {
             class,
@@ -84,42 +74,68 @@ fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
             slope: rounded(b[2]),
             oneway: rounded(b[3]),
         };
-        if best.as_ref().is_none_or(|(e, _, _)| error < *e) {
-            best = Some((error, model, residuals));
+        if best.as_ref().is_none_or(|(e, ..)| error < *e) {
+            best = Some((error, model, radius, cap, b));
         }
     }
-    let (_, model, residuals) = best?;
+    let (_, model, radius, cap, b) = best?;
+    let residuals: Vec<(&CountedRow, f64)> = rows
+        .iter()
+        .filter(|r| r.around[radius] > 0.0)
+        .map(|r| (*r, main_residual(r, radius, cap, &b)))
+        .collect();
     Some((
         model,
-        json!({"class": class, "countries": country_errors(&residuals), "mean_absolute_db": errors}),
+        json!({"class": class, "countries": design_errors(&residuals), "mean_absolute_db": errors}),
     ))
 }
 
-/// A fitted row, its weight and its natural-log residual (count over prediction).
-type Residual<'a> = (&'a CountedRow, f64, f64);
+fn main_design(r: &CountedRow, radius: usize, cap: f64) -> [f64; 4] {
+    [
+        f64::from(r.built_up == 1),
+        f64::from(r.built_up == 2),
+        r.around[radius].min(cap).ln(),
+        f64::from(r.oneway),
+    ]
+}
 
-/// Each country's rows, km, weighted mean residual and mean absolute residual (dB).
-fn country_errors(residuals: &[Residual]) -> Value {
-    let mut by: BTreeMap<String, [f64; 5]> = BTreeMap::new();
-    for (r, w, e) in residuals {
-        let entry = by
-            .entry(String::from_utf8_lossy(&r.country).into())
-            .or_default();
+/// A row's natural-log residual (count over prediction) at a main-class law.
+fn main_residual(r: &CountedRow, radius: usize, cap: f64, b: &[f64]) -> f64 {
+    let predicted: f64 = main_design(r, radius, cap)
+        .iter()
+        .zip(b)
+        .map(|(x, c)| x * c)
+        .sum();
+    r.total.ln() - predicted
+}
+
+/// For each country and sampling design: rows, km, the length-weighted mean residual and mean
+/// absolute residual (dB).
+fn design_errors(residuals: &[(&CountedRow, f64)]) -> Value {
+    let mut by: BTreeMap<String, [f64; 4]> = BTreeMap::new();
+    for (r, e) in residuals {
+        let design = serde_json::to_value(r.design).expect("a design name");
+        let key = format!(
+            "{} {}",
+            String::from_utf8_lossy(&r.country),
+            design.as_str().unwrap_or_default()
+        );
         let signed = e * 10.0 / std::f64::consts::LN_10;
+        let entry = by.entry(key).or_default();
         *entry = [
             entry[0] + 1.0,
-            entry[1] + r.length_m / 1_000.0,
-            entry[2] + w * signed,
-            entry[3] + w * signed.abs(),
-            entry[4] + w,
+            entry[1] + r.length_m,
+            entry[2] + r.length_m * signed,
+            entry[3] + r.length_m * signed.abs(),
         ];
     }
     let tenth = |v: f64| (v * 10.0).round() / 10.0;
     json!(
         by.into_iter()
-            .map(|(c, [n, km, bias, absolute, w])| (
-                c,
-                json!({"rows": n, "km": tenth(km), "bias_db": tenth(bias / w), "mean_absolute_db": tenth(absolute / w)})
+            .map(|(key, [n, metres, bias, absolute])| (
+                key,
+                json!({"rows": n, "km": tenth(metres / 1_000.0), "bias_db": tenth(bias / metres),
+                    "mean_absolute_db": tenth(absolute / metres)})
             ))
             .collect::<serde_json::Map<_, _>>()
     )
@@ -236,7 +252,20 @@ fn major_models(rows: &[&CountedRow]) -> Result<(RoadModels, Value)> {
         major_lanes_unknown: rounded(b[22]),
         major_countries,
     };
-    Ok((models, json!({"held_out": support})))
+    let residuals: Vec<(&CountedRow, f64)> = rows
+        .iter()
+        .map(|r| {
+            let x = major_design(r);
+            (
+                *r,
+                r.total.ln() - x.iter().zip(&b).map(|(x, c)| x * c).sum::<f64>(),
+            )
+        })
+        .collect();
+    Ok((
+        models,
+        json!({"held_out": support, "countries": design_errors(&residuals)}),
+    ))
 }
 
 /// Every model of the table from the counted rows: the major roads', each main class's on rows

@@ -1332,5 +1332,334 @@
       "search_radius_m": 70,
       "point_band_m": 15
     }
+  ],
+  "sampling": [
+    {
+      "inputs": [
+        "cz-rsd-celostatni-scitani-dopravy"
+      ],
+      "design": "whole-network",
+      "exceptions": [
+        {
+          "road_class_mask": 24,
+          "design": "selected-sites"
+        }
+      ],
+      "citation": "https://md.gov.cz/Media/Media-a-tiskove-zpravy/RSD-zahajilo-Celostatni-scitani-dopravy-2020",
+      "statement": "The 2020 national census counts motorways, class I and II roads and some class III roads (1,370 of its 6,465 sections).",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "gb-dft-aadf-by-count-point"
+      ],
+      "design": "whole-network",
+      "citation": "https://roadtraffic.dft.gov.uk/about",
+      "statement": "Estimated for each link of the major road network (motorways and A roads) and for a sample of locations on the minor road network.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "us-fhwa-hpms"
+      ],
+      "design": "whole-network",
+      "citation": "https://www.fhwa.dot.gov/policyinformation/hpms/fieldmanual/page04.cfm",
+      "statement": "AADT (item 21) is reported for the full extent of all Federal-aid highways and their ramps.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "se-trafikverket-nvdb-trafik-adt"
+      ],
+      "design": "whole-network",
+      "citation": "https://bransch.trafikverket.se/contentassets/29f030c5f81948f1ae48ab3b73c02d30/metodbeskrivning_adt_2015-06-18.pdf",
+      "statement": "ÅDT of the state road network from a measurement cycle over some 22,000 of its sections; about 12,000 more are assessed, which the converter leaves out.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "fi-vaylavirasto-liikennemaarat"
+      ],
+      "design": "whole-network",
+      "citation": "https://www.fintraffic.fi/sites/default/files/2026-05/Maanteiden%20liikennelaskentaj%C3%A4rjestelm%C3%A4%202026.pdf",
+      "statement": "Every homogeneous section of the state road network takes its traffic from permanent stations, sample counts and other updates.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "no-nvdb-trafikkmengde"
+      ],
+      "design": "whole-network",
+      "citation": "https://www.vegvesen.no/nvdb/datakatalog/eksport/produktspesifikasjon/540.pdf",
+      "statement": "Every road in the road database at the year’s end is to carry an ÅDT, ramps included.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3"
+      ],
+      "design": "whole-network",
+      "citation": "https://bast.opus.hbz-nrw.de/frontdoor/deliver/index/docId/3260/file/V417-Gesamtversion-BA.pdf",
+      "statement": "The 2021 census of the federal Autobahnen and Bundesstraßen, reported by counted section for the whole network.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "pl-gddkia-generalny-pomiar-ruchu"
+      ],
+      "design": "whole-network",
+      "citation": "https://www.gov.pl/web/gddkia/generalny-pomiar-ruchu-20202021",
+      "statement": "The 2020/2021 general traffic census measured every section of the national and voivodeship road networks it covers.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "es-mitma-mapa-de-trafico"
+      ],
+      "design": "whole-network",
+      "citation": "https://www.transportes.gob.es/carreteras/trafico-velocidades-y-accidentes-mapa-estimacion-y-evolucion/mapas-de-trafico",
+      "statement": "The traffic map of the State Road Network (26,564 km, 3,465 counting stations) from the national counting plan.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "fr-cerema-tmja-reseau-routier-national",
+        "fr-cerema-tmja-reseau-routier-national-2019"
+      ],
+      "design": "whole-network",
+      "citation": "https://www.data.gouv.fr/fr/datasets/trafic-moyen-journalier-annuel-sur-le-reseau-routier-national/",
+      "statement": "The annual average daily traffic of each section of the non-concession national road network, from permanent or temporary counts.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "jp-mlit-road-traffic-census-r3"
+      ],
+      "design": "whole-network",
+      "citation": "https://www.mlit.go.jp/road/census/r3/index.html",
+      "statement": "Assumed: the 2021 general traffic survey covers every survey section of the road types it tabulates by prefecture.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "nl-rws-inweva-weekdag-gemiddelde-intensiteiten"
+      ],
+      "design": "whole-network",
+      "citation": "https://geo.rijkswaterstaat.nl/services/ogc/gdr/inweva/ows",
+      "statement": "Assumed: Rijkswaterstaat’s weekday intensities of the sections of the national main road network.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "th-drr-rural-roads-aadt"
+      ],
+      "design": "whole-network",
+      "citation": "https://datagov.mot.go.th/",
+      "statement": "Assumed: the Department of Rural Roads’ yearly traffic of the roads of its network.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "mx-sict-imt-datos-viales-u1-segments",
+        "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict"
+      ],
+      "design": "whole-network",
+      "citation": "https://github.com/iChocko/Datos-Viales-SICT",
+      "statement": "Assumed: the federal road network’s counting stations, each standing for its segment.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "ca-quebec-mtq-djma"
+      ],
+      "design": "whole-network",
+      "citation": "https://ws.mapserver.transports.gouv.qc.ca/swtq",
+      "statement": "Assumed: the ministry’s yearly daily traffic of the sections of its road network.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "si-drsi-pldp-counting-sites",
+        "si-drsi-pldp-counting-sites-pldp2024noo"
+      ],
+      "design": "whole-network",
+      "citation": "https://podatki.gov.si/dataset/86c39f5b-4a57-4976-a6ac-987df32c84b1",
+      "statement": "Assumed: the annual daily traffic of the state road network’s counting sections.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "ar-dnv-national-provincial-roads-tmda-ows-3"
+      ],
+      "design": "whole-network",
+      "citation": "https://ide.transporte.gob.ar/geoserver/observ/ows",
+      "statement": "Assumed: the national roads agency’s TMDA of the sections of its network.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "co-invias-red-vial-tpds-nube-tpda-0"
+      ],
+      "design": "whole-network",
+      "citation": "https://services6.arcgis.com/kyerLIHvrND0OSya/arcgis/rest/services/TPDS_NUBE/FeatureServer/0",
+      "statement": "Assumed: INVIAS’s TPD of the national road network’s stations.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "pe-mtc-provias-red-vial-nacional-departamental"
+      ],
+      "design": "whole-network",
+      "citation": "https://services6.arcgis.com/G8JFnqCHKQ9vb8YW/arcgis/rest/services/Red_Vial_Nacional_2024_MTC_PROVIAS_GEO_GPS_PERU_Suyo_Pomalia/FeatureServer/0",
+      "statement": "Assumed: the ministry’s IMD of the sections of the national and departmental networks.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "cl-mop-red-vial-plan-nacional-de-censos-tmda-0"
+      ],
+      "design": "whole-network",
+      "citation": "https://rest-sit.mop.gob.cl/arcgis/rest/services/VIALIDAD/Plan_Nacional_de_Censos/MapServer",
+      "statement": "Assumed: the national census plan’s counting points across the national road network.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "ie-tii-counter-sites-daily-class-aggregate-per-site-class-aggr-2019-06-19",
+        "ie-tii-counter-sites-daily-class-aggregate"
+      ],
+      "design": "selected-sites",
+      "citation": "https://trafficdata.tii.ie/",
+      "statement": "The daily counts of Transport Infrastructure Ireland’s counter sites on the national roads.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "it-anas-traffic-2015-11"
+      ],
+      "design": "selected-sites",
+      "citation": "https://dati.mit.gov.it/catalog/dataset/traffico-giornaliero-medio-anas",
+      "statement": "Assumed: the daily averages of ANAS’s counting stations.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "eu-city-vienna",
+        "eu-city-brno",
+        "eu-city-copenhagen",
+        "eu-city-helsinki",
+        "eu-city-paris",
+        "eu-city-grenoble",
+        "eu-city-toulouse",
+        "eu-city-lyon",
+        "eu-city-lille",
+        "eu-city-bordeaux",
+        "eu-city-rennes",
+        "eu-city-marseille",
+        "eu-city-rouen",
+        "eu-city-montpellier",
+        "eu-city-berlin",
+        "eu-city-hamburg",
+        "eu-city-dublin",
+        "eu-city-milan",
+        "eu-city-luxembourg",
+        "eu-city-amsterdam",
+        "eu-city-oslo",
+        "eu-city-lisbon",
+        "eu-city-valencia",
+        "eu-city-barcelona",
+        "eu-city-madrid",
+        "eu-city-malmo",
+        "eu-city-stockholm",
+        "eu-city-zurich",
+        "eu-city-geneva",
+        "eu-city-london",
+        "eu-city-birmingham",
+        "eu-city-manchester",
+        "eu-city-glasgow",
+        "eu-city-edinburgh",
+        "eu-city-cardiff"
+      ],
+      "design": "selected-sites",
+      "citation": "https://github.com/XavB64/traffic-volume-data-EU-cities",
+      "statement": "Assumed: each city’s counters, at the streets the city chose to count.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "cz-brno-brno-bkom-pentlogram"
+      ],
+      "design": "selected-sites",
+      "citation": "https://data.brno.cz/datasets/intenzita-dopravy-intenzita-vozidel-vehicle-traffic-intensity",
+      "statement": "Assumed: the city’s traffic intensities of its main streets.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "cz-prague-tsk-praha-intenzity-dopravy"
+      ],
+      "design": "selected-sites",
+      "citation": "https://tsk-praha.cz/",
+      "statement": "Assumed: the city’s traffic intensities of its main streets.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "at-vienna-stadt-wien-ma46-dauerzahlstellen-stadt-wien-verkehrszhlstellenzhlwertewien",
+        "at-vienna-stadt-wien-ma46-dauerzahlstellen"
+      ],
+      "design": "selected-sites",
+      "citation": "https://www.data.gv.at/katalog/dataset/stadt-wien_verkehrszhlstellenzhlwertewien",
+      "statement": "The values of the city’s permanent counting stations (Dauerzählstellen).",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "ch-astra-sasvz-jahresergebnisse-station-list",
+        "ch-astra-sasvz-jahresergebnisse-station-list-jahres-ergebnisse-2024"
+      ],
+      "design": "selected-sites",
+      "citation": "https://www.astra.admin.ch/dam/de/sd-web/szrohDjQVjAZ/jahres-ergebnisse-2024.xlsx",
+      "statement": "The annual results of the federal automatic counting stations.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "dk-vejdirektoratet-mastra-ngletal"
+      ],
+      "design": "selected-sites",
+      "citation": "https://vmgeoserver.vd.dk/geosmastra/opendata/ows",
+      "statement": "Assumed: the key figures of the counting points the road authorities chose.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "sa-mot-traffic-density-riyadh-pms-road-atlas-traffic-density-on-roads"
+      ],
+      "design": "selected-sites",
+      "citation": "https://mot.gov.sa/documents/7507107/7507109/Traffic+density+on+roads.xlsx",
+      "statement": "Assumed: the ministry’s and Riyadh’s counts at the roads they chose.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "id-bina-marga-toll-regional-lhrt-national-roads-0"
+      ],
+      "design": "selected-sites",
+      "citation": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0",
+      "statement": "Assumed: counts on the roads the agency chose.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "nz-nzta-carriageway-auckland-transport-aadt",
+        "nz-nzta-carriageway-auckland-transport-aadt-0"
+      ],
+      "design": "selected-sites",
+      "citation": "https://services.arcgis.com/CXBb7LAjgIIdcsPt/ArcGIS/rest/services/GEO_MASTER_GIS_Carriageway/FeatureServer/0",
+      "statement": "Assumed: Auckland Transport’s counted carriageways, chosen by its counting programme.",
+      "stated": false
+    }
   ]
 }

@@ -122,7 +122,7 @@ which counts and models are used; a road classification alone is not a traffic c
 
 A road observation keeps the period actually counted, its location or route, the direction and count scope, the source, and a separate value or missing flag for each vehicle class. A reported zero stays zero; a missing class is inferred and remains marked estimated. A published group, such as all trucks, keeps its total while the selected year’s class model estimates its parts. Measured vehicle classes retain that status even when the count is shared between carriageways or continued along the road. A count of one direction, both directions and a whole street cross-section have different meanings when divided between mapped carriageways.
 
-Each map year selects explicit publisher editions and converter definitions. A later publication can supply earlier observations, but observations after the year’s cutoff cannot enter the map or train its model. The country’s source section says when no dated road count is used; the global road model and mapped buildings then provide the estimate. Road classifications and manually drawn city boxes are not traffic measurements.
+Each map year selects explicit publisher editions and converter definitions. A later publication can supply earlier observations, but observations after the year’s cutoff cannot enter the map or train its model. The country’s source section says when no dated road count is used; the global road model and mapped buildings then provide the estimate. Road classifications and manually drawn city boxes are not traffic measurements. Each publisher also declares, from its own documentation, how it chose where to count: every section of its network, a random sample of locations, or sites it selected, such as a city's busy streets or permanent stations. Where no document says so, a national authority's table of its own network is taken as the whole network and any other set of counts as selected sites; the recipe marks the design as assumed.
 
 One matcher uses the observation’s declared route, geometry, direction and source priority. At an equally near survey endpoint, the road’s two endpoints distinguish which surveyed section it follows. Conflicting counts with equally good support remain unassigned. Compatible counts can continue along a road through its original mapped nodes, including across a country border or a gap in the coastline data; a branch or conflicting count stops that continuation. Allocation shares a physical cross-section between parallel carriageways and preserves the published total. The final road reader applies the selected year’s vehicle shares, period fractions and speed tables.
 
@@ -139,17 +139,20 @@ junctions and the place's yearly air temperature.
 
 - **Traffic without a count.** Secondary, tertiary and unclassified roads with only a class
   estimate follow a law of the trips their buildings make within 1, 2 or 5 km, whichever predicts
-  the counts best, fitted on the year's counted roads with every country weighed alike and the
-  trips held at the counted roads' 90th percentile; a rural road network counted on its own,
+  the counts best, fitted on the year's counts of whole networks and random samples with every
+  country weighed alike and the trips held at the counted roads' 90th percentile. Counts at
+  selected sites carry their own roads but stay out of this law: Italy's stations read tertiary
+  roads 3 dB above it, Sweden's whole network 3 dB below. A rural road network counted on its own,
   Thailand's, follows its own law. Motorways, trunk and primary roads follow one law of the trips
-  within 1, 5 and 15 km, their lanes and one-way carriageways, in the countries whose counts it
+  within 1, 5 and 15 km, their lanes and one-way carriageways, fitted on counts of every design
+  (stations on major roads read within the whole networks' range), in the countries whose counts it
   predicts better, held out, than the other countries' class constants do; elsewhere the class
   estimate stays. No country's law is shifted to its own counts. Where a country's default
   stands instead (Russia, Turkey, Japan, Iran, Ukraine), it is kept. A street carries the trips its
   buildings make, OpenStreetMap's and Overture's, routed along the street network to the nearest
   main road. In a town, an unclassified street, and a residential street that a bus, trolleybus or
-  coach line runs along, carries at least what Great Britain's, France's and Sweden's counted
-  unclassified streets carry among as many trips within 2 km (a one-way residential street what a
+  coach line runs along, carries at least what the counted unclassified streets of whole networks
+  and random samples (Great Britain's) carry among as many trips around it (a one-way residential street what a
   two-way one carries): a line mostly runs along a through street that its class misses. In Great
   Britain's random sample of counted minor roads, 592 residential streets with a line carry 1,820
   vehicles a day in the median; the trips routed down them read 8.2 dB low, this rule 0.5 dB.

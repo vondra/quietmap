@@ -151,7 +151,7 @@ grid coverage there is no state mix; the normal country/global vehicle model app
 | service-cooling | Fraction of service floor cooled; Heat Roadmap Europe D3.2 section 5.3, observed 2015 and published 2018 |
 | dwelling-trips | Vehicle trips per dwelling per day; MiD 2017, National Travel Survey and NHTS 2022, including occupancy adjustment |
 | hotel-trip-rate | Vehicle trips per 100 m² per day; mapped room density and ITE trip rates |
-| building-road-models | Log-linear coefficients over building trip ends; distances in metres, traffic in vehicles/day; field names in `source_tables/models.rs` specify each fit. Fitted by the year run (`building-road-models`, after `traffic`) on the counted rows of the year's prepared roads, every country of at least 500 counted rows weighed alike, with no country shift; its support (`building-road-models.samples.json`) holds each country's rows, km, bias and held-out errors |
+| building-road-models | Log-linear coefficients over building trip ends; distances in metres, traffic in vehicles/day; field names in `source_tables/models.rs` specify each fit. Fitted by the year run (`building-road-models`, after `traffic`) on the counted rows of the year's prepared roads, every country of at least 500 counted rows weighed alike, with no country shift; the secondary, tertiary and unclassified laws on whole-network and random-sample counts only (the design each row's count carries, `road-conversion`'s `sampling`), the major-road law on all; its support (`building-road-models.samples.json`) holds each country's rows, km, bias and held-out errors |
 | bus-models | Frequencies, exponents, minimum service and period fractions; fitted to timetable service and mapped routes |
 | venue-seating | Expected and tagged seats by bar, pub, nightclub, restaurant, café and fast-food use; beer-garden median area in m²; predominant unmapped building use |
 | venue-customs | Opening and terrace closing hours, with hours after midnight above 24; meal times and open-fronted practice |
@@ -246,6 +246,13 @@ conversion input. Converters produce one Arrow observation contract: identity,
 observed interval, location/reference/direction, annual/weekday/hourly/period basis,
 individual optional vehicle counts, count scope, source priority and matching support.
 Publisher column names and edition-specific objects occur in these dated recipes.
+`sampling` declares each count publisher's design from its documentation: `whole-network`
+(every section of its network), `random-sample` or `selected-sites`, with the cited document,
+what it states and `stated: false` where no reachable document states it. An unstated design is
+taken as the whole network for a national authority's table of its own network and as selected
+sites otherwise. `exceptions` give a publisher road category (its class mask) another design:
+Czechia's census counts only some class III roads. Every observation carries its design, and the
+prepared roads keep it in `traffic_observation_design` (1, 2, 3; 0 for a continuation).
 The Arrow metadata binds the observation file to the manifest's SHA-256.
 
 `road-preparation-model.json` supplies physical carriageway priors, access factors,
