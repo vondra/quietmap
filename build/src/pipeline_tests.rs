@@ -181,6 +181,28 @@ fn spatial_context_wraps_longitude_and_stops_at_the_pole() {
     }
 }
 
+/// The runner takes the steps in order: a step listed before one it depends on would never run,
+/// as the road fits would not if they came after the sources that read them.
+#[test]
+fn every_step_comes_after_the_steps_it_depends_on() {
+    let steps = crate::pipeline_plan::steps();
+    for (index, step) in steps.iter().enumerate() {
+        for dependency in step.dependencies {
+            assert!(
+                steps[..index]
+                    .iter()
+                    .any(|earlier| earlier.name == *dependency),
+                "{} before {dependency}",
+                step.name
+            );
+        }
+    }
+    let sources = steps.iter().find(|step| step.name == "sources").unwrap();
+    for fit in ["building-road-models", "road-reference-counts"] {
+        assert!(sources.dependencies.contains(&fit), "{fit}");
+    }
+}
+
 #[test]
 fn completed_native_steps_ignore_other_stages_partial_files_and_pin_the_manifest() {
     let temporary = tempfile::tempdir().unwrap();

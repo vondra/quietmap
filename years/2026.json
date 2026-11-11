@@ -640,11 +640,13 @@
       "public_ok": true,
       "depends_on": [
         "th-highway-distance",
-        "osm",
+        "th-province-names",
+        "prepared",
+        "road-traffic",
         "subdivision-grids",
         "building-road-models"
       ],
-      "description": "Daily traffic and vehicle shares by highway and province. The archived DOH file says 2021; the publisher now labels it 2018, so its observation year remains unresolved. These derived rates also use the September 2026 mapped road lengths."
+      "description": "Daily traffic and vehicle shares by highway and province: the department's vehicle-km over the year's mapped length of the highway there, each highway and province screened by 3-MAD rules on its km per control section and on its traffic over the year's major-road model; fitted by the year run. The archived DOH file says 2021; the publisher now labels it 2018, so its observation year remains unresolved. The committed table is 2026's fit until a 2026 world run publishes its own."
     },
     {
       "id": "us-vehicle-shares-fhwa",
@@ -734,10 +736,10 @@
       "public_ok": true,
       "depends_on": [
         "prepared",
-        "gb-dft-aadf-by-count-point",
+        "road-observations",
         "road-traffic"
       ],
-      "description": "Traffic fits from counted roads and mapped buildings; the input network describes 2026."
+      "description": "Log-linear laws of counted roads' daily traffic over the trip ends of the buildings around them, every country with at least 500 counted rows weighed alike: secondary, tertiary and unclassified roads by the trips within the best of 1, 2 and 5 km (a rural road network by its own counts where they suffice), motorways, trunks, primary roads and links by the trips within 1, 5 and 15 km, lanes and one-way; the major-road law replaces the class constants of the countries whose counts it predicts better than the other countries' constants when they are held out. Fitted by the year run over the whole admitted counted state, without country shifts. The committed table is 2026's fit until a 2026 world run publishes its own."
     },
     {
       "id": "bus-models",
@@ -7666,6 +7668,22 @@
       "public_ok": true,
       "depends_on": [],
       "description": "Highway vehicle-kilometres by province; the supplied edition is labelled 2021 and the catalogue labels it 2018, so the later bound is retained."
+    },
+    {
+      "id": "th-province-names",
+      "kind": "model-observations",
+      "region": "TH",
+      "publisher": "Wikidata",
+      "url": "https://www.wikidata.org/wiki/Property:P300",
+      "observed": {
+        "start": "2011",
+        "end": "2011"
+      },
+      "published": null,
+      "licence": "CC0-1.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Thailand's 77 provinces by the Thai name the Department of Highways uses, with their ISO 3166-2:TH codes; unchanged since Bueng Kan became a province in 2011."
     },
     {
       "id": "terrace-surveys",

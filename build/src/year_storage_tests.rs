@@ -138,12 +138,17 @@ fn every_required_model_kind_refuses_missing_and_empty_inputs() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// A table the year run fits is admitted through the inputs it is fitted from, not derived apart.
 #[test]
 fn a_historical_model_not_yet_derived_is_refused_with_its_pending_derivation() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let inputs =
         YearInputs::read(&root.join("../years/2024.json"), &root.join("test-data")).unwrap();
-    for &kind in crate::source_tables::MODEL_KINDS {
+    let produced = crate::pipeline_plan::produced_kinds();
+    for &kind in crate::source_tables::MODEL_KINDS
+        .iter()
+        .filter(|kind| !produced.contains(kind))
+    {
         if let Err(error) = inputs.paths(kind)
             && error.contains("no admitted input")
         {

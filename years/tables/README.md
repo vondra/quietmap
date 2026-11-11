@@ -105,6 +105,13 @@ length there. Eligible mapped classes are motorway through tertiary and unclassi
 the first numeric road reference; one-way carriageway length counts half. The denominator is
 a dated input: rates must be refitted for a different mapped network.
 
+The year run fits the table (its `road-reference-counts` step, after `building-road-models`)
+from `th-highway-distance`, `th-province-names` (the Thai province names the department uses,
+with their ISO codes), the year's prepared highways and its own major-road model. Given the 2026
+inputs still on disk, the step returns 1,668 of the 2026 table's 1,675 rows byte for byte; the km
+bands equal 2026's, and seven rows out and eight in follow from the expectation's trip ends, which
+now include the Overture footprints that the 2026 screening's trip ends lacked.
+
 A 3-MAD outlier rule rejects inconsistent control-section coverage. In the 2026 map, a whole
 highway is rejected when vehicle-kilometres / the global major-road model's expectation lies
 outside 0.23–26.9, or mapped km / control section outside 0.82–240. A province is rejected
@@ -144,7 +151,7 @@ grid coverage there is no state mix; the normal country/global vehicle model app
 | service-cooling | Fraction of service floor cooled; Heat Roadmap Europe D3.2 section 5.3, observed 2015 and published 2018 |
 | dwelling-trips | Vehicle trips per dwelling per day; MiD 2017, National Travel Survey and NHTS 2022, including occupancy adjustment |
 | hotel-trip-rate | Vehicle trips per 100 m² per day; mapped room density and ITE trip rates |
-| building-road-models | Log-linear coefficients over building trip ends; distances in metres, traffic in vehicles/day, country shifts in dB; field names in `source_tables/models.rs` specify each fit |
+| building-road-models | Log-linear coefficients over building trip ends; distances in metres, traffic in vehicles/day; field names in `source_tables/models.rs` specify each fit. Fitted by the year run (`building-road-models`, after `traffic`) on the counted rows of the year's prepared roads, every country of at least 500 counted rows weighed alike, with no country shift; its support (`building-road-models.samples.json`) holds each country's rows, km, bias and held-out errors |
 | bus-models | Frequencies, exponents, minimum service and period fractions; fitted to timetable service and mapped routes |
 | venue-seating | Expected and tagged seats by bar, pub, nightclub, restaurant, café and fast-food use; beer-garden median area in m²; predominant unmapped building use |
 | venue-customs | Opening and terrace closing hours, with hours after midnight above 24; meal times and open-fronted practice |

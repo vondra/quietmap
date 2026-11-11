@@ -174,7 +174,9 @@ fn with_motorcycles(flows: [f64; 4], share: f64) -> [f64; 4] {
 
 /// The rows whose count is a main road's copy (`road_copies`): the counted rows, their ends, ways'
 /// nodes and roads' cross-sections, and the rows in tunnels, at the latitude of the first.
-fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet<usize>, String> {
+pub(super) fn copied_counts(
+    table: &crate::dev4::Table,
+) -> Result<std::collections::HashSet<usize>, String> {
     let (mut counted, mut tunnels) = (Vec::new(), Vec::new());
     let mut first = 0;
     for batch in &table.batches {
@@ -285,7 +287,9 @@ fn local_motorcycles(
                 let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
                 let flows = std::array::from_fn(|k| aadt[k].value(row));
                 if let Some(identities) = observation_id {
-                    if source_id.value(row) != 12 && measured.is_some_and(|c| c.value(row)) {
+                    if source_id.value(row) != crate::roads::CONTINUITY_SOURCE
+                        && measured.is_some_and(|c| c.value(row))
+                    {
                         local.add_observation(
                             source_id.value(row),
                             identities.value(row),

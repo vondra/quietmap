@@ -2,13 +2,13 @@
 //! local street carries the trip ends routed down it to the nearest main road, no background and
 //! no street more than the one it drains into, and in a town an unclassified street, or a
 //! residential one that carries a bus line, at least what its trip ends around predict for an
-//! unclassified street; a main road of the classes the counts cover takes
-//! the counted roads' relation between their traffic and the trip ends generated around them
-//! (the admitted building-road-models table);
-//! where a country has a major-road fit, its major roads take the model of those counts
-//! (`models.major`). Class estimates are replaced, a country's own defaults stay, and a count copied
-//! from a main road (`road_copies`) takes the model in every country. Squares whose buildings are
-//! not mapped keep dev4's guesses, and a copy carries none.
+//! unclassified street; a secondary, tertiary or unclassified road takes the counted roads'
+//! relation between their traffic and the trip ends generated around them, and a motorway, trunk,
+//! primary road or link that of the major-road model, in the countries whose counts it predicts
+//! better than their class constants (the year run's building-road-models table,
+//! [`super::road_model_fit`]). Class estimates are replaced, a country's own defaults stay, and a
+//! count copied from a main road (`road_copies`) takes the model in every country. Squares whose
+//! buildings are not mapped keep dev4's guesses, and a copy carries none.
 
 use crate::dev4::Square;
 use crate::source_tables::{BusModel, MainModel, RoadModels};
@@ -16,6 +16,9 @@ use crate::traffic::{SquareTraffic, Surroundings};
 use std::path::Path;
 
 const MAPPED_TRIP_ENDS_PER_KM: f64 = 30.0;
+/// Trip ends added before the major-road model takes their logarithm, so a road among none has a
+/// finite expectation (the 2026 fit's choice, kept for both years).
+pub(crate) const MAJOR_TRIP_END_OFFSET: f64 = 100.0;
 
 fn by_built_up([rural, urban]: [f64; 2], built_up: u8) -> f64 {
     match built_up {
@@ -33,7 +36,8 @@ fn major_model_replaces(models: &RoadModels, guess: Guess, iso: [u8; 2]) -> bool
     }
 }
 
-fn major_group(class: u8) -> Option<usize> {
+/// The major-road model's group of a class: motorway, trunk, primary, any link.
+pub(crate) fn major_group(class: u8) -> Option<usize> {
     match class {
         0 => Some(0),
         1 => Some(1),
@@ -41,6 +45,45 @@ fn major_group(class: u8) -> Option<usize> {
         10..=12 => Some(3),
         _ => None,
     }
+}
+
+/// A main-class model's daily traffic among `around` trip ends (capped at the counted rows' bound),
+/// `None` among none.
+pub(crate) fn main_prediction(
+    model: &MainModel,
+    around: f64,
+    (built_up, oneway): (u8, bool),
+) -> Option<f64> {
+    let around = around.min(model.most_around);
+    (around > 0.0).then(|| {
+        (by_built_up(model.intercept, built_up)
+            + model.slope * around.ln()
+            + if oneway { model.oneway } else { 0.0 })
+        .exp()
+    })
+}
+
+/// The major-road model's daily traffic of a row of `group` among the trip ends `around` its
+/// radii (`models.major_radii_m`).
+pub(crate) fn major_group_prediction(
+    models: &RoadModels,
+    group: usize,
+    around: [f64; 3],
+    (built_up, oneway, lanes): (u8, bool, u8),
+) -> f64 {
+    let model = &models.major[group];
+    let density: f64 = around
+        .iter()
+        .zip(model.slopes)
+        .map(|(&trip_ends, slope)| slope * (trip_ends + MAJOR_TRIP_END_OFFSET).ln())
+        .sum();
+    let lanes_term = if lanes > 0 {
+        models.major_ln_lanes * f64::from(lanes).ln()
+    } else {
+        models.major_lanes_unknown
+    };
+    let oneway_term = if oneway { models.major_oneway } else { 0.0 };
+    (by_built_up(model.intercept, built_up) + density + lanes_term + oneway_term).exp()
 }
 
 pub fn thai_rural_road_ref(reference: &str) -> bool {
@@ -57,23 +100,6 @@ pub fn thai_rural_road_ref(reference: &str) -> bool {
             && number.len() == 4
             && number.bytes().all(|b| b.is_ascii_digit())
     })
-}
-
-fn unselected_tertiary_shift_db(models: &RoadModels, around: f64) -> f64 {
-    let points = &models.unselected_tertiary_shift_db;
-    if points.is_empty() {
-        return 0.0;
-    }
-    if around <= points[0].0 {
-        return points[0].1;
-    }
-    for pair in points.windows(2) {
-        let [(x0, y0), (x1, y1)] = [pair[0], pair[1]];
-        if around <= x1 {
-            return y0 + (y1 - y0) * (around / x0).ln() / (x1 / x0).ln();
-        }
-    }
-    points[points.len() - 1].1
 }
 
 const TREE_CLASSES: [u8; 3] = [5, 6, 7];
@@ -110,6 +136,11 @@ impl BuildingTraffic {
         }))
     }
 
+    /// The trip ends within `radius_m` of the z30 point `middle`.
+    pub fn around(&self, middle: (i32, i32), radius_m: f64) -> f64 {
+        self.surroundings.around(middle, radius_m)
+    }
+
     /// The world major-road model's daily traffic of a row: a motorway, trunk, primary road or
     /// link by its group, any other class as a primary road.
     pub fn major_prediction(
@@ -118,21 +149,15 @@ impl BuildingTraffic {
         middle: (i32, i32),
         (class, built_up, oneway, lanes): (u8, u8, bool, u8),
     ) -> f64 {
-        let model = &models.major[major_group(class).unwrap_or(2)];
-        let intercept = by_built_up(model.intercept, built_up);
-        let density: f64 = models
+        let around = models
             .major_radii_m
-            .iter()
-            .zip(model.slopes)
-            .map(|(&radius, slope)| slope * (self.surroundings.around(middle, radius) + 100.0).ln())
-            .sum();
-        let lanes_term = if lanes > 0 {
-            models.major_ln_lanes * f64::from(lanes).ln()
-        } else {
-            models.major_lanes_unknown
-        };
-        let oneway_term = if oneway { models.major_oneway } else { 0.0 };
-        (intercept + density + lanes_term + oneway_term).exp()
+            .map(|radius| self.surroundings.around(middle, radius));
+        major_group_prediction(
+            models,
+            major_group(class).unwrap_or(2),
+            around,
+            (built_up, oneway, lanes),
+        )
     }
 
     /// The modelled daily total of a row whose traffic dev4 guessed or whose count is a copy,
@@ -169,35 +194,12 @@ impl BuildingTraffic {
             (class, oneway)
         };
         let iso = country_iso.to_le_bytes();
-        let shift_db = |class: u8| {
-            let Some(shifts) = models
-                .country_shifts_db
-                .iter()
-                .find(|row| row.country == iso)
-                .and_then(|row| row.value.get(usize::from(class.checked_sub(3)?)))
-            else {
-                return 0.0;
-            };
-            by_built_up([shifts[0], shifts[1]], built_up)
-        };
         let main = |model: &MainModel| {
-            let around = self
-                .surroundings
-                .around(middle, model.radius_m)
-                .min(model.most_around);
-            (around > 0.0).then(|| {
-                let selection_db =
-                    if model.class == 4 && models.selective_tertiary_countries.contains(&iso) {
-                        unselected_tertiary_shift_db(models, around)
-                    } else {
-                        0.0
-                    };
-                (by_built_up(model.intercept, built_up)
-                    + model.slope * around.ln()
-                    + if oneway { model.oneway } else { 0.0 }
-                    + (shift_db(model.class) + selection_db) / 10.0 * std::f64::consts::LN_10)
-                    .exp()
-            })
+            main_prediction(
+                model,
+                self.around(middle, model.radius_m),
+                (built_up, oneway),
+            )
         };
         if major_group(class).is_some() {
             if !major_model_replaces(models, guess, iso) {
@@ -341,24 +343,6 @@ mod tests {
         ] {
             assert!(range.contains(&value), "{value}");
         }
-    }
-
-    #[test]
-    fn uncounted_tertiary_roads_shift_most_where_buildings_are_few() {
-        let models = &SourceTables::test_fixture().road_models;
-        assert_eq!(unselected_tertiary_shift_db(models, 5_000.0), -5.8);
-        assert!((unselected_tertiary_shift_db(models, 77_000.0) + 3.9).abs() < 1e-9);
-        let between = unselected_tertiary_shift_db(models, 120_000.0);
-        assert!(between < -2.8 && between > -3.9, "{between}");
-        assert_eq!(unselected_tertiary_shift_db(models, 2e6), -1.9);
-        assert!(
-            models
-                .selective_tertiary_countries
-                .windows(2)
-                .all(|w| w[0] < w[1])
-        );
-        assert!(!models.selective_tertiary_countries.contains(b"SE"));
-        assert!(models.selective_tertiary_countries.contains(b"CZ"));
     }
 
     /// A residential street that carries a bus line in a town collects what passes through, as the

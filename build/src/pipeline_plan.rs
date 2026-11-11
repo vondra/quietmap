@@ -197,6 +197,21 @@ pub(crate) fn steps() -> Vec<Step> {
             false,
         ),
         ("traffic", &["prepared"], Some(RoadTraffic), Some(1), false),
+        // Fits of the year's counted roads and the trips its buildings make, before the sources.
+        (
+            "building-road-models",
+            &["prepared", "traffic"],
+            Some(BuildingRoadModels),
+            None,
+            false,
+        ),
+        (
+            "road-reference-counts",
+            &["prepared", "traffic", "building-road-models"],
+            Some(RoadReferenceCounts),
+            None,
+            false,
+        ),
         (
             "sources",
             &[
@@ -205,6 +220,8 @@ pub(crate) fn steps() -> Vec<Step> {
                 "train-scale-table",
                 "facilities",
                 "traffic",
+                "building-road-models",
+                "road-reference-counts",
                 "airport-traffic",
                 "ships",
                 "terrain",

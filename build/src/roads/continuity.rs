@@ -13,7 +13,8 @@ use std::{
     path::Path,
 };
 
-const CONTINUITY_SOURCE: u16 = 12;
+/// The source id of a row whose count continues a measured one along its road (dev4's 12).
+pub(crate) const CONTINUITY_SOURCE: u16 = 12;
 
 #[derive(Clone, PartialEq)]
 struct Flow {
