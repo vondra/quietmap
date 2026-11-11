@@ -1,6 +1,6 @@
 //! Convert only manifest-selected railway publisher objects into the shared movement stream.
 #[path = "rail_inputs/calendar.rs"]
-mod calendar;
+pub(crate) mod calendar;
 #[path = "rail_inputs/crossings.rs"]
 pub(crate) mod crossings;
 #[path = "rail_inputs/czptt.rs"]
@@ -10,7 +10,7 @@ mod gtfs;
 #[path = "rail_inputs/gtfs_movements.rs"]
 mod gtfs_movements;
 #[path = "rail_inputs/gtfs_tables.rs"]
-mod gtfs_tables;
+pub(crate) mod gtfs_tables;
 #[path = "rail_inputs/spatial.rs"]
 mod spatial;
 #[path = "rail_inputs/station_names.rs"]

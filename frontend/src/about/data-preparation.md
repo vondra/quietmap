@@ -23,11 +23,11 @@ traffic counts divided by a newer mapped road length cannot supply an earlier ye
 practices apply over their documented validity intervals; a practice measured later, such as church
 bells, calls to prayer or venue hours, holds over the preceding few years unless a source dated
 within them shows a different practice. A table fitted on the year's own mapped state, such as the
-posted-speed medians, the railway country factors, a hotel's trips per floor area or the seats
-outside bars and restaurants, is fitted by the year's build after that state is prepared and
-published with the year. A required model table that is missing stops the build. Where a country
-has no counts, the documented world model still applies. Source lists appear only for maps that
-have been built.
+posted-speed medians, the railway country factors, a hotel's trips per floor area, the seats
+outside bars and restaurants or the buses on uncounted roads, is fitted by the year's build after
+that state is prepared and published with the year. A required model table that is missing stops
+the build. Where a country has no counts, the documented world model still applies. Source lists
+appear only for maps that have been built.
 
 <details>
 <summary>The year manifest and input tables</summary>
@@ -202,6 +202,19 @@ junctions and the place's yearly air temperature.
   German cities left out of the fit, 2.2 dB high. Buses keep the timetables' shares of their stop
   calls: 73 % by day, 16 % in the evening and 11 % at night. A road on a bridge emits from its deck,
   straight between the ground at the bridge's two ends.
+- **Each year's bus law.** The numbers above are the 2026 map's. A year's build fits them again on
+  26 of those places in 11 countries, the ones with a timetable of that year: each place's bus trips
+  of one ordinary week, a trip's shape running along an uncounted road where it passes within 15 m
+  of the road's middle within 30 degrees of its direction (a one-way road only in its direction),
+  against the year's mapped lines and the trips its buildings make within 2 km. The bound on those
+  trips (in steps of 100,000) and the trolleybus weight (in quarters) are the pair that fits best;
+  the floor is where the timetables stop falling with the trips, the geometric mean of the roads
+  of fewest trips that run at least their share; where the buildings are not mapped, the trips'
+  part is the law's geometric mean on each kind of road where they are; the period shares are the
+  places' medians, and a coach line runs the median of the coach routes its timetables run through
+  the places. The 2026 law came before these rules: its bound was read off the binned residuals, a
+  coach line's 4 a day was a judgment, and its places included Denmark's, New South Wales's and
+  Sofia's, which keep no timetable of 2024.
 
 </details>
 
@@ -779,8 +792,9 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
   floor area from the same state, `train-scale-table` the railway country factors from the
   prepared railways, `venue-seating-table` the seats outside its bars and restaurants from the
   dated seating surveys (`fetch/terrace_surveys.py`) and its mapped places, `building-road-models`
-  the laws of counted roads over the trips their buildings make, and `road-reference-counts`
-  Thailand's highway means per province from them. Other steps include
+  the laws of counted roads over the trips their buildings make, `road-reference-counts`
+  Thailand's highway means per province from them, and `bus-model-table` the buses on uncounted
+  roads from the year's timetables. Other steps include
   `ships` (monthly occupancy with completed coverage), `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.

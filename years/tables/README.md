@@ -152,7 +152,7 @@ grid coverage there is no state mix; the normal country/global vehicle model app
 | dwelling-trips | Vehicle trips per dwelling per day; MiD 2017, National Travel Survey and NHTS 2022, including occupancy adjustment |
 | hotel-trip-rate | Car trips per 100 m² of gross floor per day; the year run fits it (below) |
 | building-road-models | Log-linear coefficients over building trip ends; distances in metres, traffic in vehicles/day; field names in `source_tables/models.rs` specify each fit. Fitted by the year run (`building-road-models`, after `traffic`) on the counted rows of the year's prepared roads, every country of at least 500 counted rows weighed alike, with no country shift; the secondary, tertiary and unclassified laws on whole-network and random-sample counts only (the design each row's count carries, `road-conversion`'s `sampling`), the major-road law on all; its support (`building-road-models.samples.json`) holds each country's rows, km, bias and held-out errors |
-| bus-models | Frequencies, exponents, minimum service and period fractions; fitted to timetable service and mapped routes |
+| bus-models | One line direction's buses a day, the exponents of line directions and of trip ends within 2 km, trolleybus weight, bound and floor of the trip ends' share, that share by built-up flag where buildings are unmapped, period fractions, a coach line direction's departures; fitted by the year run (`bus-model-table`, below) |
 | venue-seating | Expected and tagged seats by bar, pub, nightclub, restaurant, café and fast-food use; beer-garden median area in m²; predominant unmapped building use |
 | venue-customs | Opening and terrace closing hours, with hours after midnight above 24; meal times and open-fronted practice |
 | worship-calls | Prayer method, start offset and sounding duration in seconds, sound power dB(A), iqama/sala seconds, dawn/Friday/silent policy and horn height in metres |
@@ -321,6 +321,30 @@ one whose centroid lies nearest (a hotel inside a mapped complex takes the hotel
 is read as traffic reads it (footprint, else 100 m², times storeys). Its support
 (`hotel-trip-rate.samples.json`) has the factors, the sums by match and building use, the
 lodgings that met no building, and each square's rated sums.
+
+`bus-models` is fitted by the year run itself (its `bus-model-table` step, after `prepared`,
+`traffic` and `bus`, before sources) on the training places of the `bus-timetable-places` input:
+each place's bounds, the first of seven ordinary days (every day must run a bus) and its admitted
+timetables. A row is an uncounted road row (dev4's guess, not a tunnel) whose middle lies in the
+place, in a square whose buildings are mapped, carrying a mapped bus or trolleybus line without a
+tagged interval; its buses are the trips a day of the timetable's shapes passing within 15 m of
+its middle within 30 degrees (a one-way row in its direction), each shape once, rows above 0.5 a
+day fitted. Least squares on ln buses over ln(bus + W trolleybus line directions) and
+ln(min(trip ends, bound) / 100,000), every place weighing one and its rows by length; W in
+quarters from 1 to 6 and the bound in steps of 100,000 up to the most trip ends, the pair of
+least weighted squared error. The floor is the weighted geometric mean of timetable buses over
+the law's line part on the largest set of lowest-share rows whose mean is at least the highest
+share among them. The built-up shares are the length-weighted geometric means of the law's share
+on each flag's bus rows (unknown: the mean of rural and urban); the period shares the places'
+medians of their stop calls by period, made to sum to one; the coach departures the median trips
+a day of the coach route directions (GTFS 200-209) calling in the places. The run publishes the
+table and its support (`bus-models.samples.json`: each place's rows, line-direction-km the
+timetables did and did not run, mean level against its timetable and stop calls; each timetable
+week's trips a day; the best law of every bound). The 2026 table predates the step: fitted on 35
+places with the bound picked from binned residuals at 600,000 (the fit's own criterion on those
+places picks 700,000), the floor read off the same bins (the rule gives 0.1249 there), period
+shares of 43 places and a coach line's 4 departures by judgment.
+
 Legal and heavy speed histories retain their source, applicability and validity
 interval (exclusive end). A country lacking a documented historical row retains the
 road model's global speed fallback; no later legal check is backdated. Japan's 2024

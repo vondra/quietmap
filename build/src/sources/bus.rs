@@ -51,16 +51,24 @@ impl BusRoutes {
 
     /// Whether an OSM way carries a bus, trolleybus or coach line (every way listed carries one).
     pub fn serves(&self, way: i64) -> bool {
-        self.ways.binary_search(&way).is_ok()
+        self.lines(way).is_some()
+    }
+
+    /// An OSM way's bus, trolleybus and coach line directions without an interval and the
+    /// departures a day of its bus and trolleybus and of its coach routes with one; `None` where
+    /// no line runs.
+    pub fn lines(&self, way: i64) -> Option<([u16; 3], [f32; 2])> {
+        let index = self.ways.binary_search(&way).ok()?;
+        Some(self.service[index])
     }
 
     /// Buses and coaches a day on an OSM way, its lines without an interval running `service`
     /// of the buses where 100,000 trips a day begin or end within 2 km.
     pub fn daily(&self, model: &BusModel, way: i64, service: f64) -> (f64, f64) {
-        let Ok(index) = self.ways.binary_search(&way) else {
+        let Some(([bus, trolleybus, coach], [departures, coach_departures])) = self.lines(way)
+        else {
             return (0.0, 0.0);
         };
-        let ([bus, trolleybus, coach], [departures, coach_departures]) = self.service[index];
         let line_directions = f64::from(bus) + model.trolleybus_line_weight * f64::from(trolleybus);
         let buses = model.one_line_direction
             * line_directions.powf(model.line_directions_exponent)

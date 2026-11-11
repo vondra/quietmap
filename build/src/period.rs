@@ -79,7 +79,12 @@ pub fn period_in(zone: &Tz, timestamp: f64) -> u8 {
         return NIGHT;
     }
     let utc = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or(DateTime::UNIX_EPOCH);
-    match utc.with_timezone(zone).hour() {
+    period_of_hour(utc.with_timezone(zone).hour())
+}
+
+/// The period of a wall-clock hour (0-23).
+pub fn period_of_hour(hour: u32) -> u8 {
+    match hour {
         7..=18 => DAY,
         19..=22 => EVENING,
         _ => NIGHT,
