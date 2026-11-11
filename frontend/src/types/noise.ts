@@ -212,6 +212,8 @@ export interface RayProfile {
  *  in the colour of what it delivers (the selected ray marked), and the point the level is computed
  *  at. */
 export interface SegmentFan {
+  /** A new visitor selection asks the map to frame it; a restored link does not. */
+  frame?: boolean
   source: string
   receiver: [number, number]
   pieces: { ends: [number, number][], color: string, selected: boolean }[]

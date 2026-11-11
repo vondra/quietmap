@@ -8,13 +8,11 @@
 //! determine the sample's confidence. A pixel takes it blended from the four points around in
 //! decibels; the painter and its etalon take the same.
 
-use crate::exact::{Batch, LAYERS, Pair, Point, PointBands, evaluate_all};
+use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all, loud_pairs};
 use crate::hum_samples::sampled_hum;
-use crate::paint::bilinear;
+use crate::paint::{bilinear, lattice_points};
 use crate::square::Square;
 use physics::bands::{PERIODS, lden_energy};
-use rayon::prelude::*;
-use tiles::geo::Mercator;
 
 pub(crate) type HumPointSound = ([[f64; PERIODS]; LAYERS], PointBands);
 
@@ -61,31 +59,8 @@ impl Hum {
                 quiet: vec![([[0.0; PERIODS]; LAYERS], PointBands::default()); side * side],
             });
         }
-        let points: Vec<Point> = (0..side * side)
-            .into_par_iter()
-            .map(|at| {
-                let (x, y) = ((at % side) * spacing, (at / side) * spacing);
-                Point::at(
-                    square,
-                    square.frame.to_metres(Mercator {
-                        x: f64::from(square.tile.x) + x as f64 / pixels as f64,
-                        y: f64::from(square.tile.y) + y as f64 / pixels as f64,
-                    }),
-                )
-            })
-            .collect::<Result<_, String>>()?;
-        let pairs: Vec<Pair> = (0..points.len())
-            .into_par_iter()
-            .map_init(Vec::new, |near, k| {
-                let point = &points[k];
-                square.index.reaching(point.position, point.position, near);
-                (near.iter())
-                    .filter(|&&index| square.loud(index, point.position, &point.bound))
-                    .map(|&index| Pair::new(k as u32, index))
-                    .collect::<Vec<_>>()
-            })
-            .flatten()
-            .collect();
+        let points = lattice_points(square, pixels, spacing)?;
+        let pairs = loud_pairs(square, &points);
         let mut loud_energy = vec![[[0.0; PERIODS]; LAYERS]; points.len()];
         for (pair, energy) in pairs
             .iter()
@@ -97,6 +72,19 @@ impl Hum {
                 *total += value;
             }
         }
+        Self::from_loud(square, pixels, spacing, &points, &loud_energy, batch)
+    }
+
+    /// The hum's points and loud energy already computed at the square's block corners.
+    pub(crate) fn from_loud(
+        square: &Square,
+        pixels: usize,
+        spacing: usize,
+        points: &[Point],
+        loud_energy: &[[[f64; PERIODS]; LAYERS]],
+        batch: Option<&dyn Batch>,
+    ) -> Result<Self, String> {
+        let side = pixels / spacing + 1;
         let seeds: Vec<u64> = (0..points.len())
             .map(|at| {
                 // Shared world coordinates give neighbouring squares the same receiver sample.
@@ -105,7 +93,7 @@ impl Hum {
                 (x << 32) | y
             })
             .collect();
-        let quiet = sampled_hum(square, &points, &loud_energy, &seeds, batch)?;
+        let quiet = sampled_hum(square, points, loud_energy, &seeds, batch)?;
         Ok(Hum {
             side,
             spacing,

@@ -62,7 +62,7 @@ const tileCellsCache = new Map<string, TileCellsEntry>()
 const TILE_CELLS_CACHE_MAX = 64
 // A failed tile is forgotten after this, so a transient error is retried
 // instead of pinning "unavailable" for the session.
-const FAILED_TILE_RETRY_MS = 30_000
+export const FAILED_TILE_RETRY_MS = 30_000
 
 /**
  * Decoded cells of one tile. Callers hold the returned array, so an eviction

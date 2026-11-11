@@ -77,6 +77,20 @@ pub struct TileId {
 }
 
 impl TileId {
+    /// The shortest signed tile offset from `origin`, wrapping longitude at the antimeridian.
+    pub fn offset_from(self, origin: TileId) -> [i64; 2] {
+        [
+            wrap_x(f64::from(self.x) - f64::from(origin.x)) as i64,
+            i64::from(self.y) - i64::from(origin.y),
+        ]
+    }
+
+    /// The Chebyshev ring around `origin` that contains this tile.
+    pub fn ring_distance(self, origin: TileId) -> u32 {
+        let [dx, dy] = self.offset_from(origin);
+        dx.unsigned_abs().max(dy.unsigned_abs()) as u32
+    }
+
     pub fn containing(position: Mercator) -> Self {
         let last = f64::from(TILES_PER_AXIS - 1);
         TileId {
@@ -170,11 +184,6 @@ impl TileId {
         }
         tiles
     }
-
-    /// Ground width of the tile in metres (east-west at its centre latitude).
-    pub fn width_m(self) -> f64 {
-        LocalFrame::at(self.centre()).east_m_per_unit
-    }
 }
 
 /// A position on the world's int16-step lattice: `x` east and `y` south from the north-west
@@ -203,7 +212,7 @@ impl GlobalSteps {
 }
 
 /// `dx` in tile units taken the short way around the world.
-fn wrap_x(dx: f64) -> f64 {
+pub fn wrap_x(dx: f64) -> f64 {
     let n = f64::from(TILES_PER_AXIS);
     (dx + n / 2.0).rem_euclid(n) - n / 2.0
 }
@@ -328,7 +337,8 @@ mod tests {
 
     #[test]
     fn prague_tile_is_six_kilometres_wide_with_19_cm_steps() {
-        let width = TileId { x: 2212, y: 1387 }.width_m();
+        // East-west at the tile's centre latitude.
+        let width = LocalFrame::at(TileId { x: 2212, y: 1387 }.centre()).east_m_per_unit;
         assert!((6_270.0..6_300.0).contains(&width), "{width}");
         assert!((width / STEPS_PER_TILE - 0.19).abs() < 0.005);
     }

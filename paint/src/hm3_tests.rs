@@ -3,7 +3,7 @@
 use super::*;
 use crate::hm3_square::SQUARE_HEADER_BYTES;
 use crate::levels::PaintedCells;
-use crate::paint::{NO_LEVEL, SILENCE};
+use crate::levels::{NO_LEVEL, SILENCE};
 
 #[test]
 fn a_non_file_completion_marker_cannot_skip_a_square() {
@@ -24,15 +24,18 @@ fn every_byte_and_row_boundary_round_trips() {
     let cells: Vec<u8> = (0..TILE_PX * TILE_PX)
         .map(|at| ((at / TILE_PX * 19 + at % TILE_PX * 31) % 256) as u8)
         .collect();
-    let encoded = encode_tile(&cells, LAYERS).unwrap();
-    assert_eq!(decode_tile(&encoded, LAYERS).unwrap(), cells);
-    assert!(decode_tile(&encoded, 0).is_err());
-    assert!(decode_tile(&encoded[..encoded.len() / 2], LAYERS).is_err());
+    let encoded = encode_metric_tile(&cells, LAYERS, Metric::Nden).unwrap();
+    assert_eq!(
+        decode_metric_tile(&encoded, LAYERS, Metric::Nden).unwrap(),
+        cells
+    );
+    assert!(decode_metric_tile(&encoded, 0, Metric::Nden).is_err());
+    assert!(decode_metric_tile(&encoded[..encoded.len() / 2], LAYERS, Metric::Nden).is_err());
     let mut trailing = encoded.clone();
     trailing.push(0);
-    assert!(decode_tile(&trailing, LAYERS).is_err());
-    assert!(decode_tile(&[], LAYERS).is_err());
-    assert!(encode_tile(&cells[..TILE_PX], LAYERS).is_err());
+    assert!(decode_metric_tile(&trailing, LAYERS, Metric::Nden).is_err());
+    assert!(decode_metric_tile(&[], LAYERS, Metric::Nden).is_err());
+    assert!(encode_metric_tile(&cells[..TILE_PX], LAYERS, Metric::Nden).is_err());
 }
 
 #[test]
@@ -137,7 +140,7 @@ fn identical_quadrants_share_bytes_and_invalid_ranges_are_refused() {
 }
 
 #[test]
-fn legacy_squares_stay_complete_and_dual_streams_keep_the_same_nden_bytes() {
+fn legacy_fixture_stays_readable_and_keeps_its_nden_streams_when_lden_is_added() {
     let old = tempfile::tempdir().unwrap();
     let path = square_path(old.path(), 12, (9, 17));
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -195,12 +198,41 @@ fn legacy_squares_stay_complete_and_dual_streams_keep_the_same_nden_bytes() {
 }
 
 #[test]
+fn a_level_past_any_painted_place_is_refused_in_either_metric() {
+    let out = tempfile::tempdir().unwrap();
+    let mut values = PaintedCells::silence(TILE_PX * TILE_PX);
+    values.nden[7] = [239; LAYERS + 1];
+    values.lden[7] = [239; LAYERS + 1];
+    write(out.path(), 12, (0, 0), &values).unwrap();
+    assert!(verify(out.path(), 12, (0, 0)).unwrap());
+    // The rented machine's fault: Lden at the top of the scale, the layer and the total alike.
+    values.lden[7] = [253; LAYERS + 1];
+    write(out.path(), 12, (1, 0), &values).unwrap();
+    assert!(
+        verify(out.path(), 12, (1, 0))
+            .unwrap_err()
+            .contains("pixel 7: a level past")
+    );
+    values.lden[7] = [239; LAYERS + 1];
+    values.nden[7][0] = 240;
+    write(out.path(), 12, (2, 0), &values).unwrap();
+    assert!(verify(out.path(), 12, (2, 0)).is_err());
+}
+
+#[test]
 fn metric_tags_and_assessment_cannot_be_swapped_or_lost() {
     let cells = vec![100; TILE_PX * TILE_PX];
     let lden = encode_metric_tile(&cells, 0, Metric::Lden).unwrap();
     assert_eq!(decode_metric_tile(&lden, 0, Metric::Lden).unwrap(), cells);
-    assert!(decode_tile(&lden, 0).is_err());
-    assert!(decode_metric_tile(&encode_tile(&cells, 0).unwrap(), 0, Metric::Lden).is_err());
+    assert!(decode_metric_tile(&lden, 0, Metric::Nden).is_err());
+    assert!(
+        decode_metric_tile(
+            &encode_metric_tile(&cells, 0, Metric::Nden).unwrap(),
+            0,
+            Metric::Lden
+        )
+        .is_err()
+    );
     let out = tempfile::tempdir().unwrap();
     let mut values = PaintedCells::silence(TILE_PX * TILE_PX);
     values.lden[0][0] = NO_LEVEL;

@@ -9,7 +9,7 @@
 
 use crate::exact::Point;
 use crate::loudest::LoudestIndex;
-use crate::paint::bilinear;
+use crate::paint::{bilinear, lattice_points};
 use crate::square::Square;
 use physics::doc29::atmosphere::{THIRD_OCTAVES as CLASS_THIRDS, place_rates_db_per_m};
 use popup::aircraft::flights::{FlightTotals, heard_spectrum_energy};
@@ -28,6 +28,19 @@ pub struct FlightSpectra {
 
 impl FlightSpectra {
     pub fn new(square: &Square, pixels: usize, spacing: usize) -> Result<Self, String> {
+        if !square.has_aircraft_boxes() && square.rolls.is_empty() {
+            return Self::from_points(square, pixels, spacing, &[]);
+        }
+        let points = lattice_points(square, pixels, spacing)?;
+        Self::from_points(square, pixels, spacing, &points)
+    }
+
+    pub(crate) fn from_points(
+        square: &Square,
+        pixels: usize,
+        spacing: usize,
+        points: &[Point],
+    ) -> Result<Self, String> {
         let side = pixels / spacing + 1;
         if !square.has_aircraft_boxes() && square.rolls.is_empty() {
             return Ok(Self {
@@ -36,18 +49,7 @@ impl FlightSpectra {
                 shares: vec![[f64::NAN; CLASS_THIRDS]; side * side],
             });
         }
-        let points: Vec<Point> = (0..side * side)
-            .into_par_iter()
-            .map(|at| {
-                let (x, y) = ((at % side) * spacing, (at / side) * spacing);
-                let position = square.frame.to_metres(tiles::geo::Mercator {
-                    x: f64::from(square.tile.x) + x as f64 / pixels as f64,
-                    y: f64::from(square.tile.y) + y as f64 / pixels as f64,
-                });
-                Point::at(square, position)
-            })
-            .collect::<Result<_, String>>()?;
-        let loudest = LoudestIndex::new(square, &points);
+        let loudest = LoudestIndex::new(square, points);
         let spectrum_of = |point: &Point| -> Result<[f64; CLASS_THIRDS], String> {
             let weather = point.weather(square);
             let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);

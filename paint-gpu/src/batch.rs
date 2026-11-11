@@ -21,6 +21,9 @@ use std::sync::OnceLock;
 /// Pairs one launch takes: 172 bytes per pair, 24 per ray and 576 per reached point.
 const PAIRS_PER_LAUNCH: usize = 2_000_000;
 
+#[path = "hum_pairs.rs"]
+mod hum_pairs;
+
 pub struct GpuBatch<'a> {
     pub gpu: &'a Gpu,
     pub device_square: &'a DeviceSquare,
@@ -101,13 +104,17 @@ impl LaunchInputs {
 /// A launch's pairs' energies from its sums (a refused pair's replaced later by the CPU's).
 fn unpack(launch: &[u32], sums: &[[f32; PAIR_SUMS]], energies: &mut [PairEnergy]) {
     for (&k, sums) in launch.iter().zip(sums) {
-        let sum = |kind: usize| -> [f64; PERIODS] {
-            std::array::from_fn(|p| f64::from(sums[kind * PERIODS + p]))
-        };
-        energies[k as usize] = PairEnergy {
-            mixed: sum(0),
-            states: [sum(1), sum(2)],
-        };
+        energies[k as usize] = pair_energy(sums);
+    }
+}
+
+fn pair_energy(sums: &[f32; PAIR_SUMS]) -> PairEnergy {
+    let sum = |kind: usize| -> [f64; PERIODS] {
+        std::array::from_fn(|p| f64::from(sums[kind * PERIODS + p]))
+    };
+    PairEnergy {
+        mixed: sum(0),
+        states: [sum(1), sum(2)],
     }
 }
 
@@ -161,6 +168,7 @@ impl GpuBatch<'_> {
                     (&gathered.receivers, &gathered.own),
                     (&gathered.candidates, &gathered.at, &gathered.weights),
                     &mut device_bands,
+                    None,
                 )
             })?;
             refused.extend(
@@ -254,6 +262,14 @@ impl Batch for GpuBatch<'_> {
             pairs: energies,
             bands,
         })
+    }
+
+    fn pair_spectra(
+        &self,
+        points: &[Point],
+        pairs: &[Pair],
+    ) -> Result<Vec<(PairEnergy, popup::evaluate::Bands)>, String> {
+        hum_pairs::evaluate(self, points, pairs)
     }
 
     fn loudness(

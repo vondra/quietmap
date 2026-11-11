@@ -1,7 +1,7 @@
 //! Open-air leisure facilities and shooting ranges as area sources 1.5 m
 //! above the ground, in the Building layer as dev4 shows them: the area law over the polygon (a
 //! node takes its class's reference footprint; a line is no area and emits from its centroid),
-//! ranges by shots a year unless roofed. Motorsport (PLAN-z13 DROP) and unknown classes are silent.
+//! ranges by shots a year unless roofed. Motorsport and unknown classes are silent.
 //! Parking serves the buildings around it: no more cars park and leave in a day in the street
 //! strips around than the trip ends of those buildings made by cars that park on the street, nor in
 //! the lots than those made by cars that park off it (houses' cars park on their plots, flats' and

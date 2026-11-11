@@ -166,6 +166,7 @@ impl LayerSelection {
                 energy: [0.0; PERIODS],
                 weather: Default::default(),
                 distance_m: candidate.distance_m,
+                slant_distance_m: received.slant_distance_m,
                 display: candidate.display,
                 display_lden: f64::NEG_INFINITY,
                 pieces: Vec::new(),
@@ -181,6 +182,7 @@ impl LayerSelection {
         contributor.weather.add(&energy, &states);
         contributor.path.add(&received.path);
         contributor.distance_m = contributor.distance_m.min(candidate.distance_m);
+        contributor.slant_distance_m = contributor.slant_distance_m.min(received.slant_distance_m);
         let lden = physics::bands::lden_energy(&energy);
         let order = |d: DisplayRef| (d.ring, d.tile, d.attribute);
         if lden > contributor.display_lden

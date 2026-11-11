@@ -72,9 +72,7 @@ impl Ground {
     }
 
     fn slot(&self, tile: TileId) -> Option<usize> {
-        let n = i64::from(TILES_PER_AXIS);
-        let dx = (i64::from(tile.x) - i64::from(self.centre.x) + n / 2).rem_euclid(n) - n / 2;
-        let dy = i64::from(tile.y) - i64::from(self.centre.y);
+        let [dx, dy] = tile.offset_from(self.centre);
         if dx.abs() > self.radius || dy.abs() > self.radius {
             return None;
         }

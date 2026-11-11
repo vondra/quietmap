@@ -8,7 +8,7 @@
 use crate::flight_boxes::{FlightBoxes, FlightRequest};
 use crate::flights::FlightSums;
 use crate::square::Square;
-use physics::bands::{BANDS, PERIODS, energy, lden_energy};
+use physics::bands::{BANDS, PERIODS, energy};
 use physics::bound::{ReceiverBound, receiver_bound};
 use physics::weather::PlaceWeather;
 use popup::evaluate::{Bands, Receiver, Scratch, period_sums, received_bands};
@@ -23,6 +23,7 @@ pub const PIXELS_PER_LOUDNESS_BATCH: usize = 8_192;
 /// A point evaluated: where it stands and what its rays share. Its weather is the table's at its
 /// place, taken when a ray is evaluated here ([`Point::weather`]): a card takes its own, and a
 /// square's million points stay small.
+#[derive(Clone)]
 pub struct Point {
     pub position: [f64; 2],
     pub altitude_m: f64,
@@ -141,6 +142,12 @@ impl Pair {
 /// every `(p, c)` of `pairs`, which come point by point.
 pub trait Batch: Sync {
     fn evaluate(&self, points: &[Point], pairs: &[Pair]) -> Result<Evaluated, String>;
+    /// Each pair's unweighted energy and spectrum, retained while hum samples converge.
+    fn pair_spectra(
+        &self,
+        points: &[Point],
+        pairs: &[Pair],
+    ) -> Result<Vec<(PairEnergy, Bands)>, String>;
     /// One chunk's Nden per layer and in total (sone), at most [`PIXELS_PER_LOUDNESS_BATCH`] points,
     /// from its packed sound
     /// (`crate::sone::PixelSound::pack`): `input` all the pixels' floats, `offsets` where each
@@ -226,16 +233,18 @@ pub fn evaluate_all(
     })
 }
 
-/// Every pair's Lden energy.
-pub fn evaluate(
-    square: &Square,
-    points: &[Point],
-    pairs: &[Pair],
-    batch: Option<&dyn Batch>,
-) -> Result<Vec<f64>, String> {
-    Ok(evaluate_all(square, points, pairs, batch)?
-        .pairs
-        .iter()
-        .map(|energy| lden_energy(&energy.mixed))
-        .collect())
+/// Sources loud at each point in the spatial index's order, with one shared admission rule.
+pub(crate) fn loud_pairs(square: &Square, points: &[Point]) -> Vec<Pair> {
+    (0..points.len())
+        .into_par_iter()
+        .map_init(Vec::new, |near, k| {
+            let point = &points[k];
+            square.index.reaching(point.position, point.position, near);
+            near.iter()
+                .filter(|&&index| square.loud(index, point.position, &point.bound))
+                .map(|&index| Pair::new(k as u32, index))
+                .collect::<Vec<_>>()
+        })
+        .flatten()
+        .collect()
 }

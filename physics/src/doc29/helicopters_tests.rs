@@ -1,7 +1,7 @@
 //! Helicopter levels: dev4's corrections kept, the EASA levels reproduced, and the FIX.
 
 use super::*;
-use crate::doc29::npd::{class_anchor, curve_level_db, tail_absorption_db_per_m};
+use crate::doc29::npd::{NpdPosition, class_anchor};
 use crate::doc29::profiles_generated::profile_idx;
 use crate::doc29::segment::AircraftType;
 
@@ -114,9 +114,9 @@ fn dev4_designators_keep_their_corrections() {
 /// helicopter class curve.
 #[test]
 fn corrections_reproduce_the_easa_sel_at_150_m() {
-    let class = AircraftType::from_designator("EC35").class;
+    let class = AircraftType::of(profile_idx("EC35"), "EC35").class;
     let anchor = class_anchor(class);
-    let at_150_m = |curve| curve_level_db(curve, tail_absorption_db_per_m(curve), 150.0);
+    let at_150_m = |curve| NpdPosition::at(150.0).linear(curve);
     let (approach, departure) = (
         at_150_m(&anchor.approach_sel),
         at_150_m(&anchor.departure_sel),
@@ -140,8 +140,8 @@ fn corrections_reproduce_the_easa_sel_at_150_m() {
     }
 }
 
-/// PLAN-z13 FIX: 22.8 % of helicopter points read the EC135 level, 5-14 dB too quiet. Each
-/// designator with an EASA record now reads its own: its level over EC135's (dB).
+/// 22.8 % of helicopter points had read the EC135 level, 5-14 dB too quiet. Each designator
+/// with an EASA record now reads its own: its level over EC135's (dB).
 #[test]
 fn a139_and_s92_no_longer_read_as_ec135() {
     let ec135 = helicopter_levels("EC35");
@@ -157,7 +157,7 @@ fn a139_and_s92_no_longer_read_as_ec135() {
         ("H160", 5.37),
     ] {
         assert_eq!(profile_idx(designator), profile_idx("EC35"), "{designator}");
-        let levels = AircraftType::from_designator(designator)
+        let levels = AircraftType::of(profile_idx(designator), designator)
             .helicopter
             .unwrap();
         let over = levels.correction_db(false, false) - ec135.correction_db(false, false);
@@ -181,7 +181,7 @@ fn designators_without_easa_levels_read_their_mass_class() {
         );
     }
     // Any other rotorcraft the mapping routes to the helicopter class reads the light class.
-    let unlisted = AircraftType::from_designator("H199").helicopter;
+    let unlisted = AircraftType::of(profile_idx("H199"), "H199").helicopter;
     assert_eq!(unlisted, Some(Light.levels()));
     let spec = [(Light, 83.1), (Medium, 84.4), (Heavy, 89.7)];
     for (class, level) in spec {
@@ -218,7 +218,7 @@ fn every_listed_designator_is_a_helicopter_and_no_airliner_is() {
         .chain(WITHOUT_LEVELS.iter().map(|(designator, _)| *designator));
     for designator in listed {
         assert!(
-            AircraftType::from_designator(designator)
+            AircraftType::of(profile_idx(designator), designator)
                 .helicopter
                 .is_some(),
             "{designator}"
@@ -226,7 +226,7 @@ fn every_listed_designator_is_a_helicopter_and_no_airliner_is() {
     }
     for designator in ["B738", "A320", "C172", "DH8D", "XXXX"] {
         assert_eq!(
-            AircraftType::from_designator(designator).helicopter,
+            AircraftType::of(profile_idx(designator), designator).helicopter,
             None,
             "{designator}"
         );

@@ -5,7 +5,8 @@
 // segments are the computation's pieces: opening the section computes the same click again with
 // the row's parts (`source=`), every piece of them, and the map draws the listed ones, the
 // selected one's rays and the selected ray. That answer never replaces the click's own.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { usePopupState } from '../../../hooks/usePopupState'
 import { streamPopup } from '../../../lib/popup-stream'
 import type { Contributor, PieceArrival, PopupPiece, SegmentFan } from '../../../types/noise'
 import { fmtDbValue, fmtInt, fmtPercent, wholePercents } from '../../../utils/formatters'
@@ -91,16 +92,18 @@ interface Segments {
 }
 
 export function SegmentsSection({ c, click }: { c: Contributor, click: SegmentsClick }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = usePopupState<boolean>(`segments:${c.id}`, false)
+  const frameNext = useRef(false)
   // Asked for when first opened, and again when opened after a failure; an answer stays while the
   // row is open (0: not asked yet).
-  const [attempt, setAttempt] = useState(0)
+  const [attempt, setAttempt] = useState(open ? 1 : 0)
+  useEffect(() => { if (open && attempt === 0) setAttempt(1) }, [open, attempt])
   const [segments, setSegments] = useState<Segments | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [opened, setOpened] = useState<number | null>(null)
+  const [opened, setOpened] = usePopupState<number | null>(`piece:${c.id}`, null)
   const [hovered, setHovered] = useState<number | null>(null)
   // The opened segment's opened and hovered ray.
-  const [openedRay, setOpenedRay] = useState<number | null>(null)
+  const [openedRay, setOpenedRay] = usePopupState<number | null>(`ray:${c.id}`, null)
   const [hoveredRay, setHoveredRay] = useState<number | null>(null)
   const parts = (c.parts?.map(part => part.id) ?? [c.id]).join(',')
   const [lat, lng] = click.at
@@ -130,7 +133,11 @@ export function SegmentsSection({ c, click }: { c: Contributor, click: SegmentsC
       : null),
     [open, segments, c.id, receiverLat, receiverLng, selected, selectedRay, opened],
   )
-  useEffect(() => { onFan(c.id, fan) }, [onFan, c.id, fan])
+  useEffect(() => {
+    // Only a fresh click asks the map to move; restored disclosures keep the shared camera.
+    onFan(c.id, fan ? { ...fan, frame: frameNext.current } : null)
+    if (fan || !open) frameNext.current = false
+  }, [onFan, c.id, fan, open])
   useEffect(() => () => onFan(c.id, null), [onFan, c.id])
 
   const pieces = segments?.pieces ?? []
@@ -146,6 +153,7 @@ export function SegmentsSection({ c, click }: { c: Contributor, click: SegmentsC
           className="flex w-full items-center justify-between py-0.5 text-left text-foreground hover:bg-muted/40"
           onClick={() => {
             const opening = !open
+            frameNext.current = opening
             setOpen(opening)
             if (opening && (attempt === 0 || error)) {
               setError(null)
@@ -177,6 +185,7 @@ export function SegmentsSection({ c, click }: { c: Contributor, click: SegmentsC
                     part={several ? partLabel(c.source_type, piece.metadata, c.name) : null}
                     open={opened === index}
                     onToggle={() => {
+                      frameNext.current = true
                       setOpened(opened === index ? null : index)
                       setOpenedRay(null)
                       setHoveredRay(null)

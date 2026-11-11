@@ -5,11 +5,11 @@
 //! rejected patches reuse their exact lattice and probe results. Half-phon and half-dB checks match the stored steps,
 //! an empirical safeguard verified against the independent etalon, not a bound on unsampled rays.
 
-use crate::blocks::meets;
+use crate::blocks::{Block, meets};
 use crate::exact::{LAYERS, Point};
+use crate::levels::{Painted, SILENCE, cell};
 use crate::paint::{
-    PASS_BLOCKS, Painted, SILENCE, bilinear, cell, metres_at, rectangle_at, runs_within,
-    shortest_pixel_side_metres,
+    PASS_BLOCKS, bilinear, metres_at, rectangle_at, runs_within, shortest_pixel_side_metres,
 };
 use crate::points::PointPainter;
 use rayon::prelude::*;
@@ -67,18 +67,19 @@ impl QuietSamples {
         heard: &Painted,
     ) -> bool {
         // A one-pixel interval has no independent interior probe.
-        x > self.axis[i]
-            && x < self.axis[i + 1]
-            && y > self.axis[j]
-            && y < self.axis[j + 1]
-            && lattice_corners([i, j])
+        if x <= self.axis[i]
+            || x >= self.axis[i + 1]
+            || y <= self.axis[j]
+            || y >= self.axis[j + 1]
+            || lattice_corners([i, j])
                 .iter()
-                .all(|&at| self.values[at].is_some())
-            && {
-                let blended = self.at(x, y);
-                agrees_with_interpolation(&heard.1, &blended.1)
-                    && energies_agree_within_half_decibel(&heard.0, &blended.0)
-            }
+                .any(|&at| self.values[at].is_none())
+        {
+            return false;
+        }
+        let blended = self.at(x, y);
+        agrees_with_interpolation(&heard.1, &blended.1)
+            && energies_agree_within_half_decibel(&heard.0, &blended.0)
     }
 
     fn sample_index(&self, x: usize, y: usize) -> Option<usize> {
@@ -112,10 +113,15 @@ impl QuietSamples {
 }
 
 /// Each block's exact samples and checked patches; rejected patches retain their other pixels.
+pub(crate) struct SampledBlocks {
+    pub blocks: Vec<(usize, QuietSamples)>,
+    pub admissions: Vec<(usize, Block)>,
+}
+
 pub(crate) fn sample_block_pixels(
     painter: &PointPainter,
     block_ids: Vec<usize>,
-) -> Result<Vec<(usize, QuietSamples)>, String> {
+) -> Result<SampledBlocks, String> {
     let (square, grid) = (painter.square, painter.grid);
     let side = grid.pixels / grid.block;
     let b = grid.block;
@@ -132,6 +138,7 @@ pub(crate) fn sample_block_pixels(
     let sampled = painter.in_passes(passes, |range| {
         let chunk = &block_ids[range];
         let mut accepted = Vec::new();
+        let mut retain = vec![true; chunk.len()];
         let blocks: Vec<_> = chunk
             .par_iter()
             .map_init(Vec::new, |near, &at| painter.block(near, at))
@@ -176,7 +183,9 @@ pub(crate) fn sample_block_pixels(
                 };
                 for (cell, (&(x, y), probe)) in positions[25..].iter().zip(&heard[25..]).enumerate()
                 {
-                    let Some(heard) = probe else { continue };
+                    let Some(heard) = probe else {
+                        continue;
+                    };
                     let (i, j) = (cell % 4, cell / 4);
                     if !sampled.agrees_with_probe([i, j], (x, y), heard) {
                         continue;
@@ -197,17 +206,28 @@ pub(crate) fn sample_block_pixels(
                     sampled.accepted[cell] =
                         !near && square.obstacles.has_no_screening_edges(low, high);
                 }
+                retain[run.start + slot] = !sampled.complete();
                 if sampled.values.iter().any(Option::is_some) {
                     accepted.push((at, sampled));
                 }
             }
         }
-        Ok(accepted)
+        let admissions = chunk
+            .iter()
+            .copied()
+            .zip(blocks)
+            .zip(retain)
+            .filter_map(|(block, retain)| retain.then_some(block))
+            .collect::<Vec<_>>();
+        Ok((accepted, admissions))
     })?;
-    Ok(sampled
-        .into_iter()
-        .flat_map(|(_, accepted)| accepted)
-        .collect())
+    let mut blocks = Vec::new();
+    let mut admissions = Vec::new();
+    for (_, (accepted, retained)) in sampled {
+        admissions.extend(retained);
+        blocks.extend(accepted);
+    }
+    Ok(SampledBlocks { blocks, admissions })
 }
 
 fn lattice_corners([i, j]: [usize; 2]) -> [usize; 4] {
@@ -241,45 +261,37 @@ const QUIET_LAYER_SONE: f64 = 0.1;
 
 /// A quiet intermittent source may pass the loudness check and still change Lden substantially.
 /// Below-zero layers need no level, but their sum can cross the stored floor.
+fn energy_agrees(heard: f64, blended: f64) -> bool {
+    heard.is_finite()
+        && blended.is_finite()
+        && heard >= 0.0
+        && blended >= 0.0
+        && (heard.max(blended) < 1.0
+            || (heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log10()).abs() <= 0.5))
+}
+
 fn energies_agree_within_half_decibel(heard: &[f64; LAYERS], blended: &[f64; LAYERS]) -> bool {
-    heard
-        .iter()
-        .copied()
-        .chain(std::iter::once(heard.iter().sum()))
-        .zip(
-            blended
-                .iter()
-                .copied()
-                .chain(std::iter::once(blended.iter().sum())),
-        )
-        .all(|(heard, blended)| {
-            heard.is_finite()
-                && blended.is_finite()
-                && heard >= 0.0
-                && blended >= 0.0
-                && (heard.max(blended) < 1.0
-                    || (heard > 0.0
-                        && blended > 0.0
-                        && (10.0 * (heard / blended).log10()).abs() <= 0.5))
-        })
+    (0..LAYERS).all(|layer| energy_agrees(heard[layer], blended[layer]))
+        && energy_agrees(heard.iter().sum(), blended.iter().sum())
 }
 
 /// One half-phon cell step in the total and in every layer not quieter than
 /// [`QUIET_LAYER_UNDER_SONE`], a tenth of a sone in the quieter; silence is already quantized.
+fn loudness_agrees(layer: usize, heard: f64, blended: f64) -> bool {
+    if !heard.is_finite() || !blended.is_finite() || heard < 0.0 || blended < 0.0 {
+        return false;
+    }
+    if layer < LAYERS && heard.max(blended) < QUIET_LAYER_UNDER_SONE {
+        return (heard - blended).abs() <= QUIET_LAYER_SONE;
+    }
+    if cell(heard) == SILENCE && cell(blended) == SILENCE {
+        return true;
+    }
+    heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log2()).abs() <= 0.5
+}
+
 fn agrees_with_interpolation(heard: &[f64; LAYERS + 1], blended: &[f64; LAYERS + 1]) -> bool {
-    (0..=LAYERS).all(|layer| {
-        let (heard, blended) = (heard[layer], blended[layer]);
-        if !heard.is_finite() || !blended.is_finite() || heard < 0.0 || blended < 0.0 {
-            return false;
-        }
-        if layer < LAYERS && heard.max(blended) < QUIET_LAYER_UNDER_SONE {
-            return (heard - blended).abs() <= QUIET_LAYER_SONE;
-        }
-        if cell(heard) == SILENCE && cell(blended) == SILENCE {
-            return true;
-        }
-        heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log2()).abs() <= 0.5
-    })
+    (0..=LAYERS).all(|layer| loudness_agrees(layer, heard[layer], blended[layer]))
 }
 
 #[cfg(test)]

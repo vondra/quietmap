@@ -3,20 +3,21 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import MapView from './components/MapView'
 import SearchBar from './components/SearchBar'
-import ControlCard, { type CardTab } from './components/ControlCard'
-import IsochronPanel, { type IsochronRequest } from './components/IsochronPanel'
+import ControlCard from './components/ControlCard'
+import IsochronPanel from './components/IsochronPanel'
 import { ICON_BUTTON } from './components/ui/button'
 import DetailCard from './components/DetailCard'
 import LayersPanel from './components/LayersPanel'
 import MobileDetailSheet from './components/MobileDetailSheet'
 import BasemapBar from './components/BasemapBar'
-import { sameDetailPosition, useUrlState, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
+import { useUrlState } from './hooks/useUrlState'
+import { QUIET_THRESHOLD_DEFAULT, sameDetailPosition } from './lib/url-state'
 import type { Metric } from './lib/hm3-decoder'
 import type { SelectedLocation } from './components/FlyToLocation'
 import { SEARCH_FLIGHT_ZOOM } from './lib/search-flight'
 import type { PopupUpdate, SegmentFan } from './types/noise'
 import { contributorHighlight, highlightGeoJson, topFlightKey } from './components/noise/top-flights'
-import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
+import { type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import AccountButton from './components/AccountButton'
 import PlaceMedia, { MediaButtons } from './components/PlaceMedia'
@@ -25,39 +26,63 @@ import { usePlaces } from './hooks/usePlaces'
 import { createMediaKeeper } from './lib/media-keeper'
 import { isSignedIn } from './lib/places-keeper'
 import { startRecording } from './lib/recorder'
-import { useIsDesktop } from './hooks/useIsDesktop'
+import { DESKTOP_QUERY, useIsDesktop } from './hooks/useIsDesktop'
 import { useSourceOutline } from './hooks/useSourceOutline'
 import type { DataLayerId } from './lib/data-layers'
-import { defaultStaySearch, freshSearch, type Stay, type StaySearch } from './lib/stays'
+import { firstCheckin, type Stay, type StaySearch } from './lib/stays'
 
+import { PopupStateContext } from './hooks/usePopupState'
+import { useReachableArea } from './hooks/useReachableArea'
+import { useSelectedStay } from './hooks/useSelectedStay'
+import type { MapCamera, Position, ReachRequest } from './lib/url-state'
 
 export default function App() {
-  const { initial, updateUrl } = useUrlState()
+  const { state, updateUrl, getShareUrl } = useUrlState()
+  const { detailPosition, metric, quietThreshold, basemap, heatmapLayers, dataLayers,
+    stays: staysOn, quietClusters: quietClustersEnabled, staySearch, stayMaxPrice,
+    controls: cardTab, calculation: calculationOpen, isochronOpen } = state
+  const layersOpen = cardTab === 'layers'
+  const setCardTab = (controls: typeof cardTab) => updateUrl({ controls })
+  const setAccountOpen = (open: boolean) => updateUrl({ controls: open ? 'account' : null })
+  const setLayersOpen = (open: boolean) => updateUrl({ controls: open ? 'layers' : null })
+  const toggleCalculation = () => updateUrl(s => ({ calculation: !s.calculation }))
+  const [staySeed, setStaySeed] = useState<{ stay: Stay; search: StaySearch } | null>(null)
+  const { stay: selectedStay, message: stayMessage } = useSelectedStay(state.stayId, detailPosition, staySearch, staySeed)
+  const isochron = useReachableArea(state.reach)
+  const isochronBusy = useRef(isochron.busy)
+  isochronBusy.current = isochron.busy
+  const showIsochron = (reach: ReachRequest) => { isochron.fitNext.current = true; updateUrl({ reach }) }
+  const clearIsochron = () => updateUrl({ reach: null })
+  const latestState = useRef(state)
+  latestState.current = state
 
   const [selectedLocation, setSelectedLocation] = useState<SelectedLocation | null>(null)
   // A search's result on its way: its name, for the history when its popup opens there.
   const searchedName = useRef<{ at: { lat: number; lng: number }; name: string } | null>(null)
-  const [layersOpen, setLayersOpen] = useState(false)
-  const [detailPosition, setDetailPosition] = useState<{ lat: number; lng: number } | null>(initial.detailPosition)
   const activeDetailPosition = useRef(detailPosition)
+  activeDetailPosition.current = detailPosition
   const isCurrentDetailPosition = useCallback((position: { lat: number; lng: number }) =>
     activeDetailPosition.current === position, [])
   // The latest streamed update of the open point (each replaces the previous one); the card opens
   // with a skeleton at the click and keeps the position on an error, so the visitor sees where.
-  const [noiseDetailData, setNoiseDetailData] = useState<PopupUpdate | null>(null)
-  const [noiseDetailError, setNoiseDetailError] = useState<string | null>(null)
+  const [noiseAnswer, setNoiseDetailData] = useState<{ position: Position | null; data: PopupUpdate } | null>(null)
+  const noiseDetailData = noiseAnswer?.position === detailPosition ? noiseAnswer?.data ?? null : null
+  const [noiseError, setNoiseDetailError] = useState<{ position: Position | null; message: string } | null>(null)
+  const noiseDetailError = noiseError?.position === detailPosition ? noiseError?.message ?? null : null
   // What the map highlights: a loudest flight's track (its row hovered, or tapped on a phone), by
   // key, or a contributor's lines (its row opened), by `source:<id>`; read from the latest
   // update, so it follows the stream and goes when it leaves the list.
-  const [highlighted, setHighlighted] = useState<string | null>(null)
+  const highlighted = typeof state.popup.highlight === 'string' ? state.popup.highlight : null
+  const setHighlighted = (key: string | null) => updateUrl(s => {
+    const popup = { ...s.popup }; delete popup.highlight
+    if (key) popup.highlight = key
+    return { popup }
+  })
   // An opened row's segments and rays on the map, while its segments are open: the row that drew
   // them last; closing another row's leaves them.
   const [fan, setFan] = useState<SegmentFan | null>(null)
   const showFan = useCallback((source: string, next: SegmentFan | null) =>
     setFan(current => next ?? (current?.source === source ? null : current)), [])
-  // The detailed calculation, open under the popup's list.
-  const [calculationOpen, setCalculationOpen] = useState(false)
-  const toggleCalculation = useCallback(() => setCalculationOpen(open => !open), [])
   const desktop = useIsDesktop()
   // The history of places opened, in its order, and the names given places: this browser's, or the
   // signed-in visitor's account's.
@@ -73,10 +98,6 @@ export default function App() {
   const highlight = sourceOutline ?? (highlightedSource?.geometry
     ? contributorHighlight(highlightedSource)
     : highlightedTrack ? highlightGeoJson(highlightedTrack) : null)
-  const [quietClustersEnabled, setQuietClustersEnabled] = useState(initial.quietClusters)
-  const [metric, setMetric] = useState<Metric>(initial.metric)
-  const [quietThreshold, setQuietThreshold] = useState(initial.quietThreshold)
-  const [basemap, setBasemap] = useState<BasemapId>(initial.basemap ?? DEFAULT_BASEMAP)
   // Mobile locate box lives in the BasemapBar row (one container = one
   // baseline); it fires the map's GeolocateControl through this ref.
   const geolocateTrigger = useRef<() => void>(() => {})
@@ -86,26 +107,7 @@ export default function App() {
     geolocateTrigger.current = trigger
   }, [])
   const handleLocate = useCallback(() => geolocateTrigger.current(), [])
-  const [heatmapLayers, setHeatmapLayers] = useState<Record<string, boolean>>(initial.heatmapLayers)
-  const [dataLayers, setDataLayers] = useState<DataLayerId[]>(initial.dataLayers)
-  const [staysOn, setStaysOn] = useState(initial.stays)
-  const [staySearch, setStaySearch] = useState<StaySearch>(() => defaultStaySearch())
-  // The place to stay whose pin opened the popup: shown above the popup until the popup moves.
-  const [selectedStay, setSelectedStay] = useState<Stay | null>(null)
-
-  // Refs are the post-event truth for the URL: each handler updates its ref before syncUrl.
-  const mapViewRef = useRef({ lat: initial.lat, lng: initial.lng, zoom: initial.zoom })
-  const getMapView = useCallback(() => mapViewRef.current, [])
-  // A pan must keep `d=` in the shared URL while the card is open.
-  const detailPositionRef = useRef(detailPosition)
-  detailPositionRef.current = detailPosition
-  const metricRef = useRef(metric)
-  const quietClustersRef = useRef(quietClustersEnabled)
-  const quietThresholdRef = useRef(quietThreshold)
-  const basemapRef = useRef(basemap)
-  const heatmapLayersRef = useRef(heatmapLayers)
-  const dataLayersRef = useRef(dataLayers)
-  const staysRef = useRef(staysOn)
+  const getMapView = useCallback(() => latestState.current, [])
 
   // Pre-warm the lazy popup-body chunk the instant a point is clicked, so it
   // downloads while the first answer is computed instead of after it.
@@ -152,41 +154,12 @@ export default function App() {
   // which knows its name before the geocoder answers (a search's result, a place opened before).
   const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition)?.title ?? null : null
   const openEntry = detailPosition && recentPlaces.find(place => samePlace(place, detailPosition))
-  // A popup a link opened counts as an opening, once.
-  const linkCounted = useRef(false)
+  // Every opened point joins the history, including pasted addresses and browser Back.
   useEffect(() => {
-    if (linkCounted.current || !initial.detailPosition) return
-    linkCounted.current = true
-    countOpening(initial.detailPosition)
-  }, [initial.detailPosition, countOpening])
-  // The phone's account under its button at the top right; the desktop's corner card, its layers or
-  // its account, folded while a popup is open (the popup has the column) and on its layers again when
-  // it closes. Both open from the history's sign-in line too.
-  const [accountOpen, setAccountOpen] = useState(false)
-  const popupOpen = detailPosition != null
-  const [cardTab, setCardTab] = useState<CardTab | null>(popupOpen ? null : 'layers')
-  useEffect(() => setCardTab(popupOpen ? null : 'layers'), [popupOpen])
-  // The area reachable from the open place: whether its panel is open, and the area drawn for a point,
-  // shown while that point is open. A new request (another place's) drops the one before, whose answer
-  // would otherwise land after it.
-  const [isochronOpen, setIsochronOpen] = useState(false)
-  const [isochron, setIsochron] = useState<{ at: { lat: number; lng: number }; area: GeoJSON.FeatureCollection } | null>(null)
-  const isochronRequest = useRef<AbortController | null>(null)
-  const showIsochron = useCallback(async ({ lat, lng, minutes, modes }: IsochronRequest) => {
-    isochronRequest.current?.abort()
-    const request = new AbortController()
-    isochronRequest.current = request
-    setIsochron(null)
-    const url = `/api/isochron?lat=${lat}&lng=${lng}&minutes=${minutes}&modes=${modes.join(',')}`
-    const response = await fetch(url, { signal: request.signal }).catch(() => null)
-    const answer = await response?.json().catch(() => null) as GeoJSON.FeatureCollection & { error?: string } | null
-    if (request.signal.aborted) return
-    if (response?.status === 429) throw new Error('Too many areas asked from here. Try again in a minute.')
-    if (!response?.ok || !answer?.features) throw new Error(answer?.error ?? 'The map could not be reached. Try again in a minute.')
-    setIsochron({ at: { lat, lng }, area: answer })
-    const missing = modes.find(mode => !answer.features.some(feature => feature.properties?.mode === mode))
-    if (missing) throw new Error(`The area ${missing === 'car' ? 'by car' : 'on foot'} could not be drawn. Try again in a minute.`)
-  }, [])
+    const searched = searchedName.current
+    searchedName.current = null
+    if (detailPosition) countOpening(detailPosition, searched && samePlace(searched.at, detailPosition) ? searched.name : null)
+  }, [detailPosition, countOpening])
   // The signed-in visitor's recordings and photos of the open place.
   const [media] = useState(() => createMediaKeeper(startRecording))
   useEffect(() => media.open(isSignedIn(account) ? account.email : null, detailPosition), [media, account, detailPosition])
@@ -198,132 +171,54 @@ export default function App() {
       : [])
   }, [detailPosition, detailTitle, detailPlaceName, detailTotalLden])
 
-  const syncUrl = useCallback((overrides?: Partial<Omit<UrlState, 'hasExplicitView'>>) => {
-    // Refs are the post-event truth; an override carries a value the state
-    // has not committed yet (an explicit null included).
-    updateUrl({
-      ...mapViewRef.current,
-      metric: metricRef.current,
-      quietClusters: quietClustersRef.current,
-      quietThreshold: quietThresholdRef.current,
-      detailPosition: detailPositionRef.current,
-      basemap: basemapRef.current,
-      heatmapLayers: heatmapLayersRef.current,
-      dataLayers: dataLayersRef.current,
-      stays: staysRef.current,
-      ...overrides,
-    })
+  const handleHeatmapLayersChange = (heatmapLayers: Record<string, boolean>) => updateUrl({ heatmapLayers })
+  const handleDataLayersChange = (dataLayers: DataLayerId[]) => updateUrl({ dataLayers })
+  const handleStaysChange = (stays: boolean) => { setStaySeed(null); updateUrl({ stays, stayId: null }) }
+  const handleStaySearchChange = useCallback((staySearch: StaySearch) => {
+    setStaySeed(null)
+    updateUrl({ staySearch, stayId: null })
   }, [updateUrl])
-
-  const handleHeatmapLayersChange = useCallback((next: Record<string, boolean>) => {
-    setHeatmapLayers(next)
-    heatmapLayersRef.current = next
-    syncUrl({ heatmapLayers: next })
-  }, [syncUrl])
-
-  const handleDataLayersChange = useCallback((next: DataLayerId[]) => {
-    setDataLayers(next)
-    dataLayersRef.current = next
-    syncUrl({ dataLayers: next })
-  }, [syncUrl])
-
-  const handleStaysChange = useCallback((on: boolean) => {
-    setStaysOn(on)
-    staysRef.current = on
-    setSelectedStay(null)
-    syncUrl({ stays: on })
-  }, [syncUrl])
-
-  // The place shown was priced for the stay searched before.
-  const handleStaySearchChange = useCallback((search: StaySearch) => {
-    setStaySearch(search)
-    setSelectedStay(null)
-  }, [])
-  // Past midnight a search from the day before is one Stay22 no longer takes: it moves on as a change
-  // of dates does, the open place with it; checked when the tab comes back, and every minute.
-  const staySearchRef = useRef(staySearch)
-  staySearchRef.current = staySearch
   useEffect(() => {
+    let day = firstCheckin()
     const roll = () => {
-      const fresh = freshSearch(staySearchRef.current)
-      if (fresh !== staySearchRef.current) handleStaySearchChange(fresh)
+      const today = firstCheckin()
+      if (today === day) return
+      day = today
+      if (latestState.current.staySearch.checkin >= today) return
+      setStaySeed(null)
+      // A passed date remains the selected date, with no old price or silent date substitution.
+      updateUrl(s => ({ staySearch: { ...s.staySearch } }))
     }
     const minute = setInterval(roll, 60_000)
     document.addEventListener('visibilitychange', roll)
-    return () => {
-      clearInterval(minute)
-      document.removeEventListener('visibilitychange', roll)
-    }
-  }, [handleStaySearchChange])
-  // The open place goes with its price, at the end of Stay22's lifetime.
+    return () => { clearInterval(minute); document.removeEventListener('visibilitychange', roll) }
+  }, [updateUrl])
+  const handleViewChange = useCallback((view: MapCamera) => updateUrl(view), [updateUrl])
+  const handleQuietClustersChange = (quietClusters: boolean) => updateUrl({ quietClusters })
+  const handleQuietThresholdChange = (quietThreshold: number) => updateUrl({ quietThreshold })
+  const handleMetricChange = (metric: Metric) => updateUrl(s => s.metric === metric ? {} : { metric, quietThreshold: QUIET_THRESHOLD_DEFAULT[metric] })
+
+  // A different point discards its answer and map overlays, including when a pasted link changes it.
   useEffect(() => {
-    if (!selectedStay) return
-    const timer = setTimeout(() => setSelectedStay(null), selectedStay.expires - Date.now())
-    return () => clearTimeout(timer)
-  }, [selectedStay])
-
-  const handleViewChange = useCallback((lat: number, lng: number, zoom: number) => {
-    mapViewRef.current = { lat, lng, zoom }
-    syncUrl({ lat, lng, zoom })
-  }, [syncUrl])
-
-  const handleQuietClustersChange = useCallback((enabled: boolean) => {
-    setQuietClustersEnabled(enabled)
-    quietClustersRef.current = enabled
-    syncUrl({ quietClusters: enabled })
-  }, [syncUrl])
-
-  const handleQuietThresholdChange = useCallback((threshold: number) => {
-    setQuietThreshold(threshold)
-    quietThresholdRef.current = threshold
-    syncUrl({ quietThreshold: threshold })
-  }, [syncUrl])
-
-  // Another quantity takes its own quiet threshold's default: a threshold in sone means nothing in dB.
-  const handleMetricChange = useCallback((next: Metric) => {
-    if (next === metricRef.current) return
-    setMetric(next)
-    metricRef.current = next
-    setQuietThreshold(QUIET_THRESHOLD_DEFAULT[next])
-    quietThresholdRef.current = QUIET_THRESHOLD_DEFAULT[next]
-    syncUrl({ metric: next, quietThreshold: QUIET_THRESHOLD_DEFAULT[next] })
-  }, [syncUrl])
-
-  const closeNoiseDetail = useCallback(() => {
-    setNoiseDetailData(null)
-    setNoiseDetailError(null)
-    setHighlighted(null)
     setFan(null)
-  }, [])
-  // The calculation goes with the popup; a new point keeps it open for that point.
-  useEffect(() => {
-    if (!detailPosition) setCalculationOpen(false)
   }, [detailPosition])
-
   const handleDetailPositionChange = useCallback((pos: { lat: number; lng: number } | null) => {
     activeDetailPosition.current = pos
-    detailPositionRef.current = pos
-    setDetailPosition(pos)
-    // Fresh click: clear the previous point's answer, error and flight so the new skeleton renders.
-    closeNoiseDetail()
-    setSelectedStay(null)
-    syncUrl({ detailPosition: pos })
-    // Each opening counts in the history; a search's result keeps its name there.
-    const searched = searchedName.current
-    searchedName.current = null
-    if (pos) countOpening(pos, searched && samePlace(searched.at, pos) ? searched.name : null)
-  }, [syncUrl, closeNoiseDetail, countOpening])
-
-  // A place to stay opens the popup at its point, with the place above it: one card, not two.
+    if (isochronBusy.current) updateUrl({ reach: null })
+    setStaySeed(null)
+    updateUrl(s => ({ detailPosition: pos, stayId: null, popup: {}, scroll: { ...s.scroll, detail: 0 }, controls: pos ? (s.detailPosition ? s.controls : null) : window.matchMedia(DESKTOP_QUERY).matches ? 'layers' : null,
+      sheetExpanded: true, ...(pos ? {} : { calculation: false }) }))
+  }, [updateUrl])
   const handleStaySelect = useCallback((stay: Stay) => {
     handleDetailPositionChange({ lat: stay.lat, lng: stay.lng })
-    setSelectedStay(stay)
-  }, [handleDetailPositionChange])
-  const stays = useMemo(() => (staysOn ? { search: staySearch, onSelect: handleStaySelect } : null),
-    [staysOn, staySearch, handleStaySelect])
+    setStaySeed({ stay, search: latestState.current.staySearch })
+    updateUrl({ stayId: stay.id })
+  }, [handleDetailPositionChange, updateUrl])
+  const stays = useMemo(() => (staysOn ? { search: staySearch, maxPrice: stayMaxPrice, onSelect: handleStaySelect } : null),
+    [staysOn, staySearch, stayMaxPrice, handleStaySelect])
 
   const handleDetailData = useCallback((update: PopupUpdate) => {
-    setNoiseDetailData(update)
+    setNoiseDetailData({ position: activeDetailPosition.current, data: update })
     setNoiseDetailError(null)
   }, [])
 
@@ -331,34 +226,14 @@ export default function App() {
   // incomplete and must not stay on screen as if it were the level.
   const handleDetailError = useCallback((message: string) => {
     setNoiseDetailData(null)
-    setNoiseDetailError(message)
+    setNoiseDetailError({ position: activeDetailPosition.current, message })
   }, [])
 
   const handleNoiseClose = useCallback(() => {
     handleDetailPositionChange(null)
   }, [handleDetailPositionChange])
 
-  const handleBasemapChange = useCallback((id: BasemapId) => {
-    setBasemap(id)
-    basemapRef.current = id
-    syncUrl({ basemap: id })
-  }, [syncUrl])
-
-  // A hash change in the open tab (pasted link, history step): MapStateSync
-  // moves the map and hands over the parsed hash; every other token is
-  // applied here through the same handlers a click would use. The detail is
-  // re-requested only when its point changed.
-  const handleHashState = useCallback((next: UrlState) => {
-    handleMetricChange(next.metric)
-    handleQuietClustersChange(next.quietClusters)
-    handleQuietThresholdChange(next.quietThreshold)
-    handleHeatmapLayersChange(next.heatmapLayers)
-    handleDataLayersChange(next.dataLayers)
-    handleBasemapChange(next.basemap)
-    if (next.stays !== staysRef.current) handleStaysChange(next.stays)
-    if (sameDetailPosition(detailPositionRef.current, next.detailPosition)) return
-    handleDetailPositionChange(next.detailPosition)
-  }, [handleMetricChange, handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleStaysChange, handleDetailPositionChange])
+  const handleBasemapChange = (basemap: BasemapId) => updateUrl({ basemap })
   // The area reachable from the open place: its button at the search field's end, where dev1 had it,
   // its panel under the place's row.
   const isochronButton = (
@@ -368,7 +243,7 @@ export default function App() {
       aria-expanded={isochronOpen}
       title="The area reachable from here"
       className={`${ICON_BUTTON} aria-expanded:bg-accent aria-expanded:text-foreground`}
-      onClick={() => setIsochronOpen(open => !open)}
+      onClick={() => updateUrl(s => ({ isochronOpen: !s.isochronOpen }))}
     >
       {/* The place and the rings reached from it (dev1's). */}
       <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
@@ -379,12 +254,19 @@ export default function App() {
     </button>
   )
   // Folded, the panel keeps what it holds: its minutes, a request on its way, what went wrong.
-  const isochronPanel = detailPosition && <div hidden={!isochronOpen}><IsochronPanel at={detailPosition} onShow={showIsochron} /></div>
-  const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange }
+  const isochronPanel = detailPosition && <div hidden={!isochronOpen}><IsochronPanel at={detailPosition} options={state.reachOptions} onChange={reachOptions => updateUrl({ reachOptions })} onShow={showIsochron} busy={isochron.busy} error={isochron.error} /></div>
+  const reachName = state.reach && (titleAt(placeTitles, state.reach)?.title
+    ?? (sameDetailPosition(state.reach, detailPosition) ? detailPlaceName : null)
+    ?? `${state.reach.lat.toFixed(4)}, ${state.reach.lng.toFixed(4)}`)
+  const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange,
+    stayMaxPrice, onStayMaxPriceChange: (stayMaxPrice: number | null) => updateUrl({ stayMaxPrice }),
+    reachLabel: state.reach ? `${state.reach.minutes} min from ${reachName}` : null, onClearReach: clearIsochron,
+    advanced: state.advanced, onAdvancedChange: (advanced: boolean) => updateUrl({ advanced }) }
 
   return (
     // The app is the box the fixed controls stand in: a phone browser's 100vh reaches under its
     // toolbar, which put the map's own corner controls (the ⓘ) below the control row.
+    <PopupStateContext.Provider value={{ popup: state.popup, scroll: state.scroll, update: updateUrl }}>
     <div className="fixed inset-0 overflow-hidden">
       <SearchBar
         metric={metric}
@@ -414,11 +296,11 @@ export default function App() {
           // of a neighbour's entry too, then finds this one first.
           countOpening(place)
           const at = titleAt(placeTitles, place) ?? place
-          setSelectedLocation({ lat: at.lat, lon: at.lng, zoom: Math.max(mapViewRef.current.zoom, SEARCH_FLIGHT_ZOOM) })
+          setSelectedLocation({ lat: at.lat, lon: at.lng, zoom: Math.max(latestState.current.zoom, SEARCH_FLIGHT_ZOOM) })
         }}
         onRename={rename}
         onForget={forgetPlace}
-        onSignIn={account === null ? () => (desktop ? setCardTab('account') : setAccountOpen(true)) : undefined}
+        onSignIn={account === null ? () => setCardTab('account') : undefined}
         // The microphone and the camera where a visitor records, on a touch screen, by the place's name;
         // under the row the take, the how-to before it, and the place's recordings and photos. Made anew
         // for each place and account under its key (what was open belongs to them): siblings under one
@@ -431,7 +313,7 @@ export default function App() {
       </SearchBar>
       {/* The phone's account beside the search field (a desktop has it as the corner card's tab). */}
       <div className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] right-(--map-gutter) z-[2004] md:hidden">
-        <AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={accountOpen} onOpenChange={setAccountOpen} />
+        <AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={cardTab === 'account' && !desktop} onOpenChange={setAccountOpen} />
       </div>
 
       {/* UI overlays */}
@@ -441,7 +323,7 @@ export default function App() {
             over the map's corner, whose credits and ⓘ stay in sight with every card open. */}
         <div className="hidden md:flex absolute top-3 right-(--map-gutter) bottom-11 flex-col gap-2 w-(--map-card-column) overflow-hidden">
           <ControlCard
-            tab={cardTab}
+            tab={desktop ? cardTab : null}
             onTabChange={setCardTab}
             account={account}
             onSignOut={signOut}
@@ -464,11 +346,13 @@ export default function App() {
             position={detailPosition}
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
+            getShareUrl={getShareUrl}
             onHighlight={setHighlighted}
             calculationOpen={calculationOpen && desktop}
             onCalculationToggle={toggleCalculation}
             onFan={showFan}
             stay={selectedStay}
+            stayMessage={stayMessage}
           />
         </div>
 
@@ -486,18 +370,17 @@ export default function App() {
       <MapView
         isCurrentDetailPosition={isCurrentDetailPosition}
         selectedLocation={selectedLocation}
-        initialCenter={[initial.lat, initial.lng]}
-        initialZoom={initial.zoom}
+        view={state}
         basemap={basemap}
         onViewChange={handleViewChange}
         onDetailData={handleDetailData}
         onDetailPositionChange={handleDetailPositionChange}
-        onHashState={handleHashState}
         onDetailError={handleDetailError}
         detailPosition={detailPosition}
         highlight={highlight}
         segmentFan={fan}
-        isochron={isochron && sameDetailPosition(isochron.at, detailPosition) ? isochron.area : null}
+        isochron={isochron.area}
+        fitIsochron={isochron.fit}
         quietClustersEnabled={quietClustersEnabled}
         metric={metric}
         quietThreshold={quietThreshold}
@@ -512,8 +395,8 @@ export default function App() {
       {/* Mobile: layers toggle button */}
       {!layersOpen && (
         <button
-          onClick={() => { setLayersOpen(true); handleNoiseClose() }}
-          className="fixed bottom-[16px] right-[10px] z-[1003] flex h-11 w-11 items-center justify-center rounded-lg bg-background md:hidden"
+          onClick={() => { handleNoiseClose(); setLayersOpen(true) }}
+          className="fixed bottom-[calc(16px+var(--map-footer-height))] right-[10px] z-[1003] flex h-11 w-11 items-center justify-center rounded-lg bg-background md:hidden"
           style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}
           aria-label="Toggle layers panel"
         >
@@ -528,7 +411,7 @@ export default function App() {
       {/* Mobile: layers panel (bottom sheet) */}
       <div className="md:hidden">
         <LayersPanel
-          open={layersOpen}
+          open={layersOpen && !desktop}
           onClose={() => setLayersOpen(false)}
           quietClustersEnabled={quietClustersEnabled}
           onQuietClustersChange={handleQuietClustersChange}
@@ -548,16 +431,21 @@ export default function App() {
       <MobileDetailSheet
         metric={metric}
         data={noiseDetailData}
+        expanded={state.sheetExpanded}
+        onExpandedChange={sheetExpanded => updateUrl({ sheetExpanded })}
         position={detailPosition}
         error={noiseDetailError}
         onClose={handleNoiseClose}
+        getShareUrl={getShareUrl}
         onHighlight={setHighlighted}
         calculationOpen={calculationOpen && !desktop}
         onCalculationToggle={toggleCalculation}
         onFan={showFan}
         stay={selectedStay}
+        stayMessage={stayMessage}
       />
 
     </div>
+    </PopupStateContext.Provider>
   )
 }

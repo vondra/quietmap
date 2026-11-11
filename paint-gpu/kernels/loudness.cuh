@@ -16,6 +16,22 @@ __device__ void loud_accumulate(float* mixture, const LoudDistribution& d, float
             atomicAdd(&mixture[2 * b + 1], weight * d.bins[b][1]);
         }
     }
+    // The next layer may overwrite the shared distribution from lane 0.
+    __syncwarp();
+}
+
+// Equal source energies in every layer give the same distribution: retain their combined time
+// once, without averaging unequal weather states before the nonlinear loudness calculation.
+__device__ bool loud_same_weather(const float* in, const int* start, const int* count,
+                                  int period, int left, int right, int lane) {
+    bool same = true;
+    for (int layer = 0; layer < LOUD_LAYERS; layer++) {
+        for (int line = lane; line < count[layer]; line += LOUD_LANES) {
+            const float* means = in + start[layer] + line * LOUD_LINE_FLOATS + PERIODS + period * LOUD_STATES;
+            same &= means[left] == means[right];
+        }
+    }
+    return __all_sync(LOUD_FULL_MASK, same);
 }
 
 // The pixels' mixtures: a warp a task (a pixel's period, group of hours and weather state,
@@ -35,8 +51,12 @@ extern "C" __global__ void pixel_mixtures(const float* input, const u64* offsets
     int start[LOUD_LAYERS], count[LOUD_LAYERS];
     bool profiled = loud_layers(in, start, count);
     if (!profiled && group > 0) return;
+    if (state > 0 && loud_same_weather(in, start, count, p, state - 1, state, lane)) return;
+    int repeats = 1;
+    while (state + repeats < LOUD_STATES && loud_same_weather(in, start, count, p, state, state + repeats, lane)) repeats++;
     float weight = profiled ? (float)LOUD_GROUP_SLOTS[p * LOUD_GROUPS_MAX + group] / (LOUD_PERIOD_HOURS[p] * LOUD_STATES)
                             : 1.0f / LOUD_STATES;
+    weight *= repeats;
     float* mixture = mixtures + (u64)pixel * LOUD_MIXTURE_FLOATS + (u64)p * LOUD_CURVES * LOUD_BINS * 2;
     // What holds steady in every layer at once, then the layers that move.
     float floors[LOUD_LAYERS], held[LOUD_LAYERS];

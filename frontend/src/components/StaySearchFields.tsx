@@ -1,7 +1,8 @@
 // The stay the places to stay are searched for, under their switch, one aligned row each: which
-// places, the dates (from today for two nights), the guests, and the lowest stars and guests' score,
+// places, the dates (from today for two nights), the guests, maximum price, stars and guests' score,
 // every choice in view and one click away (the owner, 2026-07-29 and 2026-07-31: no drop-downs,
 // stars as stars).
+import { useEffect, useState } from 'react'
 import { addDays, firstCheckin, withCheckin, withCheckout, type StayKind, type StaySearch } from '../lib/stays'
 
 /** The most guests the server asks for (Stay22 answers up to 99, fewer places the more there are). */
@@ -41,7 +42,14 @@ function Choices<T>({ label, value, options, onChange, testId }: {
 const DATE_INPUT = 'min-w-0 flex-1 rounded-md border border-input bg-background px-1.5 py-0.5 text-base leading-5 text-foreground focus:border-ring focus:outline-none pointer-fine:text-xs pointer-fine:leading-4'
 const STEP = 'flex size-5 cursor-pointer items-center justify-center rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:cursor-default disabled:opacity-40'
 
-export default function StaySearchFields({ search, onChange }: { search: StaySearch; onChange: (search: StaySearch) => void }) {
+export default function StaySearchFields({ search, onChange, maxPrice, onMaxPriceChange }: {
+  search: StaySearch
+  onChange: (search: StaySearch) => void
+  maxPrice: number | null
+  onMaxPriceChange: (price: number | null) => void
+}) {
+  const [priceText, setPriceText] = useState(maxPrice?.toString() ?? '')
+  useEffect(() => { setPriceText(maxPrice?.toString() ?? '') }, [maxPrice])
   return (
     <div className="mb-1.5 ml-7 mt-0.5 grid grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 text-xs">
       <span className="text-muted-foreground">Type</span>
@@ -79,6 +87,22 @@ export default function StaySearchFields({ search, onChange }: { search: StaySea
           type="button" className={STEP} aria-label="One guest more" data-testid="stay-adults-plus"
           disabled={search.adults >= MAX_ADULTS} onClick={() => onChange({ ...search, adults: search.adults + 1 })}
         >+</button>
+      </span>
+
+      <span className="text-muted-foreground">Up to</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <input type="number" inputMode="decimal" aria-label="Maximum price per night in euros"
+          min={0} step="any" placeholder="Any" value={priceText} className={DATE_INPUT}
+          onChange={event => {
+            const price = event.target.valueAsNumber
+            setPriceText(price < 0 ? '' : event.target.value)
+            onMaxPriceChange(Number.isFinite(price) && price >= 0 ? price : null)
+          }}
+          onBlur={event => {
+            const price = event.target.valueAsNumber
+            onMaxPriceChange(Number.isFinite(price) && price >= 0 ? price : null)
+          }} />
+        <span className="shrink-0 text-muted-foreground">€ / night</span>
       </span>
 
       <span className="text-muted-foreground">Stars</span>

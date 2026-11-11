@@ -90,18 +90,8 @@ fn tile_seams_and_the_antimeridian_use_the_same_coverage_in_every_frame() {
         let other_frame = LocalFrame::at(origin);
         let mut original = Scene::new(stock.frame);
         let mut moved = Scene::new(other_frame);
-        for (tile, bytes) in &files {
-            match bytes {
-                Some(bytes) => {
-                    original.insert(*tile, Obstacles::parse(bytes).unwrap());
-                    moved.insert(*tile, Obstacles::parse(bytes).unwrap());
-                }
-                None => {
-                    original.insert_empty(*tile);
-                    moved.insert_empty(*tile);
-                }
-            }
-        }
+        original.insert_all(parsed(&files));
+        moved.insert_all(parsed(&files));
         original
             .prepare_reflection_coverage([-2.0, -1.0], [13.0, 5.0])
             .unwrap();

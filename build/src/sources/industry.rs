@@ -64,9 +64,9 @@ pub struct RowEmission {
 }
 
 /// A row's emission with the facility evidence of `joins`; `None` when silent: a dead site
-/// (`suppressed`), a gas station, a rail yard (PLAN-z13 DROP), a wind turbine or farm outline
-/// (`turbines`), an inactive site, a transformer (its rating joins its substation), an unknown type, a solar generator
-/// inside its plant (the plant emits) or an untagged solar node without a footprint.
+/// (`suppressed`), a gas station, a rail yard, a wind turbine or farm outline (`turbines`), an
+/// inactive site, a transformer (its rating joins its substation), an unknown type, a solar
+/// generator inside its plant (the plant emits) or an untagged solar node without a footprint.
 pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmission> {
     let silent_type = matches!(
         row.source_type,

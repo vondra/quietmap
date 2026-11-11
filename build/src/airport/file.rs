@@ -30,8 +30,8 @@ pub struct LineTraffic {
     pub ends: [[f64; 2]; 2],
     pub aeroway: Aeroway,
     pub airport: Airport,
-    /// The airport's arrivals and departures (aircraft on its runways) and ground vehicles per
-    /// average day.
+    /// Observed arrivals, departures and vehicles per average day, matching the observed taxi
+    /// energy. Officially supplemented roll counts live in the separate airport census.
     pub movements_per_day: [f64; 3],
     /// Sound power per metre (dB re 1 pW/m) per period and band; `-inf` is silence.
     pub power_db: [[f64; BANDS]; PERIODS],

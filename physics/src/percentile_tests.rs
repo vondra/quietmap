@@ -107,8 +107,9 @@ fn writes_the_table() {
 /// 1 / (1 + x^2) over the mean lambda pi.
 #[test]
 fn sparse_lines_are_quiet_most_of_the_time_and_dense_ones_hum() {
-    let l90 = |lambda: f64| exceeded_level_db(50.0, lambda, 0.9);
-    let l10 = |lambda: f64| exceeded_level_db(50.0, lambda, 0.1);
+    // A 50 dB line's L90 and L10: the levels it stays below 10 % and 90 % of the time.
+    let l90 = |lambda: f64| 50.0 + 10.0 * relative_intensity(lambda, 0.1).log10();
+    let l10 = |lambda: f64| 50.0 + 10.0 * relative_intensity(lambda, 0.9).log10();
     for lambda in [1e-4, 1e-3] {
         let x = 0.105 / (2.0 * lambda);
         let expected =
@@ -121,7 +122,7 @@ fn sparse_lines_are_quiet_most_of_the_time_and_dense_ones_hum() {
     }
     assert!(l90(1e-3) < l10(1e-3));
     assert!((l10(100.0) - 50.0).abs() < 1.0 && (l90(100.0) - 50.0).abs() < 1.0);
-    assert_eq!(exceeded_level_db(50.0, f64::INFINITY, 0.1), 50.0);
+    assert_eq!(l10(f64::INFINITY), 50.0);
     for lambda in [1e-4, 1e-2, 0.3, 3.0, 9.9, 10.0, 30.0] {
         assert!(l90(lambda) <= l10(lambda), "{lambda}");
     }

@@ -1241,6 +1241,22 @@
       "description": "Month-first samples of aircraft absent from the primary archive."
     },
     {
+      "id": "airport-operations",
+      "kind": "airport-operations",
+      "region": "world",
+      "publisher": "CAAC East China, UK CAA, EUROCONTROL, Statistics Canada, ANAC, AAI, ACSA, Hong Kong CAD and SingStat/CAAS",
+      "url": "https://ansperformance.eu/reference/dataset/airport-traffic/",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Mixed; each count names its publisher's licence and scope",
+      "public_ok": false,
+      "depends_on": [],
+      "description": "Published monthly runway operations by airport and engine class, which supplement the observed flights where receivers miss them."
+    },
+    {
       "id": "shuffled",
       "kind": "shuffled",
       "region": "world",

@@ -52,7 +52,7 @@ function middle(low: number, high: number): [number, number] {
 
 /** The view and the search a query names, or what is wrong with it. A check-in Stay22 would refuse
  *  (before its today, the UTC day) is refused here, at no cost of its calls; Stay22 judges the rest
- *  and its refusal is passed on. */
+ *  and a refused search gets a visitor-readable failure. */
 export function parseStayQuery(query: Record<string, unknown>): { view: Box; search: StaySearch } | string {
   const [south, west, north, east] = [query.swlat, query.swlng, query.nelat, query.nelng].map(coordinate)
   if (south == null || west == null || north == null || east == null
@@ -96,12 +96,13 @@ export function snapBox(view: Box): Box {
 }
 
 /** The status, words and wait a failure is answered with. */
-function explain(failure: unknown): { status: number; error: string; retryAfter?: number } {
-  if (failure instanceof Stay22Refusal) return { status: 400, error: failure.message }
+function explain(failure: unknown, reply: FastifyReply): { status: number; error: string; retryAfter?: number } {
+  if (!(failure instanceof Stay22Busy)) reply.log.warn({ err: failure }, 'Stay22 search failed')
+  if (failure instanceof Stay22Refusal) return { status: 400, error: 'Accommodation search could not be completed. Please try again.' }
   if (failure instanceof Stay22Busy) {
-    return { status: 503, retryAfter: failure.seconds, error: `Stay22 is asked too often just now; places to stay again in ${failure.seconds} s.` }
+    return { status: 503, retryAfter: failure.seconds, error: `Accommodation search is busy; retrying in ${failure.seconds} s.` }
   }
-  return { status: 502, error: 'Stay22 did not answer; no places to stay for now.' }
+  return { status: 502, error: 'Accommodation search did not answer. Please try again.' }
 }
 
 export async function stayRoutes(app: FastifyInstance, { stay22 }: { stay22: { aid: string; apiKey: string } | null }) {
@@ -146,8 +147,7 @@ export async function stayRoutes(app: FastifyInstance, { stay22 }: { stay22: { a
   }
 
   const fail = (reply: FastifyReply, failure: unknown) => {
-    const { status, error, retryAfter } = explain(failure)
-    if (status === 502) reply.log.warn({ err: failure }, 'Stay22 search failed')
+    const { status, error, retryAfter } = explain(failure, reply)
     if (retryAfter) reply.header('Retry-After', String(retryAfter))
     return reply.code(status).send({ error })
   }
@@ -184,7 +184,7 @@ export async function stayRoutes(app: FastifyInstance, { stay22 }: { stay22: { a
     } catch (failure) {
       return fail(reply, failure)
     }
-    const failure = answer.failure == null ? null : explain(answer.failure)
+    const failure = answer.failure == null ? null : explain(answer.failure, reply)
     if (failure?.retryAfter) reply.header('Retry-After', String(failure.retryAfter))
     return reply.send({
       listings: answer.listings,

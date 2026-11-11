@@ -170,7 +170,8 @@ low.
 - **The levels over time.** The moments of a period are spread over ten equally likely states of
   the place's weather, the same for all its rays, as a night's inversion bends them all at once: a
   piece with p = 0.3 is bent down in the three most favourable states. The levels exceeded 5 to 90 %
-  of the time and Nden are computed over every hour and these states; the map takes two of them.
+  of the time and Nden are computed over every hour and these states. New painting keeps the same ten
+  weather states; existing squares keep their earlier weather calculation until repainted.
 
 </details>
 
@@ -212,7 +213,7 @@ and sends a first answer. It reads one more ring of tiles at a time until every 
 within 12 km, every flight within 16 km and every runway roll starting within 8 km is covered,
 sending the whole answer again
 after each ring. At Greenwich in London it
-reads 219 MB in 114 reads, the flight tracks and the weather among them.
+reads 225 MB in 119 reads, the flight tracks and the weather among them.
 
 Every flight uses the same horizon, built once from that terrain and the nearby buildings.
 
@@ -262,8 +263,8 @@ A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of point
 which the receiver sees it is cut into five equal parts, each sending one ray; a piece seen under
 less than 3° sends one. Five rays match a sum of 401 points within 0.1 dB on a 250 m piece. Where
 buildings stand in front of a part spanning 3° or more, the part is split at their edges and every
-hidden stretch and every gap gets rays of its own, one for every 15° of it: a street is heard
-through the gaps between its houses.
+hidden stretch and every gap gets rays of its own, one for every 15° of it and at most nine: a street
+is heard through the gaps between its houses.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 270" role="img" aria-label="A line piece seen from above by the point R: five rays at equal angles where the view is open, and more rays where two houses hide parts of the piece" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -296,9 +297,9 @@ every wall the ray crosses stands at its height. Over this cross-section the pop
 - the spreading of the sound with distance;
 - the air's absorption in each octave band (ISO 9613-1), averaged over 30 years of the place's
   weather;
-- diffraction over the edges that block the line of sight — a hilltop, a roof, a wall — once in
-  calm air and once downwind, where sound bends toward the ground along an arc of at least 1 km
-  radius;
+- diffraction over the edges that block the line of sight — a hilltop, a roof, a wall; beyond 300 m
+  of both ends, the terrain's highest point in each 150 m — once in calm air and once downwind,
+  where sound bends toward the ground along an arc of at least 1 km radius;
 - the ground's effect, on either side of those edges or over the whole ray;
 - the tree crowns the ray passes through (ISO 9613-2, Annex A, which CNOSSOS-EU leaves out): 0.02 dB
   a metre at 63 Hz to 0.12 dB at 8 kHz over at most 200 m, weighted by the tree cover;
@@ -346,10 +347,16 @@ The map does not know when a car or a plane passed; it knows how many pass and h
 vehicles a day, spread over the hours by measured hourly profiles, a railway's trains by period,
 from timetables where they exist, a flight path's flights and a runway's take-offs and landings by
 period. Each is a stream of passes at random times, and the source's distance and speed tell how
-much of the time the level spends at each value (Kurze's statistics of moving sources). A road with
-600 vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m;
+much of the time the level spends at each value (Kurze's statistics of moving sources). The
+distance runs from the point, 4 m up, to the vehicles or trains where they pass nearest, as if
+they drove on the point's own ground (on a bridge, on its deck): over a road's middle it is about
+4 m, not none; beside a cutting it reads short, beside an embankment long. A road with 600
+vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m;
 one flight a day 1 km away is near its peak for about half a minute; a take-off passes a house
-100 m beside its start of roll in about 11 seconds, as it sets off from rest. Sources add up only within the same moment, so the sum is taken
+100 m beside its start of roll in about 11 seconds, as it sets off from rest. The flights heard
+and the runways' rolls are one stream, its rate and passing time weighted by sound energy; the
+flights' come from the coarse boxes of airspace everywhere, also where the fine boxes give the
+sound, so the stream does not jump where one gives way to the other. Sources add up only within the same moment, so the sum is taken
 for every hour of road traffic and ten states of the weather; bells, calls, a car park's cars, a
 range's shots, courts, pitches, playgrounds, pools and terraces in use, the guests outside bars
 and restaurants and the plant of shops, offices and restaurants while it runs sound in their share

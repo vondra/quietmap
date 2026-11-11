@@ -28,22 +28,13 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     primary_link: 'Primary road ramp',
   },
   railway: {
-    freight_corridor: 'Freight railway',
-    passenger: 'Railway',
+    // Keys ARE the backend names (emission/rail.rs::RailType::name; heritage lines are silent).
     tram: 'Tram',
     light_rail: 'Light rail',
     rail: 'Railway',
     narrow_gauge: 'Narrow gauge',
     funicular: 'Funicular',
-    heritage: 'Heritage railway',
     horn: 'Level-crossing horn',
-    'rail (bridge)': 'Railway (bridge)',
-    'tram (bridge)': 'Tram (bridge)',
-    'light_rail (bridge)': 'Light rail (bridge)',
-    'narrow_gauge (bridge)': 'Narrow gauge (bridge)',
-    'funicular (bridge)': 'Funicular (bridge)',
-    'heritage (bridge)': 'Heritage railway (bridge)',
-    'horn (bridge)': 'Level-crossing horn (bridge)',
   },
   industrial: {
     industrial_area: 'Industrial area',

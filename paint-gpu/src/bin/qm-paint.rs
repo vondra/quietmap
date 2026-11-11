@@ -14,12 +14,15 @@ use paint::exact::Batch;
 use paint::hm3::painted;
 use paint::levels::PaintedCells;
 use paint::paint::{Corners, Grid, corners_of, paint_pixels};
-use paint::square::{Files, Square};
+use paint::square::Files;
+#[path = "painter/prepared.rs"]
+mod prepared;
 use paint_gpu::batch::GpuBatch;
 use paint_gpu::device::{DeviceSquare, Gpu};
 use paint_gpu::square_writer::{PaintedSquareCells, write_beside_painting};
 use physics::weather::WeatherTable;
 use popup::release::Release;
+use prepared::PreparedSquare;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::mpsc::sync_channel;
@@ -33,12 +36,8 @@ use tiles::geo::{Mercator, TileId};
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-fn value<'a>(arguments: &'a [String], key: &str) -> Option<&'a str> {
-    arguments
-        .windows(2)
-        .find(|pair| pair[0] == format!("--{key}"))
-        .map(|pair| pair[1].as_str())
-}
+mod common;
+use common::option;
 
 fn numbers(text: &str) -> Result<Vec<f64>, String> {
     text.split(',')
@@ -51,7 +50,7 @@ fn numbers(text: &str) -> Result<Vec<f64>, String> {
 }
 
 fn squares(arguments: &[String]) -> Result<Vec<TileId>, String> {
-    if let Some(list) = value(arguments, "squares") {
+    if let Some(list) = option(arguments, "squares") {
         return list
             .split(';')
             .map(|pair| {
@@ -66,7 +65,7 @@ fn squares(arguments: &[String]) -> Result<Vec<TileId>, String> {
             })
             .collect();
     }
-    let bbox = numbers(value(arguments, "bbox").ok_or("missing --squares or --bbox")?)?;
+    let bbox = numbers(option(arguments, "bbox").ok_or("missing --squares or --bbox")?)?;
     let [south, west, north, east] = bbox[..] else {
         return Err("--bbox is SOUTH,WEST,NORTH,EAST".into());
     };
@@ -80,7 +79,7 @@ fn squares(arguments: &[String]) -> Result<Vec<TileId>, String> {
 }
 
 fn run(arguments: &[String]) -> Result<(), String> {
-    let required = |key: &str| value(arguments, key).ok_or_else(|| format!("missing --{key}"));
+    let required = |key: &str| option(arguments, key).ok_or_else(|| format!("missing --{key}"));
     if arguments.first().map(String::as_str) == Some("merge") {
         let zoom: u32 = required("zoom")?
             .parse()
@@ -100,7 +99,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             zoom,
             &PathBuf::from(required("tiles")?),
             required("build")?,
-            value(arguments, "regions").map(PathBuf::from).as_deref(),
+            option(arguments, "regions").map(PathBuf::from).as_deref(),
         );
     }
     if arguments.first().map(String::as_str) == Some("pack-region") {
@@ -169,7 +168,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         // The painters own the receiver: when the last one ends, the preparer's next hand-over fails.
         let prepared_receiver = Arc::new(Mutex::new(prepared_receiver));
         let card = Card::default();
-        let (weather, gpu, todo, squares, card) = (&weather, gpu.as_ref(), &todo, &squares, &card);
+        let (gpu, todo, squares, card) = (gpu.as_ref(), &todo, &squares, &card);
         let prepare = &prepare;
         std::thread::scope(|scope| {
             scope.spawn(move || {
@@ -213,7 +212,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             // A panic is this square's error: the preparer may wait for the card.
                             let cells = prepared.and_then(|prepared| {
                                 catch_unwind(AssertUnwindSafe(|| {
-                                    finish_square(weather, gpu, grid, squares.len(), prepared)
+                                    finish_square(gpu, grid, squares.len(), prepared)
                                 }))
                                 .unwrap_or_else(|_| Err("a square's painting panicked".into()))
                             });
@@ -293,10 +292,10 @@ const PIPELINE_CANDIDATES_MAX: usize = 250_000;
 const PREPARING_THREADS: usize = 12;
 
 /// A square read, on the card and its corners taken, ready for its pixels.
-struct Prepared {
+struct Prepared<'a> {
     number: usize,
     tile: TileId,
-    files: Files,
+    square: PreparedSquare<'a>,
     device_square: Option<DeviceSquare>,
     corners: Option<Corners>,
     candidates: usize,
@@ -304,35 +303,36 @@ struct Prepared {
 }
 
 /// Reads square `tile`, uploads it to the card (if there is one) and takes its corners.
-fn prepare_square(
+fn prepare_square<'a>(
     release: &Release,
-    weather: &WeatherTable,
+    weather: &'a WeatherTable,
     gpu: Option<&Gpu>,
     grid: Grid,
     number: usize,
     tile: TileId,
-) -> Result<Prepared, String> {
+) -> Result<Prepared<'a>, String> {
     let started = Instant::now();
     let files = Files::read(release, tile)?;
     let read_s = started.elapsed().as_secs_f64();
+    let owned = PreparedSquare::from_files(files, weather, tile)?;
     let (device_square, corners, candidates, built_s) = {
-        let square = Square::new(weather, tile, &files)?;
+        let square = owned.borrow_dependent();
         let built_s = started.elapsed().as_secs_f64() - read_s;
         let device_square = match gpu {
-            Some(gpu) => Some(DeviceSquare::upload(gpu, &square, &files, weather)?),
+            Some(gpu) => Some(DeviceSquare::upload(gpu, square, owned.files(), weather)?),
             None => None,
         };
         let batch = gpu
             .zip(device_square.as_ref())
-            .map(|(gpu, device_square)| GpuBatch::new(gpu, device_square, &square));
-        let corners = corners_of(&square, grid, batch.as_ref().map(|b| b as &dyn Batch))?;
+            .map(|(gpu, device_square)| GpuBatch::new(gpu, device_square, square));
+        let corners = corners_of(square, grid, batch.as_ref().map(|b| b as &dyn Batch))?;
         (device_square, corners, square.candidates.len(), built_s)
     };
     let corners_s = started.elapsed().as_secs_f64() - read_s - built_s;
     Ok(Prepared {
         number,
         tile,
-        files,
+        square: owned,
         device_square,
         corners,
         candidates,
@@ -342,7 +342,6 @@ fn prepare_square(
 
 /// Paints a prepared square's pixels and releases its source buffers before encoding the bundle.
 fn finish_square(
-    weather: &WeatherTable,
     gpu: Option<&Gpu>,
     grid: Grid,
     count: usize,
@@ -352,7 +351,7 @@ fn finish_square(
     let Prepared {
         number,
         tile,
-        files,
+        square: owned,
         device_square,
         corners,
         candidates,
@@ -361,12 +360,12 @@ fn finish_square(
     let cells = match corners {
         None => PaintedCells::silence(grid.pixels * grid.pixels),
         Some(corners) => {
-            let square = Square::new(weather, tile, &files)?;
+            let square = owned.borrow_dependent();
             let batch = gpu
                 .zip(device_square.as_ref())
-                .map(|(gpu, device_square)| GpuBatch::new(gpu, device_square, &square));
+                .map(|(gpu, device_square)| GpuBatch::new(gpu, device_square, square));
             paint_pixels(
-                &square,
+                square,
                 grid,
                 batch.as_ref().map(|b| b as &dyn Batch),
                 corners,
@@ -380,7 +379,7 @@ fn finish_square(
         tile,
         number,
         count,
-        file_bytes: files.bytes(),
+        file_bytes: owned.files().bytes(),
         candidates,
         seconds: [read_s, built_s, painted_s],
     })

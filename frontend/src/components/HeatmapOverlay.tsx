@@ -1,25 +1,27 @@
-// The noise heatmap: HM3 tiles of one source (the total, one layer or a combination of layers,
-// `hm3-combine`) decoded and palette-mapped in the browser, as deck.gl tiles below the base zoom
-// and one stitched image past it.
+// Noise and quiet-area rasters share one map overlay beneath data and labels.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { TileLayer } from '@deck.gl/geo-layers'
 import { BitmapLayer } from '@deck.gl/layers'
 import { useMap } from 'react-map-gl/maplibre'
 
-import { TILE_PX } from '../lib/hm3-decoder'
+import { TILE_PX, type Metric } from '../lib/hm3-decoder'
 import { PREVIEW_DELTA } from '../lib/hm3-compose'
 import { hiDpiTileZoomOffset } from '../lib/hm3-sample'
 import { lngLatToTileFloat } from '../lib/tile-math'
-import { MIN_ZOOM, WORLD_EXTENT, buildKey, tileUrl, useTileBuild, type HeatmapSource, type TileBuilds } from '../lib/tile-urls'
+import { MIN_ZOOM, WORLD_EXTENT, buildKey, publishes, tileUrl, useTileBuild, type HeatmapSource, type TileBuilds } from '../lib/tile-urls'
 import { loadTileProgressively, fetchAncestor, type HeatTile } from '../lib/progressive-tile-loader'
 import { compositeSig, baseRange, buildComposite, type Composite } from '../lib/tile-composite'
 import { overlayAnchorId } from '../utils/overlay-anchor'
 import { lowestDataLayerId } from '../lib/data-layers'
+import { makeQuietZonesLayer } from '../lib/quiet-zones'
 
 interface Props {
-  /** The total or one layer; `null` paints nothing. */
+  /** The total or one layer; `null` hides the noise raster. */
   source: HeatmapSource | null
+  metric: Metric
+  /** The total's quiet threshold in the selected quantity; null hides the green mask. */
+  quietThreshold: number | null
 }
 
 // Display zoom at/above which we stitch ONE composite image (no internal tile
@@ -53,7 +55,7 @@ const MAX_CACHE_TILES = 192
  * static/CDN reader. Interleaved overlay + a
  * `beforeId` beneath the data layers and the first label layer keeps both on top.
  */
-export default function HeatmapOverlay({ source }: Props): null {
+export default function HeatmapOverlay({ source, metric, quietThreshold }: Props): null {
   const { current: mapRef } = useMap()
   // Generation snapshot: a build flip re-renders and re-keys every layer; the
   // snapshot is passed explicitly into URL builders so no fetch closure ever
@@ -125,9 +127,6 @@ export default function HeatmapOverlay({ source }: Props): null {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [dpr])
-  // A DPR flip re-creates `apply` but nothing else calls it — apply NOW so the
-  // re-keyed layer (offset is part of the id) fetches the finer/coarser level.
-  useEffect(() => { applyRef.current() }, [dpr])
 
   // One interleaved MapboxOverlay (shares MapLibre's GL context).
   useEffect(() => {
@@ -182,9 +181,14 @@ export default function HeatmapOverlay({ source }: Props): null {
     } else {
       dropTileTails('') // no source (or no build) removes the layer too
     }
+    if (build !== null && quietThreshold !== null && publishes(build, metric)) {
+      layers.push(makeQuietZonesLayer(metric, quietThreshold, build, beforeId))
+    }
     overlay.setProps({ layers })
-  }, [overlay, mapRef, build, source, onRefined, dropTileTails, dpr])
+  }, [overlay, mapRef, build, source, metric, quietThreshold, onRefined, dropTileTails, dpr])
   applyRef.current = apply
+  // Slider, quantity and pixel-ratio changes need a repaint without a camera move.
+  useEffect(() => { apply() }, [apply])
 
   // Rebuild the over-zoom composite (only past the composite threshold, only when the base
   // range/source changed) then re-apply. Coalesced to one run per frame. Below it this is
@@ -215,12 +219,7 @@ export default function HeatmapOverlay({ source }: Props): null {
     })
   }, [mapRef, source, build])
 
-  // Re-run on source/overlay change. `overlay` is load-bearing: it's null
-  // on first render, so the mount-time update() no-ops (apply guards on overlay);
-  // re-firing once it lands paints the heatmap on load without needing a pan/zoom.
-  useEffect(() => {
-    update()
-  }, [update, overlay])
+  useEffect(() => { update() }, [update])
 
   // Re-apply + rebuild the composite after the viewport settles.
   useEffect(() => {

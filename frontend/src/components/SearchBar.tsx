@@ -176,20 +176,6 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
     if (highlighted >= 0) listRef.current?.children[highlighted]?.scrollIntoView({ block: 'nearest' })
   }, [highlighted])
 
-  // How low the bar reaches with what stands under the field: a phone's map credits stand under it
-  // (index.css).
-  useEffect(() => {
-    const bar = containerRef.current
-    if (!bar) return
-    const observer = new ResizeObserver(() =>
-      document.documentElement.style.setProperty('--map-top-bar-bottom', `${bar.getBoundingClientRect().bottom}px`))
-    observer.observe(bar)
-    return () => {
-      observer.disconnect()
-      document.documentElement.style.removeProperty('--map-top-bar-bottom')
-    }
-  }, [])
-
   // The list keeps above a phone's keyboard, the sign-in line under it too.
   useEffect(() => {
     const viewport = window.visualViewport
@@ -208,9 +194,8 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
       {listed && <div className="fixed inset-0 z-[2001]" onClick={() => setListing(false)} />}
       {/* Above the card column and the phone's sheets, under the account's form at the top right;
           `.map-top-bar` (index.css) keeps it clear of the column horizontally on md+. */}
-      <div ref={containerRef} className="map-top-bar top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[2003]">
-        {/* On a phone the field leaves the account's button its room; the rows under it take the width. */}
-        <div className="relative max-md:mr-[calc(2.75rem+var(--map-gutter))]">
+      <div ref={containerRef} className={`${FLOATING} map-top-bar top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[2003]`}>
+        <div className="relative">
           <input
             ref={inputRef}
             id="search"
@@ -233,8 +218,8 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
               if (!containerRef.current?.contains(e.relatedTarget)) setListing(false)
             }}
             onKeyDown={handleKeyDown}
-            placeholder="Search address..."
-            className={`${FLOATING} w-full px-4 py-2.5 pr-10 placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30`}
+            placeholder={open ? 'Search another place…' : 'Search address…'}
+            className="w-full rounded-lg bg-background px-4 py-2.5 pr-10 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 pointer-fine:text-sm"
           />
           <span id="search-keys" hidden>Up and down choose a place, Enter opens it, Shift+Delete forgets it.</span>
           {loading && (
@@ -244,7 +229,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
         </div>
         {listed ? (
           <div
-            className={`${FLOATING} mt-1 overflow-hidden bg-popover`}
+            className="overflow-hidden rounded-b-lg border-t border-border bg-popover"
             onMouseDown={(e) => {
               if (!(e.target instanceof HTMLInputElement)) e.preventDefault()
             }}
@@ -318,19 +303,18 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
           <>
             {/* Made anew for each place: a name being written belongs to the place it was begun for. Its
                 key names the row alone: siblings under one key once left a row behind at every place. */}
-            <div key={`open:${keyOf(open.at)}`} data-testid="open-place" className={`${FLOATING} mt-1 overflow-hidden bg-popover`}>
+            <div key={`open:${keyOf(open.at)}`} data-testid="open-place" className="overflow-hidden rounded-b-lg border-t border-border bg-popover">
               <PlaceRow
                 {...described(open.at, open.place)}
                 metric={metric}
                 sone={open.sone}
                 lden={open.lden}
                 highlighted
-                onOpen={() => inputRef.current?.focus()}
                 onRename={onRename}
                 action={openAction}
               />
               {/* Scrolled within what is left above a phone's sheet (MobileDetailSheet's sheetTop) under a
-                  notch too, the map's credits under it, and never shut on a short screen; a desktop has no
+                  notch too, and never shut on a short screen; a desktop has no
                   sheet. */}
               <div className="max-h-[max(6rem,calc(50dvh-11rem-env(safe-area-inset-top,0px)))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
             </div>

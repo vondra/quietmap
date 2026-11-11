@@ -27,9 +27,17 @@ function element(tagName: string, properties: Element['properties'], children: E
 function rehypeAboutSections() {
   return (tree: Root) => {
     const sections: [string, string][] = []
+    const detailIds = new Map<string, number>()
     const visit = (nodes: RootContent[]) => {
       for (const node of nodes) {
         if (node.type !== 'element') continue
+        if (node.tagName === 'details') {
+          const summary = node.children.find(child => child.type === 'element' && child.tagName === 'summary')
+          const base = `detail-${sectionId(summary ? textOf(summary) : 'details')}`
+          const count = (detailIds.get(base) ?? 0) + 1
+          detailIds.set(base, count)
+          node.properties.id = count === 1 ? base : `${base}-${count}`
+        }
         if (node.tagName !== 'h2' && node.tagName !== 'h3') {
           visit(node.children)
           continue

@@ -84,8 +84,8 @@ pub fn convert(turbines: &Turbines, square: Square, out: &mut Vec<Converted>) ->
             DEFAULT_HUB_HEIGHT_M
         };
         let sound = turbine_sound_power(power_kw);
-        // The industry layer's display fields (`tiles/src/sources.rs`); an unknown hub is shown
-        // as unknown, not as the height it is computed at.
+        // The industry layer's display fields (`tiles/src/sources/display.rs`); an unknown hub is
+        // stored as none, not as the height it is computed at.
         let display = json!([
             "",
             "wind_turbine",

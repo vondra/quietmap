@@ -5,7 +5,7 @@
 // made and a sign-out comes after them; each read of the account shows its answer with the changes
 // not yet sent applied over it. hooks/usePlaces.ts reads it again whenever the map comes back.
 import { deleteAccount, fetchAccount, saveRecent, saveTitle, signOut } from './account.ts'
-import { loadPlaceTitles, loadRecentPlaces, savePlaceTitles, saveRecentPlaces } from './browser-places.ts'
+import { loadBrowserPlaces, loadPlaceTitles, savePlaceTitles, saveRecentPlaces } from './browser-places.ts'
 import { withAnswer, withName, withOpened, withTitle, withoutPlace, type PlaceTitle, type RecentPlace } from './place-rules.ts'
 
 /** Who keeps the places: 'unknown' until the server answers, null when signed out, 'unavailable' on
@@ -34,10 +34,8 @@ function applied<T extends Places>(places: T, change: Change): T {
     : { ...places, titles: withTitle(places.titles, change.at, change.title, change.updatedAt) }
 }
 
-const browserPlaces = (): Places => ({ recent: loadRecentPlaces(), titles: loadPlaceTitles() ?? [] })
-
 export function createPlacesKeeper() {
-  let shown: Shown = { account: 'unknown', ...browserPlaces(), notSaved: false }
+  let shown: Shown = { account: 'unknown', ...loadBrowserPlaces(), notSaved: false }
   const listeners = new Set<() => void>()
   const show = (next: Partial<Shown>) => {
     shown = { ...shown, ...next }
@@ -58,7 +56,7 @@ export function createPlacesKeeper() {
   function keepInBrowser(account: null | 'unavailable') {
     unsent = []
     if (shown.account !== 'unknown' && !isSignedIn(shown.account)) return show({ account })
-    const places = held.splice(0).reduce(applied, browserPlaces())
+    const places = held.splice(0).reduce(applied, loadBrowserPlaces())
     saveRecentPlaces(places.recent)
     savePlaceTitles(places.titles)
     show({ account, ...places, notSaved: false })
@@ -143,7 +141,7 @@ export function createPlacesKeeper() {
     const { account } = shown
     if (!isSignedIn(account) || !await request(account.email)) return false
     unsent = []
-    show({ account: null, ...browserPlaces(), notSaved: false })
+    show({ account: null, ...loadBrowserPlaces(), notSaved: false })
     return true
   })
 
@@ -176,5 +174,3 @@ export function createPlacesKeeper() {
     deleteAccount: () => leave(deleteAccount),
   }
 }
-
-export type PlacesKeeper = ReturnType<typeof createPlacesKeeper>

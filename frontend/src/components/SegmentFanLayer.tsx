@@ -59,6 +59,7 @@ function useFrameFan(fan: SegmentFan | null) {
     const opened = fan.opened?.index ?? null
     const before = framed.current?.row === row ? framed.current : null
     framed.current = { row, opened }
+    if (!fan.frame) return
     const padding = framePadding(map.getContainer())
     const frame = (points: [number, number][], maxZoom: number) => {
       const lats = points.map(([lat]) => lat)

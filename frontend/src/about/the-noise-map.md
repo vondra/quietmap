@@ -80,38 +80,77 @@ Advanced shows the data the popup computes over; each layer switched on shows it
 - road traffic (vehicles a day) and trains a day;
 - the other sources: turbines, bells, terraces, car parks, airports.
 
+Data layers stay above the green quiet zones. On the standard and satellite maps, labels do too.
+
+## Places to stay
+
+Set a maximum price per night in euros for the selected dates and guests. Turn on Quiet zones to
+keep stays within its total-noise limit. A reachable area shows how far you can travel; stays
+beyond it remain visible. The area keeps its starting point while you open stays; Clear in Layers
+removes it. A place without a quote is excluded by a price limit. The quiet filter hides stays
+where the noise map has no value; clicking the map still calculates noise at that point.
+
+The noise filter reads the map at its finest resolution, even when zoomed out. It describes outdoor
+noise averaged over the year, not the room or the dates of the stay. Open a stay for the detailed
+calculation at its point. The offers returned for each view are a selection, not a complete list.
+
 ## How close it comes to the popup
 
-The map should agree with the popup within 1 phon, 7 % of loudness, at any point. The painter is
-checked against a reference that computes every loud source exactly at every outdoor pixel. In the
-last check, in October 2026, the total missed it by more than 1 phon at 0.07 % of 248,909 pixels.
-Single layers miss more often: the railways at 2.40 % of the pixels, the buildings at 1.21 %.
+The map's target is to stay within 1 phon of the popup, about 7 % of loudness. Buildings and
+individual noise layers can differ more.
+
+On 11 November 2026, newly calculated tiles met the 1-phon target at 99.1 % of sampled points
+where the popup gave at least 1 sone, across 54 squares around the world. Differences are larger
+at very quiet points and in individual layers. These checks compare computations;
+[Validation](/about/validation) compares the model with microphone measurements.
 
 <details>
 <summary>The limits and the last check</summary>
 
-The painter is held to two references. The etalon is the same tile with every loud ground source
-and the flights computed exactly at every outdoor pixel, the hum, the flights' spectra and the
-loudness grain taken as the painter takes them: over the pixels of 1 sone or more, each layer and
-the total may differ from it by more than 0.5 phon at no more than 20 % of them, by more than 1
-phon (7 % of loudness) at no more than 1 %, by more than 3 phon at 0.01 %
-and by more than 6 phon at 0.001 %, with a bias under 0.5 phon; at most 0.25 % may fall on the
-other side of 1 sone, and a pixel under 1 sone may be off by at most 10 phon. And at any point it
-should agree with the popup within 1 phon.
+The independent popup check samples 300 random pixel centres in each of 54 squares, including
+buildings. The squares were drawn from groups with different numbers of sources and calculation
+costs across the world's land and coastal grid, including already painted areas. Each popup uses
+its own source selection, façade choice and finer loudness calculation. The sample covers all
+continents except Antarctica, but its percentages are not a population-weighted global error rate.
+Existing tiles can predate the computation tested here.
 
-On one pixel in 16 of four squares in central Bohemia (248,909 of 1 sone or more, October 2026)
-the total meets every limit: 0.07 % over 1 phon, 3 pixels over 3 phon, none over 6 phon or across
-1 sone, a bias of −0.07 phon. Single layers miss some: the railways and the buildings over 1 phon
-(2.40 and 1.21 %), the roads, railways, industry and buildings over 3 phon (0.03 to 0.11 %), the
-roads, industry and buildings over 6 phon (2 to 4 pixels); the railways, aircraft and buildings
-across 1 sone (0.52 to 1.33 %); the railways, industry and buildings under 1 sone (up to 21 phon).
+Of 16,200 sampled points, 6,372 have a stored popup total of at least 1 sone. At those points,
+363 differ by more than 0.5 phon, 59 by more than 1 phon, three by more than 3 phon and none by
+more than 6 phon. The mean signed difference is +0.16 phon. By layer:
 
-The exact computations run on a graphics card in single precision or on the processor's
-cores in double; a pair the card refuses is computed on the cores. On 2 million random pairs of
-source and pixel in Prague (October 2026) the two agree within 0.006 dB for 99 % of them and
-0.03 dB for 99.9 %. Single precision puts 90 pairs more than 1 dB apart, up to 23 dB, where a ray
-grazes the terrain or crosses a building's edge; all but one of them lie more than 20 dB below the
-loudest source at their pixel.
+| Layer | Popup points ≥ 1 sone | More than 1 phon apart |
+|---|---:|---:|
+| Roads | 5,209 | 1.59 % |
+| Railways | 833 | 0.12 % |
+| Industry | 904 | 2.32 % |
+| Buildings | 525 | 5.52 % |
+| Ships | 113 | 0.00 % |
+| Aircraft | 1,103 | 0.82 % |
+| Total | 6,372 | 0.93 % |
+
+Across all points, including those below 1 sone, 1,173 differ by more than 1 phon; the largest
+quiet-total difference is 16.5 phon. There are 55 crossings of the 1-sone boundary beyond its
+half-phon rounding band. No sampled point is missing from the map. Total Lden differs by more
+than 1 dB at 159 of 14,290 points with a nonnegative popup level; the largest difference between
+stored nonnegative values is 14.5 dB. Seventeen nonnegative popup values become below zero in
+the map, and 27 cross the other way.
+
+The target for each layer and the total, at reference levels of at least 1 sone, is at most
+20 % differing by more than 0.5 phon, 1 % by more than 1 phon, 0.01 % by more than 3 phon and
+0.001 % by more than 6 phon. The last share also counts pixels crossing 1 sone from below.
+Mean bias must stay within ±0.5 phon. At most 0.25 % may cross 1 sone, excluding comparisons
+where both values lie within half a phon of that boundary; a quieter pixel may differ by at
+most 10 phon. Roads, industry and buildings miss the 1-phon target in this sample. The total
+still misses the 3-phon, boundary-crossing and quiet-pixel limits; some layers have larger tails.
+
+A second check isolates the painting approximations in four squares in central Bohemia. Its
+outdoor reference evaluates every retained loud ground source and the flights exactly at one
+pixel in each 4 × 4 cell, omitting buildings. It shares the map's background hum, flight spectra
+and loudness resolution, so it cannot reveal an error common to those parts of both computations.
+The independent popup check is needed alongside it. On 11 November, the outdoor total differed
+by more than 1 phon at 126 of 257,377 reference pixels (0.05 %), with a mean difference of −0.07
+phon and a largest difference of 4.5 phon. Total Lden differed by more than 1 dB at 120 of those
+pixels, with a largest difference of 4 dB. Some individual layers still miss the limits above.
 
 </details>
 
@@ -123,17 +162,20 @@ A pixel inside a building shows the building's loudest façade, as the popup doe
 <details>
 <summary>How a tile is painted</summary>
 
-The map is painted in tiles of 1,024 × 1,024 pixels. Every loud source is computed exactly at the
-corners of blocks 16 pixels wide and at every pixel it is near. What is far is blended between the
-corners, and the faint hum of far, quiet sources is computed on a coarser grid.
+The map is painted in squares of 1,024 × 1,024 pixels. Every loud source is computed exactly at the
+corners of blocks 16 pixels wide and at the pixels it is near, or blended from exact samples there
+where the sound is smooth. What is far is blended between the corners, and the faint hum of far,
+quiet sources is computed on a coarser grid.
 
-The tiles are the web map's of zoom 12, each in blocks of 16 × 16 pixels (95 m in London). A ground
+A square is a tile of the web map's zoom 12, in blocks of 16 × 16 pixels (95 m in London). A ground
 source counts as loud at a point where its upper bound there reaches 20 dB.
 
 - At every block corner, each loud source is computed exactly.
-- A block's pixels compute exactly the loud sources that cross the block or one of the eight around
-  it and, layer by layer, the loudest at the block's corners until what each corner leaves out
-  weighs at most 20 % of the layer's loud sources at the block's quietest corner.
+- A block's pixels compute exactly, of the sources loud at the pixel, those that cross the block or
+  one of the eight around it and, layer by layer, the loudest at the block's corners until what
+  each corner leaves out weighs at most 20 % of the layer's loud sources at the block's quietest
+  corner, 5 % for the railways: blended between the corners, a railway's few trains are heard at
+  the wrong loudness.
 - What is left out is blended between the block's four corners, and weakened at a pixel as much as
   the block's computed far sources are there, as behind a house.
 - The hum, the sources under 20 dB, is estimated with the popup's physics and error budget at
@@ -175,13 +217,15 @@ Buildings and their façade receivers keep the exact computations.
 
 Each block blends only the sources it leaves out, so neighbouring blocks blend different
 remainders; at the corners they share, the exact and the blended sound together meet. Aircraft
-boxes are summed at the hum's 17 × 17 points; their near share is computed every second block corner,
-and between those where the energy varies by more than 1 dB. Their spectra use 33 × 33 points:
+boxes are summed at the hum's 17 × 17 points; their near share, within three hum spacings, is
+computed with the runway rolls every second block corner, and between those where the energy varies
+by more than 1 dB. Their spectra use 33 × 33 points:
 alternating points and cell centres are computed, others blended only where the spectra change
 little and their centre agrees. The square's edges are computed. Cruise boxes use 5 × 5 points
 where screening does not apply, every corner reads the same boxes within reach, and their pieces
-and average flight lines stay at least 8 km away. Their energies and energies times the flights' rate and passing
-duration are blended to the block corners, keeping how their noise changes over time. The
+and average flight lines stay at least 8 km away. Their energies are blended to the block corners, and so is what
+the flights' lambda is weighted from, keeping how their noise changes over time: the far boxes' energies and
+energies times the flights' rate and passing duration, also where the fine boxes give the energy, and the rolls'. The
 quiet sources may be omitted only when their summed bounds can change a layer's exact loud
 energy by at most 0.1 dB in every period. Otherwise the painter uses the popup's bound-proportional
 sampling and 0.05 dB confidence budget, batches the selected rays on the graphics card and
@@ -190,11 +234,18 @@ A pixel inside a building shows the building's loudest façade, as the popup
 inside it does: of the receivers 0.1 m in front of its walls, a party wall's left out, the three
 whose painted pixel in front is loudest are computed like pixels, without the building's own
 reflection, and the loudest of them counts. Both choices go by the ground sources, as the popup's
-do: the flights do not pick the façade.
+do: the flights do not pick the façade. A building crossing a painting square's boundary ranks all its exposed
+receivers by the popup's rule, using the 100 ground-source pieces with the greatest bound at any
+façade. Its chosen receiver computes every loud ground source and the flights exactly; only its
+background hum and flight spectrum use the nearest pixel's fields. Both halves therefore choose
+from the complete building, even when its loudest façade is in the neighbouring square. New
+painting uses this rule; existing squares keep their earlier façade choice until repainted.
 
 A pixel's loudness is computed as the popup computes it, at a coarser grain: the levels over time
-in steps of 2 dB, two states of the weather, and four groups of the day's hours, one of the
-evening's and three of the night's, where the popup takes 0.5 dB, ten states and every hour. Each
+in steps of 2 dB and four groups of the day's hours, one of the
+evening's and three of the night's, where the popup takes 0.5 dB and every hour. Both use the same
+ten weather states, preserving how long favourable propagation lasts. New painting uses this rule;
+existing squares keep their earlier weather calculation until repainted. Each
 layer and the total are stored in steps of half a phon, 3.5 % of loudness; zoomed out, a pixel is
 the mean loudness of the pixels under it.
 
@@ -206,13 +257,17 @@ the mean loudness of the pixels under it.
 <summary>The painter's code: paint/ and paint-gpu/, the tiles it writes and its checks</summary>
 
 `paint/` is the method and `paint-gpu/` (`qm-paint`) runs it by squares of zoom 12 in three stages:
-the cores read the next square's tiles once, to the reach of its farthest pixel (the fine terrain
-when a ray first needs it), and take its corners; two squares paint their pixels at once (a square
-of many sources alone); two writers publish the squares before. The exact pairs and the aircraft boxes' sums at the block corners'
-lattices run on the first CUDA card (`paint-gpu/kernels/`, the popup's physics in single
-precision with fast math, each function citing its Rust) or on the cores. Four passes of a square
-run at once, at most two launching their pairs on the card while the others list and sound their
-pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
+the cores read the next square's tiles once, to the reach of its farthest pixel, give the card the
+fine terrain of every land tile among them, and take its corners, hum and aircraft lattices; two
+squares paint their pixels at once (a square of many sources alone); two writers publish the squares
+before. The exact pairs, the hum's sampled pairs, the aircraft boxes' sums at the block corners'
+lattices and every pixel's loudness run on the first CUDA card (`paint-gpu/kernels/`, the popup's
+physics in single precision, with fast math except the loudness; a ray's crossing of a building's
+edge is found in double wherever single precision cannot rule it out; each function cites its Rust) or
+on the cores. The runway rolls, the flight spectra, the loudness at open blocks' corners and a
+building across the square's edge stay on the cores. A square's samples, then its pixels, then its
+façades run in passes, four at once, at most two launching their pairs on the card while the
+others list and sound their pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
 one before.
 The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
 while the card computes the current chunk's loudness.
@@ -224,12 +279,12 @@ interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, t
 `paint/src/flight_spectra.rs`, a
 building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
 `popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs` and `hm3_square.rs`: per layer and the total,
-512 × 512 cells of twice the loudness level in phon (80 one sone, a doubling 20; 254 silence under
-1/16 sone, 255 not assessed). Each tile is compressed when painted: PNG's Paeth predictor uses
+four tiles of zoom 13 of 512 × 512 cells of 80 + 20 log₂ of the loudness in sone, twice the loudness
+level in phon from 1 sone up (80 one sone, a doubling 20; 254 silence under 1/16 sone, 255 not
+assessed). Each tile is compressed when painted: PNG's Paeth predictor uses
 the left, above and upper-left cells (zero outside the tile), and the cell minus that prediction,
-modulo 256, enters one Brotli stream at quality 11 with a 512 KiB window. Among the measured
-Brotli choices, this fixed predictor and quality fit the projected volume budget. The served
-archives in the measured urban area shrink by 26 % against raw-cell Brotli at quality 9.
+modulo 256, enters one lossless Brotli stream with a 512 KiB window. The painter uses quality 10
+for new tiles; existing streams at other quality settings decode in the same way.
 The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` restores the same prediction in place;
 every cell, including silence and not assessed, returns exactly.
 
@@ -244,9 +299,9 @@ in each layer and the total; otherwise its remaining pixels are calculated indiv
 The bundle's directory points at compressed tile streams, identical tile grids encoded and stored
 once. Container version 8 holds both quantities; already painted version-7 bundles contain only
 Nden and remain complete. The Nden tile streams keep HM3 version 7; Lden streams use HMD version 1,
-so decibels cannot be mistaken for loudness. Verification decodes both quantities and checks their
-assessment masks and Lden totals. Two writers compress and publish the bundles
-while the next squares are painted; at most six squares' cell buffers are resident (two written,
+so decibels cannot be mistaken for loudness. Verification decodes both quantities, checks their
+assessment masks and Lden totals, and refuses any cell of 120 phon or 120 dB and more. Two
+writers compress and publish the bundles while the next squares are painted; at most six squares' cell buffers are resident (two written,
 two waiting, two painted), and a square is complete only after its bundle is durable
 (`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies
 independent painters' bundles into one tree atomically, without decoding or replacing completed
@@ -270,7 +325,7 @@ server sends the stored stream with `Content-Encoding: br`. The manifest URL bel
 format's version, so an open page with an earlier decoder keeps its last compatible immutable build
 until the page is refreshed.
 
-Loud is one rule for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
+Loud is one rule for the painter, its reference and the hum: `popup::candidates::loud`, a bound reaching
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB). `qm-paint-gpu check` measures the card against the
 cores on random pairs, `check-loudness` on random pixels' loudness and `check-flights` on a square's
 aircraft lattices; `etalon` paints the reference,

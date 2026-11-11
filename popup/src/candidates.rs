@@ -1,6 +1,7 @@
 //! Every source of the read rings as a candidate: its geometry in the click's frame, a bridge's deck
 //! under it, its closest horizontal distance and its upper bound per period.
 
+use crate::answer::RECEIVER_HEIGHT_M;
 use crate::obstacles::REFLECTION_MAX_DB;
 use crate::scene::Ground;
 use physics::bands::BANDS;
@@ -109,19 +110,29 @@ fn distance_from(receiver: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 
 /// Horizontal distance from the origin to the segment `a`-`b`.
 fn distance_to_segment(a: [f64; 2], b: [f64; 2]) -> f64 {
+    let offset = closest_offset(a, b);
+    offset[0].hypot(offset[1])
+}
+
+fn closest_offset(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    let t = closest_fraction(a, b);
+    [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]
+}
+
+/// How far along the segment `a`-`b` (0 at `a`, 1 at `b`) its point nearest the origin lies.
+fn closest_fraction(a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let length_sq = dx * dx + dy * dy;
-    let t = if length_sq > 0.0 {
+    if length_sq > 0.0 {
         (-(a[0] * dx + a[1] * dy) / length_sq).clamp(0.0, 1.0)
     } else {
         0.0
-    };
-    (a[0] + t * dx).hypot(a[1] + t * dy)
+    }
 }
 
 impl Candidate {
     /// How the piece spreads (a line carries its power per horizontal metre).
-    fn spread(&self) -> Spread {
+    pub fn spread(&self) -> Spread {
         if self.line {
             let [a, b] = self.ends_m;
             Spread::Line {
@@ -143,14 +154,39 @@ impl Candidate {
         })
     }
 
+    /// The distance from a receiver at `receiver` (click metres) and `altitude_m` to the piece's
+    /// emitters where it passes nearest, `height_m` above their ground: Kurze's distance to a line
+    /// of them (`crate::percentiles`), over a road's axis the receiver's height above the vehicles.
+    /// Their ground is a bridge's deck there, else the receiver's own: exact over the axis and on
+    /// level ground, short beside a cutting and long beside an embankment. Across 168 roads in 14
+    /// squares the terrain at the nearest point moved a road's Nden by at most 0.6 phon at 99 % of
+    /// 2,686 clicks (1 phon on hillsides), and would be read for every pair of every painted pixel.
+    pub fn slant_distance_from(&self, receiver: [f64; 2], altitude_m: f64, height_m: f64) -> f64 {
+        let [a, b] = (self.ends_m).map(|end| [end[0] - receiver[0], end[1] - receiver[1]]);
+        let fraction = closest_fraction(a, b);
+        let [x, y] = [
+            a[0] + fraction * (b[0] - a[0]),
+            a[1] + fraction * (b[1] - a[1]),
+        ];
+        let vertical_m = match self.deck_m {
+            Some([start, end]) => altitude_m - (start + fraction * (end - start)) - height_m,
+            None => RECEIVER_HEIGHT_M - height_m,
+        };
+        (x * x + y * y + vertical_m * vertical_m).sqrt()
+    }
+
     /// Horizontal distance from `receiver` (click metres) to the piece.
     pub fn distance_from(&self, receiver: [f64; 2]) -> f64 {
-        let [a, b] = self.ends_m;
-        if self.line {
-            distance_from(receiver, a, b)
-        } else {
-            (a[0] - receiver[0]).hypot(a[1] - receiver[1])
-        }
+        let offset = self.offset_from(receiver);
+        offset[0].hypot(offset[1])
+    }
+
+    /// Offset of the nearest source point, before taking its length.
+    pub fn offset_from(&self, receiver: [f64; 2]) -> [f64; 2] {
+        let [a, b] = self
+            .ends_m
+            .map(|end| [end[0] - receiver[0], end[1] - receiver[1]]);
+        if self.line { closest_offset(a, b) } else { a }
     }
 
     /// The bound per period at horizontal distance `distance_m`.
@@ -302,5 +338,41 @@ mod tests {
         assert!((distance_to_segment([-5.0, 3.0], [5.0, 3.0]) - 3.0).abs() < 1e-12);
         assert!((distance_to_segment([4.0, 3.0], [9.0, 3.0]) - 5.0).abs() < 1e-12);
         assert!((distance_to_segment([3.0, 4.0], [3.0, 4.0]) - 5.0).abs() < 1e-12);
+    }
+
+    /// Kurze's distance runs from the receiver to the emitters themselves: over a road's axis its
+    /// height above them (the horizontal distance, none, read roads' axes a median 1.9 phon quiet
+    /// in Nden, 168 roads in 14 squares), beside the road the hypotenuse, past a piece's end to
+    /// that end, under a bridge up to the deck.
+    #[test]
+    fn a_line_is_heard_from_its_emitters_where_it_passes_nearest() {
+        let piece = |deck_m| Candidate {
+            layer: Layer::Road,
+            line: true,
+            attribute: AttributeRef { list: 0, index: 0 },
+            ends_m: [[-100.0, 0.0], [100.0, 0.0]],
+            deck_m,
+            distance_m: 0.0,
+            bound: [0.0; PERIODS],
+            order: 0.0,
+            group_key: 0,
+            display: DisplayRef {
+                ring: 0,
+                tile: 0,
+                attribute: 0,
+            },
+        };
+        let (road, bridge) = (piece(None), piece(Some([320.0, 340.0])));
+        let close = |distance: f64, expected: f64| assert!((distance - expected).abs() < 1e-9);
+        close(road.slant_distance_from([0.0, 0.0], 304.0, 0.05), 3.95);
+        close(
+            road.slant_distance_from([30.0, 3.0], 304.0, 0.05),
+            3.0f64.hypot(3.95),
+        );
+        close(
+            road.slant_distance_from([110.0, 0.0], 304.0, 0.05),
+            10.0f64.hypot(3.95),
+        );
+        close(bridge.slant_distance_from([50.0, 0.0], 304.0, 0.05), 31.05);
     }
 }

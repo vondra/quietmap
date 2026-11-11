@@ -238,12 +238,18 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
                 prepared: inputs.required(crate::year::Kind::OsmGeography)?.into(),
                 rasters: PathBuf::new(),
             };
+            let window = inputs.manifest.window();
+            let operations = airport::operations::Operations::read(
+                inputs.required(crate::year::Kind::AirportOperations)?,
+                &window,
+            )?;
             let written = airport::build(
                 &dev4,
                 inputs.required(crate::year::Kind::Segments)?,
-                &inputs.manifest.window(),
+                &window,
                 &parse_squares(options.get("squares")?)?,
                 (options.terrain(&inputs, &out)?, &out),
+                &operations,
             )?;
             eprintln!("airport traffic: {written} squares with traffic");
             Ok(())

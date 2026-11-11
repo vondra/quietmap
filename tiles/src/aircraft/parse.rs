@@ -10,6 +10,7 @@ use super::{
     MIX_BYTES, NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
 };
 use crate::FormatError;
+use crate::little_endian::{u16_at, u32_at};
 use crate::rate::rate;
 
 /// A parsed aircraft file borrowing its bytes.
@@ -26,16 +27,8 @@ pub struct Aircraft<'a> {
     wide: &'a [u8],
 }
 
-fn u16_at(record: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([record[at], record[at + 1]])
-}
-
 fn i16_at(record: &[u8], at: usize) -> i16 {
     i16::from_le_bytes([record[at], record[at + 1]])
-}
-
-fn u32_at(record: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(record[at..at + 4].try_into().unwrap())
 }
 
 fn u24_at(record: &[u8], at: usize) -> u32 {
@@ -167,10 +160,6 @@ impl<'a> Aircraft<'a> {
 
     pub fn box_count(&self) -> usize {
         self.heads.len()
-    }
-
-    pub fn flight_count(&self) -> usize {
-        self.flights.len() / FLIGHT_BYTES
     }
 
     pub fn piece_count(&self) -> usize {

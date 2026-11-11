@@ -1,10 +1,10 @@
-//! The aircraft events table (PLAN section 6, B): at a receiver every flight counts once, at its
-//! loudest moment (Doc 29 Eq. 4-8a, outdoors in the open); per band of that maximum level the
-//! flights of an average day by the period of the moment, their mean height above the ground
-//! there and the type flying most of them, and the helicopters of the lowest band. The weights are
-//! the boxes': a flight whose primary segments pass a band counts on baseline days, one that
-//! passes it only through what the secondary provider saw counts on increment days (the energy's
-//! P/B + S/I estimator, a count in place of the energy).
+//! The aircraft events table: at a receiver every flight counts once, at its loudest moment (Doc 29
+//! Eq. 4-8a, outdoors in the open); per band of that maximum level the flights of an average day by
+//! the period of the moment, their mean height above the ground there and the type flying most of
+//! them, and the helicopters of the lowest band. The weights are the boxes': a flight whose primary
+//! segments pass a band counts on baseline days, one that passes it only through what the secondary
+//! provider saw counts on increment days (the energy's P/B + S/I estimator, a count in place of the
+//! energy).
 //!
 //! The builder ([`build_square`]) counts at every z16 cell of a square (`aircraft-events` tiles),
 //! the checker at its points; both take every segment of a flight whose reach (its own LAmax
@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::path::Path;
 pub use tiles::aircraft_events::{BANDS, EVENT_BANDS_DB};
 use tiles::aircraft_events::{BandCell, CELLS_PER_SIDE, EventCell, encode};
-use tiles::geo::{LocalFrame, MAX_LATITUDE_DEG, Mercator, TILES_PER_AXIS, TileId};
+use tiles::geo::{LocalFrame, MAX_LATITUDE_DEG, Mercator, TILES_PER_AXIS, TileId, wrap_x};
 use tiles::square::{SquareWriter, read_held};
 use tiles::terrain::Terrain;
 
@@ -193,12 +193,6 @@ const RECEIVER_HEIGHT_M: f64 = 4.0;
 const IMPEDANCE_MARGIN_DB: f64 = 0.1;
 /// z16 cells per square side.
 const CELLS: usize = 8 * CELLS_PER_SIDE;
-
-/// Mercator x differences across the antimeridian.
-fn wrap_x(dx: f64) -> f64 {
-    let n = f64::from(TILES_PER_AXIS);
-    (dx + n / 2.0).rem_euclid(n) - n / 2.0
-}
 
 /// The receivers of a square: each z16 cell's centre 4 m above the terrain, per row the local
 /// frame's metres per Mercator unit, and the highest receiver.

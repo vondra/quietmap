@@ -26,6 +26,7 @@ macro_rules! kinds {
     (@intermediate) => { false };
 }
 kinds! {
+    AirportOperations => "airport-operations",
     AirportTraffic => "airport-traffic" [intermediate],
     Barriers => "barriers" [intermediate],
     BuildingPlant => "building-plant",

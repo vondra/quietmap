@@ -16,7 +16,7 @@ use tiles::geo::TileId;
 const SQUARES_WAITING: usize = 2;
 
 /// Squares encoded at once. A square's encoding lasts as long as its slowest tile (one stream on one
-/// core at Brotli quality 11), and a light square has few distinct tiles: one writer, busy all the
+/// core), and a light square has few distinct tiles: one writer, busy all the
 /// time on the light classes, held their painters back while most cores waited.
 const WRITERS: usize = 2;
 

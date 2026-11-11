@@ -7,63 +7,43 @@
 // receiver summed over the vertices kept behind the walk. The CPU builds the same path in arrays
 // before sorting the candidates.
 
-// Whether a crossing was found before, remembering it otherwise; the crossings of the receiver's
-// building are dropped first (evaluate.rs). crossings::sort_and_deduplicate keeps one crossing per
-// footprint within 1e-9 of the ray: the same edge seen from two cells, or two edges meeting where the
-// ray passes a vertex. Here the same edge is the same key, and two edges of a footprint are one
-// crossing within f32's error of t (about 1e-7 of t: the terms grow with the distance from the
-// source). A wider window would merge a ray clipping a building's corner within a millimetre, and
-// its odd count would take the building for the source's own (22 dB louder at 919 m).
-__device__ u32 crossing_dropped(RayStream& s, const Crossing& c, bool* dropped) {
-    *dropped = true;
+// The receiver's own walls are omitted; other repeated crossings merge as on the CPU.
+// Intersection t stays in double precision until deduplication: a submillimetre corner clip
+// must retain both boundaries, while two edges at the same vertex retain one top.
+__device__ u32 keep_crossing(RayStream& s, const Crossing& c, int* index) {
+    *index = -1;
     if (c.footprint_id == s.receiver_footprint) return 0;
-    // Kept crossings come in order of t, but a cell takes crossings up to its slack beyond its
-    // stretch, so the same edge found again from the next cell lies within twice the slack.
-    float window = 1e-9f + 5e-7f * c.t;
-    float reach = fmaxf(window, 2.0f * CELL_WINDOW_SLACK);
+    double reach = 2.0 * CELL_WINDOW_SLACK;
     for (int k = 1; k <= s.recent_count; k++) {
         const KeptCrossing& r = s.recent[(s.recent_next - k + RECENT_CROSSINGS) % RECENT_CROSSINGS];
         if (c.t - r.t > reach) break;
-        if (r.edge == c.edge) return 0;
-        if (r.footprint_id == c.footprint_id && fabsf(c.t - r.t) < window) return 0;
+        if (r.edge == c.edge || (r.footprint_id == c.footprint_id && fabs(c.t - r.t) < 1e-9)) {
+            *index = r.index;
+            return 0;
+        }
     }
-    *dropped = false;
-    // A full ring whose oldest crossing could still be found again: past what it can tell.
     if (s.recent_count == RECENT_CROSSINGS && c.t - s.recent[s.recent_next].t <= reach) return FAILED_CAPACITY;
-    KeptCrossing& kept = s.recent[s.recent_next];
-    kept.footprint_id = c.footprint_id;
-    kept.edge = c.edge;
-    kept.t = c.t;
+    *index = s.crossing_count;
+    s.recent[s.recent_next] = KeptCrossing{c.footprint_id, c.edge, c.t, *index};
     s.recent_next = (s.recent_next + 1) % RECENT_CROSSINGS;
     s.recent_count = min(s.recent_count + 1, RECENT_CROSSINGS);
     return 0;
 }
 
-// The crossings walk: each crossing the CPU keeps (not the receiver's building's, one per footprint
-// and point) listed, the last at each place, kept or not, closing the roofs queued there; for a
-// building's source each building crossing toggles its footprint, so the footprints left are those
-// crossed an odd number of times, whose crossings the terrain walk then passes.
+// A coincident ring entry can turn a tangent top into a roof boundary. Containment is computed
+// after these merges, so it toggles exactly once for each retained boundary.
 struct CrossingLister {
     RayStream* s;
-    bool parity;
     __device__ u32 operator()(const Crossing& c) {
         RayStream& r = *s;
-        bool dropped;
-        u32 failed = crossing_dropped(r, c, &dropped);
+        int index;
+        u32 failed = keep_crossing(r, c, &index);
         if (failed) return failed;
-        if (!dropped) {
-            if (parity && c.building) {
-                int k = 0;
-                while (k < r.containing_count && r.containing[k] != c.footprint_id) k++;
-                if (k < r.containing_count) {
-                    r.containing[k] = r.containing[--r.containing_count];
-                } else {
-                    if (r.containing_count == CONTAINING - 1) return FAILED_CAPACITY;
-                    r.containing[r.containing_count++] = c.footprint_id;
-                }
-            }
+        if (index == r.crossing_count) {
             if (r.crossing_count == RAY_CROSSINGS) return FAILED_CAPACITY;
-            r.crossings[r.crossing_count++] = RayCrossing{c.t, c.height_m, c.footprint_id, c.building, 0};
+            r.crossings[r.crossing_count++] = RayCrossing{(float)c.t, c.height_m, c.footprint_id, c.bounds_roof, 0};
+        } else if (index >= 0) {
+            r.crossings[index].bounds_roof |= c.bounds_roof;
         }
         if (!c.tie && r.crossing_count > 0) r.crossings[r.crossing_count - 1].closes = 1;
         return 0;
@@ -80,10 +60,23 @@ __device__ __noinline__ u32 list_crossings(const ObstacleScene& obstacles, float
     s.recent_count = 0;
     s.containing_count = 0;
     if (!obstacles_on_ray) return 0;
-    CrossingLister list = {&s, ends.own_footprint != 0};
+    CrossingLister list = {&s};
     u32 failed = walk_crossings(obstacles, sx, sy, rx, ry, list);
     if (failed) return failed;
-    if (ends.own_footprint != 0) s.containing[s.containing_count++] = ends.own_footprint;
+    if (ends.own_footprint != 0) {
+        for (int i = 0; i < s.crossing_count; i++) {
+            const RayCrossing& c = s.crossings[i];
+            if (!c.bounds_roof) continue;
+            int k = 0;
+            while (k < s.containing_count && s.containing[k] != c.footprint_id) k++;
+            if (k < s.containing_count) s.containing[k] = s.containing[--s.containing_count];
+            else {
+                if (s.containing_count == CONTAINING - 1) return FAILED_CAPACITY;
+                s.containing[s.containing_count++] = c.footprint_id;
+            }
+        }
+        s.containing[s.containing_count++] = ends.own_footprint;
+    }
     return 0;
 }
 
@@ -119,7 +112,7 @@ __device__ __forceinline__ u32 take_crossing(RayStream& s, const RayCrossing& c,
     Moments prefix = prefix_behind;
     add_stretch(prefix, behind.x, x, behind.z, terrain_z, behind.g, terrain_g, 0.0f, s.path.source_ground_z);
     float height = terrain_z + c.height_m;
-    if (c.building) {
+    if (c.bounds_roof) {
         int open = -1;
         for (int k = 0; k < s.open_count; k++) {
             if (s.open[k].footprint_id == c.footprint_id) open = k;

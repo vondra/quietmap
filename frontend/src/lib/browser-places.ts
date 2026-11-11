@@ -65,3 +65,8 @@ export function loadPlaceTitles(): PlaceTitle[] | null {
 export function savePlaceTitles(titles: PlaceTitle[]): void {
   store(PLACE_TITLES_KEY, titles)
 }
+
+/** This browser's places: the recent places and the names given (none when storage keeps none). */
+export function loadBrowserPlaces(): { recent: RecentPlace[], titles: PlaceTitle[] } {
+  return { recent: loadRecentPlaces(), titles: loadPlaceTitles() ?? [] }
+}

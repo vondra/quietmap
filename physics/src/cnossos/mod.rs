@@ -104,10 +104,6 @@ pub struct StateBoundary {
     pub attenuation_db: [f64; BANDS],
     /// The same with every ground term removed (the "no ground" hypothesis of the display).
     pub without_ground_db: [f64; BANDS],
-    /// A_ground of the whole path, diffraction ignored (the free-field hypothesis).
-    pub whole_path_ground_db: [f64; BANDS],
-    /// Signed path difference of the diffraction path (0 without one).
-    pub path_difference_m: f64,
 }
 
 /// Reusable per-thread buffers; `path` holds the diffraction points of the last boundary,
@@ -119,17 +115,6 @@ pub struct VerticalPathScratch {
     hull: Vec<(f64, f64, usize)>,
     pub path: DiffractionPath,
     pub calm_path: DiffractionPath,
-}
-
-/// A_boundary of `path` in `state`.
-pub fn state_boundary(
-    path: &VerticalPath<'_>,
-    state: MeteorologicalState,
-    scratch: &mut VerticalPathScratch,
-) -> StateBoundary {
-    collect_candidates(path, &mut scratch.candidates);
-    let direct = diffraction::DirectPath::of(path);
-    boundary_on_candidates(path, state, &direct, scratch)
 }
 
 /// A_boundary of `path` in both states (homogeneous, favourable), the candidates and the direct

@@ -20,9 +20,7 @@ html, body {
   bottom: 10px !important;
 }
 
-/* The bottom-right corner is one row: the base map's credits, always shown (CARTO asks for its
-   credit on the map, not behind a click), then the ⓘ to the About pages, which credit every source
-   of the noise model (AboutControl). Three classes: maplibre's own rules come later. */
+/* The basemap's required attribution stays at the bottom; all noise-model credits live in About. */
 .maplibregl-ctrl-bottom-right {
   display: flex;
   align-items: center;
@@ -100,11 +98,10 @@ html, body {
   }
   /* The ⓘ is a button of the control row, left of the layers button (10 + 44 + 10 px from the edge),
      in the row's look (tucked under the row in maplibre's black disc it looked stray, owner
-     2026-10-16). The credits stand under the search bar and what stands under its field (the open
-     place's row, its recordings; SearchBar measures it), where neither sheet reaches: a sheet over
-     them would hide them. */
+     2026-10-16). The control row and sheets leave the attribution footer clear. */
+  :root { --map-footer-height: 16px; }
   .maplibregl-ctrl-bottom-right {
-    bottom: 16px !important;
+    bottom: calc(16px + var(--map-footer-height)) !important;
     right: 64px !important;
     padding: 0;
   }
@@ -115,17 +112,24 @@ html, body {
   }
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
     position: fixed;
-    top: calc(var(--map-top-bar-bottom, calc(env(safe-area-inset-top, 0px) + 3.5rem)) + 0.5rem);
-    right: var(--map-gutter);
-    width: max-content;
-    max-width: calc(100vw - 2 * var(--map-gutter));
+    bottom: 0;
+    left: 0;
+    right: 0;
+    box-sizing: border-box;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 16px;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-radius: 0;
     line-height: 16px;
+    text-align: center;
   }
 }
 
-/* Search bar: one horizontal placement. Below md the bar takes the width
-   between the gutters, its field leaving the account's 44 px button its room
-   (SearchBar). From md up the bar stays centered while that leaves the card
+/* Search bar: one horizontal placement for the field and every row beneath it.
+   Below md the whole bar leaves the account's 44 px button its room.
+   From md up the bar stays centered while that leaves the card
    column untouched, otherwise slides left to sit one gutter before the column,
    and narrows once even that no longer fits (clamp with min > max resolves to
    min). Audit 2026-09-06: the centered bar covered the Layers header between
@@ -133,7 +137,7 @@ html, body {
 .map-top-bar {
   position: fixed;
   left: var(--map-gutter);
-  width: calc(100% - 2 * var(--map-gutter));
+  width: calc(100% - 3 * var(--map-gutter) - 2.75rem);
 }
 @media (width >= theme(--breakpoint-md)) {
   .map-top-bar {
@@ -156,17 +160,13 @@ html, body {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
@@ -184,17 +184,13 @@ html, body {
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
     --popover: oklch(0.205 0 0);
     --popover-foreground: oklch(0.985 0 0);
     --primary: oklch(0.922 0 0);
     --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.269 0 0);
     --muted-foreground: oklch(0.708 0 0);
     --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
@@ -208,17 +204,13 @@ html, body {
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
   --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
@@ -226,7 +218,6 @@ html, body {
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
 }
 
 @layer base {

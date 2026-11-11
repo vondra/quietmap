@@ -7,20 +7,22 @@ import FlyToLocation from './FlyToLocation'
 import DetailPopup from './DetailPopup'
 import FlightTrackLayer from './FlightTrackLayer'
 import SegmentFanLayer from './SegmentFanLayer'
-import QuietZonesLayer from './QuietZonesLayer'
 import HeatmapOverlay from './HeatmapOverlay'
 import { HEATMAP_LAYERS, publishes, sourceOf, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
 import AboutControl from './AboutControl'
+import MapCredits from './MapCredits'
 import IsochronLayer from './IsochronLayer'
 import DataLayersOverlay from './DataLayersOverlay'
 import StayLayer from './StayLayer'
 import type { Stay, StaySearch } from '../lib/stays'
 import type { DataLayerId } from '../lib/data-layers'
 import MapStateSync from './MapStateSync'
-import { DEFAULT_BASEMAP, OSM_CREDIT, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
-import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
+import PublicOverlayOrder from './PublicOverlayOrder'
+import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
+import { QUIET_THRESHOLD_DEFAULT } from '../lib/url-state'
 import type { SelectedLocation } from './FlyToLocation'
+import { pixelPadding, type MapCamera } from '../lib/url-state'
 import type { Metric } from '../lib/hm3-decoder'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -32,11 +34,9 @@ const ARRIVED_PX = 2
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
   selectedLocation?: SelectedLocation | null
-  initialCenter?: [number, number]
-  initialZoom?: number
+  view: MapCamera
   basemap?: BasemapId
-  onViewChange?: (lat: number, lng: number, zoom: number) => void
-  onHashState?: (next: UrlState) => void
+  onViewChange: (view: MapCamera) => void
   onDetailData?: (data: PopupUpdate) => void
   onDetailPositionChange?: (pos: { lat: number; lng: number } | null) => void
   onDetailError?: (message: string) => void
@@ -47,6 +47,7 @@ interface MapViewProps {
   segmentFan?: SegmentFan | null
   /** The area reachable from the open place, once drawn. */
   isochron?: GeoJSON.FeatureCollection | null
+  fitIsochron?: boolean
   /** The quantity the heatmap, its hover and the quiet zones show. */
   metric?: Metric
   quietClustersEnabled?: boolean
@@ -54,7 +55,7 @@ interface MapViewProps {
   heatmapLayers?: Record<string, boolean>
   dataLayers?: DataLayerId[]
   /** The places to stay for the stay searched, when shown; a click on one selects it. */
-  stays?: { search: StaySearch; onSelect: (stay: Stay) => void } | null
+  stays?: { search: StaySearch; maxPrice: number | null; onSelect: (stay: Stay) => void } | null
   /** Hands the parent a function that fires the map's GeolocateControl — the
    *  mobile locate box in the BasemapBar row triggers GPS through it. */
   registerGeolocateTrigger?: (trigger: () => void) => void
@@ -66,14 +67,13 @@ interface MapViewProps {
 }
 
 export default function MapView({
-  isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, highlight, segmentFan, isochron,
+  isCurrentDetailPosition, selectedLocation, view,
+  basemap, onViewChange, onDetailData, onDetailPositionChange, onDetailError, detailPosition, highlight, segmentFan, isochron, fitIsochron,
   metric = 'nden', quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers, stays,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
-  const center = initialCenter ?? [49.8, 15.5]
-  const zoom = initialZoom ?? 8
   const bm = basemap ?? DEFAULT_BASEMAP
+  const activeQuietThreshold = quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null
   const [flyToPos, setFlyToPos] = useState<{ lat: number; lng: number } | null>(null)
   const [mapStyle, setMapStyle] = useState<string | StyleSpecification | null>(null)
 
@@ -145,27 +145,26 @@ export default function MapView({
     <Map
       ref={mapRef}
       initialViewState={{
-        latitude: center[0],
-        longitude: center[1],
-        zoom,
+        latitude: view.lat,
+        longitude: view.lng,
+        zoom: view.zoom,
+        bearing: view.bearing,
+        pitch: view.pitch,
+        padding: pixelPadding(view.padding, window.innerWidth, window.innerHeight),
       }}
       style={{ width: '100%', height: '100%' }}
       mapStyle={mapStyle}
       onMoveEnd={handleMoveEnd}
       fadeDuration={0}
       maxZoom={16}
-      // The base map's credits, never folded: CARTO asks for its credit "visible on the map, legible,
-      // in any corner. Not hidden, faded or behind a click" (carto.com/attribution), Esri for its
-      // sources' names on the map. They name OpenStreetMap, whose credit the noise model owes too
-      // (`OSM_CREDIT`); every other source of the model is credited on the About pages, the ⓘ
-      // beside them (AboutControl).
-      attributionControl={{ compact: false, customAttribution: OSM_CREDIT }}
+      attributionControl={false}
       // Defaults (deceleration 2500, maxSpeed 1400) give ~1.25 s inertia on a medium
       // flick — too sluggish. 4000 / 1100 lands around ~780 ms, between the default
       // and a Google-Maps-snappy feel.
       dragPan={{ deceleration: 4000, maxSpeed: 1100 }}
     >
       <NavigationControl position="bottom-left" showCompass={false} />
+      <MapCredits />
       <AboutControl />
       {/* Precise location is user-triggered (Google pattern): the initial view
           only approximates from browser language (utils/initial-view.ts); GPS
@@ -199,12 +198,10 @@ export default function MapView({
         // trackuserlocationend — without this the row's icon stays blue.
         onError={() => onGeolocateActiveChange?.(false)}
       />
-      {/* Noise heatmap (HM3 tiles out of the pmtiles archives, decoded +
-          energy-summed + palette-mapped in the browser) below the labels,
-          above the basemap, on its own interleaved deck.gl canvas. */}
-      <HeatmapOverlay source={heatmapSource} />
+      {/* Noise and quiet zones share the map's context below data layers and labels. */}
+      <HeatmapOverlay source={heatmapSource} metric={metric}
+        quietThreshold={activeQuietThreshold} />
       <DataLayersOverlay layers={dataLayers ?? []} />
-      <QuietZonesLayer enabled={quietClustersEnabled ?? false} metric={metric} threshold={quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric]} />
       <FlyToLocation location={selectedLocation ?? null} onArrived={handleArrived} />
       <HoverTooltip source={heatmapSource} />
       <DetailPopup
@@ -217,13 +214,15 @@ export default function MapView({
         onStaySelect={stays?.onSelect}
       />
       {/* A new search starts from no pins. */}
-      {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} />}
+      {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} maxPrice={stays.maxPrice}
+        metric={metric} quietThreshold={activeQuietThreshold} />}
       {/* The segments above the opened row's highlight: a style rebuild adds the layers in this
           order. */}
-      <IsochronLayer area={isochron ?? null} />
+      <IsochronLayer area={isochron ?? null} fit={fitIsochron ?? false} />
       <FlightTrackLayer highlight={highlight ?? null} />
       <SegmentFanLayer fan={segmentFan ?? null} />
-      {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}
+      <PublicOverlayOrder />
+      <MapStateSync view={view} onViewChange={onViewChange} />
     </Map>
   )
 }

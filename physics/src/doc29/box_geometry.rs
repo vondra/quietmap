@@ -1,8 +1,8 @@
-//! The size of an aircraft box (PLAN section 5): a web-map cell horizontally and a slab of the
-//! same edge vertically, counted as clearance above the highest terrain within one edge. The edge
-//! grows with clearance so that one edge spans at most `BOX_EDGE_LEVEL_STEP_DB` of the sizing
-//! slope at that clearance (the slant to a receiver right below), never finer than the first
-//! layer of about 50 m: nearer the ground the altitude error of the data dominates anyway.
+//! The size of an aircraft box: a web-map cell horizontally and a slab of the same edge vertically,
+//! counted as clearance above the highest terrain within one edge. The edge grows with clearance so
+//! that one edge spans at most `BOX_EDGE_LEVEL_STEP_DB` of the sizing slope at that clearance (the
+//! slant to a receiver right below), never finer than the first layer of about 50 m: nearer the
+//! ground the altitude error of the data dominates anyway.
 
 use super::npd::{
     METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, NPD_LAST_DISTANCE_M, NPD_NEAREST_SLANT_M,
@@ -46,8 +46,9 @@ fn sizing_slope_db_per_m(slant_m: f64) -> f64 {
 
 /// D: the level change one box edge may span along the steepest NPD curve (dB).
 pub const BOX_EDGE_LEVEL_STEP_DB: f64 = 3.0;
-/// D of the far boxes, read for the z12 tiles beyond 3 km of the click: that far the steepest
-/// slope is a fraction of the one at the boxes' clearance, so four times the edges hold.
+/// D of the far boxes, read for the z12 tiles beyond 3 km of the click (that far the steepest
+/// slope is a fraction of the one at the boxes' clearance, so four times the edges hold) and for
+/// the flights' lambda everywhere.
 pub const FAR_BOX_EDGE_LEVEL_STEP_DB: f64 = 12.0;
 /// The first layer's edge (m): the web-map zoom whose cell edge is nearest to it is the finest.
 pub const FIRST_LAYER_EDGE_M: f64 = 50.0;

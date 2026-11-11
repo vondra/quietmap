@@ -4,14 +4,16 @@
 //! touchdown point, the class's typical lengths and speeds).
 
 use super::legs::GroundLeg;
-use super::lines::{Aeroway, Aeroways};
+use super::lines::{Aeroway, Aeroways, distance_m};
 use super::low_ends::LowEnd;
-use crate::aircraft::flat::{
-    M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, flat_distance_m, signed_longitude_delta,
-};
+use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, signed_longitude_delta};
 use physics::doc29::npd::Family;
 use physics::doc29::profiles_generated::CLASS_FAMILY;
 use std::collections::{BTreeMap, HashMap};
+
+#[cfg(test)]
+#[path = "runways_tests.rs"]
+mod tests;
 
 /// A low end lies within this distance of a runway's axis (m) and heads within this angle of it.
 const MAX_LATERAL_M: f64 = 150.0;
@@ -204,7 +206,7 @@ pub struct RollPath {
 }
 
 impl Runways {
-    pub fn new(aeroways: &Aeroways) -> Self {
+    pub fn new(aeroways: &mut Aeroways) -> Self {
         let mut pieces_of: BTreeMap<i64, (u32, Vec<Piece>)> = BTreeMap::new();
         for line in &aeroways.lines {
             if line.aeroway == Aeroway::Runway {
@@ -252,7 +254,9 @@ impl Runways {
                     });
                     if along {
                         let (a, b) = (root(&mut group, a), root(&mut group, b));
-                        group[b] = a;
+                        // The same joined runway keeps its index and direction regardless
+                        // of the hash map's node order.
+                        group[a.max(b)] = a.min(b);
                     }
                 }
             }
@@ -269,12 +273,9 @@ impl Runways {
         for (first, joined) in members {
             // The joined ways' two ends farthest apart, in the first way's direction.
             let ends: Vec<[f64; 2]> = joined.iter().flat_map(|&way| ways[way].2).collect();
-            let apart = |a: [f64; 2], b: [f64; 2]| {
-                flat_distance_m(a[0] as f32, a[1] as f32, b[0] as f32, b[1] as f32)
-            };
             let [a, b] = (ends.iter())
                 .flat_map(|&a| ends.iter().map(move |&b| [a, b]))
-                .max_by(|x, y| apart(x[0], x[1]).total_cmp(&apart(y[0], y[1])))
+                .max_by(|x, y| distance_m(x[0], x[1]).total_cmp(&distance_m(y[0], y[1])))
                 .expect("a way has ends");
             let [start, end] = ways[first].2;
             let reversed = Runway::new([a, b], ways[first].1)
@@ -292,7 +293,39 @@ impl Runways {
                 runways.runways.push(runway);
             }
         }
+        runways.resolve_airports(aeroways);
         runways
+    }
+
+    /// Resolve disagreement between joined ways from every microsegment of their geometry.
+    /// Ground-line events and inferred rolls must use the same owner.
+    fn resolve_airports(&mut self, aeroways: &mut Aeroways) {
+        let mut pieces: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        for (index, line) in aeroways.lines.iter().enumerate() {
+            if line.aeroway == Aeroway::Runway
+                && let Some(&runway) = self.by_way.get(&line.osm_id)
+            {
+                pieces.entry(runway).or_default().push(index);
+            }
+        }
+        for (runway, indices) in pieces {
+            let first = aeroways.lines[indices[0]].airport;
+            if indices
+                .iter()
+                .all(|&index| aeroways.lines[index].airport == first)
+            {
+                continue;
+            }
+            let geometry: Vec<_> = indices
+                .iter()
+                .map(|&index| aeroways.lines[index].ends)
+                .collect();
+            let airport = aeroways.airport_for_geometry(&geometry);
+            self.runways[runway as usize].airport = airport;
+            for index in indices {
+                aeroways.lines[index].airport = airport;
+            }
+        }
     }
 
     /// The airport of runway `runway` (an index into [`Aeroways::airports`]).

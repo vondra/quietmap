@@ -52,7 +52,7 @@ export default function HoverTooltip({ source }: Props) {
   if (!hover || !cell || !sample) return null
   // '…' until this sample's tile has landed: a previous tile's cell would mislead.
   const readout = loaded?.key === sample.key ? heatmapCellReadoutText(readHeatmapCell(loaded.tile, cell)) : '…'
-  return <MapHoverBox hover={hover} placement="above" testId="heatmap-hover">{readout}</MapHoverBox>
+  return <MapHoverBox hover={hover} testId="heatmap-hover">{readout}</MapHoverBox>
 }
 
 function heatmapCellReadoutText(readout: HeatmapCellReadout): string {

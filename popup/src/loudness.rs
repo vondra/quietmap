@@ -77,7 +77,7 @@ pub struct Curve {
     /// The spectrum's third-octave levels set to an A-weighted level of 0 dB (`-inf` silent);
     /// `None` for a spectrum without energy.
     shape_db: Option<[f64; THIRD_OCTAVES]>,
-    values: Vec<OnceLock<f64>>,
+    values: OnceLock<Vec<OnceLock<f64>>>,
 }
 
 impl Curve {
@@ -87,7 +87,6 @@ impl Curve {
             .zip(A_WEIGHTING_DB)
             .map(|(value, weight)| value * energy(weight))
             .sum();
-        let steps = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
         Curve {
             shape_db: (a_weighted > 0.0).then(|| {
                 thirds.map(|value| {
@@ -98,7 +97,7 @@ impl Curve {
                     }
                 })
             }),
-            values: (0..=steps).map(|_| OnceLock::new()).collect(),
+            values: OnceLock::new(),
         }
     }
 
@@ -109,7 +108,11 @@ impl Curve {
 
     /// The loudness (sone) at the curve's `step`th whole decibel.
     fn value(&self, step: usize) -> f64 {
-        *self.values[step].get_or_init(|| {
+        let values = self.values.get_or_init(|| {
+            let steps = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
+            (0..=steps).map(|_| OnceLock::new()).collect()
+        });
+        *values[step].get_or_init(|| {
             self.shape_db.map_or(0.0, |shape| {
                 let level_db = CURVE_LOW_DB + step as f64;
                 zwicker_loudness_sone(&shape.map(|db| db + level_db))
@@ -119,7 +122,7 @@ impl Curve {
 
     /// The loudness (sone) at `level_db`.
     pub fn at(&self, level_db: f64) -> f64 {
-        let last = self.values.len() - 1;
+        let last = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
         let position = (level_db - CURVE_LOW_DB).clamp(0.0, last as f64);
         let below = (position.floor() as usize).min(last - 1);
         let (low, high) = (self.value(below), self.value(below + 1));
@@ -422,6 +425,41 @@ mod tests {
         assert!((night - road[2].at(70.0) / 3.0).abs() < 1e-9);
     }
 
+    /// Infrequent favourable propagation must not become a moderate hum over half the day.
+    #[test]
+    fn map_weather_keeps_infrequent_favourable_sound_within_one_phon() {
+        use crate::percentiles::tests::contributor;
+        let road = road_curves();
+        for share in [0.2, 0.3, 0.4, 0.6, 0.7, 0.8] {
+            let (calm, favourable) = (energy(35.0), energy(55.0));
+            let mean = calm + share * (favourable - calm);
+            let mut source = contributor(1, Layer::Industry, 0.0, 300.0);
+            source.energy = [mean; PERIODS];
+            source.weather = Weather::default();
+            source
+                .weather
+                .add(&source.energy, &[[calm; PERIODS], [favourable; PERIODS]]);
+            let line = Line::of(
+                &source.group(),
+                &Passes::read(source.layer, &serde_json::Value::Null),
+            )
+            .unwrap();
+            let at = |resolution| {
+                let distributions = crate::percentiles::distributions_of(
+                    std::slice::from_ref(&line),
+                    [0.0; PERIODS],
+                    resolution,
+                );
+                loudness(&distributions, &road).nden_sone
+            };
+            let difference = 10.0 * (at(Resolution::MAP) / at(Resolution::CLICK)).log2();
+            assert!(
+                difference.abs() <= 1.0,
+                "favourable share {share}: {difference} phon"
+            );
+        }
+    }
+
     /// A source alone: steady, its loudness at its level all day; a car every half hour 4 m away
     /// far under its steady self though its energy is the same; over a steady floor, the floor's
     /// loudness at least.
@@ -433,10 +471,8 @@ mod tests {
             (12.0 * road[0].at(50.0) + 4.0 * road[1].at(55.0) + 8.0 * road[2].at(60.0)) / 24.0;
         assert!((steady - expected).abs() < 1e-9);
         let weather = Weather::default();
-        let lane = crate::percentiles::Line::flights(
-            &weather,
-            ([energy(50.0); PERIODS], [energy(50.0) * 1e-3; PERIODS]),
-        );
+        let lane =
+            crate::percentiles::Line::flights(&weather, ([energy(50.0); PERIODS], [1e-3; PERIODS]));
         let rare = own_nden(Some(&lane), [0.0; PERIODS], &road);
         assert!(rare > 0.0 && rare < 0.5 * steady, "{rare} {steady}");
         let over_floor = own_nden(Some(&lane), [energy(45.0); PERIODS], &road);

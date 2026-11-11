@@ -11,6 +11,7 @@ pub mod aircraft_events;
 pub mod aircraft_rolls;
 pub mod aircraft_tracks;
 pub mod geo;
+mod little_endian;
 pub mod obstacles;
 mod rate;
 pub mod sources;
@@ -27,7 +28,8 @@ pub enum Kind {
     Obstacles,
     Sources,
     Aircraft,
-    /// The same format with boxes of a coarser rule, read for tiles beyond 3 km of the click.
+    /// The same format with boxes of a coarser rule, read for tiles beyond 3 km of the click and for
+    /// the flights' lambda everywhere.
     AircraftFar,
     /// What flies over each cell: flights a day above 50, 60 and 70 dB.
     AircraftEvents,
@@ -58,7 +60,9 @@ pub const COMPLETION_MARKER: &str = "complete";
 pub const LAYOUT: &str = "qmsq1";
 
 mod completion;
-pub use completion::{check_year_complete, manifest_hash, mark_year_complete};
+pub use completion::{
+    check_year_complete, manifest_hash, mark_year_complete, year_completion_note,
+};
 
 /// A tile whose bytes do not follow its kind's format: the click fails, never answers quieter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

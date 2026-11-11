@@ -66,6 +66,8 @@ pub struct Received {
     pub bands: Bands,
     pub path: Path,
     pub edges: [[f64; 3]; 3],
+    /// The receiver's distance from the piece's emitters ([`Candidate::slant_distance_from`]).
+    pub slant_distance_m: f64,
 }
 
 /// How a source's sound reaches the receiver, its rays' A-weighted energy per period summed after
@@ -275,6 +277,11 @@ pub fn received_bands(
         bands: [[0.0; BANDS]; PERIODS],
         path: Path::default(),
         edges: [[0.0; 3]; 3],
+        slant_distance_m: candidate.slant_distance_from(
+            receiver.position,
+            receiver.altitude_m,
+            source.height_m,
+        ),
     };
     source_rays(receiver, candidate, source, scratch, &mut |ray| {
         add_ray(&mut received, &source.energy, &ray.terms, ray.weight)

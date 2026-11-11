@@ -13,7 +13,11 @@ const FLAT_FAVOURABLE_GAIN_BOUND_DB: f64 = 9.6;
 
 /// Largest −A_boundary over the bands of one state.
 fn gain_db(path: &VerticalPath<'_>, state: MeteorologicalState) -> f64 {
-    let boundary = state_boundary(path, state, &mut VerticalPathScratch::default());
+    let [homogeneous, favourable] = state_boundaries(path, &mut VerticalPathScratch::default());
+    let boundary = match state {
+        MeteorologicalState::Homogeneous => homogeneous,
+        MeteorologicalState::Favourable => favourable,
+    };
     boundary
         .attenuation_db
         .iter()

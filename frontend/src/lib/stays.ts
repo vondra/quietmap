@@ -114,13 +114,6 @@ export function withCheckout(search: StaySearch, checkout: string): StaySearch {
   return { ...search, checkout: checkout > search.checkin ? checkout : addDays(search.checkin, 1) }
 }
 
-/** The search still possible at `now`: a check-in Stay22 no longer takes (a tab open past midnight)
- *  moved to its first, the stay's length kept; else the search itself. */
-export function freshSearch(search: StaySearch, now = new Date()): StaySearch {
-  const first = firstCheckin(now)
-  return search.checkin < first ? withCheckin(search, first) : search
-}
-
 /** The server's places for a map view (centred in the world copy -180..180): its box, or two where it
  *  crosses the antimeridian, a side each, as the server takes boxes within ±180°. */
 export function stayRequests(view: Omit<ViewBox, 'zoom'>, search: StaySearch): string[] {

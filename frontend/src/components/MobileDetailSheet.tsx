@@ -1,9 +1,12 @@
 // The phone popup's bottom sheet, with a drag handle, a collapsed peek and the streamed answer.
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
+import { useViewScroll } from '../hooks/useViewScroll'
+import { useIsDesktop } from '../hooks/useIsDesktop'
 import type { Metric } from '../lib/hm3-decoder'
 import { X } from 'lucide-react'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
+import SharePlace from './SharePlace'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import type { Stay } from '../lib/stays'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
@@ -12,12 +15,11 @@ import { ICON_BUTTON } from './ui/button'
 // Lazy popup body: see DetailCard.
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
 
-// The handle over the sheet's body (measured on a 390 x 844 phone: 28 px, the opened sheet reaching
-// 410 px from the top).
-const SHEET_CHROME_PX = 28
+// The handle and touch actions above the sheet's body.
+const SHEET_CHROME_PX = 44
 
 /** How far from the viewport's top the opened sheet reaches at most: its body is at most half the
- *  viewport less 16 px (`max-h-[calc(50dvh-16px)]` below), the handle over it. */
+ *  viewport less 16 px and the attribution footer, the handle over it. */
 export function sheetTop(viewportHeight: number): number {
   return viewportHeight / 2 + 16 - SHEET_CHROME_PX
 }
@@ -25,22 +27,27 @@ export function sheetTop(viewportHeight: number): number {
 interface MobileDetailSheetProps {
   /** The quantity the popup leads with. */
   metric: Metric
+  expanded: boolean
+  onExpandedChange: (expanded: boolean) => void
   data: PopupUpdate | null
   // Same contract as DetailCard: the sheet springs open on click (position) with a skeleton and
   // redraws on every streamed update.
   position?: { lat: number; lng: number } | null
   error?: string | null
   onClose: () => void
+  getShareUrl: () => string
   onHighlight: (key: string | null) => void
   calculationOpen: boolean
   onCalculationToggle: () => void
   onFan: (source: string, fan: SegmentFan | null) => void
   /** The place to stay at the point, when its pin opened the popup: above the answer, in the peek. */
   stay: Stay | null
+  stayMessage: string | null
 }
 
-export default function MobileDetailSheet({ metric, data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay }: MobileDetailSheetProps) {
-  const [expanded, setExpanded] = useState(false)
+export default function MobileDetailSheet({ metric, expanded, onExpandedChange: setExpanded, data, position, error, onClose, getShareUrl, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, stayMessage }: MobileDetailSheetProps) {
+  const desktop = useIsDesktop()
+  const scrollRef = useViewScroll('detail', !desktop)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
   const dragRef = useRef({ startY: 0, isDragging: false })
@@ -53,7 +60,6 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
   // one point keep whatever the visitor made of the sheet since.
   useEffect(() => {
     if (position) {
-      setExpanded(true)
       setDismissing(false)
       setDragOffset(0)
       if (dismissTimeoutRef.current !== null) {
@@ -106,7 +112,7 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
   const transition = dragRef.current.isDragging ? 'none' : 'transform 0.3s ease-out'
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[2000] md:hidden">
+    <div className="fixed bottom-(--map-footer-height) left-0 right-0 z-[2000] md:hidden">
       <div
         data-testid="mobile-detail-sheet"
         className="relative bg-background rounded-t-xl shadow-2xl"
@@ -114,11 +120,14 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
       >
         {/* A visible way to close it, as the desktop card has; a swipe down on the handle closes it
             too, but nothing on a phone tells that. */}
-        <button type="button" onClick={onClose} aria-label="Close" className={`${ICON_BUTTON} absolute top-0 right-1.5 z-10`}>
-          <X className="size-5" />
-        </button>
+        <div className="absolute top-0 right-1.5 z-10 flex">
+          <SharePlace key={`${position.lat},${position.lng}`} getUrl={getShareUrl} />
+          <button type="button" onClick={onClose} aria-label="Close" className={`${ICON_BUTTON} size-11`}>
+            <X className="size-5" />
+          </button>
+        </div>
         <div
-          className="flex justify-center py-3 cursor-grab"
+          className="flex h-11 items-center justify-center cursor-grab"
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
@@ -134,8 +143,9 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
             a fixed cap; the tap now reaches onClick, so this state is real
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
         {stay && <StayHeader stay={stay} />}
-        <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px)]' : 'overflow-hidden max-h-24'}`}>
-          {showSkeleton
+        {stayMessage && <p role="status" data-testid="stay-status" className="border-b border-border px-2.5 py-2 text-xs text-muted-foreground">{stayMessage}</p>}
+        <div key={`${position.lat},${position.lng}`} ref={scrollRef} className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px-var(--map-footer-height))]' : 'overflow-hidden max-h-24'}`}>
+          {!desktop && (showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
                 <NoiseDetailContent
@@ -146,7 +156,7 @@ export default function MobileDetailSheet({ metric, data, position, error, onClo
                   onCalculationToggle={onCalculationToggle}
                   onFan={onFan}
                 />
-              </Suspense>}
+              </Suspense>)}
         </div>
       </div>
     </div>

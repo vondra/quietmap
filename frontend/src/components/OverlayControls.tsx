@@ -1,11 +1,11 @@
 // The overlay switches: the quiet zones with their threshold slider, and the places to stay with
 // the stay they are searched for.
-import { useState, useEffect, useRef } from 'react'
 import { BedDouble, TreePine } from 'lucide-react'
-import { QUIET_THRESHOLDS } from '../hooks/useUrlState'
+import { QUIET_THRESHOLDS } from '../lib/url-state'
 import type { Metric } from '../lib/hm3-decoder'
 import type { StaySearch } from '../lib/stays'
 import StaySearchFields from './StaySearchFields'
+import { BUTTON } from './ui/button'
 import { Switch } from './ui/switch'
 
 export interface OverlayControlsProps {
@@ -17,6 +17,10 @@ export interface OverlayControlsProps {
   onQuietThresholdChange: (threshold: number) => void
   staysOn: boolean
   onStaysChange: (on: boolean) => void
+  stayMaxPrice: number | null
+  onStayMaxPriceChange: (price: number | null) => void
+  reachLabel: string | null
+  onClearReach: () => void
   staySearch: StaySearch
   onStaySearchChange: (search: StaySearch) => void
 }
@@ -43,23 +47,14 @@ function LoudnessSlider({ metric, value, onChange, testId }: {
   metric: Metric; value: number; onChange: (v: number) => void; testId: string
 }) {
   const thresholds = QUIET_THRESHOLDS[metric]
-  const [local, setLocal] = useState(value)
-  const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
-  useEffect(() => { setLocal(value) }, [value])
-  useEffect(() => {
-    if (local === value) return
-    const t = setTimeout(() => onChangeRef.current(local), 300)
-    return () => clearTimeout(t)
-  }, [local, value])
-  const at = Math.max(0, thresholds.findIndex((t) => t === local))
+  const at = Math.max(0, thresholds.findIndex(t => t === value))
   return (
     <div className="flex items-center gap-2 ml-7 mt-0.5 mb-1">
       <span className="text-xs text-muted-foreground shrink-0">below</span>
       <input type="range" data-testid={testId} value={at}
-        onChange={(e) => setLocal(thresholds[parseInt(e.target.value, 10)])} min={0} max={thresholds.length - 1} step={1}
+        onChange={(e) => onChange(thresholds[parseInt(e.target.value, 10)])} min={0} max={thresholds.length - 1} step={1}
         className="flex-1 h-1 accent-primary cursor-pointer" />
-      <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">{local} {metric === 'lden' ? 'dB' : 'sone'}</span>
+      <span className="text-xs text-muted-foreground tabular-nums w-14 text-right">{value} {metric === 'lden' ? 'dB' : 'sone'}</span>
     </div>
   )
 }
@@ -67,7 +62,7 @@ function LoudnessSlider({ metric, value, onChange, testId }: {
 export default function OverlayControls({
   metric, quietClustersEnabled, onQuietClustersChange,
   quietThreshold, onQuietThresholdChange,
-  staysOn, onStaysChange, staySearch, onStaySearchChange,
+  staysOn, onStaysChange, staySearch, onStaySearchChange, stayMaxPrice, onStayMaxPriceChange, reachLabel, onClearReach,
 }: OverlayControlsProps) {
   return (
     <div>
@@ -75,7 +70,7 @@ export default function OverlayControls({
         active={quietClustersEnabled}
         icon={<TreePine className="size-4" />}
         label="Quiet zones"
-        tooltip="Highlight areas where the total noise (all sources) stays below a threshold"
+        tooltip="Highlight areas below the total-noise threshold; places to stay are filtered by the same limit"
         onClick={() => onQuietClustersChange(!quietClustersEnabled)}
       />
       {quietClustersEnabled && (
@@ -86,10 +81,17 @@ export default function OverlayControls({
         active={staysOn}
         icon={<BedDouble className="size-4" />}
         label="Places to stay"
-        tooltip="Hotels and apartments with a room for your dates and their prices (Stay22); click one for its noise"
+        tooltip="Hotels and apartments with a room for your dates and their prices; click one for its noise"
         onClick={() => onStaysChange(!staysOn)}
       />
-      {staysOn && <StaySearchFields search={staySearch} onChange={onStaySearchChange} />}
+      {staysOn && <StaySearchFields search={staySearch} onChange={onStaySearchChange} maxPrice={stayMaxPrice} onMaxPriceChange={onStayMaxPriceChange} />}
+      {reachLabel && (
+        <div className="ml-7 flex items-center gap-2 py-1 text-xs" data-testid="stay-reach">
+          <span className="min-w-0 flex-1 text-muted-foreground">{reachLabel}</span>
+          <button type="button" aria-label="Clear reachable area" onClick={onClearReach}
+            className={BUTTON}>Clear</button>
+        </div>
+      )}
     </div>
   )
 }

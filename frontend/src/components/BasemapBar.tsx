@@ -67,7 +67,7 @@ export default function BasemapBar({ basemap, onBasemapChange, onLocate, locatin
       {/* Mobile: horizontal row, bottom-left — basemap trio + locate box share
           ONE flex container, so their baseline, margins and sizes can never
           drift apart. */}
-      <div className="flex md:hidden items-center gap-[10px] fixed bottom-[16px] left-[10px] z-[1002]">
+      <div className="flex md:hidden items-center gap-[10px] fixed bottom-[calc(16px+var(--map-footer-height))] left-[10px] z-[1002]">
         <div className="flex rounded-lg bg-background overflow-hidden" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}>
           {BASEMAPS.map((b, i) => (
             <button

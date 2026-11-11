@@ -1,6 +1,6 @@
 //! Aircraft box SEL as linear period energies from its average pieces through shared Doc 29 corrections.
 //!
-//! One aircraft box at one receiver: the click-time equation of PLAN section 5. A box sums the
+//! One aircraft box at one receiver: the click-time equation. A box sums the
 //! pieces of every flight that crossed it; the click reads the summed energies at the slant to
 //! its average aircraft (the emission-weighted centroid, one axis and gradient, the mean piece
 //! length) and applies to that average piece what the kernel applies to one segment: Delta_F with
@@ -24,7 +24,7 @@ use super::corrections::{
 };
 use super::npd::{Installation, NPD_DISTANCES, NPD_LAST_DISTANCE_M, NpdPosition, TAIL_ANCHOR_M};
 use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, screened_sel_db};
-use super::segment::{ClosestPoints, closest_points};
+use super::segment::closest_points;
 use crate::bands::{PERIODS, energy};
 
 /// The NPD distance (1,000 ft) whose energy weighs the periods' piece lengths into one.
@@ -56,23 +56,16 @@ pub struct AircraftBoxAtReceiver<'a> {
     pub ground_m: f64,
 }
 
-/// A box's SEL energies at the receiver per period and the terms that made them.
+/// A box's SEL energies at the receiver per period, its closest slant and its installation mix.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxSel {
     /// After screening (linear energy per period, zero silent).
     pub sel_energy: [f64; PERIODS],
-    pub closest: ClosestPoints,
+    /// The slant to the average piece's line at its closest point (m).
     pub closest_slant_m: f64,
-    /// Per period (each with its mean piece length).
-    pub finite_segment_energy_fraction: [f64; PERIODS],
-    pub lateral_attenuation_db: f64,
-    /// Per period, the energy gain of its installation mix.
-    pub installation_energy_gain: [f64; PERIODS],
     /// Per period, the received energy's shares of wing-mounted jets, fuselage-mounted jets and
     /// propellers.
     pub installation_fractions: [[f64; 3]; PERIODS],
-    pub terrain_loss_db: f64,
-    pub building_loss_db: f64,
 }
 
 /// A lower bound on the closest-line slant for receivers within `half_extent_m` of the origin.
@@ -160,8 +153,8 @@ fn shares_at(shares: [[f64; 3]; 2], fraction: f64) -> [f64; 3] {
     std::array::from_fn(|k| shares[0][k] + fraction * (shares[1][k] - shares[0][k]))
 }
 
-/// The box's SEL sums at the receiver: its two average pieces, or one without a spread (the terms
-/// besides the sums are the lower piece's).
+/// The box's SEL sums at the receiver: its two average pieces, or one without a spread (the
+/// closest slant is the lower piece's).
 pub fn box_sel_at_receiver(
     aircraft_box: &AircraftBoxAtReceiver,
     horizons: &impl ReceiverHorizons,
@@ -285,14 +278,8 @@ fn average_piece_sel(
     });
     BoxSel {
         sel_energy,
-        closest,
         closest_slant_m: slant_m,
-        finite_segment_energy_fraction: finite,
-        lateral_attenuation_db: lateral_attenuation,
-        installation_energy_gain: installation,
         installation_fractions,
-        terrain_loss_db,
-        building_loss_db,
     }
 }
 

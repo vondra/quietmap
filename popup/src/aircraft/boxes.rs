@@ -78,6 +78,24 @@ pub struct ReceiverArea {
 }
 
 impl ReceiverArea {
+    /// The bounding rectangle and altitude range of the supplied receiver positions.
+    pub fn from_points(points: impl IntoIterator<Item = ([f64; 2], f64)>) -> Self {
+        let mut area = Self {
+            low: [f64::INFINITY; 2],
+            high: [f64::NEG_INFINITY; 2],
+            altitudes_m: [f64::INFINITY, f64::NEG_INFINITY],
+        };
+        for (position, altitude_m) in points {
+            for (axis, value) in position.into_iter().enumerate() {
+                area.low[axis] = area.low[axis].min(value);
+                area.high[axis] = area.high[axis].max(value);
+            }
+            area.altitudes_m[0] = area.altitudes_m[0].min(altitude_m);
+            area.altitudes_m[1] = area.altitudes_m[1].max(altitude_m);
+        }
+        area
+    }
+
     fn of(receiver: AircraftReceiver) -> Self {
         ReceiverArea {
             low: receiver.position,

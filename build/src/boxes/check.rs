@@ -1,11 +1,11 @@
-//! The boxes against the full computation (PLAN section 7): at each benchmark point, every
-//! segment of the window through the kernel, weighted as the boxes weigh it, against the written
-//! boxes through the click-time equation, both unscreened (the screening is one rule applied
-//! alike); per period Leq of each and their difference, also apart for the first band (near the
-//! ground, where the data's altitude error dominates) and the bands above, each segment cut into
-//! its box pieces as the builder cuts it. The top-flights list as the popup makes it (the kept
-//! pieces of each ring's loudest boxes, reading K of them) against the ten loudest flights of the
-//! exact sum. One pass over the days serves every point.
+//! The boxes against the full computation: at each benchmark point, every segment of the window
+//! through the kernel, weighted as the boxes weigh it, against the written boxes through the
+//! click-time equation, both unscreened (the screening is one rule applied alike); per period Leq
+//! of each and their difference, also apart for the first band (near the ground, where the data's
+//! altitude error dominates) and the bands above, each segment cut into its box pieces as the
+//! builder cuts it. The top-flights list as the popup makes it (the kept pieces of each ring's
+//! loudest boxes, reading K of them) against the ten loudest flights of the exact sum. One pass
+//! over the days serves every point.
 
 mod exact;
 mod report;

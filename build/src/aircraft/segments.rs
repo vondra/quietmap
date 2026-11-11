@@ -213,8 +213,8 @@ pub fn departures(samples: &[Sample], phases: &[Phase]) -> Vec<bool> {
 }
 
 /// The climb rate (ft/min) around the pair (i-1, i): the barometric secant between the first and
-/// last airborne samples within 15 s of the pair's middle; NaN when they span less than 10 s. PLAN-z13
-/// fix: dev4 flagged a helicopter pair losing 10 m, which finds 4 % of the descents at 1 s cadence
+/// last airborne samples within 15 s of the pair's middle; NaN when they span less than 10 s.
+/// dev4 flagged a helicopter pair losing 10 m, which finds 4 % of the descents at 1 s cadence
 /// and 82 % at 10 s; the median of per-step rates still finds only 11 % at 1 s (25 ft steps make
 /// most 1 s steps zero); this window finds 82-87 % at every cadence up to 12 s (one day, 3,886
 /// helicopters, against a +-60 s least-squares rate).

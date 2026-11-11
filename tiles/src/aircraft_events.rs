@@ -17,6 +17,7 @@
 //! (measured 2026-10-15).
 
 use crate::FormatError;
+use crate::little_endian::u16_at;
 
 const MAGIC: &[u8; 8] = b"qmevt2\n\0";
 const HEADER_BYTES: usize = 12;
@@ -100,10 +101,6 @@ pub fn encode(cells: &[EventCell]) -> Vec<u8> {
 pub struct AircraftEvents<'a> {
     cells: &'a [u8],
     designators: &'a [u8],
-}
-
-fn u16_at(bytes: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([bytes[at], bytes[at + 1]])
 }
 
 impl<'a> AircraftEvents<'a> {

@@ -18,12 +18,12 @@ function bounds(area: GeoJSON.FeatureCollection): [[number, number], [number, nu
   return west === Infinity ? null : [[west, south], [east, north]]
 }
 
-export default function IsochronLayer({ area }: { area: GeoJSON.FeatureCollection | null }) {
+export default function IsochronLayer({ area, fit }: { area: GeoJSON.FeatureCollection | null; fit: boolean }) {
   const { current: map } = useMap()
   useEffect(() => {
     const box = area && bounds(area)
-    if (map && box) map.fitBounds(box, { padding: framePadding(map.getContainer()), maxZoom: 15 })
-  }, [map, area])
+    if (map && box && fit) map.fitBounds(box, { padding: framePadding(map.getContainer()), maxZoom: 15 })
+  }, [map, area, fit])
   if (!area) return null
   return (
     <Source id="isochron" type="geojson" data={area}>

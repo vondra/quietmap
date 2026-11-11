@@ -31,18 +31,9 @@ export const ROAD_ESTIMATED_MEDIUM = 2
 export const ROAD_ESTIMATED_HEAVY = 4
 export const ROAD_ESTIMATED_MOTO = 8
 
-const roadCount = (value: number): string =>
-  value.toLocaleString('en', { maximumFractionDigits: 0 })
-
 /** True when the category's prepared value is an estimate or prior. */
 export function roadCategoryEstimated(traffic: Pick<RoadTrafficCounts, 'traffic_estimated'>, bit: number): boolean {
   return (traffic.traffic_estimated & bit) !== 0
-}
-
-/** One category line: value (vehicles/day) plus its counted/estimated status. */
-export function roadCategoryLine(label: string, value: number, estimated: boolean): string {
-  const status = estimated ? 'estimated' : value > 0 ? 'counted' : 'counted zero'
-  return `${label}: ${roadCount(value)}/day — ${status}`
 }
 
 /** Category status is explicit; a numeric zero never proves absence of trains. */

@@ -1,182 +1,34 @@
-// The shareable map state in the URL hash: view, open popup point, basemap, the quantity shown,
-// layers, quiet zones, places to stay, data layers.
-import { useCallback, useRef, useMemo } from 'react'
-import { DEFAULT_BASEMAP, type BasemapId } from '../utils/basemaps'
-import { resolveInitialView } from '../utils/initial-view'
-import { HEATMAP_LAYERS } from '../lib/tile-urls'
-import { parseDataLayers, type DataLayerId } from '../lib/data-layers'
-import type { Metric } from '../lib/hm3-decoder'
-// Quiet-zone thresholds — highlight areas whose total is ≤ this. In sone: from a quarter of a quiet
-// room's to four times it in readable steps of a tenth to a quarter of a doubling. In dB Lden: 20 to
-// 55 in steps of 5. By default where the map's colours begin: one sone (a quiet room), 35 dB.
-export const QUIET_THRESHOLDS: Record<Metric, readonly number[]> = {
-  nden: [0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.5, 3, 3.5, 4],
-  lden: [20, 25, 30, 35, 40, 45, 50, 55],
-}
-export const QUIET_THRESHOLD_DEFAULT: Record<Metric, number> = { nden: 1, lden: 35 }
-
-/** The popup point's decimals in the URL: 0.1 m, so a shared link answers at the very point
- *  clicked (at four decimals, 11 m, a click inside a building could open outside it). */
-const DETAIL_DECIMALS = 6
-
-/** The point a popup link names, as written into the URL. */
-const detailText = (position: { lat: number; lng: number }) =>
-  `${position.lat.toFixed(DETAIL_DECIMALS)},${position.lng.toFixed(DETAIL_DECIMALS)}`
-
-/** Whether two popup points are the same point of a link. */
-export function sameDetailPosition(a: { lat: number; lng: number } | null, b: { lat: number; lng: number } | null): boolean {
-  return a === b || (a != null && b != null && detailText(a) === detailText(b))
-}
-
-export interface UrlState {
-  lat: number
-  lng: number
-  zoom: number
-  /** True when the #hash carried explicit coordinates (a shared link) —
-   *  false means lat/lng/zoom are the browser-language fallback. */
-  hasExplicitView: boolean
-  /** The quantity the map, the quiet zones and the popup show (`m=lden`, Nden when absent). */
-  metric: Metric
-  quietClusters: boolean
-  /** In the metric's unit: sone or dB. */
-  quietThreshold: number
-  detailPosition: { lat: number; lng: number } | null
-  basemap: BasemapId
-  heatmapLayers: Record<string, boolean>
-  /** The data layers switched on (`data=`, none when absent). */
-  dataLayers: DataLayerId[]
-  /** The places to stay shown (`stay=1`); the stay searched is the visitor's own, never linked. */
-  stays: boolean
-}
-
-// Default view: every noise layer on (the overlay then fetches the precomputed `total` tile).
-const DEFAULT_HEATMAP_LAYERS: Record<string, boolean> = Object.fromEntries(HEATMAP_LAYERS.map(id => [id, true]))
-
-// Quiet-zone threshold: the nearest of the slider's values (by loudness ratio, or by dB). A
-// malformed or non-positive `qt` falls back to the default: a NaN threshold would otherwise mask
-// nothing, or every assessed pixel, downstream.
-function parseQuietThreshold(raw: string | null, metric: Metric): number {
-  const n = raw == null ? NaN : parseFloat(raw)
-  if (!(Number.isFinite(n) && n > 0)) return QUIET_THRESHOLD_DEFAULT[metric]
-  const distance = (t: number) => Math.abs(metric === 'lden' ? t - n : Math.log2(t / n))
-  return QUIET_THRESHOLDS[metric].reduce((best, t) => (distance(t) < distance(best) ? t : best))
-}
-
-export function parseHash(): UrlState {
-  const hash = window.location.hash.slice(1)
-  // First visit (no shared link) — and the missing-coordinate fallback for a
-  // partial hash: approximate the visitor's country from browser languages,
-  // else whole Europe — see utils/initial-view.ts.
-  const view = resolveInitialView()
-  if (!hash) {
-    return {
-      lat: view.lat,
-      lng: view.lng,
-      zoom: view.zoom,
-      hasExplicitView: false,
-      metric: 'nden',
-      quietClusters: false,
-      quietThreshold: QUIET_THRESHOLD_DEFAULT.nden,
-      detailPosition: null,
-      basemap: DEFAULT_BASEMAP,
-      heatmapLayers: { ...DEFAULT_HEATMAP_LAYERS },
-      dataLayers: [],
-      stays: false,
-    }
-  }
-
-  const params = new URLSearchParams(hash)
-
-  let detailPosition: { lat: number; lng: number } | null = null
-  const dParam = params.get('d')
-  if (dParam) {
-    const parts = dParam.split(',')
-    if (parts.length === 2) {
-      const dlat = parseFloat(parts[0])
-      const dlng = parseFloat(parts[1])
-      if (Number.isFinite(dlat) && Number.isFinite(dlng)) {
-        detailPosition = { lat: dlat, lng: dlng }
-      }
-    }
-  }
-
-  // `ro` lists exactly the active layers; its absence means the default view
-  // (every layer on). An explicit empty `ro=` therefore means "all off".
-  const ro = params.get('ro')
-  const heatmapLayers: Record<string, boolean> = ro === null
-    ? { ...DEFAULT_HEATMAP_LAYERS }
-    : Object.fromEntries(HEATMAP_LAYERS.map(id => [id, ro.split(',').includes(id)]))
-
-  const metric: Metric = params.get('m') === 'lden' ? 'lden' : 'nden'
-  const parsedLat = parseFloat(params.get('lat') || '')
-  const parsedLng = parseFloat(params.get('lng') || '')
-  const parsedZoom = parseFloat(params.get('z') || '')
-
-  return {
-    lat: Number.isFinite(parsedLat) ? parsedLat : view.lat,
-    lng: Number.isFinite(parsedLng) ? parsedLng : view.lng,
-    zoom: Number.isFinite(parsedZoom) ? parsedZoom : view.zoom,
-    hasExplicitView: Number.isFinite(parsedLat) && Number.isFinite(parsedLng),
-    metric,
-    quietClusters: params.get('qc') === '1',
-    quietThreshold: parseQuietThreshold(params.get('qt'), metric),
-    detailPosition,
-    basemap: (params.get('bm') as BasemapId) || DEFAULT_BASEMAP,
-    heatmapLayers,
-    dataLayers: parseDataLayers(params.get('data')),
-    stays: params.has('stay'),
-  }
-}
-
-type UrlWrite = Omit<UrlState, 'hasExplicitView'>
-
-function buildHash(state: UrlWrite): string {
-  const parts: string[] = [
-    `lat=${state.lat.toFixed(4)}`,
-    `lng=${state.lng.toFixed(4)}`,
-    `z=${state.zoom.toFixed(2)}`,
-  ]
-
-  if (state.metric === 'lden') parts.push('m=lden')
-
-  if (state.quietClusters) {
-    parts.push('qc=1')
-    if (state.quietThreshold !== QUIET_THRESHOLD_DEFAULT[state.metric]) parts.push(`qt=${state.quietThreshold}`)
-  }
-
-  if (state.detailPosition) {
-    parts.push(`d=${detailText(state.detailPosition)}`)
-  }
-
-  if (state.basemap !== DEFAULT_BASEMAP) {
-    parts.push(`bm=${state.basemap}`)
-  }
-
-  // Omit `ro` for the default view (every layer on) so a bare link opens the
-  // default; serialize the exact set otherwise (including the empty "all off" set as `ro=`).
-  if (!HEATMAP_LAYERS.every(id => state.heatmapLayers[id])) {
-    parts.push(`ro=${HEATMAP_LAYERS.filter(id => state.heatmapLayers[id]).join(',')}`)
-  }
-
-  if (state.dataLayers.length) {
-    parts.push(`data=${state.dataLayers.join(',')}`)
-  }
-
-  if (state.stays) parts.push('stay=1')
-
-  return '#' + parts.join('&')
-}
+// One public state for controls and address; event handlers publish it before a link can be copied.
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { buildHash, parseHash, sameDetailPosition, type UrlState } from '../lib/url-state'
+export type UrlUpdate = Partial<UrlState> | ((state: UrlState) => Partial<UrlState>)
 
 export function useUrlState() {
-  const initial = useMemo(() => parseHash(), [])
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const updateUrl = useCallback((state: UrlWrite) => {
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => {
-      window.history.replaceState(null, '', buildHash(state))
-    }, 300)
+  const [state, setState] = useState(() => parseHash())
+  const latest = useRef(state)
+  const updateUrl = useCallback((patch: UrlUpdate) => {
+    const next = { ...latest.current, ...(typeof patch === 'function' ? patch(latest.current) : patch) }
+    latest.current = next
+    const hash = buildHash(next)
+    if (window.location.hash !== hash) window.history.replaceState(null, '', hash)
+    setState(next)
   }, [])
-
-  return { initial, updateUrl }
+  useEffect(() => {
+    const read = () => {
+      const next = parseHash()
+      if (buildHash(next) === buildHash(latest.current)) return
+      if (sameDetailPosition(next.detailPosition, latest.current.detailPosition)) next.detailPosition = latest.current.detailPosition
+      for (const key of ['padding', 'staySearch', 'reach', 'heatmapLayers', 'dataLayers', 'popup', 'scroll'] as const) {
+        if (JSON.stringify(next[key]) === JSON.stringify(latest.current[key])) Object.assign(next, { [key]: latest.current[key] })
+      }
+      latest.current = next
+      setState(next)
+    }
+    window.addEventListener('hashchange', read)
+    window.addEventListener('popstate', read)
+    window.history.replaceState(null, '', buildHash(latest.current))
+    return () => { window.removeEventListener('hashchange', read); window.removeEventListener('popstate', read) }
+  }, [])
+  const getShareUrl = useCallback(() => `${window.location.origin}/${buildHash(latest.current)}`, [])
+  return { state, updateUrl, getShareUrl }
 }

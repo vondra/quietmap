@@ -1,7 +1,7 @@
 //! Open-air leisure areas (courts, pitches, playgrounds, terraces, car parks) by the settlement
 //! area law over their polygon, and outdoor shooting ranges by shots per year. Levels are annual:
 //! an active sound power minus a stated season and duty cut (dev4 settlement v2; END does not
-//! model sport). Motorsport as dev4 built it is dropped (PLAN-z13 DROP) and emits nothing.
+//! model sport). Motorsport as dev4 built it is dropped and emits nothing.
 
 use super::DAY_ONLY_OFFSET_DB;
 use super::settlement::area_law_lw_dba;
@@ -26,8 +26,8 @@ pub const ARTIFICIAL_TURF_PITCH: u8 = 12;
 
 /// The plant floor all leisure areas share; the per-m2 term carries the level.
 const LEISURE_FLOOR_DBA: f64 = 40.0;
-/// Pitches count at most 10 ha (PLAN-z13 FIX: 8,739 pitches over 10 ha, 413 over 100 ha, are
-/// ski runs and trail networks; one read 40 dB inside a desert singletrack).
+/// Pitches count at most 10 ha (8,739 pitches over 10 ha, 413 over 100 ha, are ski runs and trail
+/// networks; one read 40 dB inside a desert singletrack).
 pub const PITCH_AREA_CAP_M2: f64 = 100_000.0;
 
 /// A class's area law with its reference footprint (the area of a node without a polygon).

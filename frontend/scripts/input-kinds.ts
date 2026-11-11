@@ -1,5 +1,6 @@
 // Generated from build/src/year_kind.rs by qm-build input-kinds.
 export const INPUT_KINDS = [
+  "airport-operations",
   "airport-traffic",
   "barriers",
   "building-plant",

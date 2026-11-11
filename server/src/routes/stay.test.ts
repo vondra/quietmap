@@ -196,7 +196,7 @@ test('a list longer than a page is read to its third page', async (t) => {
   assert.equal(fetchMock.mock.callCount(), 4)
 })
 
-test("Stay22's refusal reaches the visitor; a failed search is answered 502 and not kept", async (t) => {
+test('a refused search has plain visitor wording; a failed search is answered 502 and not kept', async (t) => {
   let answer = () => new Response(JSON.stringify({ message: 'querystring/checkin Must be today or in the future' }), { status: 400 })
   const fetchMock = mock.method(globalThis, 'fetch', async () => answer())
   t.after(() => fetchMock.mock.restore())
@@ -204,7 +204,7 @@ test("Stay22's refusal reaches the visitor; a failed search is answered 502 and 
 
   const refused = await server.inject(`/api/stay?${VIEW}&${STAY}`)
   assert.equal(refused.statusCode, 400)
-  assert.deepEqual(refused.json(), { error: 'Stay22: querystring/checkin Must be today or in the future' })
+  assert.deepEqual(refused.json(), { error: 'Accommodation search could not be completed. Please try again.' })
 
   answer = () => new Response('busy', { status: 503 })
   const failed = await server.inject(`/api/stay?${VIEW}&${STAY}&type=hotel`)
@@ -223,7 +223,7 @@ test('after a 429 no search goes to Stay22 until its Retry-After has passed', as
   const busy = await server.inject(`/api/stay?${VIEW}&${STAY}&type=hotel`)
   assert.equal(busy.statusCode, 503)
   assert.equal(busy.headers['retry-after'], '7')
-  assert.match(busy.json().error, /asked too often just now; places to stay again in 7 s/)
+  assert.match(busy.json().error, /Accommodation search is busy; retrying in 7 s/)
   const calls = fetchMock.mock.callCount()
   // Another place within the minute is answered at once, without asking.
   const elsewhere = await server.inject(`/api/stay?swlat=48.85&swlng=2.33&nelat=48.86&nelng=2.35&${STAY}`)
@@ -292,7 +292,7 @@ test("one kind's failure keeps the other kind's places, with the failure beside 
   const response = await server.inject(`/api/stay?${VIEW}&${STAY}`)
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.json().listings.map((listing: { id: string }) => listing.id), ['h1'])
-  assert.equal(response.json().failure, 'Stay22 did not answer; no places to stay for now.')
+  assert.equal(response.json().failure, 'Accommodation search did not answer. Please try again.')
   await server.inject(`/api/stay?${VIEW}&${STAY}`)
   assert.equal(fetchMock.mock.callCount(), 8)
 })

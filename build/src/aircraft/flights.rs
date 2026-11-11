@@ -1,8 +1,9 @@
 //! One aircraft-day trace to its flights (dev4 `trace_to_flight`): towers, obstacles, gliders and
-//! balloons dropped, ground vehicles (by designator or emitter category) kept apart, sane points only, one flight per rotation with its own
-//! identity and callsign. A rotation ends at a surface rest of 5 minutes or more; the next starts at
-//! its takeoff roll (PLAN-z13 fix: dev4 started it at the first airborne sample, so the roll and
-//! the lift-off pair stayed behind and only 14 % of jet departures knew their field).
+//! balloons dropped, ground vehicles (by designator or emitter category) kept apart, sane points
+//! only, one flight per rotation with its own identity and callsign. A rotation ends at a surface
+//! rest of 5 minutes or more; the next starts at its takeoff roll (dev4 started it at the first
+//! airborne sample, so the roll and the lift-off pair stayed behind and only 14 % of jet departures
+//! knew their field).
 
 use super::filters::point_is_sane;
 use super::trace::{AircraftTrace, TracePoint, parse_address_hex};

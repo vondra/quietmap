@@ -16,7 +16,7 @@ use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
 use physics::doc29::screening::Unscreened;
 use popup::aircraft::boxes::{AircraftReceiver, tile_energy};
 use popup::aircraft::flights::{FLIGHTS_SHOWN, FlightTotals};
-use popup::aircraft::{reads_fine_boxes, ring_aircraft};
+use popup::aircraft::{RingTile, reads_fine_boxes, ring_aircraft};
 use std::collections::HashMap;
 use std::path::Path;
 use tiles::aircraft::Aircraft;
@@ -191,8 +191,16 @@ pub(super) fn report(
         let (mut searched, mut exhaustive) =
             (FlightTotals::reading(pieces), FlightTotals::reading(pieces));
         for ring in &popup_rings {
+            // The list alone: no lambda read, so no far boxes beside the fine ones.
+            let heard: Vec<RingTile> = (ring.iter())
+                .map(|&(tile, heard)| RingTile {
+                    tile,
+                    heard,
+                    far: None,
+                })
+                .collect();
             ring_aircraft(
-                ring,
+                &heard,
                 &receiver.frame,
                 aircraft_receiver,
                 &Unscreened,

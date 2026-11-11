@@ -15,7 +15,7 @@ use super::npd::{
     NpdPosition, NpdReading, TAIL_ANCHOR_M, class_anchor, is_helicopter_class, read_npd,
     read_npd_lamax_db,
 };
-use super::profiles_generated::{noise_class_of, profile_idx};
+use super::profiles_generated::noise_class_of;
 use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, screened_sel_db};
 use super::thrust::{PowerBracket, SegmentFlight, power_bracket};
 
@@ -27,11 +27,6 @@ pub struct AircraftType {
 }
 
 impl AircraftType {
-    /// By the generated designator mapping (`profile_idx`, unknown types on the fallback class).
-    pub fn from_designator(designator: &str) -> Self {
-        AircraftType::of(profile_idx(designator), designator)
-    }
-
     /// The class of `profile` (the one Stage 1 decided for the flight); a helicopter's certified
     /// levels by its designator.
     pub fn of(profile: u8, designator: &str) -> Self {
@@ -269,21 +264,13 @@ pub fn closest_points(start_m: [f64; 3], end_m: [f64; 3]) -> ClosestPoints {
     }
 }
 
-/// A segment's SEL at the receiver and the terms of Eq. 4-8b.
+/// A segment's SEL at the receiver (Eq. 4-8b) and the NPD reading it starts from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SegmentSel {
     /// After terrain and building screening (dB).
     pub sel_db: f64,
-    /// Before screening (dB).
-    pub free_sel_db: f64,
-    pub closest: ClosestPoints,
     /// NPD values at the slant to the line's closest point, helicopter correction included.
     pub npd: NpdReading,
-    pub finite_segment_correction_db: f64,
-    pub lateral_attenuation_db: f64,
-    pub installation_correction_db: f64,
-    pub terrain_loss_db: f64,
-    pub building_loss_db: f64,
 }
 
 /// The exact SEL of one segment at the receiver (Doc 29 4.4-4.5): the NPD level at the slant to
@@ -354,14 +341,7 @@ pub fn screened_segment_sel(
             terrain_loss_db,
             building_loss_db,
         ),
-        free_sel_db,
-        closest,
         npd,
-        finite_segment_correction_db: finite,
-        lateral_attenuation_db: lateral_attenuation,
-        installation_correction_db: installation,
-        terrain_loss_db,
-        building_loss_db,
     }
 }
 

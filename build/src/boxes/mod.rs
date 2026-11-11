@@ -1,8 +1,8 @@
-//! Builds `aircraft` tiles (PLAN section 5) from Stage 1's day files: the window's segments are
-//! first sorted into z9 squares ([`shuffle`]), then square by square every airborne or cruise
-//! segment gets its Doc 29 emission (`physics::doc29`), is cut into the pieces of the boxes it
-//! crosses, and each piece is added to its box, weighted as an average day of the window. A box
-//! keeps its loudest pieces for the top-flights list.
+//! Builds `aircraft` tiles from Stage 1's day files: the window's segments are first sorted into z9
+//! squares ([`shuffle`]), then square by square every airborne or cruise segment gets its Doc 29
+//! emission (`physics::doc29`), is cut into the pieces of the boxes it crosses, and each piece is
+//! added to its box, weighted as an average day of the window. A box keeps its loudest pieces for
+//! the top-flights list.
 
 pub mod check;
 pub mod events;
@@ -32,9 +32,9 @@ use tiles::geo::{LocalFrame, Mercator, TileId};
 use tiles::square::{TILES_PER_SIDE, TILES_PER_SQUARE, read_held};
 use tiles::terrain::Terrain;
 
-/// Loudest pieces a box keeps for the top-flights list (PLAN section 5: K starts at 2), one per
-/// flight, by their LAmax at their height above the box's ground: the list ranks flights by
-/// LAmax, and a receiver under a box hears its lowest pieces of the loudest types loudest.
+/// Loudest pieces a box keeps for the top-flights list, one per flight, by their LAmax at their
+/// height above the box's ground: the list ranks flights by LAmax, and a receiver under a box
+/// hears its lowest pieces of the loudest types loudest.
 pub const PIECES_PER_BOX: usize = 2;
 
 /// The days of the window: baseline days carry the primary provider; increment days add the
@@ -389,7 +389,7 @@ impl Default for BoxRule {
 }
 
 impl BoxRule {
-    /// The far boxes, read for tiles beyond 3 km of the click.
+    /// The far boxes, read for tiles beyond 3 km of the click and for the flights' lambda everywhere.
     pub fn far() -> Self {
         BoxRule {
             level_step_db: physics::doc29::box_geometry::FAR_BOX_EDGE_LEVEL_STEP_DB,

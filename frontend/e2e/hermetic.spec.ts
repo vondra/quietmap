@@ -248,7 +248,7 @@ test('an About page opened at a broken section link shows', async ({ page }) => 
 // An opened row computes its segments when asked: the same click again with the row's parts, whose
 // answer never replaces the click's own. How all of its sound arrives in calm air, its loudest
 // segments, and an opened one's sound path, rays and terrain profile.
-test('desktop: an opened row computes its segments, how they arrive and their rays', async ({ page }) => {
+test('desktop: an opened row computes its segments, how they arrive and their rays, also from its copied address', async ({ page, browser }) => {
   await installHermeticMap(page, POINT)
   await page.goto(mapUrl(POINT))
   const { x, y } = await canvasCenter(page)
@@ -304,6 +304,34 @@ test('desktop: an opened row computes its segments, how they arrive and their ra
   await expect(ray.getByRole('img')).toBeVisible()
   await expect(ray).toContainText('building')
   await expect(ray).not.toContainText('barrier')
+
+  const recipient = await browser.newContext()
+  try {
+    const opened = await recipient.newPage()
+    await installHermeticMap(opened, POINT)
+    const shared = new URL(page.url()), camera = new URLSearchParams(shared.hash.slice(1))
+    camera.set('lat', '40'); camera.set('lng', '10')
+    shared.hash = camera.toString()
+    await opened.goto(shared.toString())
+    await expect.poll(() => popupRequests(opened)).toHaveLength(1)
+    const [at] = await popupRequests(opened)
+    const update = popupUpdate(1, false, at.lat, at.lng, FIXTURE_DB)
+    await sendPopupLine(opened, update)
+    await endPopup(opened, 0)
+    await expect.poll(() => popupRequests(opened)).toHaveLength(2)
+    expect((await popupRequests(opened))[1].source).toBe(street.id)
+    await sendPopupLine(opened, { ...update, arrival: { pieces: 3, edges: [] },
+      pieces: [computedPiece(street, 61.2, 12), computedPiece(street, 55.4, 40)] })
+    await endPopup(opened, 1)
+    await expect.poll(() => popupRequests(opened)).toHaveLength(3)
+    expect((await popupRequests(opened))[2].piece).toBe(1)
+    await sendPopupLine(opened, pieceRun(update, computedPiece(street, 55.4, 40)))
+    await endPopup(opened, 2)
+    const sharedRay = opened.getByTestId('ray').filter({ visible: true })
+    await expect(sharedRay).toContainText(/Terrain profile\s*350 → 354 m a\.s\.l\./)
+    await expect(sharedRay.getByRole('img')).toBeVisible()
+    expect(Number(new URLSearchParams(new URL(opened.url()).hash.slice(1)).get('lat'))).toBe(40)
+  } finally { await recipient.close() }
 })
 
 test('search: picking a result flies the map there and opens its popup', async ({ page }) => {
@@ -320,8 +348,8 @@ test('search: picking a result flies the map there and opens its popup', async (
   await expect(option).toBeVisible()
   // A press anywhere in the row opens its place, its empty end too.
   await option.click({ position: { x: (await option.boundingBox())!.width - 8, y: 24 } })
-  // The hash carries four decimals; anchor the complete values.
-  await expect(page).toHaveURL(/lat=50\.1000&lng=14\.2600&/)
+  // The selected point stays exact even when the camera is padded below the search field.
+  await expect(page).toHaveURL(url => new URLSearchParams(url.hash.slice(1)).get('d') === '50.100000,14.260000')
   await expect.poll(() => popupRequests(page)).toEqual([{ lat: target.lat, lng: target.lon }])
   // The place keeps the result's name, not the geocoder's for its point.
   await expect(page.getByTestId('open-place').getByTestId('place-title')).toHaveValue(target.display_name)
@@ -407,13 +435,13 @@ test.describe('animated', () => {
     await page.getByRole('combobox').click()
     await page.getByRole('option').getByRole('button', { name: /^Before the house/ }).click()
     await expect.poll(() => popupRequests(page)).toEqual([house])
-    await expect(page).toHaveURL(/z=14\.00/)
+    await expect(page).toHaveURL(url => Number(new URLSearchParams(url.hash.slice(1)).get('z')) === 14)
     // From a link past the map's last zoom, it flies to that last zoom, and opens.
     await page.goto(`/?e2e=close${mapUrl({ ...POINT, lat: POINT.lat + 0.1 }, 'road', 17).slice(1)}`)
     await page.getByRole('combobox').click()
     await page.getByRole('option').getByRole('button', { name: /^Before the house/ }).click()
     await expect.poll(() => popupRequests(page)).toEqual([house])
-    await expect(page).toHaveURL(/z=16\.00/)
+    await expect(page).toHaveURL(url => Number(new URLSearchParams(url.hash.slice(1)).get('z')) === 16)
   })
 })
 
@@ -453,8 +481,8 @@ test("desktop: the reachable area is drawn from the open place by the button at 
   await expect(panel.getByRole('button', { name: 'Drawing…' })).toBeDisabled()
   // Another place's area asked meanwhile drops the first, whose answer would land after it.
   await page.mouse.click(x + 60, y + 60)
-  await panel.getByRole('button', { name: 'Show area' }).click()
   expect((await dropped).failure()?.errorText).toContain('ABORTED')
+  await panel.getByRole('button', { name: 'Show area' }).click()
   await expect.poll(() => asked).toHaveLength(2)
   await expect(panel.getByRole('button', { name: 'Show area' })).toBeEnabled()
   await expect(panel.getByRole('alert')).toHaveCount(0)

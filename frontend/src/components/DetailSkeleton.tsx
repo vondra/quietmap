@@ -11,7 +11,7 @@ export default function DetailSkeleton({ position, error }: DetailSkeletonProps)
         <span className={`text-2xl font-bold leading-none shrink-0 ${error ? 'text-destructive/60' : 'text-muted-foreground/40 animate-pulse'}`}>
           {error ? '⚠' : '— dB'}
         </span>
-        <div className="text-right pr-6">
+        <div className="text-right">
           <div className="text-xs text-muted-foreground/60 font-mono leading-tight">
             {position.lat.toFixed(4)}, {position.lng.toFixed(4)}
           </div>

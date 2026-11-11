@@ -2,7 +2,7 @@
 
 use crate::evaluate::Path;
 use crate::loudness::{Curve, loudness, own_nden};
-use crate::percentiles::{Line, Resolution, distributions_of, heard};
+use crate::percentiles::{Line, Resolution, distributions_of, passes_at};
 use crate::update::Contributor;
 use physics::bands::PERIODS;
 use rayon::prelude::*;
@@ -142,7 +142,7 @@ pub fn score_rows<'a>(
                 Some(line) => own_nden(Some(line), [0.0; PERIODS], curves(part.layer)),
                 None => own_nden(None, part.energy, curves(part.layer)),
             });
-            part.heard = heard(part, display);
+            part.heard = passes_at(part, display);
             match line {
                 Some(line) => lines.push(line),
                 None => (0..PERIODS).for_each(|period| steady[period] += part.energy[period]),

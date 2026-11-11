@@ -36,8 +36,8 @@ const METALLURGY: [f64; BANDS] = [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -5.0];
 const MACHINING: [f64; BANDS] = [-3.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -5.0];
 const MACHINERY: [f64; BANDS] = [-3.0, -1.0, 0.0, 1.0, 0.0, -1.0, -3.0, -6.0];
 
-/// OSM source types of `industrial.arrow` with their own models or none: a rail yard (PLAN-z13
-/// DROP: its 96 dB(A)/ha was guessed), a wind turbine, a wind-farm outline and an inactive site
+/// OSM source types of `industrial.arrow` with their own models or none: a rail yard (dropped:
+/// its 96 dB(A)/ha was guessed), a wind turbine, a wind-farm outline and an inactive site
 /// (their turbines or nothing emit), a solar farm, a substation, a transformer (its rating joins
 /// its substation). Types above the transformer are unknown and silent.
 pub const SOURCE_QUARRY: u8 = 1;

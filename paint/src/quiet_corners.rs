@@ -5,7 +5,7 @@
 
 use crate::exact::LAYERS;
 use crate::points::PointPainter;
-use crate::sone::Rest;
+use crate::sone::SoundBesideExactPairs;
 use popup::percentiles::Resolution;
 use rayon::prelude::*;
 
@@ -34,7 +34,7 @@ pub(crate) fn loudness_at_corner(
     let corners = &painter.corners;
     let (x, y) = ((at % side) * grid.block, (at / side) * grid.block);
     let (steady, bands) = corners.hum.at(x, y);
-    let rest = Rest {
+    let rest = SoundBesideExactPairs {
         steady,
         bands,
         left_groups: (&[], [0.0; 4]),
@@ -44,7 +44,7 @@ pub(crate) fn loudness_at_corner(
     crate::sone::pixel_ndens(
         painter.square,
         &corners.displays,
-        (corners.corner_points[at].position, 1.0),
+        (&corners.corner_points[at], 1.0),
         (&[], &[], &crate::exact::PointBands::default()),
         (&rest, &corners.flight_spectra.at(x, y)),
         Resolution::MAP,

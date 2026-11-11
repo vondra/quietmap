@@ -1,7 +1,7 @@
 // A contributor's facts as lines, only what its row and class line do not say: a road's speed,
 // traffic (with the dataset behind it) and a surface other than asphalt, a railway's speed and
 // trains (with theirs), a building's floors, height and footprint or an area's size and cars, a
-// site's area or a turbine's rated power, a ship cell's vessels, an airport's movements; then the
+// site's area or a turbine's rated power, a ship cell's vessels; then the
 // source's sound power. A layer without lines of its own lists its fields by name, so a newly added
 // layer shows up before it gets its own wording.
 import type { ReactNode } from 'react'
@@ -11,7 +11,10 @@ import { wholeRoadPerDay } from '../heard'
 import { HoverText } from '../../ui/info-tip'
 import { subtypeLabel } from '../labels'
 import { fieldText, lineRow } from '../shared'
-import { datasetLine, railDatasetLines, railTrafficDescription, railTrafficLabel, roadCategoryEstimated, type RailTraffic } from '../provenance'
+import {
+  datasetLine, railDatasetLines, railTrafficDescription, railTrafficLabel, roadCategoryEstimated,
+  ROAD_ESTIMATED_HEAVY, ROAD_ESTIMATED_LIGHT, ROAD_ESTIMATED_MEDIUM, ROAD_ESTIMATED_MOTO, type RailTraffic,
+} from '../provenance'
 
 function num(m: ContributorMetadata, key: string): number | null {
   const value = m[key]
@@ -70,7 +73,12 @@ function RoadRows({ m }: { m: ContributorMetadata }) {
   const trafficText = txtTable([
     ...(wholeRoad ? [['Whole road, both ways', `${fmtInt(crossSection)}/day`] as [string, string]] : []),
     'This carriageway:',
-    ...([['Light', light, 1], ['Medium', medium, 2], ['Heavy', heavy, 4], ['Moto', moto, 8]] as const)
+    ...([
+      ['Light', light, ROAD_ESTIMATED_LIGHT],
+      ['Medium', medium, ROAD_ESTIMATED_MEDIUM],
+      ['Heavy', heavy, ROAD_ESTIMATED_HEAVY],
+      ['Moto', moto, ROAD_ESTIMATED_MOTO],
+    ] as const)
       .map(([label, value, bit]) =>
         [`  ${label}`, roadCategoryEstimated(estimated, bit) ? `${fmtInt(value)} est.` : fmtInt(value)] as [string, string],
       ),
@@ -179,20 +187,6 @@ function ShipRows({ m }: { m: ContributorMetadata }) {
   return lineRow('Vessels at a time', <HoverText title={cell}>{fmtCount(atATime.reduce((a, b) => a + b, 0))}</HoverText>)
 }
 
-/** An airport's ground operations: its taxiing and rolls come from its flights. */
-function AirportRows({ m }: { m: ContributorMetadata }) {
-  const perDay = (key: string) => `${fmtCount(num(m, key) ?? 0)}/day`
-  const airport = text(m, 'airport')
-  return (
-    <>
-      {airport && lineRow('Airport', airport)}
-      {lineRow('Arrivals', perDay('arrivals_per_day'))}
-      {lineRow('Departures', perDay('departures_per_day'))}
-      {(num(m, 'ground_vehicles_per_day') ?? 0) > 0 && lineRow('Ground vehicles', perDay('ground_vehicles_per_day'))}
-    </>
-  )
-}
-
 // A layer without lines of its own: its fields by name, but for the name and the subtype that the
 // row and its class line show.
 function FieldRows({ m }: { m: ContributorMetadata }) {
@@ -207,7 +201,6 @@ const LAYER_ROWS: Record<string, (props: { m: ContributorMetadata }) => ReactNod
   building: BuildingRows,
   industrial: IndustrialRows,
   ship: ShipRows,
-  aircraft: AirportRows,
 }
 
 /** When a source's stored sound power holds: a venue's people at their busiest, an event while it

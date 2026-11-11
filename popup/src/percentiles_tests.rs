@@ -1,10 +1,11 @@
 //! The time levels' tests: traffic by the hour, lines alone and together, the weather, events.
 
+use super::traffic::OTHER_PERIOD_SHARES;
 use super::*;
 use crate::candidates::DisplayRef;
 use crate::update::Contributor;
 use physics::bands::energy;
-use physics::percentile::{exceeded_level_db, relative_intensity};
+use physics::percentile::relative_intensity;
 
 const BIN_DB: f64 = Resolution::CLICK.bin_db;
 
@@ -43,6 +44,7 @@ pub(crate) fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) 
             weather
         },
         distance_m,
+        slant_distance_m: distance_m,
         display: DisplayRef {
             ring: 0,
             tile: 0,
@@ -190,7 +192,7 @@ fn a_busy_roads_quiet_hours_lower_its_night_l90() {
         )
     };
     let levels = levels(&[road], &busy);
-    let constant_l90 = exceeded_level_db(60.0, 12.0, 0.9);
+    let constant_l90 = 60.0 + 10.0 * relative_intensity(12.0, 0.1).log10();
     assert!(constant_l90 > 59.0, "{constant_l90}");
     assert!(levels.l90[2] < 56.0, "{}", levels.l90[2]);
     assert!(levels.l10[2] > 60.5, "{}", levels.l10[2]);
@@ -198,21 +200,30 @@ fn a_busy_roads_quiet_hours_lower_its_night_l90() {
 
 /// A car every half hour 4 m away is heard as passes about twice an hour by day; a
 /// motorway's 30,000 vehicles 300 m away run together into a steady sound; industry has no
-/// passes.
+/// passes; a dense road's vehicles run together over its axis, 4 m below the receiver.
 #[test]
 fn a_contributor_is_heard_as_its_passes_or_as_a_steady_sound() {
     let lane = contributor(7, Layer::Road, 40.0, 4.0);
-    let heard_lane = heard(&lane, &quiet_road(&lane.group()).unwrap()).unwrap();
+    let heard_lane = passes_at(&lane, &quiet_road(&lane.group()).unwrap()).unwrap();
     assert!((heard_lane.per_hour[0] - 33.0 * 0.70 / 12.0).abs() < 1e-9);
     assert!(!heard_lane.steady);
     let motorway = contributor(8, Layer::Road, 45.0, 300.0);
     let busy = serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
         "road_class": "motorway"});
-    let heard_motorway = heard(&motorway, &busy).unwrap();
+    let heard_motorway = passes_at(&motorway, &busy).unwrap();
     assert!((heard_motorway.per_hour[0] - 30_000.0 * 0.65 / 12.0).abs() < 1e-9);
     assert!(heard_motorway.steady);
     let industry = contributor(9, Layer::Industry, 45.0, 30.0);
-    assert_eq!(heard(&industry, &busy), None);
+    assert_eq!(passes_at(&industry, &busy), None);
+    // Over a road's axis its vehicles pass 4 m from the receiver, not none: 12,833 an hour at
+    // 50 km/h run together there (Kurze's lambda 1.03), though none is within the horizontal 0 m.
+    let mut axis = contributor(10, Layer::Road, 70.0, 0.0);
+    axis.slant_distance_m = 4.0;
+    let dense = serde_json::json!({"aadt_light": 220_000.0, "speed_kmh": 50.0,
+        "road_class": "primary"});
+    assert!(passes_at(&axis, &dense).unwrap().steady);
+    let line = Line::of(&axis.group(), &Passes::read(Layer::Road, &dense)).unwrap();
+    assert!((line.lambda[0] - 220_000.0 * 0.70 / 12.0 / 3_600.0 / (50.0 / 3.6) * 4.0).abs() < 1e-9);
 }
 
 /// Industry is steady; the same click gives the same levels whatever order the hash maps
@@ -401,6 +412,6 @@ fn events_sound_for_their_duty_and_are_silent_otherwise() {
     let ringing = 10.0 * 51f64.log10() + 40.0;
     assert!((distribution.exceeded_db(0.019) - ringing).abs() <= BIN_DB / 2.0);
     let fields = bells_fields(&bells.group()).unwrap();
-    let heard_bells = heard(&bells, &fields).unwrap();
+    let heard_bells = passes_at(&bells, &fields).unwrap();
     assert!(!heard_bells.steady && (heard_bells.per_hour[0] - 3.0).abs() < 1e-9);
 }

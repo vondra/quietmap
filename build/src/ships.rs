@@ -44,17 +44,8 @@ pub fn input_root(inputs: &YearInputs) -> Result<&Path, String> {
 }
 
 pub fn check_squares(root: &Path, squares: &[Square]) -> Result<(), String> {
-    tiles::check_year_complete(root)?;
-    let marker: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(root.join(tiles::COMPLETION_MARKER)).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    let listed: Vec<[u32; 2]> = serde_json::from_str(
-        marker["note"]
-            .as_str()
-            .ok_or("ships completion lacks its squares")?,
-    )
-    .map_err(|e| e.to_string())?;
+    let listed: Vec<[u32; 2]> =
+        serde_json::from_str(&tiles::year_completion_note(root)?).map_err(|e| e.to_string())?;
     let covered: HashSet<Square> = listed.into_iter().map(|[x, y]| Square { x, y }).collect();
     if squares
         .iter()

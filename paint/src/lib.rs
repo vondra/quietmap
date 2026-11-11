@@ -12,6 +12,7 @@
 //! (`frontend/src/about/the-noise-map.md`).
 
 mod blocks;
+mod boundary_facades;
 mod buildings;
 pub mod etalon;
 pub mod exact;
@@ -22,6 +23,7 @@ pub mod hm3;
 mod hm3_square;
 pub mod hum;
 mod hum_samples;
+pub mod inputs;
 pub mod levels;
 mod loudest;
 pub mod merge;
