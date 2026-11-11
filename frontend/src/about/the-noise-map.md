@@ -183,12 +183,17 @@ source counts as loud at a point where its upper bound there reaches 20 dB.
   steeply from its nearest sources, and a blend in energy read quiet places by their loudest point.
 
 An open block hearing only the hum and flights takes its loudness from shared corners, without
-constructing a receiver at every pixel. Other blocks use a 5 × 5 grid of actual pixel receivers,
-with one further pixel probe for each of its sixteen patches. A patch interpolates energy
+constructing a receiver at every pixel. Other blocks first compute a 3 × 3 grid of actual pixel
+receivers (the block's edges and middle) and one probe in each quarter. The whole block is
+interpolated from that grid only when all four probes agree with it as a patch's probe must
+(below) and no source or screening edge crosses the block or its margin; its four probes then
+take the interpolated values too. The other blocks use a 5 × 5 grid, the first grid's pixels
+among it, with one further pixel probe for each of its sixteen patches. A patch interpolates energy
 and loudness only when its probe agrees within half a phon in the total and in every layer of
-half a sone or more (a tenth of a sone in a quieter layer, which the map shows clear), and no
-source or screening edge crosses it or the margin protecting the pixels used to rank façades.
-The other pixels keep their ray computations; exact lattice and probe results are reused.
+half a sone or more (a tenth of a sone in a quieter layer, which the map shows clear) and within
+half a decibel of Lden, and no source or screening edge crosses it or the margin protecting the
+pixels used to rank façades. The other pixels keep their ray computations; there the exact lattice
+and probe results are reused.
 Between samples, a shadow cast from outside the patch can still change sharply.
 Buildings and their façade receivers keep the exact computations.
 
