@@ -5708,7 +5708,7 @@
         "osm-geography",
         "structures"
       ],
-      "description": "Median numeric mapped speed by country, road class and the same building-density context used by the reader, with at least 30 mapped pieces per cell. This projection covers the prepared fixture geography; absent cells retain the global model until the whole admitted state is prepared."
+      "description": "Median numeric mapped speed by country, road class and the same building-density context used by the reader, with at least 30 mapped pieces per cell, fitted by the year run over the whole admitted mapped state."
     },
     {
       "id": "practice-history-legal-speeds",

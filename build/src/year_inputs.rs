@@ -1,6 +1,6 @@
 //! Inputs resolve by public id below a separate root for each year; required kinds cannot disappear.
 use super::{Kind, Manifest};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub struct YearInputs {
@@ -184,7 +184,9 @@ impl YearInputs {
     }
 
     /// Completion publishes exactly the model values used by the build and the About pages.
-    pub fn check_published_tables(&self) -> Result<(), String> {
+    /// Every consumed table equals its published copy; `produced` kinds (none at completion) are
+    /// tables the year run has yet to fit.
+    pub fn check_published_tables(&self, produced: &BTreeSet<Kind>) -> Result<(), String> {
         let directory = self
             .manifest_path
             .parent()
@@ -192,6 +194,9 @@ impl YearInputs {
             .join("tables")
             .join(&self.manifest.year);
         for &kind in crate::source_tables::MODEL_KINDS {
+            if produced.contains(&kind) {
+                continue;
+            }
             let path = directory.join(format!("{kind}.json"));
             self.check_published_table(kind, &path)?;
         }

@@ -354,3 +354,33 @@ fn world_preflight_needs_an_admitted_vintage_or_declared_absence_for_each_kind()
     fs::remove_file(&admitted).unwrap();
     assert!(crate::pipeline_plan::check_publisher_inputs(&read()).is_err());
 }
+
+#[test]
+fn a_table_the_run_fits_is_neither_pinned_from_an_earlier_fit_nor_required_before_the_run() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    fixture(root);
+    let tables = root.join("tables/2000");
+    fs::create_dir_all(&tables).unwrap();
+    fs::write(
+        tables.join("tagged-speeds.json"),
+        br#"{"rows":[{"fixture":1}]}"#,
+    )
+    .unwrap();
+    fs::write(tables.join("hotel-trip-rate.json"), br#"{"rows":[2.87]}"#).unwrap();
+    let produced = crate::pipeline_plan::produced_kinds();
+    assert!(produced.contains(&crate::year::Kind::TaggedSpeeds));
+    let run = open(root, "0:0", json!({})).unwrap();
+    let pinned = run.root.join("tables/2000");
+    assert!(pinned.join("hotel-trip-rate.json").is_file());
+    assert!(!pinned.join("tagged-speeds.json").exists());
+    let inputs =
+        crate::year::YearInputs::read(&root.join("year.json"), &root.join("sources")).unwrap();
+    let every: std::collections::BTreeSet<_> =
+        crate::source_tables::MODEL_KINDS.iter().copied().collect();
+    crate::source_tables::check_tables(&inputs, &every).unwrap();
+    let mut all_but_speeds = every.clone();
+    all_but_speeds.remove(&crate::year::Kind::TaggedSpeeds);
+    let missing = crate::source_tables::check_tables(&inputs, &all_but_speeds).unwrap_err();
+    assert!(missing.contains("tagged-speeds"), "{missing}");
+}

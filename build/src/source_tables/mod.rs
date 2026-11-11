@@ -44,6 +44,29 @@ pub const MODEL_KINDS: &[crate::year::Kind] = &[
     crate::year::Kind::WorshipCalls,
 ];
 
+/// Before an expensive world run: every model table not fitted by the run itself is admitted,
+/// parses and is not empty. Its typed reading follows in the stages that use it.
+pub fn check_tables(
+    inputs: &YearInputs,
+    produced: &std::collections::BTreeSet<crate::year::Kind>,
+) -> Result<(), String> {
+    for &kind in MODEL_KINDS.iter().filter(|kind| !produced.contains(kind)) {
+        for path in inputs.paths(kind)? {
+            let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let value: serde_json::Value = serde_json::from_slice(&bytes)
+                .map_err(|e| format!("{kind}: {}: {e}", path.display()))?;
+            let empty = match value.get("rows") {
+                Some(rows) => rows.as_array().is_none_or(Vec::is_empty),
+                None => value.as_object().is_none_or(serde_json::Map::is_empty),
+            };
+            if empty {
+                return Err(format!("{kind}: {}: empty required table", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub type PeriodShares = [[[f64; 3]; 2]; 3];
 pub type ClassShares = [[[f64; 2]; 2]; 2];
 

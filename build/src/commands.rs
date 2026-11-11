@@ -56,7 +56,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
         let path = Path::new(options.get("year")?);
         let inputs = year::YearInputs::read(path, Path::new(options.get("sources")?))?;
         source_tables::SourceTables::read(&inputs)?;
-        inputs.check_published_tables()?;
+        inputs.check_published_tables(&Default::default())?;
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         return tiles::mark_year_complete(&out, &bytes, options.get("note")?);
     }

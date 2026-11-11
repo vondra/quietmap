@@ -6,10 +6,7 @@ pub(crate) fn check_generated_aliases(
     manifest: &crate::year::Manifest,
     sources: &std::path::Path,
 ) -> anyhow::Result<()> {
-    let produced: BTreeSet<_> = steps()
-        .into_iter()
-        .filter_map(|step| step.binding)
-        .collect();
+    let produced = produced_kinds();
     let conflicts: Vec<_> = manifest
         .inputs
         .iter()
@@ -33,10 +30,7 @@ pub(crate) fn check_generated_aliases(
 }
 
 pub(crate) fn check_publisher_inputs(inputs: &crate::year::YearInputs) -> anyhow::Result<()> {
-    let produced: BTreeSet<_> = steps()
-        .into_iter()
-        .filter_map(|step| step.binding)
-        .collect();
+    let produced = produced_kinds();
     let mut declared = BTreeSet::new();
     let mut admitted = BTreeSet::new();
     for input in &inputs.manifest.inputs {
@@ -61,6 +55,14 @@ pub(crate) fn check_publisher_inputs(inputs: &crate::year::YearInputs) -> anyhow
         );
     }
     Ok(())
+}
+
+/// Kinds the year run produces: never staged, published from the run where they are tables.
+pub(crate) fn produced_kinds() -> BTreeSet<Kind> {
+    steps()
+        .into_iter()
+        .filter_map(|step| step.binding)
+        .collect()
 }
 
 pub(crate) struct Step {
@@ -88,6 +90,14 @@ pub(crate) fn steps() -> Vec<Step> {
             &["osm", "structure-observations"],
             Some(Structures),
             Some(2),
+            false,
+        ),
+        // A fit of the year's own mapped roads, before the sources that read it.
+        (
+            "tagged-speed-table",
+            &["osm", "structures"],
+            Some(TaggedSpeeds),
+            None,
             false,
         ),
         (
@@ -175,6 +185,7 @@ pub(crate) fn steps() -> Vec<Step> {
             "sources",
             &[
                 "prepared",
+                "tagged-speed-table",
                 "facilities",
                 "traffic",
                 "airport-traffic",

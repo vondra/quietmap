@@ -98,10 +98,11 @@ pub(crate) fn build(options: &Arguments) -> Result<()> {
             Path::new(options.get("sources").map_err(anyhow::Error::msg)?),
         )
         .map_err(anyhow::Error::msg)?;
-        crate::source_tables::SourceTables::read(&inputs).map_err(anyhow::Error::msg)?;
+        let produced = crate::pipeline_plan::produced_kinds();
+        crate::source_tables::check_tables(&inputs, &produced).map_err(anyhow::Error::msg)?;
         crate::pipeline_plan::check_publisher_inputs(&inputs)?;
         inputs
-            .check_published_tables()
+            .check_published_tables(&produced)
             .map_err(anyhow::Error::msg)?;
     }
     let run = Run::open(
@@ -196,6 +197,14 @@ pub(crate) fn build(options: &Arguments) -> Result<()> {
             }
             if let Some(kind) = step.binding {
                 bind(&run, &manifest, kind, &output)?;
+                if crate::source_tables::MODEL_KINDS.contains(&kind) {
+                    let table = format!("{kind}.json");
+                    publish(
+                        &output,
+                        &run.root.join("tables").join(&manifest.year).join(&table),
+                    )?;
+                    publish(&output, &run.out.join("tables").join(&table))?;
+                }
             }
             match step.name {
                 "weather" => publish(&output, &run.out.join("weather"))?,
@@ -250,7 +259,7 @@ fn finalize(run: &Run, squares: &[Square], boxes: Option<&str>) -> Result<()> {
             .map_err(anyhow::Error::msg)?;
         crate::source_tables::SourceTables::read(&inputs).map_err(anyhow::Error::msg)?;
         inputs
-            .check_published_tables()
+            .check_published_tables(&Default::default())
             .map_err(anyhow::Error::msg)?;
         record_partial(run, squares, boxes)
     }

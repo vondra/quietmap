@@ -143,9 +143,18 @@ pub fn pin_manifest(root: &Path, source: &Path, year: &str) -> Result<PathBuf> {
         if tables.is_dir() {
             let copies = root.join("tables").join(year);
             fs::create_dir_all(&copies)?;
+            // A table the run fits is published by the run, never pinned from an earlier fit.
+            let produced: Vec<_> = crate::pipeline_plan::produced_kinds()
+                .into_iter()
+                .map(|kind| format!("{kind}.json"))
+                .collect();
             for entry in fs::read_dir(tables)? {
                 let entry = entry?;
-                if entry.path().is_file() {
+                if entry.path().is_file()
+                    && !produced
+                        .iter()
+                        .any(|name| entry.file_name() == name.as_str())
+                {
                     fs::copy(entry.path(), copies.join(entry.file_name()))?;
                 }
             }

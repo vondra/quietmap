@@ -239,13 +239,13 @@ Service-road trip bounds are also absent in the historical template: all service
 The fitter writes the class and weekday values directly into the preparation model,
 and obtains transition limits from the admitted legal-speed table.
 
-`tagged-speeds.json` is fitted from numeric limits in the manifest-selected mapped
-OSM geometry. A mapped piece contributes one observation, classified by the same
+`tagged-speeds` is fitted by the year run itself (its `tagged-speed-table` step, after
+OSM geography and structures, before sources) from numeric limits in the manifest-selected
+mapped OSM geometry. A mapped piece contributes one observation, classified by the same
 settlement polygons and building-density model used by road preparation. A cell needs
-at least 30 pieces. The current 2024 fit covers the 116 nonempty staged fixture-context
-squares and produces 12 country rows; it is not a whole-world speed fit. Expand the
-prepared geography and run the same command to extend coverage.
-`tagged-speed-samples.json` records the square list and support.
+at least 30 pieces. The run publishes the fitted table in the year tree's `tables/`; the
+release commit copies it here. A table fitted on a smaller selection is never pinned into a
+later run.
 Legal and heavy speed histories retain their source, applicability and validity
 interval (exclusive end). A country lacking a documented historical row retains the
 road model's global speed fallback; no later legal check is backdated. Japan's 2024

@@ -20,8 +20,9 @@ exclude their last.
 
 A fitted table is admitted only when every input used to derive it is admitted. For example,
 traffic counts divided by a newer mapped road length cannot supply an earlier year's rate.
-Laws and practices apply over their documented validity intervals. A required model table
-that is missing stops the build. Where a country has no counts, the documented world model
+Laws and practices apply over their documented validity intervals. A table fitted on the year's
+own mapped state, such as the posted-speed medians, is fitted by the year's build after that state
+is prepared and published with the year. A required model table that is missing stops the build. Where a country has no counts, the documented world model
 still applies. Source lists appear only for maps that have been built.
 
 <details>
