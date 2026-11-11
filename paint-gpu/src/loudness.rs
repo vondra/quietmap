@@ -28,12 +28,9 @@ pub const LOUDNESS_FLOATS: usize = LAYERS + 1;
 /// The hourly profiles (`popup::percentiles` HOURLY_SHARES's rows).
 const PROFILES: usize = 3;
 
-/// The loudness kernels' source, their tables first, the mixtures' blocks of `block_states` states.
-pub(crate) fn loudness_source(block_states: usize) -> String {
-    format!(
-        "{}{DISTRIBUTION}{LOUDNESS}",
-        loudness_constants(block_states)
-    )
+/// The loudness kernels' source, their tables first.
+pub(crate) fn loudness_source() -> String {
+    format!("{}{DISTRIBUTION}{LOUDNESS}", loudness_constants())
 }
 
 /// The map's level bins (`popup::distribution`'s span at the map's resolution).
@@ -41,25 +38,8 @@ fn bins() -> usize {
     (SPAN_DB / Resolution::MAP.bin_db).round() as usize
 }
 
-/// Weather states a block of the mixtures' kernel takes on a card whose multiprocessors hold
-/// `shared_bytes` of shared memory, a warp each: all ten (a line's values made once for all) where
-/// two such blocks fit (compute capability 7.0 and 12.0, about 96 KB); two elsewhere, which keeps
-/// more warps resident (on 7.5, 64 KB, ten a block painted 2-3 % slower than a task a warp, two
-/// 2-3 % faster).
-pub(crate) fn block_states(shared_bytes: usize) -> usize {
-    // A state's warp holds four distributions (a bin's two floats each, their silence and range)
-    // and a line's values (each value, and its shares and weighted shares from it), and its bit.
-    let values = node_probabilities().len().max(bins() + 1);
-    let warp_bytes = 4 * (12 + 8 * bins()) + 4 * (1 + 3 * values + 2) + 4;
-    if 2 * WEATHER_STATES * warp_bytes <= shared_bytes {
-        WEATHER_STATES
-    } else {
-        2
-    }
-}
-
 /// A pixel's blocks on the card: each period's groups of hours (as when some line follows a
-/// profile), a block's weather states ([`block_states`]) a warp each.
+/// profile), its weather states a warp each.
 fn period_groups() -> Vec<(usize, usize)> {
     let resolution = Resolution::MAP;
     (0..PERIODS)
@@ -79,7 +59,7 @@ fn mixture_floats() -> usize {
 /// The kernels' tables at the map's resolution, in global memory (a warp's lanes read different
 /// entries, which constant memory serves one at a time: a quarter less time for the same pixels);
 /// f32's Debug is the shortest decimal that reads back as it.
-fn loudness_constants(block_states: usize) -> String {
+fn loudness_constants() -> String {
     let resolution = Resolution::MAP;
     let floats = |name: &str, values: &[f64]| {
         let values: Vec<String> = values.iter().map(|&v| format!("{:?}f", v as f32)).collect();
@@ -141,7 +121,6 @@ fn loudness_constants(block_states: usize) -> String {
         format!("#define LOUD_BIN_DB {:?}f\n", resolution.bin_db as f32),
         format!("#define LOUD_BINS {}\n", bins()),
         format!("#define LOUD_PERIOD_GROUPS {}\n", period_groups().len()),
-        format!("#define LOUD_BLOCK_STATES {block_states}\n"),
         format!("#define LOUD_LEVEL_MIN_DB ({:?}f)\n", LEVEL_MIN_DB as f32),
         format!("#define LOUD_STATES {}\n", WEATHER_STATES),
         format!("#define LOUD_NODES {}\n", nodes.len()),
@@ -241,13 +220,8 @@ impl Gpu {
         // another pass run beside them on the card.
         let stream = self.fork()?;
         let mixtures_config = LaunchConfig {
-            grid_dim: (
-                (count * period_groups().len() * (WEATHER_STATES / self.loudness_block_states))
-                    as u32,
-                1,
-                1,
-            ),
-            block_dim: (self.loudness_block_states as u32 * 32, 1, 1),
+            grid_dim: ((count * period_groups().len()) as u32, 1, 1),
+            block_dim: (WEATHER_STATES as u32 * 32, 1, 1),
             shared_mem_bytes: 0,
         };
         let pixels_config = LaunchConfig {
@@ -277,20 +251,5 @@ impl Gpu {
             .chunks_exact(LOUDNESS_FLOATS)
             .map(|pixel| std::array::from_fn(|k| pixel[k]))
             .collect())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Ten states a block where two blocks of ten fit (96 KB and 100 KB multiprocessors), two in a
-    /// 64 KB one; every count divides the states.
-    #[test]
-    fn a_block_takes_every_state_where_two_blocks_fit() {
-        assert_eq!(block_states(96 * 1024), WEATHER_STATES);
-        assert_eq!(block_states(100 * 1024), WEATHER_STATES);
-        assert_eq!(block_states(64 * 1024), 2);
-        assert_eq!(WEATHER_STATES % block_states(64 * 1024), 0);
     }
 }

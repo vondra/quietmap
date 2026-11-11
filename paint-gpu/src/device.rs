@@ -252,8 +252,6 @@ pub struct Gpu {
     pub name: String,
     /// Held while cudarc records and waits on the device's one event (`crate::stream`).
     pub(crate) event: Mutex<()>,
-    /// Weather states a block of the loudness mixtures takes (`crate::loudness::block_states`).
-    pub(crate) loudness_block_states: usize,
 }
 
 impl Gpu {
@@ -265,9 +263,6 @@ impl Gpu {
         let minor = attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
         let multiprocessors =
             attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
-        let loudness_block_states = crate::loudness::block_states(attribute(
-            CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
-        )? as usize);
         let arch: &'static str = Box::leak(format!("compute_{major}{minor}").into_boxed_str());
         let source = format!(
             "{COMMON}{}{}#define THREADS_PER_BLOCK {THREADS_PER_BLOCK}\n{PHYSICS}",
@@ -299,10 +294,7 @@ impl Gpu {
             ],
         ))?;
         // The pixels' loudness, in full precision (fast math moved a sum's bin at its edges).
-        let loudness = format!(
-            "{COMMON}{}",
-            crate::loudness::loudness_source(loudness_block_states)
-        );
+        let loudness = format!("{COMMON}{}", crate::loudness::loudness_source());
         let ptx = compile_ptx_with_opts(
             loudness,
             CompileOptions {
@@ -367,7 +359,6 @@ impl Gpu {
             device,
             name: format!("{name} (sm_{major}{minor}, {multiprocessors} SMs)"),
             event: Mutex::new(()),
-            loudness_block_states,
         })
     }
 
