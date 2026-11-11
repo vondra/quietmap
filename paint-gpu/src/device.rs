@@ -304,7 +304,11 @@ impl Gpu {
             },
         )
         .map_err(|error| format!("nvrtc (loudness): {error}"))?;
-        driver(device.load_ptx(ptx, "loudness", &["pixel_mixtures", "pixel_ndens"]))?;
+        driver(device.load_ptx(
+            ptx,
+            "loudness",
+            &["pixel_mixtures", "pixel_ndens", "loud_struct_sizes"],
+        ))?;
         // The aircraft boxes' sums at the corners' lattices, with the Rust's constants.
         let aircraft = format!(
             "{COMMON}{}{}",
@@ -352,6 +356,19 @@ impl Gpu {
         {
             return Err(format!(
                 "flight struct layouts differ: device {device_sizes:?}, host {host_sizes:?}"
+            ));
+        }
+        let warp_bytes = driver(device.alloc_zeros::<u64>(1))?;
+        let function = device
+            .get_func("loudness", "loud_struct_sizes")
+            .ok_or("kernel loud_struct_sizes missing")?;
+        // SAFETY: the kernel writes one u64.
+        driver(unsafe { function.launch(ONE_THREAD, (&warp_bytes,)) })?;
+        let warp_bytes = driver(device.dtoh_sync_copy(&warp_bytes))?[0];
+        if warp_bytes != crate::loudness::loud_warp_bytes() as u64 {
+            return Err(format!(
+                "loudness warp layouts differ: device {warp_bytes}, host {}",
+                crate::loudness::loud_warp_bytes()
             ));
         }
         let name = driver(device.name())?;

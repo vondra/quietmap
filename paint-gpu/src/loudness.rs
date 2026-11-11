@@ -4,6 +4,7 @@
 //! their Nden out.
 
 use crate::device::{Gpu, driver, read_back};
+use crate::weather_runs::mixture_blocks;
 use cudarc::driver::{LaunchAsync, LaunchConfig};
 use paint::exact::LAYERS;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS};
@@ -36,6 +37,15 @@ pub(crate) fn loudness_source() -> String {
 /// The map's level bins (`popup::distribution`'s span at the map's resolution).
 fn bins() -> usize {
     (SPAN_DB / Resolution::MAP.bin_db).round() as usize
+}
+
+/// The bytes of one weather state's warp in a mixtures block (kernels/distribution.cuh
+/// LoudWarp, checked against the card's when the module loads): a layer's distribution in two
+/// buffers (a bin's two floats each, their silence and range) and a line's values (each value, and
+/// its shares and weighted shares from it, and their count).
+pub(crate) fn loud_warp_bytes() -> usize {
+    let values = node_probabilities().len().max(bins() + 1);
+    2 * (12 + 8 * bins()) + 4 * (3 * values + 3)
 }
 
 /// A pixel's blocks on the card: each period's groups of hours (as when some line follows a
@@ -207,8 +217,14 @@ impl Gpu {
             return Ok(Vec::new());
         }
         let device = &self.device;
+        let (spans, tasks, runs) = mixture_blocks(
+            offsets.iter().map(|&at| &input[at as usize..]),
+            &period_groups(),
+        );
         let input = driver(device.htod_sync_copy(input))?;
         let offsets = driver(device.htod_sync_copy(offsets))?;
+        let tasks = driver(device.htod_sync_copy(&tasks))?;
+        let runs = driver(device.htod_sync_copy(&runs))?;
         let mixtures = driver(device.alloc_zeros::<f32>(mixture_floats() * count))?;
         let ndens = driver(device.alloc_zeros::<f32>(LOUDNESS_FLOATS * count))?;
         let kernel = |name: &str| {
@@ -219,11 +235,6 @@ impl Gpu {
         // On a stream of their own (once the buffers above are zeroed): the pairs' kernels of
         // another pass run beside them on the card.
         let stream = self.fork()?;
-        let mixtures_config = LaunchConfig {
-            grid_dim: ((count * period_groups().len()) as u32, 1, 1),
-            block_dim: (WEATHER_STATES as u32 * 32, 1, 1),
-            shared_mem_bytes: 0,
-        };
         let pixels_config = LaunchConfig {
             grid_dim: (count as u32, 1, 1),
             block_dim: (32, 1, 1),
@@ -232,13 +243,21 @@ impl Gpu {
         // SAFETY: the kernels read each pixel's floats from its offset (the host packed them as
         // kernels/distribution.cuh lays them out); the first adds into `mixture_floats()` zeroed
         // floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel.
-        driver(unsafe {
-            kernel("pixel_mixtures")?.launch_on_stream(
-                &stream,
-                mixtures_config,
-                (&input, &offsets, &mixtures),
-            )
-        })?;
+        let state_bytes = loud_warp_bytes() + 4;
+        for (states, &(first, blocks)) in spans.iter().enumerate().filter(|(_, (_, n))| *n > 0) {
+            let config = LaunchConfig {
+                grid_dim: (blocks as u32, 1, 1),
+                block_dim: (states as u32 * 32, 1, 1),
+                shared_mem_bytes: (states * state_bytes) as u32,
+            };
+            driver(unsafe {
+                kernel("pixel_mixtures")?.launch_on_stream(
+                    &stream,
+                    config,
+                    (&input, &offsets, &tasks, &runs, first as u32, &mixtures),
+                )
+            })?;
+        }
         driver(unsafe {
             kernel("pixel_ndens")?.launch_on_stream(
                 &stream,

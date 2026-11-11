@@ -416,49 +416,49 @@ __device__ float loud_floor(const float* lines, int count, float steady, int p, 
     return floor;
 }
 
-// percentiles.rs layer_states, a warp a weather state (`state`, the warp's place among the block's
-// `warps`): the layer's floor (loud_floor's, with its `held` and `moves`), then its moving lines added
-// in moment()'s order (the events, then the others); returns which of the warp's `layer` holds the
-// result. A line's values hang on its duty or its lambda alone, never on the state (layer_states
-// shares the shapes alike): the lines come LOUD_STATES at a time, each made once by one warp in its
-// `values` for every state that adds it (`adders`, a bit a state), a state skipped (`skip`) adding
-// none. Every warp of the block calls this alike: its barriers are the block's.
+// percentiles.rs layer_states, a warp a weather state (`state`; the warp's place among the block's
+// `warps` is its warp index): the layer's floor (loud_floor's, with its `held` and `moves`), then its
+// moving lines added in moment()'s order (the events, then the others); returns which of the warp's
+// `layer` holds the result. A line's values hang on its duty or its lambda alone, never on the state
+// (layer_states shares the shapes alike): the lines come the block's warp count at a time, each made
+// once by one warp in its `values` for every warp that adds it (`adders`, a bit a warp). Every warp of
+// the block calls this alike: its barriers are the block's.
 __device__ int loud_layer(const float* lines, int count, float floor, float held, bool moves, int p, int group, int state,
-                          bool skip, LoudWarp* warps, u32* adders, int lane) {
-    LoudWarp& w = warps[state];
-    bool active = !skip && moves;
-    if (!skip) loud_steady(floor, w.layer[0], lane);
+                          LoudWarp* warps, u32* adders, int lane) {
+    int warp = threadIdx.x / LOUD_LANES, block_states = blockDim.x / LOUD_LANES;
+    LoudWarp& w = warps[warp];
+    loud_steady(floor, w.layer[0], lane);
     int now = 0;
-    if (!__syncthreads_or(active)) return now;
+    if (!__syncthreads_or(moves)) return now;
     for (int pass = 0; pass < 2; pass++) {
-        for (int first = 0; first < count; first += LOUD_STATES) {
-            if (threadIdx.x < LOUD_STATES) adders[threadIdx.x] = 0u;
+        for (int first = 0; first < count; first += block_states) {
+            if (threadIdx.x < block_states) adders[threadIdx.x] = 0u;
             __syncthreads();
-            for (int k = 0; k < LOUD_STATES && first + k < count; k++) {
+            for (int k = 0; k < block_states && first + k < count; k++) {
                 LoudLine line{lines + (first + k) * LOUD_LINE_FLOATS};
                 float factor = line.factor(p, group);
                 float mean = line.mean(p, state) * factor;
                 float duty = line.duty(p), lambda = line.lambda(p) * factor;
                 // The one-state loop's tests as they were, negated (a NaN skips alike).
-                bool adds = active && !(line.energy(p) <= 0.0f || mean <= 0.0f);
+                bool adds = moves && !(line.energy(p) <= 0.0f || mean <= 0.0f);
                 if (pass == 0) {
                     adds = adds && !(isnan(duty) || duty <= 0.0f);
                 } else {
                     adds = adds && !(!isnan(duty) || lambda >= LOUD_HOLDS_MEAN_LAMBDA)
                         && !(mean * loud_exceeded(lambda) < LOUD_HELD_SHARE * held);
                 }
-                if (adds && lane == 0) atomicOr(&adders[k], 1u << state);
+                if (adds && lane == 0) atomicOr(&adders[k], 1u << warp);
             }
             __syncthreads();
             // This warp's line of the run: its values for the states that add it.
-            if (adders[state] != 0u) {
-                LoudLine line{lines + (first + state) * LOUD_LINE_FLOATS};
+            if (adders[warp] != 0u) {
+                LoudLine line{lines + (first + warp) * LOUD_LINE_FLOATS};
                 if (pass == 0) loud_event(line.duty(p), w.values, lane);
                 else loud_kurze(line.lambda(p) * line.factor(p, group), w.values, lane);
             }
             __syncthreads();
-            for (int k = 0; k < LOUD_STATES && first + k < count; k++) {
-                if (!((adders[k] >> state) & 1u)) continue;
+            for (int k = 0; k < block_states && first + k < count; k++) {
+                if (!((adders[k] >> warp) & 1u)) continue;
                 LoudLine line{lines + (first + k) * LOUD_LINE_FLOATS};
                 float mean = line.mean(p, state) * line.factor(p, group);
                 loud_with_line(w.layer[now], warps[k].values, mean, w.layer[1 - now], lane);
