@@ -141,23 +141,25 @@ pub fn snapped_parts(geometry: &impl Geom) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn repaired(geometry: &impl Geom) -> geos::GResult<Geometry> {
+    if geometry.is_valid()? {
+        geometry.clone()
+    } else {
+        geometry.buffer(0.0, 8)
+    }
+}
+
 pub fn overlap(left: &impl Geom, right: &impl Geom) -> Result<(f64, bool)> {
-    let contains = right.covers(&left.get_centroid()?)?;
+    // GEOS 3.12 refuses both predicates on a self-crossing ring (13 such 3DBAG footprints in one
+    // degree); the frozen producer's GEOS 3.14 answered `covers` directly. Both fall back to the
+    // buffer-0 repair, and the union keeps the original areas.
+    let centroid = left.get_centroid()?;
+    let contains = right
+        .covers(&centroid)
+        .or_else(|_| repaired(right)?.covers(&centroid))?;
     let intersection = left
         .intersection(right)
-        .or_else(|_| {
-            let left = if left.is_valid()? {
-                left.clone()?
-            } else {
-                left.buffer(0.0, 8)?
-            };
-            let right = if right.is_valid()? {
-                right.clone()?
-            } else {
-                right.buffer(0.0, 8)?
-            };
-            left.intersection(&right)
-        })?
+        .or_else(|_| repaired(left)?.intersection(&repaired(right)?))?
         .area()?;
     let union = left.area()? + right.area()? - intersection;
     Ok((
