@@ -324,6 +324,24 @@
       "description": "Restaurants, cafés, bars and terraces."
     },
     {
+      "id": "lodgings",
+      "kind": "lodgings",
+      "region": "world",
+      "publisher": "OpenStreetMap contributors",
+      "url": "https://www.openstreetmap.org/copyright",
+      "observed": {
+        "start": "2026-09-21",
+        "end": "2026-09-21"
+      },
+      "published": null,
+      "licence": "ODbL",
+      "public_ok": true,
+      "depends_on": [
+        "osm"
+      ],
+      "description": "Mapped hotels, hostels, motels and guest houses that state their rooms, derived from the admitted OSM state."
+    },
+    {
       "id": "barriers",
       "kind": "barriers",
       "region": "PL",
@@ -782,7 +800,7 @@
       "id": "hotel-trip-rate",
       "kind": "hotel-trip-rate",
       "region": "world",
-      "publisher": "Quiet Map; national household travel surveys; OpenStreetMap contributors",
+      "publisher": "Quiet Map; Institute of Transportation Engineers; OpenStreetMap contributors",
       "url": "https://quietmap.org/about/data-preparation",
       "observed": {
         "start": "2026-09-21",
@@ -792,9 +810,27 @@
       "licence": "Apache-2.0 (derived coefficients)",
       "public_ok": true,
       "depends_on": [
-        "osm"
+        "lodgings",
+        "structures",
+        "trip-generation-observations"
       ],
-      "description": "Hotel trip rate per 100 square metres, using the room density of mapped hotels and ITE trip rates."
+      "description": "Car trips a hotel makes a day per 100 square metres of its gross floor: the observed car trips a room over the gross floor a room of the mapped hotels, hostels, motels and guest houses that state their rooms and stand in hotel-typed buildings, fitted by the year run over the whole admitted mapped state."
+    },
+    {
+      "id": "trip-generation-observations",
+      "kind": "model-observations",
+      "region": "world",
+      "publisher": "Institute of Transportation Engineers; earlier Quiet Map model assumptions",
+      "url": "https://www.ite.org/technical-resources/topics/trip-and-parking-generation/",
+      "observed": {
+        "start": "2012",
+        "end": "2012"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "A hotel's car trips a room: ITE's 8.17 weekday vehicle trip ends a room (Trip Generation, 9th edition, 2012, land use 310), measured, with an assumed occupancy of 0.5 and car share of 0.6 carried over from the earlier model; each factor names its basis and source."
     },
     {
       "id": "venue-customs",

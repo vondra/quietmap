@@ -293,6 +293,24 @@
       "description": "Mapped restaurants, cafes, bars and terraces, derived from the admitted OSM state."
     },
     {
+      "id": "lodgings",
+      "kind": "lodgings",
+      "region": "world",
+      "publisher": "OpenStreetMap contributors",
+      "url": "https://www.openstreetmap.org/copyright",
+      "observed": {
+        "start": "2024-12-31",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "ODbL",
+      "public_ok": true,
+      "depends_on": [
+        "osm"
+      ],
+      "description": "Mapped hotels, hostels, motels and guest houses that state their rooms, derived from the admitted OSM state."
+    },
+    {
       "id": "church-bells",
       "kind": "church-bells",
       "region": "europe",
@@ -5616,17 +5634,37 @@
       "id": "trip-generation-observations",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "ITE and national household travel surveys",
+      "publisher": "Institute of Transportation Engineers; earlier Quiet Map model assumptions",
       "url": "https://www.ite.org/technical-resources/topics/trip-and-parking-generation/",
       "observed": {
-        "start": "2017",
-        "end": "2022"
+        "start": "2012",
+        "end": "2012"
       },
       "published": null,
       "licence": "Published aggregate observations and model parameters",
       "public_ok": true,
       "depends_on": [],
-      "description": "Building trip rates from the ITE 11th edition and household travel studies; model assumptions retain their documented scope."
+      "description": "A hotel's car trips a room: ITE's 8.17 weekday vehicle trip ends a room (Trip Generation, 9th edition, 2012, land use 310), measured, with an assumed occupancy of 0.5 and car share of 0.6 carried over from the earlier model; each factor names its basis and source."
+    },
+    {
+      "id": "hotel-trip-rate",
+      "kind": "hotel-trip-rate",
+      "region": "world",
+      "publisher": "Quiet Map; Institute of Transportation Engineers; OpenStreetMap contributors",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2024",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "lodgings",
+        "structures",
+        "trip-generation-observations"
+      ],
+      "description": "Car trips a hotel makes a day per 100 square metres of its gross floor: the observed car trips a room over the gross floor a room of the mapped hotels, hostels, motels and guest houses that state their rooms and stand in hotel-typed buildings, fitted by the year run over the whole admitted mapped state."
     },
     {
       "id": "road-calibration",
@@ -7444,15 +7482,6 @@
         "bus-training-timetables",
         "osm",
         "road-traffic"
-      ]
-    },
-    {
-      "id": "hotel-trip-rate",
-      "kind": "hotel-trip-rate",
-      "region": "world",
-      "description": "To be derived for 2024. Hotel trip rate per 100 square metres, using the room density of mapped hotels and ITE trip rates.",
-      "depends_on": [
-        "osm"
       ]
     },
     {

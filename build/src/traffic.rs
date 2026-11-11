@@ -11,6 +11,7 @@
 //! trip ends routed through it (NaN where the row is no local street of a tree), then the square's
 //! grid of trip ends.
 
+pub(crate) mod hotel_trip_rate_fit;
 pub(crate) mod preparation;
 mod preparation_buildings;
 pub(crate) mod preparation_model;
@@ -88,16 +89,37 @@ const SHED_UP_TO_M2: f64 = 30.0;
 const HOUSE_UP_TO_M2: f64 = 250.0;
 const HOUSE_UP_TO_STOREYS: u8 = 3;
 
-/// Trips by mapped use: dwellings per household, hotels by the admitted room-density table,
-/// other uses by floor area or fixed fixtures. An unknown use is a shed, house or flats by size.
+/// The footprint of a building whose area is not mapped (m2).
+const UNKNOWN_FOOTPRINT_M2: f64 = 100.0;
+
+/// A building's storeys as the trips read them: its demand storeys, else its mapped floors, else one.
+pub(crate) fn demand_storeys(storeys: Option<u8>, floors: Option<u8>) -> u8 {
+    storeys.filter(|&count| count > 0).or(floors).unwrap_or(1)
+}
+
+/// An OSM building's mapped footprint (m2), when it is a positive area.
+pub(crate) fn mapped_footprint_m2(area_m2: Option<f32>) -> Option<f64> {
+    area_m2
+        .filter(|area| area.is_finite() && *area > 0.0)
+        .map(f64::from)
+}
+
+/// A building's gross floor (m2) as the trips read it: its footprint times its storeys.
+pub(crate) fn gross_floor_m2(storeys: u8, area_m2: Option<f64>) -> f64 {
+    area_m2.unwrap_or(UNKNOWN_FOOTPRINT_M2) * f64::from(storeys.max(1))
+}
+
+/// Trips by mapped use: dwellings per household, hotels by the year's fitted trips per floor
+/// area, other uses by floor area or fixed fixtures. An unknown use is a shed, house or flats by
+/// size.
 pub(crate) fn building_load(
     tables: &TripRates,
     building_type: u8,
     storeys: u8,
     area_m2: Option<f64>,
 ) -> (f64, f64) {
-    let footprint = area_m2.unwrap_or(100.0);
-    let gfa = footprint * f64::from(storeys.max(1));
+    let footprint = area_m2.unwrap_or(UNKNOWN_FOOTPRINT_M2);
+    let gfa = gross_floor_m2(storeys, area_m2);
     let dwellings =
         |per_dwelling: f64, cap: f64| ((gfa / per_dwelling).floor().max(1.0).min(cap), 0.0);
     if building_type == 0 && area_m2.is_some_and(|area| area < SHED_UP_TO_M2) {
@@ -349,15 +371,12 @@ fn read_buildings(
             } else {
                 centroid
             };
-            let storey_count = cell(storeys, row)
-                .filter(|&count| count > 0)
-                .or_else(|| cell(floors, row))
-                .unwrap_or(1);
+            let storey_count = demand_storeys(cell(storeys, row), cell(floors, row));
             let (building_type, area) = if osm {
-                let area = cell(areas, row)
-                    .filter(|area| area.is_finite() && *area > 0.0)
-                    .map(f64::from);
-                (cell(types, row).unwrap_or(0), area)
+                (
+                    cell(types, row).unwrap_or(0),
+                    mapped_footprint_m2(cell(areas, row)),
+                )
             } else {
                 (0, footprint_area_m2(outlines.value(row)))
             };

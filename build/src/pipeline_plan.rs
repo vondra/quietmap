@@ -143,6 +143,15 @@ pub(crate) fn steps() -> Vec<Step> {
         ("bus", &[], Some(Bus), None, false),
         ("worship", &[], Some(Worship), None, false),
         ("venues", &[], Some(Venues), None, false),
+        ("lodgings", &[], Some(Lodgings), None, false),
+        // A fit of the year's own lodgings and buildings, before the traffic that reads it.
+        (
+            "hotel-trip-rate",
+            &["lodgings", "structures"],
+            Some(HotelTripRate),
+            None,
+            false,
+        ),
         (
             "prepared",
             &["osm", "structures", "roads", "prepare-railways"],
@@ -180,7 +189,13 @@ pub(crate) fn steps() -> Vec<Step> {
             Some(0),
             false,
         ),
-        ("traffic", &["prepared"], Some(RoadTraffic), Some(1), false),
+        (
+            "traffic",
+            &["prepared", "hotel-trip-rate"],
+            Some(RoadTraffic),
+            Some(1),
+            false,
+        ),
         (
             "sources",
             &[

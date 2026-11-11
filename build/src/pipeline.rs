@@ -148,7 +148,13 @@ pub(crate) fn build(options: &Arguments) -> Result<()> {
             }
             if matches!(
                 step.name,
-                "osm" | "rail-movements" | "aircraft-segments" | "bus" | "worship" | "venues"
+                "osm"
+                    | "rail-movements"
+                    | "aircraft-segments"
+                    | "bus"
+                    | "worship"
+                    | "venues"
+                    | "lodgings"
             ) {
                 extra.push((
                     "scratch",

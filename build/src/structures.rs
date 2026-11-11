@@ -16,7 +16,7 @@ mod national_attributes;
 pub(crate) mod observations;
 pub(crate) mod prepare;
 pub(crate) mod prepare_geometry;
-mod prepare_rows;
+pub(crate) mod prepare_rows;
 #[cfg(test)]
 mod prepare_tests;
 pub(crate) mod prepare_walls;

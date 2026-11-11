@@ -132,7 +132,7 @@ grid coverage there is no state mix; the normal country/global vehicle model app
 | building-plant | Heating and cooling outdoor units per household, central cooling fraction, optional fixed hours/day; EHPA, EurObserv'ER, RECS and national surveys |
 | service-cooling | Fraction of service floor cooled; Heat Roadmap Europe D3.2 section 5.3, observed 2015 and published 2018 |
 | dwelling-trips | Vehicle trips per dwelling per day; MiD 2017, National Travel Survey and NHTS 2022, including occupancy adjustment |
-| hotel-trip-rate | Vehicle trips per 100 m² per day; mapped room density and ITE trip rates |
+| hotel-trip-rate | Car trips per 100 m² of gross floor per day; the year run fits it (below) |
 | building-road-models | Log-linear coefficients over building trip ends; distances in metres, traffic in vehicles/day, country shifts in dB; field names in `source_tables/models.rs` specify each fit |
 | bus-models | Frequencies, exponents, minimum service and period fractions; fitted to timetable service and mapped routes |
 | venue-seating | Expected and tagged seats by bar, pub, nightclub, restaurant, café and fast-food use; beer-garden median area in m²; predominant unmapped building use |
@@ -251,6 +251,17 @@ at least 30 pieces; a selection whose roads fill no such cell has no fit and bui
 The run publishes the fitted table and its support (`tagged-speeds.samples.json`) in the year
 tree's `tables/`; the release commit copies the table here. A table fitted on a smaller selection is never pinned into a
 later run.
+
+`hotel-trip-rate` is fitted the same way (its `hotel-trip-rate` step, after `lodgings` and
+structures, before traffic): the product of the `trip-generation-observations` factors, each
+marked measured or assumed with its source (ITE's 8.17 vehicle trips a room, measured; dev4's
+occupancy 0.5 and car share 0.6, assumed), times 100 over the gross floor a stated room (sum over
+sum) of the lodgings that state their rooms and stand in hotel-typed buildings: a way or relation
+by its own structure row, a node by the outline holding it, a hotel-typed one first, then the
+one whose centroid lies nearest (a hotel inside a mapped complex takes the hotel). Gross floor
+is read as traffic reads it (footprint, else 100 m², times storeys). Its support
+(`hotel-trip-rate.samples.json`) has the factors, the sums by match and building use, the
+lodgings that met no building, and each square's rated sums.
 Legal and heavy speed histories retain their source, applicability and validity
 interval (exclusive end). A country lacking a documented historical row retains the
 road model's global speed fallback; no later legal check is backdated. Japan's 2024

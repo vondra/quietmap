@@ -23,9 +23,9 @@ traffic counts divided by a newer mapped road length cannot supply an earlier ye
 practices apply over their documented validity intervals; a practice measured later, such as church
 bells, calls to prayer or venue hours, holds over the preceding few years unless a source dated
 within them shows a different practice. A table fitted on the year's own mapped state, such as the
-posted-speed medians, is fitted by the year's build after that state is prepared and published with
-the year. A required model table that is missing stops the build. Where a country has no counts,
-the documented world model still applies. Source lists appear only for maps that have been built.
+posted-speed medians or a hotel's trips per floor area, is fitted by the year's build after that
+state is prepared and published with the year. A required model table that is missing stops the
+build. Where a country has no counts, the documented world model still applies. Source lists appear only for maps that have been built.
 
 <details>
 <summary>The year manifest and input tables</summary>
@@ -140,8 +140,12 @@ junctions and the place's yearly air temperature.
   model of the same kind, fitted on 13 European countries; where a country's default stands
   instead (Russia, Turkey, Japan, Iran, Ukraine), it is kept. A street carries the trips its
   buildings make, OpenStreetMap's and Overture's, routed along the street network to the nearest
-  main road. In a town, an unclassified street, and a residential street that a bus, trolleybus or
-  coach line runs along, carries at least what Great Britain's, France's and Sweden's counted
+  main road. A hotel makes 2.45 car trips a room a day: ITE's measured 8.17 vehicle trips a room
+  (Trip Generation, 9th edition, land use 310) at an assumed half occupancy and 60 % by car, two
+  factors without a measured source. Its rooms come from its floor, at the floor a room of the
+  year's mapped hotels, hostels, motels and guest houses that state their rooms: 85 m² in 2026.
+  In a town, an unclassified street, and a residential street that a bus, trolleybus or coach line
+  runs along, carries at least what Great Britain's, France's and Sweden's counted
   unclassified streets carry among as many trips within 2 km (a one-way residential street what a
   two-way one carries): a line mostly runs along a through street that its class misses. In Great
   Britain's random sample of counted minor roads, 592 residential streets with a line carry 1,820
@@ -747,9 +751,10 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
   terrain models, wind turbines, WorldClim and the
   <abbr title="Trans-European Transport Network">TEN-T</abbr> rail network.
 - `build/` turns the inputs into the tiles and every source's sound power. The `year` command
-  runs the steps in dependency order. `bus`, `worship` and `venues` extract mapped routes and
-  activities from that year's OpenStreetMap state; `tagged-speed-table` fits the posted-speed
-  medians from the same state. Other steps include
+  runs the steps in dependency order. `bus`, `worship`, `venues` and `lodgings` extract mapped
+  routes, activities and the lodgings that state their rooms from that year's OpenStreetMap state;
+  `tagged-speed-table` fits the posted-speed medians and `hotel-trip-rate` a hotel's trips per
+  floor area from the same state. Other steps include
   `ships` (monthly occupancy with completed coverage), `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.

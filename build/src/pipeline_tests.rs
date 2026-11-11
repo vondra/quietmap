@@ -368,12 +368,19 @@ fn a_table_the_run_fits_is_neither_pinned_from_an_earlier_fit_nor_required_befor
     )
     .unwrap();
     fs::write(tables.join("hotel-trip-rate.json"), br#"{"rows":[2.87]}"#).unwrap();
+    fs::write(
+        tables.join("dwelling-trips.json"),
+        br#"{"rows":[{"country":"AT","value":3.4}]}"#,
+    )
+    .unwrap();
     let produced = crate::pipeline_plan::produced_kinds();
     assert!(produced.contains(&crate::year::Kind::TaggedSpeeds));
+    assert!(produced.contains(&crate::year::Kind::HotelTripRate));
     let run = open(root, "0:0", json!({})).unwrap();
     let pinned = run.root.join("tables/2000");
-    assert!(pinned.join("hotel-trip-rate.json").is_file());
+    assert!(pinned.join("dwelling-trips.json").is_file());
     assert!(!pinned.join("tagged-speeds.json").exists());
+    assert!(!pinned.join("hotel-trip-rate.json").exists());
     let inputs =
         crate::year::YearInputs::read(&root.join("year.json"), &root.join("sources")).unwrap();
     let every: std::collections::BTreeSet<_> =
