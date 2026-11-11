@@ -293,6 +293,54 @@
       "description": "Mapped restaurants, cafes, bars and terraces, derived from the admitted OSM state."
     },
     {
+      "id": "church-bells",
+      "kind": "church-bells",
+      "region": "europe",
+      "publisher": "Quiet Map; LUBW; published church schedules",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2026-10-04",
+        "end": "2026-10-04"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (derived parameters)",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Country ringing practices checked in October 2026: denomination defaults and clock strikes. A practice measured in October 2026 is taken to hold over the preceding years unless a source dated within them shows a different practice; for 2024 none was found."
+    },
+    {
+      "id": "worship-calls",
+      "kind": "worship-calls",
+      "region": "world",
+      "publisher": "Quiet Map; public authorities; OpenStreetMap contributors",
+      "url": "https://quietmap.org/about/noise-at-a-point",
+      "observed": {
+        "start": "2026-10-04",
+        "end": "2026-10-04"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (derived parameters)",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Outdoor call rules and prayer-time conventions, checked against authority timetables in October 2026. A practice measured in October 2026 is taken to hold over the preceding years unless a source dated within them shows a different practice; for 2024 none was found."
+    },
+    {
+      "id": "venue-customs",
+      "kind": "venue-customs",
+      "region": "world",
+      "publisher": "Quiet Map; public authorities; OpenStreetMap contributors",
+      "url": "https://quietmap.org/about/noise-at-a-point",
+      "observed": {
+        "start": "2026-10-04",
+        "end": "2026-10-04"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (derived parameters)",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Opening hours and terrace customs compiled from national rules and HETUS surveys, checked in October 2026. A practice measured in October 2026 is taken to hold over the preceding years unless a source dated within them shows a different practice; for 2024 none was found."
+    },
+    {
       "id": "segments",
       "kind": "segments",
       "region": "world",
@@ -7408,22 +7456,6 @@
       ]
     },
     {
-      "id": "practice-history-venue-customs",
-      "kind": "model-observations",
-      "region": "world",
-      "description": "Historical validity of venue-customs must be established from dated laws or practice records.",
-      "depends_on": []
-    },
-    {
-      "id": "venue-customs",
-      "kind": "venue-customs",
-      "region": "world",
-      "description": "To be derived for 2024. Opening hours and terrace customs compiled from national rules and HETUS surveys, checked in October 2026.",
-      "depends_on": [
-        "practice-history-venue-customs"
-      ]
-    },
-    {
       "id": "venue-seating",
       "kind": "venue-seating",
       "region": "world",
@@ -7431,38 +7463,6 @@
       "depends_on": [
         "terrace-surveys",
         "osm"
-      ]
-    },
-    {
-      "id": "practice-history-worship-calls",
-      "kind": "model-observations",
-      "region": "world",
-      "description": "Historical validity of worship-calls must be established from dated laws or practice records.",
-      "depends_on": []
-    },
-    {
-      "id": "worship-calls",
-      "kind": "worship-calls",
-      "region": "world",
-      "description": "To be derived for 2024. Outdoor call rules and prayer-time conventions, checked against authority timetables in October 2026.",
-      "depends_on": [
-        "practice-history-worship-calls"
-      ]
-    },
-    {
-      "id": "practice-history-church-bells",
-      "kind": "model-observations",
-      "region": "europe",
-      "description": "Historical validity of church-bells must be established from dated laws or practice records.",
-      "depends_on": []
-    },
-    {
-      "id": "church-bells",
-      "kind": "church-bells",
-      "region": "europe",
-      "description": "To be derived for 2024. Country ringing practices checked in October 2026: denomination defaults and clock strikes.",
-      "depends_on": [
-        "practice-history-church-bells"
       ]
     },
     {
@@ -7748,6 +7748,18 @@
       "end": "2026"
     },
     "fine-dem-pt": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "venue-customs": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "worship-calls": {
+      "start": "2024",
+      "end": "2026"
+    },
+    "church-bells": {
       "start": "2024",
       "end": "2026"
     }

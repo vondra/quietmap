@@ -140,6 +140,10 @@ grid coverage there is no state mix; the normal country/global vehicle model app
 | worship-calls | Prayer method, start offset and sounding duration in seconds, sound power dB(A), iqama/sala seconds, dawn/Friday/silent policy and horn height in metres |
 | church-bells | Denomination default, clock events/hour, clock events/night and seconds/event |
 
+The practice tables (church-bells, worship-calls, venue-customs) of a year repeat the latest
+measured rows unless a source dated within that year shows a different practice; the manifest's
+`validity` interval records the years they are taken to hold.
+
 Plants use their UN M49 regional medians where a country has no observation, then zero heating
 units and 0.16 cooling units per household (the Brazil, Mexico and India surveys). South-East
 Asia uses the regional survey's 0.29. Service cooling uses the European regional medians, then

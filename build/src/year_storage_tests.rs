@@ -139,18 +139,17 @@ fn every_required_model_kind_refuses_missing_and_empty_inputs() {
 }
 
 #[test]
-fn an_unbuilt_historical_year_cannot_load_current_models() {
+fn a_historical_model_not_yet_derived_is_refused_with_its_pending_derivation() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let inputs =
         YearInputs::read(&root.join("../years/2024.json"), &root.join("test-data")).unwrap();
-    let error = match crate::source_tables::SourceTables::read(&inputs) {
-        Ok(_) => panic!("historical models are not derived"),
-        Err(e) => e,
-    };
-    assert!(
-        error.contains("church-bells") && error.contains("To be derived for 2024"),
-        "{error}"
-    );
+    for &kind in crate::source_tables::MODEL_KINDS {
+        if let Err(error) = inputs.paths(kind)
+            && error.contains("no admitted input")
+        {
+            assert!(error.contains("To be derived for 2024"), "{error}");
+        }
+    }
 }
 
 #[test]
