@@ -143,6 +143,14 @@ pub(crate) fn steps() -> Vec<Step> {
         ("bus", &[], Some(Bus), None, false),
         ("worship", &[], Some(Worship), None, false),
         ("venues", &[], Some(Venues), None, false),
+        // A fit of the year's mapped places and dated seating surveys, before the sources.
+        (
+            "venue-seating-table",
+            &["structures", "venues"],
+            Some(VenueSeating),
+            None,
+            false,
+        ),
         (
             "prepared",
             &["osm", "structures", "roads", "prepare-railways"],
@@ -194,6 +202,7 @@ pub(crate) fn steps() -> Vec<Step> {
                 "bus",
                 "worship",
                 "venues",
+                "venue-seating-table",
             ],
             None,
             Some(0),

@@ -10,16 +10,15 @@
 use super::bells::convert_bells;
 use super::building_plant::{cooled_service_share, dwelling_plant};
 pub use super::building_rows::BuildingRow;
-use super::building_rows::{place_outside, read_batch};
+use super::building_rows::{host_places, read_batch};
 use super::calls::convert_calls;
 use super::cells::{AUDIBILITY_FLOOR_DBA, Site, push_site_points, resolve_area_m2, site_points};
-use super::outside::OutsidePlacer;
 use super::people::convert_people;
 use super::venues::{PlaceHours, VenueSite, customs, place_hours, unmapped_place_hours};
 use super::worship::Host;
 use super::{Converted, Places, displayed_duty, group_key, object_key};
 use crate::climate::Climate;
-use crate::dev4::{Dev4, Square, degrees_to_z30, require_stamp, z30_corner_degrees};
+use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees};
 use crate::rings::RingIndex;
 use crate::screening::BUILDING_HEIGHT_MAX_M;
 use crate::source_tables::SourceTables;
@@ -243,18 +242,7 @@ pub fn convert(
     let venues = places
         .venues
         .map_or(&[][..], |venues| venues.in_square(square.x, square.y));
-    let mut placer = OutsidePlacer::new(
-        venues
-            .iter()
-            .map(|site| degrees_to_z30(site.lat, site.lon))
-            .collect(),
-        venues.first().map_or(0.0, |site| site.lat),
-    );
-    if !venues.is_empty() {
-        for batch in batches {
-            place_outside(batch, (square, &hospitality), &mut placer).map_err(context)?;
-        }
-    }
+    let placer = host_places(batches, (square, &hospitality), venues).map_err(context)?;
     let mut hosted: HashMap<u64, Vec<&VenueSite>> = HashMap::new();
     for (site, host) in venues.iter().zip(placer.hosts()) {
         if let Some(key) = host {

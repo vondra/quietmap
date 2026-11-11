@@ -23,8 +23,8 @@ traffic counts divided by a newer mapped road length cannot supply an earlier ye
 practices apply over their documented validity intervals; a practice measured later, such as church
 bells, calls to prayer or venue hours, holds over the preceding few years unless a source dated
 within them shows a different practice. A table fitted on the year's own mapped state, such as the
-posted-speed medians, is fitted by the year's build after that state is prepared and published with
-the year. A required model table that is missing stops the build. Where a country has no counts,
+posted-speed medians or the seats outside bars and restaurants, is fitted by the year's build after
+that state is prepared and published with the year. A required model table that is missing stops the build. Where a country has no counts,
 the documented world model still applies. Source lists appear only for maps that have been built.
 
 <details>
@@ -528,7 +528,8 @@ deliveries, building sites, garden machinery, music and festivals.
 - **Buildings of restaurants, cafés and bars** emit their cooling while their places are open, and
   a restaurant's kitchen extract while its kitchen runs, an hour either side of its hours: the
   fan law over the footprint, at the 72 dB(A) measured at a fast-food restaurant's exhaust of
-  316 m2, up to the size of a large restaurant.
+  316 m2, up to the size of a large restaurant. One with no place mapped in it keeps the hours of
+  the kind the most such buildings of the year's map hold, a restaurant.
 - **Schools, hotels and other buildings** emit by type, area and assumed hours; the data often
   cannot tell a warehouse from a workshop.
 - **Sports pitches** radiate [Sport England](https://www.sportengland.org)'s typical in-use level
@@ -557,7 +558,11 @@ deliveries, building sites, garden machinery, music and festivals.
   Friday noon at 100 dB(A). In China, Tajikistan and Singapore no call sounds outside.
 - **Terraces and doors.** People sit on the terraces of bars, cafés and restaurants and stand at the
   doors of bars and pubs from 19 h and of nightclubs, by their mapped opening hours, else the
-  country's custom; terrace seats come from Madrid's and Melbourne's registers. On weekend evenings
+  country's custom. Terrace seats come from the year's census of Madrid's premises and terraces
+  (bars, nightclubs, restaurants, cafés and fast-food places) and of Melbourne's land use (pubs):
+  a place whose terrace is mapped has the median of its kind's surveyed venues with seats, one
+  mapped neither with nor without a terrace the mean over all of them, those without seats too; a
+  beer garden 0.7 seats a square metre of its outline, else of the year's median mapped one. On weekend evenings
   and nights three quarters of the seats are taken (ÖNORM's design value), on weekdays fewer by
   Melbourne's and Paris's counts; the daytime 30 % is an assumption. The guests are heard while
   they are there, the seats in the terrace season and the opening hours, the door crowd whenever
@@ -749,7 +754,8 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
 - `build/` turns the inputs into the tiles and every source's sound power. The `year` command
   runs the steps in dependency order. `bus`, `worship` and `venues` extract mapped routes and
   activities from that year's OpenStreetMap state; `tagged-speed-table` fits the posted-speed
-  medians from the same state. Other steps include
+  medians from the same state, and `venue-seating-table` the seats outside its bars and restaurants
+  from the dated seating surveys (`fetch/terrace_surveys.py`) and its mapped places. Other steps include
   `ships` (monthly occupancy with completed coverage), `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.

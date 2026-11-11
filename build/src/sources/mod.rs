@@ -32,6 +32,7 @@ pub mod ship;
 pub mod tagged_speeds;
 pub mod tent;
 pub mod turbines;
+pub mod venue_seating_fit;
 pub mod venues;
 pub mod water;
 pub mod worship;

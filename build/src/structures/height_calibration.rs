@@ -12,7 +12,7 @@ use anyhow::{Result, ensure};
 use serde_json::json;
 use std::{io::Write, path::Path};
 
-fn median(values: &mut [f64]) -> f64 {
+pub(crate) fn median(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     let middle = values.len() / 2;
     if values.len().is_multiple_of(2) {

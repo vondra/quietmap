@@ -341,6 +341,26 @@
       "description": "Opening hours and terrace customs compiled from national rules and HETUS surveys, checked in October 2026. A practice measured in October 2026 is taken to hold over the preceding years unless a source dated within them shows a different practice; for 2024 none was found."
     },
     {
+      "id": "venue-seating",
+      "kind": "venue-seating",
+      "region": "world",
+      "publisher": "Quiet Map; public authorities; OpenStreetMap contributors",
+      "url": "https://quietmap.org/about/noise-at-a-point",
+      "observed": {
+        "start": "2024",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Apache-2.0 (derived parameters)",
+      "public_ok": true,
+      "depends_on": [
+        "terrace-surveys",
+        "venues",
+        "structures"
+      ],
+      "description": "Outdoor seats of each kind of bar, pub, nightclub, restaurant, cafe and fast-food place from the seating surveys (the median of the surveyed venues with seats where a terrace is mapped, the mean over all of them where none is), the median mapped beer garden, and the kind most buildings of bars and restaurants host, fitted by the year run over the whole admitted mapped state."
+    },
+    {
       "id": "segments",
       "kind": "segments",
       "region": "world",
@@ -4390,14 +4410,14 @@
       "publisher": "City of Madrid and City of Melbourne",
       "url": "https://datos.madrid.es/",
       "observed": {
-        "start": "2026-01-01",
-        "end": "2026-10-04"
+        "start": "2024",
+        "end": "2024-12-17"
       },
       "published": null,
       "licence": "Published aggregate observations; publisher terms apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "Terrace seating and capacity inventories used for expected outdoor seats."
+      "description": "Outdoor seats of each surveyed venue (`fetch/terrace_surveys.py`): Madrid's census of premises and terraces of 17 December 2024 (bars, nightclubs, restaurants, cafes and fast-food places) and Melbourne's Census of Land Use and Employment of 2024 (pubs, taverns and bars)."
     },
     {
       "id": "bus-training-timetables",
@@ -7439,7 +7459,7 @@
       "id": "bus-models",
       "kind": "bus-models",
       "region": "world",
-      "description": "To be derived for 2024. Bus frequencies and period shares fitted from 43 timetables and OpenStreetMap routes; the timetables describe 2026.",
+      "description": "To be derived for 2024. Bus frequencies and period shares are fitted from timetables matched to OpenStreetMap routes; the 2026 fit's 43 timetables describe 2026. Of its 35 fitted places, nine have no timetable describing 2024: Denmark's Rejseplanen (Aarhus, Odense, Jutland; the first archived extract after June 2023 runs from 2 January 2025), Transport for New South Wales (Sydney, Parramatta, Newcastle, the Hunter and the Central West; its archive needs an account) and Sofia's Urban Mobility Center (only a third-party conversion without shapes or day types); Ireland's archived feed lacks Local Link, Israel's covers only 6 August to 5 September 2024, and Germany's held-out feed has no shapes.",
       "depends_on": [
         "bus-training-timetables",
         "osm",
@@ -7452,16 +7472,6 @@
       "region": "world",
       "description": "To be derived for 2024. Hotel trip rate per 100 square metres, using the room density of mapped hotels and ITE trip rates.",
       "depends_on": [
-        "osm"
-      ]
-    },
-    {
-      "id": "venue-seating",
-      "kind": "venue-seating",
-      "region": "world",
-      "description": "To be derived for 2024. Terrace seating from Madrid and Melbourne inventories and beer-garden area from the September 2026 OpenStreetMap planet.",
-      "depends_on": [
-        "terrace-surveys",
         "osm"
       ]
     },
