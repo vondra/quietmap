@@ -35,7 +35,7 @@ use traffic::lambda;
 pub use traffic::{Heard, Passes, hour_factor, hour_groups, passes_at};
 pub(crate) use weather::favourable_share;
 use weather::weather_means;
-pub use weather::{WEATHER_STATES, Weather, flight_weather};
+pub use weather::{WEATHER_STATES, Weather, flight_weather, merge_close_states};
 
 /// The levels (dB, `-inf` silent) exceeded 5, 10, 50 and 90 % of the time per period.
 #[derive(Debug, Clone, Copy, PartialEq)]

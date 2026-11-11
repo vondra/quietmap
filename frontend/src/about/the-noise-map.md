@@ -249,8 +249,11 @@ painting uses this rule; existing squares keep their earlier façade choice unti
 A pixel's loudness is computed as the popup computes it, at a coarser grain: the levels over time
 in steps of 2 dB and four groups of the day's hours, one of the
 evening's and three of the night's, where the popup takes 0.5 dB and every hour. Both use the same
-ten weather states, preserving how long favourable propagation lasts. New painting uses this rule;
-existing squares keep their earlier weather calculation until repainted. Each
+ten weather states, preserving how long favourable propagation lasts. For each period the map
+groups consecutive states in which every source group's mean energy varies by at most 1 dB and
+gives each group its average energy over the run, keeping the run's full time and the group's
+energy; the popup keeps the ten states' own means. New painting uses this rule; existing squares
+keep their earlier weather calculation until repainted. Each
 layer and the total are stored in steps of half a phon, 3.5 % of loudness; zoomed out, a pixel is
 the mean loudness of the pixels under it.
 

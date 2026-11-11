@@ -171,7 +171,9 @@ low.
   the place's weather, the same for all its rays, as a night's inversion bends them all at once: a
   piece with p = 0.3 is bent down in the three most favourable states. The levels exceeded 5 to 90 %
   of the time and Nden are computed over every hour and these states. New painting keeps the same ten
-  weather states; existing squares keep their earlier weather calculation until repainted.
+  weather states (the map gives consecutive states in which every source group's mean varies by at
+  most 1 dB that group's average over them);
+  existing squares keep their earlier weather calculation until repainted.
 
 </details>
 

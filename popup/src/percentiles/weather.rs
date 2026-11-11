@@ -91,3 +91,45 @@ pub fn flight_weather(flights: &([f64; PERIODS], [f64; PERIODS])) -> Weather {
     weather.add(&flights.0, &[flights.0; 2]);
     weather
 }
+
+/// The weather states merged where their difference cannot show: per period, each run of
+/// consecutive states in which every line's mean stays finite and within `spread` (its largest
+/// over its smallest) takes each line's mean over the run in all its states. The energy stays; the
+/// distributions compute a state equal to the one before once (`layer_states`, the card's blocks
+/// of distinct states), so a run costs one state. A moment's intensity moves by no more than
+/// `spread` where the run's states hold and move the same lines; a line held steady in one state and
+/// moving in another can change its rare loud moments by more.
+pub fn merge_close_states(layers: &mut [(Vec<Line>, [f64; PERIODS])], spread: f64) {
+    let within = |means: &[f64]| {
+        let (mut low, mut high) = (f64::INFINITY, 0.0f64);
+        for &mean in means {
+            if !mean.is_finite() {
+                return false;
+            }
+            (low, high) = (low.min(mean), high.max(mean));
+        }
+        high <= spread * low
+    };
+    for period in 0..PERIODS {
+        let mut start = 0;
+        while start < WEATHER_STATES {
+            let mut end = start + 1;
+            while end < WEATHER_STATES
+                && (layers.iter().flat_map(|(lines, _)| lines))
+                    .all(|line| within(&line.means[period][start..=end]))
+            {
+                end += 1;
+            }
+            if end - start > 1 {
+                for line in layers.iter_mut().flat_map(|(lines, _)| lines) {
+                    let run = &mut line.means[period][start..end];
+                    if run.iter().any(|&mean| mean != run[0]) {
+                        let mean = run.iter().sum::<f64>() / run.len() as f64;
+                        run.fill(mean);
+                    }
+                }
+            }
+            start = end;
+        }
+    }
+}

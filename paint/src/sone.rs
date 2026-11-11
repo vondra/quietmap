@@ -17,7 +17,7 @@ use popup::loudness::{
     Curve, FlightSound, LayerSound, PlacedLayer, curves, layer_curves, layers_loudness,
     place_layers,
 };
-use popup::percentiles::{Group, Passes, Resolution, Weather, flight_weather};
+use popup::percentiles::{Group, Passes, Resolution, Weather, flight_weather, merge_close_states};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tiles::sources::Layer;
@@ -112,6 +112,12 @@ pub(crate) fn pixel_ndens(
     )?
     .ndens(resolution))
 }
+
+/// The map's weather states apart only where some source's mean differs by more than this between
+/// them (`merge_close_states`): 1 dB. On the world sample (speed-2, 11 November) it took the
+/// distinct states of a 0-30 / 30-300 / 300-1500 KB pixel and period from 4.3 / 5.2 / 6.0 of ten to
+/// 2.9 / 4.1 / 4.9; 2 dB saved no more time.
+const MAP_WEATHER_SPREAD: f64 = 1.258_925_411_794_167_2; // 10^(1 / 10)
 
 /// What a pixel's loudness takes: each layer's lines over its steady energy, the layers' sounds and
 /// the curves (the place's and each layer's).
@@ -303,12 +309,13 @@ pub(crate) fn pixel_sound(
         energy: flights,
         spectrum_db: Some(*flight_spectrum_db),
     };
-    let placed = place_layers(
+    let mut placed = place_layers(
         &views,
         &sounds,
         (&weather, (flights, flights_lambda)),
         &passes,
     )?;
+    merge_close_states(&mut placed, MAP_WEATHER_SPREAD);
     Ok(PixelSound {
         placed,
         curves: curves(&sounds, &flight_sound),

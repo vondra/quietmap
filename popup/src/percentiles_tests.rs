@@ -415,3 +415,44 @@ fn events_sound_for_their_duty_and_are_silent_otherwise() {
     let heard_bells = passes_at(&bells, &fields).unwrap();
     assert!(!heard_bells.steady && (heard_bells.per_hour[0] - 3.0).abs() < 1e-9);
 }
+
+/// Consecutive weather states whose every line stays within the spread take their mean (the
+/// period's energy kept); a line apart by more keeps its states apart from there, in every layer.
+#[test]
+fn close_weather_states_merge_and_keep_their_energy() {
+    let line = |means: [f64; WEATHER_STATES]| Line {
+        key: 1,
+        energy: [means.iter().sum::<f64>() / WEATHER_STATES as f64; PERIODS],
+        means: [means; PERIODS],
+        lambda: [1e6; PERIODS],
+        profile: None,
+        duty: None,
+    };
+    let near = line([1.10, 1.05, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    let far = line([4.0, 4.0, 4.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    let mut layers = vec![
+        (vec![near.clone()], [0.0; PERIODS]),
+        (vec![far.clone()], [0.0; PERIODS]),
+    ];
+    merge_close_states(&mut layers, 1.2);
+    let (merged_near, merged_far) = (&layers[0].0[0].means[0], &layers[1].0[0].means[0]);
+    // The far line splits the states at 3; the near one's first three take their mean.
+    assert_eq!(merged_far, &far.means[0]);
+    assert_eq!(merged_near[0], merged_near[2]);
+    assert!((merged_near[0] - (1.10 + 1.05 + 1.0) / 3.0).abs() < 1e-12);
+    assert_eq!(&merged_near[3..], &near.means[0][3..]);
+    for (lines, _) in &layers {
+        let energy = lines[0].means[0].iter().sum::<f64>() / WEATHER_STATES as f64;
+        assert!((energy - lines[0].energy[0]).abs() < 1e-12);
+    }
+    // Apart by more than the spread, no state merges.
+    let mut apart = vec![(
+        vec![line([
+            2.0, 1.5, 1.0, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12, 0.09,
+        ])],
+        [0.0; PERIODS],
+    )];
+    let before = apart[0].0[0].means;
+    merge_close_states(&mut apart, 1.2);
+    assert_eq!(apart[0].0[0].means, before);
+}
