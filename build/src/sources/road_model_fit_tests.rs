@@ -35,6 +35,7 @@ fn tertiary_rows(country: &[u8; 2], shift: f64) -> Vec<CountedRow> {
                 lanes: 0,
                 rural_network: false,
                 design: SamplingDesign::WholeNetwork,
+                class_coverage: 1.0,
                 length_m: 100.0,
                 total: (law + shift).exp(),
                 around: [
@@ -152,6 +153,7 @@ fn major_rows(country: &[u8; 2], seed: u64, reflected: bool) -> Vec<CountedRow> 
                 lanes,
                 rural_network: false,
                 design: SamplingDesign::WholeNetwork,
+                class_coverage: 1.0,
                 length_m: 50.0 + f64::from(i as u32 % 7),
                 total,
                 around,
@@ -263,8 +265,6 @@ fn selected_sites_stay_out_of_the_main_class_laws_but_not_the_major_law() {
         "{italy}"
     );
     assert_eq!(models.major_countries, vec![*b"CZ", *b"IT"]);
-    assert!(SamplingDesign::RandomSample.represents_its_class());
-    assert!(!SamplingDesign::Undeclared.represents_its_class());
     for design in [
         SamplingDesign::Undeclared,
         SamplingDesign::WholeNetwork,
@@ -273,4 +273,47 @@ fn selected_sites_stay_out_of_the_main_class_laws_but_not_the_major_law() {
     ] {
         assert_eq!(SamplingDesign::from_code(design.code()), Some(design));
     }
+}
+
+/// A whole network stands for its class only where it covers most of it: Poland's voivodeship
+/// roads, 3 % of its mapped tertiary length and four times as busy, stay out of the law, Sweden's
+/// state roads at 89 % enter; a random sample enters at any coverage.
+#[test]
+fn a_whole_network_stands_for_its_class_only_where_it_covers_most_of_it() {
+    let covering = |country: &[u8; 2], shift: f64, design, class_coverage| {
+        tertiary_rows(country, shift)
+            .into_iter()
+            .map(move |row| CountedRow {
+                design,
+                class_coverage,
+                ..row
+            })
+    };
+    let mut rows: Vec<CountedRow> = covering(b"SE", 0.0, SamplingDesign::WholeNetwork, 0.89)
+        .chain(covering(b"GB", 0.0, SamplingDesign::RandomSample, 0.03))
+        .chain(covering(
+            b"PL",
+            4f64.ln(),
+            SamplingDesign::WholeNetwork,
+            0.03,
+        ))
+        .collect();
+    rows.extend(major_rows(b"SE", 1, false));
+    let (models, support) = fit_models(&rows).unwrap();
+    assert_eq!(models.main[0].intercept, [1.0, 2.0]);
+    let poland = &support["main"][0]["countries"]["PL whole-network"];
+    assert!(
+        (poland["bias_db"].as_f64().unwrap() - 6.0).abs() < 0.05,
+        "{poland}"
+    );
+    let at = |design, class_coverage| {
+        represents_its_class(&CountedRow {
+            design,
+            class_coverage,
+            ..rows[0]
+        })
+    };
+    assert!(at(SamplingDesign::WholeNetwork, 0.51) && !at(SamplingDesign::WholeNetwork, 0.5));
+    assert!(at(SamplingDesign::RandomSample, 0.0));
+    assert!(!at(SamplingDesign::SelectedSites, 1.0) && !at(SamplingDesign::Undeclared, 1.0));
 }

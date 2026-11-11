@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// How the publisher chose where to count, as its documentation states: every section of its
 /// network, a random sample of its locations, or sites it selected (permanent stations, a city's
-/// main streets). Only the first two represent the roads of their class that nobody counted.
+/// main streets).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SamplingDesign {
@@ -31,11 +31,6 @@ impl SamplingDesign {
         ]
         .get(usize::from(code))
         .copied()
-    }
-
-    /// Whether counts of this design stand for their class's uncounted roads.
-    pub fn represents_its_class(self) -> bool {
-        matches!(self, Self::WholeNetwork | Self::RandomSample)
     }
 }
 
