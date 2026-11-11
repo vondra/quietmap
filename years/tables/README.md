@@ -280,9 +280,13 @@ trains on its length, the default (guessed) counts apart from the counted ones, 
 the TEN-T tier of its own country's line. Freight: goods train-kilometres less counted freight,
 over guessed freight weighted 0.5, 2 and 4 off the network, on its other lines and on a core
 corridor (all one where the maps do not cover the country); without published goods train-kilometres
-the guessed total stays and only moves between tiers. Passengers: passenger train-kilometres less
-the counted ones, over the guessed, between zero and one, where guessed trains run at least a
-quarter of the mapped passenger train-kilometres; else one. National values are Eurostat's latest
+the guessed total stays and only moves between tiers. Passengers: the residual, passenger
+train-kilometres less the timetabled ones, over the guessed, between zero and one, trusted in
+proportion to residual / (spread × timetabled) up to one, else the defaults stand; the spread is
+the median |timetabled / national − 1| of the countries whose timetables run at least three
+quarters of their mapped passenger train-kilometres (0.082 on the 2026 network, any cut from 0.70
+to 0.80 the same). Timetables alone at or above the national total leave the defaults; a country
+without timetables takes national / guessed. National values are Eurostat's latest
 year within the `rail-kilometres` interval, per day of that year. A world row keeps every other
 country's defaults. The run publishes the table and its support (`train-scales.samples.json`, the
 mapped and national train-kilometres a day per country). The 2026 table predates the fit: it was

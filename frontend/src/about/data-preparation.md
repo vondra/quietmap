@@ -320,8 +320,10 @@ for the line. The annual sum retains repeated passages and changes of direction.
   <abbr title="Trans-European Transport Network, the EU's main transport corridors">TEN-T</abbr>
   maps, a line takes the tier of its own country's TEN-T line, and freight is weighted 4 on a core
   corridor, 2 on another TEN-T line and 0.5 off them within the country's total. Default passenger
-  trains are lowered, never raised, to the passenger train-kilometres the timetables leave, where
-  they run at least a quarter of the country's mapped passenger train-kilometres. The 2026 factors
+  trains are lowered, never raised, toward the passenger train-kilometres the timetables leave,
+  fully once that remainder exceeds the timetables' own error, in proportion below it; on the 2026
+  network the timetables of the median country they cover run within 8 % of its national total.
+  Where the timetables alone reach the national total, the defaults stand. The 2026 factors
   were fitted before this, on the earlier prepared network, to 1.2 times the passenger
   train-kilometres and without Switzerland. In the EU, Switzerland, Norway and Great Britain
   37.6 % of freight runs between 22 and 06 h, as counted at the German monitors. Lines mapped as

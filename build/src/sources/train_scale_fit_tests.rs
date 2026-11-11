@@ -5,6 +5,8 @@ use physics::bands::PERIODS;
 
 const OBSERVED: u16 = 100;
 const GUESSED: u16 = 0;
+/// Timetabled rows within a tenth of their national train-km.
+const SPREAD: Option<f64> = Some(0.1);
 /// A row: its length (km), run trains and TEN-T tier.
 type Row = (f64, Trains, Tier);
 
@@ -101,11 +103,11 @@ fn two_countries_take_their_hand_computed_factors() {
     assert_eq!(aa_mapped.passenger, [200.0, 1200.0]);
     assert_eq!(aa_mapped.freight_observed, 40.0);
     assert_eq!(aa_mapped.freight_guessed, [400.0, 200.0, 100.0]);
-    let aa_value = fitted(&aa_mapped, &aa_national, TEN_T_FREIGHT_WEIGHTS);
+    let aa_value = fitted(&aa_mapped, &aa_national, TEN_T_FREIGHT_WEIGHTS, SPREAD);
     assert!((aa_value.scales[0] - 0.96).abs() < 1e-12);
     assert!((aa_value.scales[1] - 800.0 / 1200.0).abs() < 1e-12);
     assert_eq!(aa_value.tier_weights, TEN_T_FREIGHT_WEIGHTS);
-    let bb_value = fitted(&mapped(&bb), &bb_national, [1.0; 3]);
+    let bb_value = fitted(&mapped(&bb), &bb_national, [1.0; 3], SPREAD);
     assert_eq!(bb_value.scales, [0.5, 1.0]);
     // Scaled as the sources scale them, AA runs its national train-km.
     let (passenger, freight) = scaled_train_km(&aa, &aa_value);
@@ -117,7 +119,7 @@ fn two_countries_take_their_hand_computed_factors() {
 #[test]
 fn the_ten_t_weights_move_freight_onto_the_corridors() {
     let [(aa, national), _] = network();
-    let value = fitted(&mapped(&aa), &national, TEN_T_FREIGHT_WEIGHTS);
+    let value = fitted(&mapped(&aa), &national, TEN_T_FREIGHT_WEIGHTS, SPREAD);
     let freight = |tier| train_scales(Some(&value), RailType::Rail, [GUESSED, GUESSED], tier)[0];
     assert!((freight(Tier::Corridor) / freight(Tier::Off) - 8.0).abs() < 1e-12);
     assert!((freight(Tier::Network) / freight(Tier::Off) - 4.0).abs() < 1e-12);
@@ -126,28 +128,79 @@ fn the_ten_t_weights_move_freight_onto_the_corridors() {
         freight: None,
         ..national
     };
-    let kept = fitted(&mapped(&aa), &unpublished, TEN_T_FREIGHT_WEIGHTS);
+    let kept = fitted(&mapped(&aa), &unpublished, TEN_T_FREIGHT_WEIGHTS, SPREAD);
     assert!((scaled_train_km(&aa, &kept).1 - 740.0).abs() < 1e-9);
 }
 
-/// A small guessed share keeps the guessed passengers; a large one whose timetables already run
-/// the national total silences them, and counted freight above the goods total silences guessed
-/// freight; neither goes negative.
+/// The passenger factor is continuous: timetables that alone reach the national total leave the
+/// defaults standing, a residual within the timetables' spread lowers them in proportion, one
+/// beyond it sets them; without timetables the national total does. Counted freight above the
+/// goods total silences guessed freight.
 #[test]
-fn the_residuals_are_bounded() {
+fn the_factors_are_bounded_and_the_passenger_factor_continuous() {
     let mapped = MappedTrainKm {
-        passenger: [900.0, 200.0],
+        passenger: [900.0, 400.0],
         freight_observed: 50.0,
         freight_guessed: [100.0, 0.0, 0.0],
     };
-    let national = NationalTrainKm {
-        passenger: Some((2024, 500.0)),
-        freight: Some((2024, 40.0)),
+    let factors = |passenger: f64, spread| {
+        let national = NationalTrainKm {
+            passenger: Some((2024, passenger)),
+            freight: Some((2024, 40.0)),
+        };
+        fitted(&mapped, &national, [1.0; 3], spread).scales
     };
-    assert_eq!(fitted(&mapped, &national, [1.0; 3]).scales, [0.0, 1.0]);
-    let prior_heavy = MappedTrainKm {
-        passenger: [900.0, 400.0],
+    assert_eq!(factors(800.0, SPREAD), [0.0, 1.0]);
+    assert_eq!(factors(900.0, SPREAD)[1], 1.0);
+    // Residual 9 is a tenth of the spread's 90: 1 - 0.1 * (1 - 9 / 400).
+    assert!((factors(909.0, SPREAD)[1] - (1.0 - 0.1 * (1.0 - 9.0 / 400.0))).abs() < 1e-12);
+    assert!((factors(1000.0, SPREAD)[1] - 0.25).abs() < 1e-12);
+    assert_eq!(factors(1000.0, None)[1], 1.0, "no measured spread");
+    let untimetabled = MappedTrainKm {
+        passenger: [0.0, 400.0],
         ..mapped
     };
-    assert_eq!(fitted(&prior_heavy, &national, [1.0; 3]).scales, [0.0, 0.0]);
+    let national = NationalTrainKm {
+        passenger: Some((2024, 100.0)),
+        freight: None,
+    };
+    assert_eq!(
+        fitted(&untimetabled, &national, [1.0; 3], None).scales[1],
+        0.25
+    );
+}
+
+/// The spread is the median deviation of the countries the timetables cover; a country run on
+/// defaults or without a passenger total does not count.
+#[test]
+fn the_timetable_spread_is_measured_where_timetables_cover_the_country() {
+    let country = |passenger: [f64; 2], national: Option<f64>| {
+        (
+            MappedTrainKm {
+                passenger,
+                ..MappedTrainKm::default()
+            },
+            NationalTrainKm {
+                passenger: national.map(|train_km| (2024, train_km)),
+                freight: None,
+            },
+        )
+    };
+    let countries = [
+        country([100.0, 10.0], Some(110.0)),
+        country([50.0, 5.0], Some(40.0)),
+        country([10.0, 90.0], Some(50.0)),
+        country([200.0, 0.0], Some(190.0)),
+        country([300.0, 0.0], None),
+    ];
+    let spread = timetable_spread(
+        countries
+            .iter()
+            .map(|(mapped, national)| (mapped, national)),
+    );
+    assert_eq!(spread, Some((100.0_f64 / 110.0 - 1.0).abs()));
+    assert_eq!(
+        timetable_spread(countries[2..3].iter().map(|(m, n)| (m, n))),
+        None
+    );
 }
