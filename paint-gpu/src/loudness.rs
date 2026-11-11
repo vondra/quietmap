@@ -28,12 +28,12 @@ pub const LOUDNESS_FLOATS: usize = LAYERS + 1;
 /// The hourly profiles (`popup::percentiles` HOURLY_SHARES's rows).
 const PROFILES: usize = 3;
 
-/// Warps of a block of the mixtures' kernel, a task each (4 x 8 KB of shared memory).
-const TASK_WARPS: u32 = 4;
-
-/// The loudness kernels' source, their tables first.
-pub(crate) fn loudness_source() -> String {
-    format!("{}{DISTRIBUTION}{LOUDNESS}", loudness_constants())
+/// The loudness kernels' source, their tables first, the mixtures' blocks of `block_states` states.
+pub(crate) fn loudness_source(block_states: usize) -> String {
+    format!(
+        "{}{DISTRIBUTION}{LOUDNESS}",
+        loudness_constants(block_states)
+    )
 }
 
 /// The map's level bins (`popup::distribution`'s span at the map's resolution).
@@ -41,15 +41,31 @@ fn bins() -> usize {
     (SPAN_DB / Resolution::MAP.bin_db).round() as usize
 }
 
-/// A pixel's tasks on the card: each period's groups of hours (as when some line follows a
-/// profile) and weather states.
-fn tasks() -> Vec<(usize, usize, usize)> {
+/// Weather states a block of the mixtures' kernel takes on a card whose multiprocessors hold
+/// `shared_bytes` of shared memory, a warp each: all ten (a line's values made once for all) where
+/// two such blocks fit (compute capability 7.0 and 12.0, about 96 KB); two elsewhere, which keeps
+/// more warps resident (on 7.5, 64 KB, ten a block painted 2-3 % slower than a task a warp, two
+/// 2-3 % faster).
+pub(crate) fn block_states(shared_bytes: usize) -> usize {
+    // A state's warp holds four distributions (a bin's two floats each, their silence and range)
+    // and a line's values (each value, and its shares and weighted shares from it), and its bit.
+    let values = node_probabilities().len().max(bins() + 1);
+    let warp_bytes = 4 * (12 + 8 * bins()) + 4 * (1 + 3 * values + 2) + 4;
+    if 2 * WEATHER_STATES * warp_bytes <= shared_bytes {
+        WEATHER_STATES
+    } else {
+        2
+    }
+}
+
+/// A pixel's blocks on the card: each period's groups of hours (as when some line follows a
+/// profile), a block's weather states ([`block_states`]) a warp each.
+fn period_groups() -> Vec<(usize, usize)> {
     let resolution = Resolution::MAP;
     (0..PERIODS)
         .flat_map(|period| {
             let groups = hour_groups(true, period, resolution.hour_groups).0.len();
-            (0..groups)
-                .flat_map(move |group| (0..WEATHER_STATES).map(move |state| (period, group, state)))
+            (0..groups).map(move |group| (period, group))
         })
         .collect()
 }
@@ -63,7 +79,7 @@ fn mixture_floats() -> usize {
 /// The kernels' tables at the map's resolution, in global memory (a warp's lanes read different
 /// entries, which constant memory serves one at a time: a quarter less time for the same pixels);
 /// f32's Debug is the shortest decimal that reads back as it.
-fn loudness_constants() -> String {
+fn loudness_constants(block_states: usize) -> String {
     let resolution = Resolution::MAP;
     let floats = |name: &str, values: &[f64]| {
         let values: Vec<String> = values.iter().map(|&v| format!("{:?}f", v as f32)).collect();
@@ -124,8 +140,8 @@ fn loudness_constants() -> String {
     let defines = [
         format!("#define LOUD_BIN_DB {:?}f\n", resolution.bin_db as f32),
         format!("#define LOUD_BINS {}\n", bins()),
-        format!("#define LOUD_TASKS {}\n", tasks().len()),
-        format!("#define LOUD_TASK_WARPS {TASK_WARPS}\n"),
+        format!("#define LOUD_PERIOD_GROUPS {}\n", period_groups().len()),
+        format!("#define LOUD_BLOCK_STATES {block_states}\n"),
         format!("#define LOUD_LEVEL_MIN_DB ({:?}f)\n", LEVEL_MIN_DB as f32),
         format!("#define LOUD_STATES {}\n", WEATHER_STATES),
         format!("#define LOUD_NODES {}\n", nodes.len()),
@@ -158,9 +174,9 @@ fn loudness_constants() -> String {
         format!("#define LOUD_SILENT_DB ({:?}f)\n", SILENT_DB as f32),
     ]
     .concat();
-    let tasks = tasks();
-    let task_part = |part: fn(&(usize, usize, usize)) -> usize| -> Vec<usize> {
-        tasks.iter().map(part).collect()
+    let period_groups = period_groups();
+    let period_group_part = |part: fn(&(usize, usize)) -> usize| -> Vec<usize> {
+        period_groups.iter().map(part).collect()
     };
     let dll: Vec<f64> = DLL.iter().flatten().copied().collect();
     let usl: Vec<f64> = USL.iter().flatten().copied().collect();
@@ -177,9 +193,14 @@ fn loudness_constants() -> String {
         ),
         ints("LOUD_GROUP_SLOTS", &group_slots),
         floats("LOUD_FACTOR", &factor),
-        ints("LOUD_TASK_PERIOD", &task_part(|task| task.0)),
-        ints("LOUD_TASK_GROUP", &task_part(|task| task.1)),
-        ints("LOUD_TASK_STATE", &task_part(|task| task.2)),
+        ints(
+            "LOUD_PERIOD_GROUP_PERIOD",
+            &period_group_part(|period_group| period_group.0),
+        ),
+        ints(
+            "LOUD_PERIOD_GROUP_GROUP",
+            &period_group_part(|period_group| period_group.1),
+        ),
         floats("LOUD_PERIOD_HOURS", &PERIOD_HOURS),
         floats("LOUD_PENALTY_DB", &PERIOD_PENALTY_DB),
         floats("LOUD_RAP", &RAP),
@@ -216,13 +237,17 @@ impl Gpu {
                 .get_func("loudness", name)
                 .ok_or(format!("kernel {name} missing"))
         };
-        let task_count = (count * tasks().len()) as u32;
         // On a stream of their own (once the buffers above are zeroed): the pairs' kernels of
         // another pass run beside them on the card.
         let stream = self.fork()?;
-        let tasks_config = LaunchConfig {
-            grid_dim: (task_count.div_ceil(TASK_WARPS), 1, 1),
-            block_dim: (TASK_WARPS * 32, 1, 1),
+        let mixtures_config = LaunchConfig {
+            grid_dim: (
+                (count * period_groups().len() * (WEATHER_STATES / self.loudness_block_states))
+                    as u32,
+                1,
+                1,
+            ),
+            block_dim: (self.loudness_block_states as u32 * 32, 1, 1),
             shared_mem_bytes: 0,
         };
         let pixels_config = LaunchConfig {
@@ -236,8 +261,8 @@ impl Gpu {
         driver(unsafe {
             kernel("pixel_mixtures")?.launch_on_stream(
                 &stream,
-                tasks_config,
-                (&input, &offsets, task_count, &mixtures),
+                mixtures_config,
+                (&input, &offsets, &mixtures),
             )
         })?;
         driver(unsafe {
@@ -252,5 +277,20 @@ impl Gpu {
             .chunks_exact(LOUDNESS_FLOATS)
             .map(|pixel| std::array::from_fn(|k| pixel[k]))
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ten states a block where two blocks of ten fit (96 KB and 100 KB multiprocessors), two in a
+    /// 64 KB one; every count divides the states.
+    #[test]
+    fn a_block_takes_every_state_where_two_blocks_fit() {
+        assert_eq!(block_states(96 * 1024), WEATHER_STATES);
+        assert_eq!(block_states(100 * 1024), WEATHER_STATES);
+        assert_eq!(block_states(64 * 1024), 2);
+        assert_eq!(WEATHER_STATES % block_states(64 * 1024), 0);
     }
 }
