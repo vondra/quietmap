@@ -28,6 +28,7 @@ extern "C" __global__ void struct_sizes(u64* out) {
     out[4] = sizeof(Candidate);
     out[5] = sizeof(Attribute);
     out[6] = sizeof(SquareScene);
+    out[7] = sizeof(Receiver);
 }
 
 // geo::Mercator::to_degrees of a point in the square's frame (LocalFrame::to_mercator).
@@ -40,7 +41,7 @@ __device__ void frame_degrees(const SquareScene& square, float x, float y, float
 }
 
 // The receiver at a point in the square's frame standing outdoors or in building `own_footprint`
-// (levels::Point::outdoors and Point::at): its ground plus the receiver height, its weather.
+// (exact.rs Point::with_receiver_properties): its ground plus the receiver height, its weather.
 __device__ u32 receiver_at(const SquareScene& square, float x, float y, u64 own_footprint, Receiver* receiver) {
     GroundSample ground;
     u32 failed = ground_at(square.ground, x, y, &ground);
@@ -53,6 +54,17 @@ __device__ u32 receiver_at(const SquareScene& square, float x, float y, u64 own_
     frame_degrees(square, x, y, &lat, &lon);
     place_weather(square.weather_nodes, lat, lon, &receiver->weather);
     return 0;
+}
+
+// Per launched point (its frame position at (receiver_xy[2i], receiver_xy[2i + 1]), standing in building
+// `own_footprint[i]`, 0 outdoors): its receiver, built once for all its pairs' listings and rays, and
+// its failure (0 for none), which each of its pairs takes.
+extern "C" __global__ void point_receivers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
+                                           u32 point_count, Receiver* receivers, u32* receiver_failed) {
+    u32 point = blockIdx.x * blockDim.x + threadIdx.x;
+    if (point >= point_count) return;
+    receiver_failed[point] = receiver_at(*square_ptr, receiver_xy[2 * point], receiver_xy[2 * point + 1], own_footprint[point],
+                                         &receivers[point]);
 }
 
 // A pair's first rays kept by its counting for its writing, in the pair's bands (which the rays fill
@@ -82,13 +94,13 @@ struct RayLister {
     }
 };
 
-// Per pair (candidate `candidate_index[i]` at the receiver at (receiver_xy[2i], receiver_xy[2i + 1])
-// standing in building `own_footprint[i]`, 0 outdoors): with `rays` null its rays counted into
-// `ray_counts`, its first ones kept in `slots` (PERIODS x BANDS floats a pair) and its failure into
-// `failed`; else its rays written from `ray_offsets[i]`, from its slots when they hold them all.
-extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
-                                     const u32* candidate_index, u32 pair_count, const u32* ray_offsets, PairRay* rays,
-                                     u32* ray_counts, u32* failed, float* slots) {
+// Per pair (candidate `candidate_index[i]` at receiver `receiver_of_pair[i]` of `point_receivers`): with
+// `rays` null its rays counted into `ray_counts`, its first ones kept in `slots` (PERIODS x BANDS floats
+// a pair) and its failure into `failed`; else its rays written from `ray_offsets[i]`, from its slots
+// when they hold them all.
+extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const Receiver* receivers, const u32* receiver_failed,
+                                     const u32* receiver_of_pair, const u32* candidate_index, u32 pair_count,
+                                     const u32* ray_offsets, PairRay* rays, u32* ray_counts, u32* failed, float* slots) {
     const SquareScene& square = *square_ptr;
     u32 pair = blockIdx.x * blockDim.x + threadIdx.x;
     if (pair >= pair_count || (rays && failed[pair])) return;
@@ -100,8 +112,9 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float*
         }
         return;
     }
-    Receiver receiver;
-    u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
+    u32 at = receiver_of_pair[pair];
+    const Receiver& receiver = receivers[at];
+    u32 status = receiver_failed[at];
     const Candidate& candidate = square.candidates[candidate_index[pair]];
     RayLister lister{rays ? rays + ray_offsets[pair] : 0, pair_slots, 0u};
     if (status == 0) status = pair_rays_of(square.obstacles, receiver, candidate, square.attributes[candidate.attribute], pair, lister);
@@ -123,22 +136,22 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float*
 
 // Per listed ray, a thread each: its pair's sums (PAIR_SUMS a pair) and mixed bands (PERIODS x BANDS
 // a pair) added to, or its failure to the pair's.
-extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, RAY_BLOCKS_PER_MULTIPROCESSOR) ray_transfers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
-                                         const u32* candidate_index, const PairRay* rays, u32 ray_count, float* sums,
-                                         float* pair_bands, u32* failed) {
+extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, RAY_BLOCKS_PER_MULTIPROCESSOR) ray_transfers(const SquareScene* square_ptr, const Receiver* receivers,
+                                         const u32* receiver_of_pair, const u32* candidate_index, const PairRay* rays,
+                                         u32 ray_count, float* sums, float* pair_bands, u32* failed) {
     const SquareScene& square = *square_ptr;
     u32 k = blockIdx.x * blockDim.x + threadIdx.x;
     if (k >= ray_count) return;
     const PairRay ray = rays[k];
     u32 pair = ray.pair;
-    Receiver receiver;
-    u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
+    // A listed ray's receiver was built: a pair whose receiver failed lists none.
+    const Receiver& receiver = receivers[receiver_of_pair[pair]];
     const Candidate& candidate = square.candidates[candidate_index[pair]];
     RayStream s;
     float out[PAIR_SUMS], ray_bands[PERIODS * BANDS];
     for (int j = 0; j < PAIR_SUMS; j++) out[j] = 0.0f;
     for (int j = 0; j < PERIODS * BANDS; j++) ray_bands[j] = 0.0f;
-    if (status == 0) status = ray_received(square.ground, square.obstacles, receiver, square.attributes[candidate.attribute], ray, s, out, ray_bands);
+    u32 status = ray_received(square.ground, square.obstacles, receiver, square.attributes[candidate.attribute], ray, s, out, ray_bands);
     if (status) {
         atomicOr(&failed[pair], status);
         return;

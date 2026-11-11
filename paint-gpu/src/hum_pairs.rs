@@ -24,7 +24,12 @@ pub(super) fn evaluate(
             let (sums, failed) = batch.gpu.evaluate_pairs(
                 batch.device_square,
                 (&inputs.receivers, &inputs.own),
-                (&inputs.candidates, &inputs.at, &inputs.weights),
+                (
+                    &inputs.candidates,
+                    &inputs.receiver_of_pair,
+                    &inputs.at,
+                    &inputs.weights,
+                ),
                 &mut bands,
                 Some(&mut flat),
             )?;
