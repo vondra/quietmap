@@ -87,14 +87,19 @@ fn loudness_constants() -> String {
         .chain([probability(QUANTILES - 1), 1.0 - HELD_EXCEEDED])
         .collect();
     let at = AtProbabilities::new(&probabilities);
-    let (mut normal, mut ln_p, mut tail, mut rows) =
+    let (mut normal, mut ln_p, mut tail, mut node_rows) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (n, l, r) in at.parts() {
         normal.push(n);
         ln_p.push(l);
         tail.push(usize::from(r.is_none()));
-        rows.extend(r.map_or([0.0; ROWS], |r| *r));
+        node_rows.push(r.map_or([0.0; ROWS], |r| *r));
     }
+    // Row-major: a row's entries of every node together, as a warp's lanes read them.
+    let row_nodes = node_rows.len();
+    let rows: Vec<f64> = (0..ROWS)
+        .flat_map(|row| node_rows.iter().map(move |node| node[row]))
+        .collect();
     let shares: Vec<f64> = nodes.iter().map(|&(_, share)| share).collect();
     // The map's groups of hours (as when some line follows a profile): their hours and each
     // profile's mean flow over them against the period's.
@@ -127,6 +132,7 @@ fn loudness_constants() -> String {
         format!("#define LOUD_TOP_NODE {}\n", nodes.len()),
         format!("#define LOUD_HELD_NODE {}\n", nodes.len() + 1),
         format!("#define LOUD_ROWS_COUNT {ROWS}\n"),
+        format!("#define LOUD_ROW_NODES {row_nodes}\n"),
         format!("#define LOUD_LAMBDA_MIN {:?}f\n", LAMBDA_MIN as f32),
         format!(
             "#define LOUD_STEPS_PER_DECADE {:?}f\n",
