@@ -59,33 +59,27 @@ impl SubdivisionGrid {
     }
 }
 
-#[derive(Default)]
-pub struct RegionalRoads {
-    grids: BTreeMap<[u8; 2], SubdivisionGrid>,
-    counts: BTreeMap<RoadKey, ReferenceCount>,
-    vehicles: BTreeMap<VehicleKey, [[f64; 4]; 2]>,
+/// A `road-reference-counts` row: a numbered road's daily traffic across both directions in a
+/// subdivision, its light, medium, heavy and motorcycle shares, and the provenance code.
+#[derive(Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceCountRow {
+    pub country: String,
+    pub number: u16,
+    pub subdivision: u8,
+    pub daily: f64,
+    pub shares: [f64; 4],
+    pub source_id: u16,
 }
 
-impl RegionalRoads {
+/// The admitted subdivision grids by country.
+#[derive(Default)]
+pub struct Subdivisions {
+    grids: BTreeMap<[u8; 2], SubdivisionGrid>,
+}
+
+impl Subdivisions {
     pub fn read(inputs: &YearInputs) -> Result<Self, String> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Count {
-            country: String,
-            number: u16,
-            subdivision: u8,
-            daily: f64,
-            source_id: u16,
-            shares: [f64; 4],
-        }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Vehicles {
-            country: String,
-            subdivision: u8,
-            classes: Vec<usize>,
-            shares: [[f64; 4]; 2],
-        }
         let mut table = Self::default();
         for grid in read_rows::<SubdivisionGrid>(inputs, crate::year::Kind::SubdivisionGrids)? {
             grid.validate()?;
@@ -97,7 +91,61 @@ impl RegionalRoads {
                 return Err("repeated subdivision grid".into());
             }
         }
-        for row in read_rows::<Count>(inputs, crate::year::Kind::RoadReferenceCounts)? {
+        Ok(table)
+    }
+
+    /// The subdivision of `country` at a point, 0 outside its grid.
+    pub fn at(&self, country: [u8; 2], lat: f64, lon: f64) -> u8 {
+        self.grids.get(&country).map_or(0, |grid| grid.at(lat, lon))
+    }
+
+    /// The latitudes and longitudes `[south, north, west, east]` a country's grid covers.
+    pub fn extent(&self, country: [u8; 2]) -> Option<[f64; 4]> {
+        let grid = self.grids.get(&country)?;
+        let columns = grid.runs.iter().map(|&(end, _)| end).max().unwrap_or(0);
+        Some([
+            grid.north - grid.step * (grid.row_starts.len() - 1) as f64,
+            grid.north,
+            grid.west,
+            grid.west + grid.step * f64::from(columns),
+        ])
+    }
+}
+
+/// A road's number: the first part of its `ref` of one to four digits ("1", "3256;4", "AH2;4").
+pub fn reference_number(reference: &str) -> Option<u16> {
+    reference
+        .split(';')
+        .map(str::trim)
+        .find(|part| {
+            (1..=4).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_digit())
+        })?
+        .parse()
+        .ok()
+}
+
+#[derive(Default)]
+pub struct RegionalRoads {
+    subdivisions: Subdivisions,
+    counts: BTreeMap<RoadKey, ReferenceCount>,
+    vehicles: BTreeMap<VehicleKey, [[f64; 4]; 2]>,
+}
+
+impl RegionalRoads {
+    pub fn read(inputs: &YearInputs) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Vehicles {
+            country: String,
+            subdivision: u8,
+            classes: Vec<usize>,
+            shares: [[f64; 4]; 2],
+        }
+        let mut table = Self {
+            subdivisions: Subdivisions::read(inputs)?,
+            ..Self::default()
+        };
+        for row in read_rows::<ReferenceCountRow>(inputs, crate::year::Kind::RoadReferenceCounts)? {
             let country = country_code(&row.country)?;
             let key = (country, row.number, row.subdivision);
             if row.subdivision == 0
@@ -152,7 +200,7 @@ impl RegionalRoads {
     }
 
     pub fn subdivision(&self, country: [u8; 2], lat: f64, lon: f64) -> u8 {
-        self.grids.get(&country).map_or(0, |grid| grid.at(lat, lon))
+        self.subdivisions.at(country, lat, lon)
     }
 
     pub fn reference_count(
@@ -162,14 +210,7 @@ impl RegionalRoads {
         lat: f64,
         lon: f64,
     ) -> Option<&ReferenceCount> {
-        let number = reference
-            .split(';')
-            .map(str::trim)
-            .find(|part| {
-                (1..=4).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_digit())
-            })?
-            .parse()
-            .ok()?;
+        let number = reference_number(reference)?;
         self.counts
             .get(&(country, number, self.subdivision(country, lat, lon)))
     }

@@ -1,7 +1,7 @@
 //! One JSON row format for every table; country keys are readable ISO alpha-2 codes.
 
 use crate::year::YearInputs;
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
@@ -36,6 +36,18 @@ pub fn single_row<Row: DeserializeOwned>(
         return Err(format!("{kind}: expected exactly one row"));
     }
     Ok(rows.pop().expect("one required row"))
+}
+
+/// A table as the committed ones are written: `{"rows": [` and one compact row a line.
+pub fn write_rows<Row: Serialize>(path: &std::path::Path, rows: &[Row]) -> Result<(), String> {
+    let mut text = String::from("{\"rows\": [\n");
+    for (index, row) in rows.iter().enumerate() {
+        text.push_str("  ");
+        text.push_str(&serde_json::to_string(row).map_err(|e| e.to_string())?);
+        text.push_str(if index + 1 < rows.len() { ",\n" } else { "\n" });
+    }
+    text.push_str("]}\n");
+    std::fs::write(path, text).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 pub fn country_code(code: &str) -> Result<[u8; 2], String> {

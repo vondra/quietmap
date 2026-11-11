@@ -136,9 +136,15 @@ The emission follows <abbr title="Common Noise Assessment Methods in Europe, the
 from the traffic, the vehicle mix, the speed, the surface and the gradient, with acceleration at
 junctions and the place's yearly air temperature.
 
-- **Traffic without a count.** Secondary and tertiary roads with only a class estimate follow a
-  model of the same kind, fitted on 13 European countries; where a country's default stands
-  instead (Russia, Turkey, Japan, Iran, Ukraine), it is kept. A street carries the trips its
+- **Traffic without a count.** Secondary, tertiary and unclassified roads with only a class
+  estimate follow a law of the trips their buildings make within 1, 2 or 5 km, whichever predicts
+  the counts best, fitted on the year's counted roads with every country weighed alike and the
+  trips held at the counted roads' 90th percentile; a rural road network counted on its own,
+  Thailand's, follows its own law. Motorways, trunk and primary roads follow one law of the trips
+  within 1, 5 and 15 km, their lanes and one-way carriageways, in the countries whose counts it
+  predicts better, held out, than the other countries' class constants do; elsewhere the class
+  estimate stays. No country's law is shifted to its own counts. Where a country's default
+  stands instead (Russia, Turkey, Japan, Iran, Ukraine), it is kept. A street carries the trips its
   buildings make, OpenStreetMap's and Overture's, routed along the street network to the nearest
   main road. In a town, an unclassified street, and a residential street that a bus, trolleybus or
   coach line runs along, carries at least what Great Britain's, France's and Sweden's counted
@@ -749,7 +755,9 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
 - `build/` turns the inputs into the tiles and every source's sound power. The `year` command
   runs the steps in dependency order. `bus`, `worship` and `venues` extract mapped routes and
   activities from that year's OpenStreetMap state; `tagged-speed-table` fits the posted-speed
-  medians from the same state. Other steps include
+  medians from the same state, `building-road-models` the laws of counted roads over the trips
+  their buildings make, and `road-reference-counts` Thailand's highway means per province from
+  them. Other steps include
   `ships` (monthly occupancy with completed coverage), `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
 - `physics/` holds the emission models the builders run, with the standards' test cases.

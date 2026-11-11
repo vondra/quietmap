@@ -20,6 +20,7 @@ mod matching_assignment;
 mod matching_distance;
 mod matching_streets;
 mod matching_targets;
+pub(crate) use continuity::CONTINUITY_SOURCE;
 pub(crate) use matching_distance::flat_distance;
 pub(crate) use matching_distance::great_circle as great_circle_distance;
 pub(crate) use matching_distance::segment_distance;
@@ -53,6 +54,11 @@ use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
+
+/// The squares of a prepared or mapped tree that hold roads.
+pub(crate) fn prepared_squares(root: &Path) -> Result<Vec<Square>> {
+    Ok(topology::squares(root)?.into_keys().collect())
+}
 
 fn road_path(root: &Path, square: Square) -> PathBuf {
     root.join("z9")

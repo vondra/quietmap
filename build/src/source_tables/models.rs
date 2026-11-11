@@ -1,7 +1,7 @@
 //! Fitted traffic laws' coefficients, with the training inputs and vintage recorded in the manifest.
 
 use super::table::country_code;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 fn country<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 2], D::Error> {
     country_code(&String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
@@ -14,7 +14,15 @@ fn countries<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<[u8; 2]>,
         .collect()
 }
 
-#[derive(Deserialize)]
+fn country_text<S: Serializer>(country: &[u8; 2], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&String::from_utf8_lossy(country))
+}
+
+fn countries_text<S: Serializer>(countries: &[[u8; 2]], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(countries.iter().map(|code| String::from_utf8_lossy(code)))
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MainModel {
     pub class: u8,
@@ -25,30 +33,22 @@ pub struct MainModel {
     pub oneway: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MajorModel {
     pub intercept: [f64; 2],
     pub slopes: [f64; 3],
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CountryShift {
-    #[serde(deserialize_with = "country")]
-    pub country: [u8; 2],
-    pub value: [[f64; 2]; 2],
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RegionalMainModels {
-    #[serde(deserialize_with = "country")]
+    #[serde(deserialize_with = "country", serialize_with = "country_text")]
     pub country: [u8; 2],
     pub models: Vec<MainModel>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RoadModels {
     pub main: Vec<MainModel>,
@@ -58,12 +58,8 @@ pub struct RoadModels {
     pub major_oneway: f64,
     pub major_ln_lanes: f64,
     pub major_lanes_unknown: f64,
-    #[serde(deserialize_with = "countries")]
+    #[serde(deserialize_with = "countries", serialize_with = "countries_text")]
     pub major_countries: Vec<[u8; 2]>,
-    pub country_shifts_db: Vec<CountryShift>,
-    #[serde(deserialize_with = "countries")]
-    pub selective_tertiary_countries: Vec<[u8; 2]>,
-    pub unselected_tertiary_shift_db: Vec<(f64, f64)>,
 }
 
 #[derive(Deserialize)]

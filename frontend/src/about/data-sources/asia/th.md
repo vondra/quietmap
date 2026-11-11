@@ -11,7 +11,7 @@ National highways: the Department of Highways' traffic table for 2021 gives the 
 
 Highways without an observed mean use the [global road model](/about/data-preparation). A route number or a city boundary alone supplies no traffic count.
 
-Where their buildings are mapped, uncounted roads of the rural road network follow a fit of the network's counts on the trips made by the buildings within 5 km; other secondary and tertiary roads follow the same kind of fit made on 13 European countries, and streets carry the trips their buildings make.
+Where their buildings are mapped, uncounted roads of the rural road network follow a fit of the network's counts on the trips made by the buildings around them; other secondary and tertiary roads follow the same kind of fit made on the counted roads of every country, and streets carry the trips their buildings make.
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles the share counted on rural roads nearby, else 39 % of a town street's traffic, 30 % of a secondary road's, 20 % of a trunk or primary road's and 4 % of a motorway's (WHO 2023); electric cars 0.8 % of cars, rolling noise only (IEA 2024).
 

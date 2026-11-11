@@ -72,6 +72,12 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
         "tagged-speed-table" => {
             roads::tagged_speed_fit::fit(&inputs, &out).map_err(|e| e.to_string())
         }
+        "building-road-models" => {
+            sources::road_model_fit::fit(&inputs, &out).map_err(|e| format!("{e:#}"))
+        }
+        "road-reference-counts" => {
+            sources::road_reference_fit::fit(&inputs, &out).map_err(|e| format!("{e:#}"))
+        }
         "road-observations" => road_counts::convert(&inputs, &out).map_err(|e| e.to_string()),
         "road-model-tables" => roads::calibration::build(&inputs, &out).map_err(|e| e.to_string()),
         "road-speed-table" => roads::speed_validity::build(&inputs, options.get("kind")?, &out)

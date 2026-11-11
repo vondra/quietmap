@@ -4,12 +4,12 @@ mod activities;
 mod models;
 use activities::{ChurchBells, VenueSeating, WorshipCalls};
 mod regional_roads;
-pub use models::{BusModel, MainModel, RoadModels};
+pub use models::{BusModel, MainModel, MajorModel, RegionalMainModels, RoadModels};
 mod table;
 use crate::year::YearInputs;
-pub use regional_roads::RegionalRoads;
+pub use regional_roads::{ReferenceCountRow, RegionalRoads, Subdivisions, reference_number};
 use serde::Deserialize;
-pub use table::CountryTable;
+pub use table::{CountryTable, country_code, write_rows};
 mod trips;
 use table::read_rows;
 pub use trips::TripRates;
@@ -65,6 +65,11 @@ pub fn check_tables(
         }
     }
     Ok(())
+}
+
+/// The admitted building-road models alone (the Thai highway fit reads them before the sources).
+pub fn road_models(inputs: &YearInputs) -> Result<RoadModels, String> {
+    table::single_row(inputs, crate::year::Kind::BuildingRoadModels)
 }
 
 pub type PeriodShares = [[[f64; 3]; 2]; 3];
@@ -135,7 +140,7 @@ impl SourceTables {
             worship_calls: CountryTable::read(inputs, crate::year::Kind::WorshipCalls)?,
             solar_days: inputs.manifest.solar_days()?,
             trips: TripRates::read(inputs)?,
-            road_models: table::single_row(inputs, crate::year::Kind::BuildingRoadModels)?,
+            road_models: road_models(inputs)?,
             bus_model: table::single_row(inputs, crate::year::Kind::BusModels)?,
             electric_percent: CountryTable::read(inputs, crate::year::Kind::ElectricCarShare)?,
             european_freight_fleet: CountryTable::read(
