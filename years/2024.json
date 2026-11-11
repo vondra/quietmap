@@ -4821,7 +4821,10 @@
         "barriers-nl",
         "barriers-fl",
         "barriers-va",
-        "overture"
+        "overture",
+        "3dbag",
+        "nrw-heights",
+        "plateau-heights"
       ],
       "description": "Normalized footprints, measured building heights, noise walls and registry attributes; publisher objects retain their source order."
     },
@@ -4832,17 +4835,21 @@
       "publisher": "Quiet Map",
       "url": "https://quietmap.org/about/data-preparation",
       "observed": {
-        "start": "2023",
-        "end": "2024-12-31"
+        "start": "2024",
+        "end": "2024"
       },
-      "published": "2026-11-03",
+      "published": null,
       "licence": "ODbL-1.0",
       "public_ok": true,
       "depends_on": [
         "osm-geography",
-        "prague-heights"
+        "structure-observations",
+        "prague-heights",
+        "3dbag",
+        "nrw-heights",
+        "plateau-heights"
       ],
-      "description": "Historical height table fitted only to the admitted OSM state and IPR survey: 158467 measured footprints, 104952 mapped floor counts and 570 mapped wall heights. Area medians use 53132 footprints without mapped height or floors. Prototype calibration; the historical map remains unbuilt."
+      "description": "Height ladder fitted by the year run over the squares holding admitted surveys: least squares of surveyed roofs on mapped floors, the median surveyed roof of five area quantiles of buildings mapping neither height nor floors, the lowest surveyed roof and the median mapped wall. Each mapped building takes the roof structures would read: a raster's mean, replaced by a matched footprint survey."
     },
     {
       "id": "raster-land-coverage",
@@ -6363,6 +6370,22 @@
       "public_ok": true,
       "depends_on": [],
       "description": "LoD1 measured building heights. A building standing in 2024 keeps its measured height, so the survey holds over 2024-2026."
+    },
+    {
+      "id": "plateau-heights",
+      "kind": "prepare-building-heights",
+      "region": "JP",
+      "publisher": "MLIT Project PLATEAU; Pacific Spatial Solutions (Flateau)",
+      "url": "https://source.coop/pacificspatial/flateau",
+      "observed": {
+        "start": "2020",
+        "end": "2024-03"
+      },
+      "published": "2024-05",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Measured building heights of PLATEAU's 3D city models of Tokyo's 23 wards (fiscal 2023), Osaka (fiscal 2022) and Sapporo (fiscal 2020), as Flateau's footprints of May 2024; footprints without a measured height or demolished are left out. A building standing in 2024 keeps its measured height."
     }
   ],
   "unavailable": [

@@ -101,6 +101,27 @@ fn measured_height(
     Ok(best)
 }
 
+/// A building's surveyed roof: a raster's mean, replaced by a matched footprint survey's height.
+pub(super) fn surveyed_roof(
+    geometry: &Geometry,
+    longitude: f64,
+    latitude: f64,
+    rasters: &[HeightRaster],
+    index: &FootprintIndex,
+    rows: &[Observation],
+) -> Result<Option<f64>> {
+    let mut measured = None;
+    for raster in rasters {
+        if let Some(height) = raster.sample(geometry, longitude, latitude)? {
+            measured = Some(height);
+        }
+    }
+    if let Some(height) = measured_height(geometry, index, rows)? {
+        measured = Some(height);
+    }
+    Ok(measured)
+}
+
 pub(super) struct HeightEvidence<'a> {
     pub(super) measured: &'a [Observation],
     pub(super) measured_index: FootprintIndex,
@@ -132,19 +153,17 @@ impl HeightEvidence<'_> {
         let (height, source) = if ground || open {
             (0.0, if ground { 7 } else { 6 })
         } else {
-            let mut measured = None;
-            if let Some(geometry) = geometry {
-                for raster in self.raster {
-                    if let Some(height) = raster.sample(geometry, longitude, latitude)? {
-                        measured = Some(height);
-                    }
-                }
-                if let Some(height) =
-                    measured_height(geometry, &self.measured_index, self.measured)?
-                {
-                    measured = Some(height);
-                }
-            }
+            let measured = match geometry {
+                Some(geometry) => surveyed_roof(
+                    geometry,
+                    longitude,
+                    latitude,
+                    self.raster,
+                    &self.measured_index,
+                    self.measured,
+                )?,
+                None => None,
+            };
             let area = geometry
                 .map(|g| geometry::area_m2(g, latitude))
                 .transpose()?

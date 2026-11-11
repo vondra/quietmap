@@ -7,7 +7,7 @@ mod inputs;
 mod kind;
 use chrono::{Datelike, Days};
 use dates::{Interval, date};
-pub use inputs::YearInputs;
+pub use inputs::{PREPARATION_TABLE_KINDS, YearInputs};
 pub use kind::Kind;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};

@@ -3,6 +3,15 @@ use super::{Kind, Manifest};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+/// Preparation tables a year may admit, each published beside the model tables when it does.
+pub const PREPARATION_TABLE_KINDS: &[Kind] = &[
+    Kind::PrepareGeography,
+    Kind::PrepareOsmSpeeds,
+    Kind::StructureHeightModel,
+    Kind::RailModel,
+    Kind::FacilityModel,
+];
+
 pub struct YearInputs {
     pub manifest: Manifest,
     pub manifest_path: PathBuf,
@@ -200,14 +209,8 @@ impl YearInputs {
             let path = directory.join(format!("{kind}.json"));
             self.check_published_table(kind, &path)?;
         }
-        for kind in [
-            Kind::PrepareGeography,
-            Kind::PrepareOsmSpeeds,
-            Kind::StructureHeightModel,
-            Kind::RailModel,
-            Kind::FacilityModel,
-        ] {
-            if self.paths.contains_key(&kind) {
+        for &kind in PREPARATION_TABLE_KINDS {
+            if self.paths.contains_key(&kind) && !produced.contains(&kind) {
                 self.check_published_table(kind, &directory.join(format!("{kind}.json")))?;
             }
         }

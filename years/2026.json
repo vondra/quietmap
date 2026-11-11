@@ -1396,6 +1396,22 @@
       "description": "3DBAG building-height edition of September 2025."
     },
     {
+      "id": "plateau-heights",
+      "kind": "prepare-building-heights",
+      "region": "JP",
+      "publisher": "MLIT Project PLATEAU; Pacific Spatial Solutions (Flateau)",
+      "url": "https://source.coop/pacificspatial/flateau",
+      "observed": {
+        "start": "2020",
+        "end": "2024-03"
+      },
+      "published": "2024-05",
+      "licence": "CC BY 4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Measured building heights of PLATEAU's 3D city models of Tokyo's 23 wards (fiscal 2023), Osaka (fiscal 2022) and Sapporo (fiscal 2020), as Flateau's footprints of May 2024; footprints without a measured height or demolished are left out."
+    },
+    {
       "id": "ar-dnv-national-provincial-roads-tmda",
       "kind": "prepare-road-counts",
       "region": "AR",
@@ -7990,7 +8006,8 @@
         "nrw-heights",
         "3dbag",
         "cz-cuzk-ruian-vfr-buildings",
-        "es-catastro-inspire-buildings"
+        "es-catastro-inspire-buildings",
+        "plateau-heights"
       ],
       "description": "Normalized footprints, measured building heights, noise walls and registry attributes; publisher objects retain their source order."
     },
@@ -8001,17 +8018,21 @@
       "publisher": "Quiet Map",
       "url": "https://quietmap.org/about/data-preparation",
       "observed": {
-        "start": "2022",
-        "end": "2026-09-25"
+        "start": "2026",
+        "end": "2026"
       },
-      "published": "2026-09-25",
+      "published": null,
       "licence": "ODbL-1.0",
       "public_ok": true,
       "depends_on": [
-        "structure-height-fit-observations",
-        "wall-height-fit-observations"
+        "osm-geography",
+        "structure-observations",
+        "prague-heights",
+        "3dbag",
+        "nrw-heights",
+        "plateau-heights"
       ],
-      "description": "Frozen roof-height ladder, area bins, floor-to-roof coefficients, inverse storeys and national wall means. The table reproduces the pinned prepared producer; derivation and limitations are recorded beside the published table."
+      "description": "Height ladder fitted by the year run over the squares holding admitted surveys: least squares of surveyed roofs on mapped floors, the median surveyed roof of five area quantiles of buildings mapping neither height nor floors, the lowest surveyed roof and the median mapped wall. Each mapped building takes the roof structures would read: a raster's mean, replaced by a matched footprint survey."
     },
     {
       "id": "structure-height-fit-observations",

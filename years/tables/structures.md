@@ -31,22 +31,35 @@ not a fresh validation of the fit:
   ASFINAG's end-2022 inventory (about 5 million m² / 1,406 km). The rounded aggregates do
   not re-derive every decimal of the retained means; the original coefficients are preserved.
 
-## Historical calibration
+## The year's fit
 
-`qm-build structure-height-model` fits the same table format from the admitted OSM buildings
-and measured relative-height raster. It uses least squares on mapped floors and measured
-roofs, five area quantiles of buildings lacking both height and floors, and the median of
-mapped wall heights. The receipt records the selected squares, year, sample counts and fitted
-coefficients. The minimum measured roof supplies the low-height cutoff; the output's Int16
-range supplies the upper representation bound. Later survey coefficients are not copied.
+`qm-build structure-height-model` fits the same table format. The year run runs it as a step after
+`osm` and `structure-observations`, before `structures`, over the squares structures prepares
+(every square in a world run). It reads the squares a survey can reach: those meeting the coverage
+of a measured relative-height raster or touching a degree tile of an admitted
+`prepare-building-heights` survey. Each mapped building there with an outline, not a ground
+activity or an open roof, takes on its own outline the roof structures would take as measured
+(`structures::prepare::surveyed_roof`): a raster's mean, needing three valid pixels and 30 %
+coverage, replaced by the survey footprint matched at an overlap of at least 0.5 of the union or
+by containment. A roof below 2 m, the raster's pixel rule, is no roof: a survey's empty or zero
+records leave the building out instead of lowering the table's bound.
 
-The 2024 table uses IPR's 2023 survey and the OSM state immediately before 2025. Its roofs come
-only from Prague, although its mapped walls cover the selected squares. This is a reproducible
-prototype, with the historical map still unbuilt: it has no independent global validation.
-The 2026 fit used several countries and manually chosen partitions; the historical fit derives
-its partitions from its own observations. Both use the same height ladder and table format,
-but a map difference cannot yet be attributed solely to changes in physical buildings.
-Reproducing the frozen table takes precedence over changing that fitted method in this port.
+Least squares of these roofs on mapped floors give the metres a floor and the roof; five area
+quantiles of the buildings mapping neither height nor floors, and their median roofs, give the
+area bins; the median mapped wall of the same squares gives the unmapped wall default. The lowest
+roof is the low measured and Overture cutoff, and the output's Int16 range the upper bound. Every
+building weighs one, so the largest survey dominates. A selection whose surveyed squares hold
+fewer than 100 floor pairs, 500 such buildings or 100 mapped walls has no fit and builds no
+structures. The run publishes the table and its support (`structure-height-model.samples.json`:
+the counts and coefficients, and each surveyed square's buildings and walls) in the year tree's
+`tables/`; the release commit copies it here.
+
+The 2024 table fitted on Prague's raster alone (2.456 m a floor plus 4.796 m; area medians 3 to
+7 m) read low wherever it was not fitted: its area table by 1.1 m in the Netherlands, 2.2 m in
+North Rhine-Westphalia and 5.4 to 5.7 m in Tokyo and Osaka. The same two laws fitted on Prague,
+3DBAG and North Rhine-Westphalia's LoD1 cut the bias in the held-out New York and Japanese surveys
+by 0.8 to 1.7 m; Japan still reads 1.4 to 3.7 m low under any European fit, so its own PLATEAU
+cities enter the fit. The 2026 table predates the step (the frozen model above).
 
 The existing obstacle reader still stands an unmeasured wall at 4 m. This port preserves that
 reader and its prepared-input contract; resolving the inherited override requires a separate
