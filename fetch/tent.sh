@@ -3,8 +3,9 @@
 # `railways_GL2017_EU` (the TEN-T maps of Regulation 1315/2013, EU27) as the European Union Agency
 # for Railways republishes it, and keeps every line but the high-speed passenger lines (a line
 # the maps call passenger may carry heavy freight: the left Rhine line, 76 freight trains a day at
-# the EBA monitor) as one line per line string: `<tier> x0 y0 x1 y1 ...` in Web Mercator metres,
-# tier 2 on a core network corridor, 1 elsewhere (the manifest's `tent` input). Needs GDAL's ogr2ogr.
+# the EBA monitor) as one line per line string: `<tier> <country> x0 y0 x1 y1 ...` in Web Mercator
+# metres, tier 2 on a core network corridor, 1 elsewhere, the member state the map assigns it to in
+# ISO 3166 alpha-2 (GISCO writes Greece EL; the manifest's `tent` input). Needs GDAL's ogr2ogr.
 #
 #   tent.sh OUT_DIR
 set -euo pipefail
@@ -18,11 +19,15 @@ for part in shp:6290b36e4473e2a7e8d45851/6290b36e4473e2a7e8d45852 \
     curl -sS -L -o "$out/railways_GL2017_EU.${part%%:*}" "$base/${part#*:}"
 done
 ogr2ogr -f CSV /vsistdout/ "$out/railways_GL2017_EU.shp" -lco GEOMETRY=AS_WKT \
-    -select CORRIDORS,RAILWAYS_A,TYPE |
-    awk -F'"' 'NR > 1 && $3 !~ /,Passenger,High speed$/ {
-        tier = ($3 ~ /^,[A-Z]+,/) ? 2 : 1
+    -select COUNTRY_CO,CORRIDORS,RAILWAYS_A,TYPE |
+    awk -F'"' 'NR > 1 {
+        split($3, field, ",")
+        if (field[4] == "Passenger" && field[5] == "High speed") next
+        if (field[2] !~ /^[A-Z][A-Z]$/) exit 1
+        country = (field[2] == "EL") ? "GR" : field[2]
+        tier = (field[3] != "") ? 2 : 1
         line = $2; sub(/^LINESTRING \(/, "", line); sub(/\)$/, "", line)
         gsub(/,/, " ", line)
-        print tier, line
+        print tier, country, line
     }' > "$out/tent-freight.txt"
 test "$(wc -l < "$out/tent-freight.txt")" -gt 2000

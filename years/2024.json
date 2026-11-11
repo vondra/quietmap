@@ -160,7 +160,7 @@
       "licence": "European Commission reuse policy",
       "public_ok": true,
       "depends_on": [],
-      "description": "TEN-T freight railway corridors and lines from the maps of Regulation 1315/2013."
+      "description": "TEN-T freight railway corridors and lines of each member state, from the maps of Regulation 1315/2013."
     },
     {
       "id": "turbines",
@@ -4243,8 +4243,8 @@
       "id": "rail-kilometres",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "Eurostat and Office of Rail and Road",
-      "url": "https://ec.europa.eu/eurostat/databrowser/view/rail_tf_traveh/default/table",
+      "publisher": "Eurostat",
+      "url": "https://ec.europa.eu/eurostat/databrowser/view/rail_tf_trainmv/default/table",
       "observed": {
         "start": "2019",
         "end": "2024"
@@ -4253,7 +4253,7 @@
       "licence": "Published aggregate observations; publisher terms apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "National freight and passenger train-kilometres; Great Britain uses 2019."
+      "description": "National passenger and goods train-kilometres (Eurostat rail_tf_trainmv, thousand train-km); each country's latest year in the interval, Great Britain 2019, the United Kingdom's last Eurostat year."
     },
     {
       "id": "motorcycle-fleets",
@@ -5758,6 +5758,26 @@
         "structures"
       ],
       "description": "Median numeric mapped speed by country, road class and the same building-density context used by the reader, with at least 30 mapped pieces per cell, fitted by the year run over the whole admitted mapped state."
+    },
+    {
+      "id": "train-kilometres-eurostat",
+      "kind": "train-scales",
+      "region": "world",
+      "publisher": "Quiet Map",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2019",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "Published aggregate observations and model parameters",
+      "public_ok": true,
+      "depends_on": [
+        "rail-kilometres",
+        "prepared",
+        "tent"
+      ],
+      "description": "Per country, the factors on default passenger and freight trains that bring the prepared heavy-rail network to the national train-kilometres (Great Britain 2019), with the TEN-T tier weights inside the national freight total, fitted by the year run over the whole prepared railway network."
     },
     {
       "id": "practice-history-legal-speeds",
@@ -7390,17 +7410,6 @@
       "region": "US",
       "description": "FHWA TMAS hourly volumes (time profiles): the available edition is newer than the map date; the remaining admitted sources and defaults apply.",
       "depends_on": []
-    },
-    {
-      "id": "train-kilometres-eurostat",
-      "kind": "train-scales",
-      "region": "world",
-      "description": "To be derived for 2024. Freight and passenger default multipliers fitted to national train-kilometres and the mapped network; Great Britain uses 2019. Refit for a different prepared network. The derived rates use the September 2026 mapped network and cannot be reused for an earlier map.",
-      "depends_on": [
-        "rail-kilometres",
-        "prepared",
-        "tent"
-      ]
     },
     {
       "id": "motorcycles-who",

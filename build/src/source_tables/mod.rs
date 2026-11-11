@@ -9,7 +9,7 @@ mod table;
 use crate::year::YearInputs;
 pub use regional_roads::RegionalRoads;
 use serde::Deserialize;
-pub use table::CountryTable;
+pub use table::{CountryTable, country_code};
 mod trips;
 use table::read_rows;
 pub use trips::TripRates;

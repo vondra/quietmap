@@ -27,7 +27,7 @@ Numbers are parsed with `serde_json/float_roundtrip`: the expected pub seats
 | road-class-shares | Country; `[secondary,tertiary][rural,urban][medium,heavy]`, percent | Counted vehicle-class medians in the same countries |
 | counted-class-shares | Five road classes motorway through tertiary; `[rural,urban][medium,heavy]`, percent | Counted road medians; local streets retain the documented world mix |
 | rural-free-flow | One ratio | DfT SPE0102, free-flow car speed / rural single-carriageway limit; applied only at a known rural limit of at least 80 km/h |
-| train-scales | Country; passenger/freight multipliers and three corridor weights | National train-kilometres / train-kilometres implied by the mapped network; EU core, other corridor and off-corridor weights distribute freight inside the national total |
+| train-scales | Country; `scales` [freight, passenger] on default trains, `tier_weights` [off, other TEN-T line, core corridor] | Fitted by the year run (`train-scale-table`, below): national train-kilometres / train-kilometres of the default trains on the prepared heavy-rail network; the tier weights distribute freight inside the national total where the TEN-T maps cover the country |
 | rail-fleet-regions | Country; boolean | Networks represented by the European freight fleet observations |
 | freight-period-shares | One day/evening/night triple, fractions | German EBA monitor freight counts |
 
@@ -251,6 +251,23 @@ at least 30 pieces; a selection whose roads fill no such cell has no fit and bui
 The run publishes the fitted table and its support (`tagged-speeds.samples.json`) in the year
 tree's `tables/`; the release commit copies the table here. A table fitted on a smaller selection is never pinned into a
 later run.
+
+`train-scales` is fitted by the year run itself (its `train-scale-table` step, after `prepared`,
+before sources) from the prepared railways as the sources read them: each heavy-rail row's run
+trains on its length, the default (guessed) counts apart from the counted ones, guessed freight by
+the TEN-T tier of its own country's line. Freight: goods train-kilometres less counted freight,
+over guessed freight weighted 0.5, 2 and 4 off the network, on its other lines and on a core
+corridor (all one where the maps do not cover the country); without published goods train-kilometres
+the guessed total stays and only moves between tiers. Passengers: passenger train-kilometres less
+the counted ones, over the guessed, between zero and one, where guessed trains run at least a
+quarter of the mapped passenger train-kilometres; else one. National values are Eurostat's latest
+year within the `rail-kilometres` interval, per day of that year. A world row keeps every other
+country's defaults. The run publishes the table and its support (`train-scales.samples.json`, the
+mapped and national train-kilometres a day per country). The 2026 table predates the fit: it was
+fitted to dev4's raw rows with passenger defaults brought to 1.2 times the national passenger
+train-kilometres, an EU27 list for the tiers, and Switzerland left out as its factors were near
+one (freight 0.96).
+
 Legal and heavy speed histories retain their source, applicability and validity
 interval (exclusive end). A country lacking a documented historical row retains the
 road model's global speed fallback; no later legal check is backdated. Japan's 2024

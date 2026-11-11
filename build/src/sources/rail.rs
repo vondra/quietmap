@@ -5,7 +5,7 @@ use super::decks::Decks;
 use super::rail_traffic::{column, run_trains};
 use super::tent::{FreightNetwork, Tier};
 use super::{Converted, fields, group_key, split_at_tile_edges};
-use crate::dev4::{Dev4, Square, require_stamp, z30_corner_mercator_m, z30_to_global};
+use crate::dev4::{Dev4, Square, Table, require_stamp, z30_corner_mercator_m, z30_to_global};
 use crate::source_tables::SourceTables;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type, UInt8Type, UInt16Type};
@@ -41,13 +41,7 @@ pub fn convert(
     let Some(table) = dev4.table(square, "railways.arrow")? else {
         return Ok(0);
     };
-    for (key, value) in [
-        ("grid", "z30"),
-        ("railways_contract", "country_baked_v1"),
-        ("rail_traffic_contract", "1"),
-    ] {
-        require_stamp(&table, key, value)?;
-    }
+    require_rail_stamps(&table)?;
     let run = run_trains(&table)?;
     let mut emitting = 0;
     let mut first_row = 0;
@@ -87,6 +81,7 @@ pub fn convert(
                     .is_some_and(|model| model.tier_weights != [1.0; 3])
             {
                 network.tier(
+                    iso,
                     z30_corner_mercator_m(start_x.value(row), start_y.value(row)),
                     z30_corner_mercator_m(end_x.value(row), end_y.value(row)),
                 )
@@ -204,6 +199,18 @@ pub fn convert(
         }
     }
     Ok(emitting)
+}
+
+/// The prepared railway contract the sources and the train-scale fit read.
+pub(super) fn require_rail_stamps(table: &Table) -> Result<(), String> {
+    for (key, value) in [
+        ("grid", "z30"),
+        ("railways_contract", "country_baked_v1"),
+        ("rail_traffic_contract", "1"),
+    ] {
+        require_stamp(table, key, value)?;
+    }
+    Ok(())
 }
 
 /// Trains a period as the display keeps them, to three significant digits: the popup's line

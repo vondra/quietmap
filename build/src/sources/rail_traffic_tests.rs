@@ -30,25 +30,45 @@ fn guessed_trains_follow_the_countrys_train_km() {
     let tables = SourceTables::test_fixture();
     let off = Tier::Off;
     assert_eq!(
-        train_scales(tables, RailType::Rail, *b"MK", [9013, 0], off),
+        train_scales(
+            tables.train_scales.get(*b"MK"),
+            RailType::Rail,
+            [9013, 0],
+            off
+        ),
         [0.082, 0.048]
     );
     assert_eq!(
-        train_scales(tables, RailType::Rail, *b"NO", [0, 100], off),
+        train_scales(
+            tables.train_scales.get(*b"NO"),
+            RailType::Rail,
+            [0, 100],
+            off
+        ),
         [0.265, 1.0]
     );
     assert_eq!(
-        train_scales(tables, RailType::Tram, *b"RO", [0, 0], off),
+        train_scales(tables.train_scales.get(*b"RO"), RailType::Tram, [0, 0], off),
         [1.0, 1.0]
     );
     assert_eq!(
-        train_scales(tables, RailType::Rail, *b"CH", [0, 0], off),
+        train_scales(tables.train_scales.get(*b"CH"), RailType::Rail, [0, 0], off),
         [1.0, 1.0]
     );
     // The EU27 weigh their freight by tier: a German corridor carries 8 times a line off the
     // network, a timetable row keeps its passengers.
-    let [corridor, _] = train_scales(tables, RailType::Rail, *b"DE", [0, 9864], Tier::Corridor);
-    let [off_network, passenger] = train_scales(tables, RailType::Rail, *b"DE", [0, 9864], off);
+    let [corridor, _] = train_scales(
+        tables.train_scales.get(*b"DE"),
+        RailType::Rail,
+        [0, 9864],
+        Tier::Corridor,
+    );
+    let [off_network, passenger] = train_scales(
+        tables.train_scales.get(*b"DE"),
+        RailType::Rail,
+        [0, 9864],
+        off,
+    );
     assert!((corridor / off_network - 8.0).abs() < 1e-9 && passenger == 1.0);
     assert!((corridor - 0.547 * 4.0).abs() < 1e-9);
 }
@@ -97,7 +117,12 @@ fn guessed_freight_preserves_legacy_scaling_before_period_redistribution() {
         status: [0, 0],
         source: [0, 0],
     };
-    let scale = train_scales(tables, RailType::Rail, *b"DE", [0, 0], Tier::Corridor)[0];
+    let scale = train_scales(
+        tables.train_scales.get(*b"DE"),
+        RailType::Rail,
+        [0, 0],
+        Tier::Corridor,
+    )[0];
     let legacy_total = trains
         .freight
         .map(|value| value * scale)
