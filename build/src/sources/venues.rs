@@ -11,7 +11,7 @@ use physics::emission::plant::kitchen_hours;
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum VenueKind {
     Bar,
@@ -21,6 +21,33 @@ pub enum VenueKind {
     Restaurant,
     Cafe,
     FastFood,
+}
+
+/// The kinds whose outdoor seats the seating survey gives, in the order of the table's `seats`; a
+/// beer garden's seats are its area's.
+pub const SEATED_KINDS: [VenueKind; 6] = [
+    VenueKind::Bar,
+    VenueKind::Pub,
+    VenueKind::Nightclub,
+    VenueKind::Restaurant,
+    VenueKind::Cafe,
+    VenueKind::FastFood,
+];
+
+impl VenueKind {
+    /// The kind of an OpenStreetMap `amenity` value; `None` for any other.
+    pub fn from_amenity(amenity: &str) -> Option<Self> {
+        Some(match amenity {
+            "bar" => VenueKind::Bar,
+            "pub" => VenueKind::Pub,
+            "nightclub" => VenueKind::Nightclub,
+            "biergarten" => VenueKind::Biergarten,
+            "restaurant" => VenueKind::Restaurant,
+            "cafe" => VenueKind::Cafe,
+            "fast_food" => VenueKind::FastFood,
+            _ => return None,
+        })
+    }
 }
 
 /// The `outdoor_seating` tag: a terrace (`yes`, `terrace`, `sidewalk`, `garden`, ...), none, or
@@ -67,15 +94,8 @@ impl Venues {
                 return Err(format!("line {}: expected seven fields", number + 1));
             };
             let bad = |error: &dyn std::fmt::Display| format!("line {}: {error}", number + 1);
-            let kind = match kind {
-                "bar" => VenueKind::Bar,
-                "pub" => VenueKind::Pub,
-                "nightclub" => VenueKind::Nightclub,
-                "biergarten" => VenueKind::Biergarten,
-                "restaurant" => VenueKind::Restaurant,
-                "cafe" => VenueKind::Cafe,
-                "fast_food" => VenueKind::FastFood,
-                _ => continue,
+            let Some(kind) = VenueKind::from_amenity(kind) else {
+                continue;
             };
             let site = VenueSite {
                 lat: lat.parse().map_err(|e| bad(&e))?,
@@ -106,6 +126,13 @@ impl Venues {
     /// The square's places.
     pub fn in_square(&self, x: u32, y: u32) -> &[VenueSite] {
         self.by_square.get(&(x, y)).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every square's places, in no order.
+    pub fn by_square(&self) -> impl Iterator<Item = ((u32, u32), &[VenueSite])> {
+        self.by_square
+            .iter()
+            .map(|(&square, sites)| (square, sites.as_slice()))
     }
 }
 
@@ -168,23 +195,14 @@ const SEATS_PER_M2: f64 = 0.7;
 /// Expected outdoor seats from the admitted seating survey; a mapped beer garden's area
 /// overrides its survey median, and an explicit no-terrace tag gives zero.
 pub fn seats(tables: &SourceTables, site: &VenueSite) -> f64 {
-    use VenueKind::*;
     let model = &tables.venue_seating;
-    let index = match site.kind {
-        Bar => 0,
-        Pub => 1,
-        Nightclub => 2,
-        Restaurant => 3,
-        Cafe => 4,
-        FastFood => 5,
-        Biergarten => {
-            let area = if site.area_m2 > 0.0 {
-                site.area_m2
-            } else {
-                model.beer_garden_m2
-            };
-            return SEATS_PER_M2 * area;
-        }
+    let Some(index) = SEATED_KINDS.iter().position(|&kind| kind == site.kind) else {
+        let area = if site.area_m2 > 0.0 {
+            site.area_m2
+        } else {
+            model.beer_garden_m2
+        };
+        return SEATS_PER_M2 * area;
     };
     let [tagged, expected] = model.seats[index];
     match site.seating {

@@ -75,6 +75,9 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
         "train-scale-table" => {
             sources::train_scale_fit::fit(&inputs, &out).map_err(|error| format!("{error:#}"))
         }
+        "venue-seating-table" => {
+            sources::venue_seating_fit::fit(&inputs, &out).map_err(|e| format!("{e:#}"))
+        }
         "road-observations" => road_counts::convert(&inputs, &out).map_err(|e| e.to_string()),
         "road-model-tables" => roads::calibration::build(&inputs, &out).map_err(|e| e.to_string()),
         "road-speed-table" => roads::speed_validity::build(&inputs, options.get("kind")?, &out)

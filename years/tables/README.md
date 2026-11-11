@@ -161,10 +161,16 @@ Asia uses the regional survey's 0.29. Service cooling uses the European regional
 HRE's 0.847 saturation from hot-climate US floor shares, also reached by Cyprus and Malta.
 Country, regional and world values are distinct levels of the same table.
 
-Venue seating uses Madrid and Melbourne inventories and mapped beer-garden areas. The choice
-of restaurant hours for an unnamed hospitality building is in the table too: restaurants
-were 69% of buildings with a named place in 227 squares counted on 19 October 2026. This
-observation is a dependency, not a timeless compiled rule. Clock-event duration is measured
+Venue seating is fitted by the year run (`venue-seating-table`) from the admitted seating
+surveys (`fetch/terrace_surveys.py`: Madrid's census of premises and terraces for bars,
+nightclubs, restaurants, cafés and fast food, Melbourne's land-use census for pubs) and the
+year's mapped places: a kind's tagged seats are the median of its surveyed venues with seats,
+its expected seats the mean over all of them; the beer-garden area is the median mapped outline;
+the unmapped kind, whose hours a building of bars and restaurants without a mapped place keeps,
+is the kind the most such buildings host. The committed 2026 table predates the fit: its pub
+expectation is Melbourne's share with seats times their median (0.56 x 40), where the fit takes
+the mean over all 125 surveyed pubs (33.1), and its unmapped kind was counted in 227 squares on
+19 October 2026. Clock-event duration is measured
 independently of clock-event frequency (25 seconds/hour divided by four measured events/hour).
 
 Country practices and legal limits use their manifest validity intervals. A check in 2026

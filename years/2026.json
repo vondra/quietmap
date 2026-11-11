@@ -825,10 +825,10 @@
       "public_ok": true,
       "depends_on": [
         "terrace-surveys",
-        "osm",
-        "mapped-venue-use"
+        "venues",
+        "structures"
       ],
-      "description": "Terrace seating from Madrid and Melbourne inventories and beer-garden area from the September 2026 OpenStreetMap planet."
+      "description": "Outdoor seats of each kind of bar, pub, nightclub, restaurant, cafe and fast-food place from the seating surveys (the median of the surveyed venues with seats where a terrace is mapped, the mean over all of them where none is), the median mapped beer garden, and the kind most buildings of bars and restaurants host, fitted by the year run over the whole admitted mapped state."
     },
     {
       "id": "worship-calls",
@@ -7655,14 +7655,14 @@
       "publisher": "City of Madrid and City of Melbourne",
       "url": "https://datos.madrid.es/",
       "observed": {
-        "start": "2026-01-01",
-        "end": "2026-10-04"
+        "start": "2024",
+        "end": "2026-09-30"
       },
       "published": null,
       "licence": "Published aggregate observations; publisher terms apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "Terrace seating and capacity inventories used for expected outdoor seats."
+      "description": "Outdoor seats of each surveyed venue (`fetch/terrace_surveys.py`): Madrid's census of premises and terraces of 30 September 2026 (bars, nightclubs, restaurants, cafes and fast-food places) and Melbourne's Census of Land Use and Employment of 2024 (pubs, taverns and bars)."
     },
     {
       "id": "bus-training-timetables",
@@ -7711,22 +7711,6 @@
       "public_ok": true,
       "depends_on": [],
       "description": "Freight fleet and hourly train counts from German railway noise monitoring."
-    },
-    {
-      "id": "mapped-venue-use",
-      "kind": "model-observations",
-      "region": "world",
-      "publisher": "OpenStreetMap contributors",
-      "url": "https://www.openstreetmap.org/copyright",
-      "observed": {
-        "start": "2026-10-19",
-        "end": "2026-10-19"
-      },
-      "published": null,
-      "licence": "ODbL",
-      "public_ok": true,
-      "depends_on": [],
-      "description": "Mapped use in 227 squares: 69% of hospitality buildings with a named place contain a restaurant."
     },
     {
       "kind": "prepare-timetable",

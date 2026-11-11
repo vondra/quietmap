@@ -1,9 +1,10 @@
 //! dev4's `structures.arrow` as the building conversion reads it: its OSM buildings as rows, and
-//! every building footprint offered to the placer of the places mapped inside them.
+//! the places mapped inside its footprints placed outside them and hosted by their buildings.
 
 use super::cells::{Z30Ring, ring_cell};
 use super::outside::OutsidePlacer;
-use crate::dev4::{Square, cell, column, positive, text};
+use super::venues::VenueSite;
+use crate::dev4::{Square, cell, column, degrees_to_z30, positive, text};
 use crate::structures::{decode_parts, footprint_id};
 use arrow_array::{
     Array, BinaryArray, Float32Array, Int32Array, Int64Array, RecordBatch, StringArray, UInt8Array,
@@ -35,36 +36,49 @@ pub struct BuildingRow {
     pub footprint_id: u64,
 }
 
-/// Offers every building footprint of a batch near a place (OpenStreetMap's and Overture's alike:
-/// both screen) to the placer, a bar's, restaurant's or café's (`hospitality`, by footprint id)
-/// with its source's group key.
-pub fn place_outside(
-    batch: &RecordBatch,
+/// The places mapped in a square, each placed outside the footprint it stands in (OpenStreetMap's
+/// and Overture's alike: both screen) and hosted by the bar's, restaurant's or café's building it
+/// stands in (`hospitality`: footprint id to that building's key): what the sources hear and the
+/// venue-seating fit counts.
+pub fn host_places(
+    batches: &[RecordBatch],
     (square, hospitality): (Square, &HashMap<u64, u64>),
-    placer: &mut OutsidePlacer,
-) -> Result<(), String> {
-    let kinds = column::<UInt8Array>(batch, "kind")?;
-    let outlines = column::<BinaryArray>(batch, "geom")?;
-    let ordinals = column::<UInt32Array>(batch, "screening_ordinal")?;
-    let centroid = [
-        column::<Int32Array>(batch, "centroid_gx")?,
-        column::<Int32Array>(batch, "centroid_gy")?,
-    ];
-    for row in 0..batch.num_rows() {
-        if kinds.value(row) != KIND_BUILDING
-            || !outlines.is_valid(row)
-            || !centroid.iter().all(|values| values.is_valid(row))
-            || !placer.near((centroid[0].value(row), centroid[1].value(row)))
-        {
-            continue;
-        }
-        let host = cell(ordinals, row)
-            .and_then(|ordinal| hospitality.get(&footprint_id(square, ordinal)).copied());
-        for part in decode_parts(outlines.value(row)).unwrap_or_default() {
-            placer.offer(part, host);
+    venues: &[VenueSite],
+) -> Result<OutsidePlacer, String> {
+    let mut placer = OutsidePlacer::new(
+        venues
+            .iter()
+            .map(|site| degrees_to_z30(site.lat, site.lon))
+            .collect(),
+        venues.first().map_or(0.0, |site| site.lat),
+    );
+    if venues.is_empty() {
+        return Ok(placer);
+    }
+    for batch in batches {
+        let kinds = column::<UInt8Array>(batch, "kind")?;
+        let outlines = column::<BinaryArray>(batch, "geom")?;
+        let ordinals = column::<UInt32Array>(batch, "screening_ordinal")?;
+        let centroid = [
+            column::<Int32Array>(batch, "centroid_gx")?,
+            column::<Int32Array>(batch, "centroid_gy")?,
+        ];
+        for row in 0..batch.num_rows() {
+            if kinds.value(row) != KIND_BUILDING
+                || !outlines.is_valid(row)
+                || !centroid.iter().all(|values| values.is_valid(row))
+                || !placer.near((centroid[0].value(row), centroid[1].value(row)))
+            {
+                continue;
+            }
+            let host = cell(ordinals, row)
+                .and_then(|ordinal| hospitality.get(&footprint_id(square, ordinal)).copied());
+            for part in decode_parts(outlines.value(row)).unwrap_or_default() {
+                placer.offer(part, host);
+            }
         }
     }
-    Ok(())
+    Ok(placer)
 }
 
 pub fn read_batch(batch: &RecordBatch, square: Square) -> Result<Vec<BuildingRow>, String> {
