@@ -18,7 +18,7 @@ Numbers are parsed with `serde_json/float_roundtrip`: the expected pub seats
 | Table | Row layout and units | Derivation |
 |---|---|---|
 | electric-car-share | Country; percentage of cars | IEA Global EV Data Explorer, battery-electric stock / car stock |
-| motorcycle-share | Country; fleet share and daily-use weight | WHO and national vehicle fleets, use weights fitted on DfT counts; the fit depends on that count edition |
+| motorcycle-share | Country, WHO region and world; motorcycles' share of a tertiary road's traffic and daily use (0 leisure, 1 daily) | WHO fleet shares turned into traffic by use weights fitted on the year's counts; below |
 | road-period-shares | Country; `[road group][light/heavy][day/evening/night]`, fractions | Hourly counts and roadside monitoring; groups are motorway, main road and street; each triple sums to one |
 | tagged-speeds | Country; eight road classes, `[rural,urban]`, km/h | Median mapped speed signs; the mapped network is a dependency |
 | legal-speeds | Country; `[urban,rural,motorway,motorroad]`, km/h | Published passenger-car rules; zero means no supplied limit, not stationary traffic |
@@ -30,6 +30,17 @@ Numbers are parsed with `serde_json/float_roundtrip`: the expected pub seats
 | train-scales | Country; passenger/freight multipliers and three corridor weights | National train-kilometres / train-kilometres implied by the mapped network; EU core, other corridor and off-corridor weights distribute freight inside the national total |
 | rail-fleet-regions | Country; boolean | Networks represented by the European freight fleet observations |
 | freight-period-shares | One day/evening/night triple, fractions | German EBA monitor freight counts |
+
+A motorcycle fleet share is the 2- and 3-wheelers over the registered vehicles of a country's
+latest WHO road safety report (2023, else 2018) whose types, where it gives the four-wheel
+vehicles, account for at least 70 % of its total; a total below every type is a misprint and the four motor-vehicle types stand for it, one
+below only some of them makes the profile unusable. The use weight is the counted motorcycles off
+motorways over the fleet share, in each country whose counts give motorcycles as a class. These
+countries split at the widest gap between their fleet shares: the weight is the median of those
+below (leisure riding) and of those above (daily riding), linear in the fleet share between the
+two groups' nearest members. A counted country keeps its own share; a WHO region and the world
+apply the rule at the median fleet share of their measured members, with the WHO regions of the
+year. The 2026 table is the earlier fit, with six country values that no observation supports.
 
 The global road-period model applies where no country or regional observations exist. Main
 roads without local counts use the global road model; the lack of counts is not an excuse to

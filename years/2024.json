@@ -4259,17 +4259,42 @@
       "id": "motorcycle-fleets",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "WHO and national vehicle registers",
+      "publisher": "World Health Organization",
       "url": "https://www.who.int/publications/i/item/9789240086517",
       "observed": {
-        "start": "2023",
-        "end": "2023"
+        "start": "2007",
+        "end": "2021"
       },
       "published": null,
-      "licence": "Published aggregate observations; publisher terms apply",
+      "licence": "CC BY-NC-SA 3.0 IGO",
       "public_ok": true,
       "depends_on": [],
-      "description": "Reported motorcycle and car fleets, with regional estimates."
+      "description": "Registered vehicles by type in the country profiles of WHO's Global status reports on road safety 2023 (data of 2020 and 2021) and 2018 (data of 2007 to 2017), with WHO's country regions as of July 2024."
+    },
+    {
+      "id": "motorcycles-who",
+      "kind": "motorcycle-share",
+      "region": "world",
+      "publisher": "Quiet Map; WHO; DfT, ŘSD, BASt, GDDKiA, DRSI, SICT and DRR counts",
+      "url": "https://quietmap.org/about/data-preparation",
+      "observed": {
+        "start": "2007",
+        "end": "2024"
+      },
+      "published": null,
+      "licence": "CC BY-NC-SA 3.0 IGO (WHO fleets); the count publishers' licences apply",
+      "public_ok": true,
+      "depends_on": [
+        "motorcycle-fleets",
+        "gb-dft-aadf-by-count-point",
+        "cz-rsd-celostatni-scitani-dopravy",
+        "de-bast-svz-autobahnen-bundesstraen-autobahnen-2021-3",
+        "pl-gddkia-generalny-pomiar-ruchu",
+        "si-drsi-pldp-counting-sites",
+        "mx-sict-imt-datos-viales-u1-segments-datos-viales-sict",
+        "th-drr-rural-roads-aadt"
+      ],
+      "description": "Motorcycles' share of a tertiary road's traffic and how far they are ridden daily: each country's latest WHO fleet share times a use weight fitted on the counted motorcycles off motorways of seven countries, the leisure median 0.167 up to Czechia's 20 % of the fleet and Thailand's daily 0.754 from its 52 %, linear between. A counted country keeps its own share; elsewhere the median fleet share of the WHO region, then of the world."
     },
     {
       "id": "road-period-counts",
@@ -7400,16 +7425,6 @@
         "rail-kilometres",
         "prepared",
         "tent"
-      ]
-    },
-    {
-      "id": "motorcycles-who",
-      "kind": "motorcycle-share",
-      "region": "world",
-      "description": "To be derived for 2024. Motorcycle share and daily-use weight from reported fleets, with regional estimates where no fleet was reported.",
-      "depends_on": [
-        "motorcycle-fleets",
-        "gb-dft-aadf-by-count-point"
       ]
     },
     {
