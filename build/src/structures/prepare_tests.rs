@@ -306,3 +306,27 @@ fn national_attributes_keep_floor_evidence_activity_classes_and_first_equal_matc
     NationalAttributes::new(&points).apply(&mut building);
     assert_eq!(building.row.floors, Some(0));
 }
+
+#[test]
+fn self_intersecting_survey_footprint_still_answers_its_building() {
+    // A 3DBAG footprint whose ring crosses itself near a touching hole (Utrecht, v2025-09-03):
+    // GEOS refused `covers` with a side location conflict and failed the whole square.
+    let survey = Geometry::new_from_wkt(
+        "POLYGON ((5.115309291186669 52.072084381971365,5.115268313556092 52.07203030495403,\
+         5.1152955046464275 52.07202248512092,5.11529883714952 52.07202613298598,\
+         5.115384927889268 52.07199612255535,5.115424672968637 52.07203941996604,\
+         5.115424292932673 52.0720395539112,5.115424859739693 52.072039887777514,\
+         5.115424687553921 52.072039419999655,5.115433236448267 52.07204873339879,\
+         5.115309291186669 52.072084381971365),(5.115418056467138 52.07205295875615,\
+         5.115417239254361 52.072053028776644,5.1154174273351165 52.07205328087694,\
+         5.115418056467138 52.07205295875615))",
+    )
+    .unwrap();
+    assert!(!survey.is_valid().unwrap());
+    let building = Geometry::new_from_wkt(
+        "POLYGON ((5.11528 52.07201,5.11542 52.07201,5.11542 52.07208,5.11528 52.07208,5.11528 52.07201))",
+    )
+    .unwrap();
+    let (iou, contains) = geometry::overlap(&building, &survey).unwrap();
+    assert!(contains && iou > 0.5, "iou {iou}");
+}
