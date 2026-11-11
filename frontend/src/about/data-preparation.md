@@ -140,10 +140,13 @@ junctions and the place's yearly air temperature.
 
 - **Traffic without a count.** Secondary, tertiary and unclassified roads with only a class
   estimate follow a law of the trips their buildings make within 1, 2 or 5 km, whichever predicts
-  the counts best, fitted on the year's counts of whole networks and random samples with every
-  country weighed alike and the trips held at the counted roads' 90th percentile. Counts at
-  selected sites carry their own roads but stay out of this law: Italy's stations read tertiary
-  roads 3 dB above it, Sweden's whole network 3 dB below. A rural road network counted on its own,
+  the counts best, fitted with every country weighed alike and the trips held at the counted
+  roads' 90th percentile on the year's random samples and on the whole networks that cover most
+  of their class's mapped length in their country. A network's counts covering less, and counts at
+  sites a publisher selected, carry their own roads but stay out of this law: Germany's federal
+  and Poland's voivodeship roads, under 4 % of their countries' tertiary length, read 5 to 7 dB
+  above it, where Sweden's state roads, 89 % of Sweden's, read within 1 dB. A rural road network
+  counted on its own,
   Thailand's, follows its own law. Motorways, trunk and primary roads follow one law of the trips
   within 1, 5 and 15 km, their lanes and one-way carriageways, fitted on counts of every design
   (stations on major roads read within the whole networks' range), in the countries whose counts it
@@ -156,8 +159,8 @@ junctions and the place's yearly air temperature.
   factors without a measured source. Its rooms come from its floor, at the floor a room of the
   year's mapped hotels, hostels, motels and guest houses that state their rooms: 85 m² in 2026.
   In a town, an unclassified street, and a residential street that a bus, trolleybus or
-  coach line runs along, carries at least what the counted unclassified streets of whole networks
-  and random samples (Great Britain's) carry among as many trips around it (a one-way residential street what a
+  coach line runs along, carries at least what counted unclassified streets that stand for their
+  class (Great Britain's random sample) carry among as many trips around it (a one-way residential street what a
   two-way one carries): a line mostly runs along a through street that its class misses. In Great
   Britain's random sample of counted minor roads, 592 residential streets with a line carry 1,820
   vehicles a day in the median; the trips routed down them read 8.2 dB low, this rule 0.5 dB.

@@ -7,6 +7,7 @@ use super::road_model_rows::{
     CountedRow, MAIN_CANDIDATE_RADII, MAIN_CLASSES, MAJOR_RADII, RADII_M,
 };
 use super::road_traffic::{MAJOR_TRIP_END_OFFSET, major_group};
+use crate::roads::observation_sample::SamplingDesign;
 use crate::source_tables::{MainModel, MajorModel, RegionalMainModels, RoadModels};
 use crate::year::YearInputs;
 use anyhow::{Context, Result, anyhow, ensure};
@@ -18,8 +19,27 @@ use std::path::Path;
 /// law is extrapolated where few counted roads stand.
 const MAIN_TRIP_END_QUANTILE: f64 = 0.9;
 
+/// A whole network stands for its class where it covers most of the class's mapped length in its
+/// country. On the 2026 counts no whole network covered between 25 % and 68 % of its class, so any
+/// bound between gives the same fit: those above (Sweden's, Czechia's and Poland's secondary
+/// roads, Sweden's tertiary roads, Thailand's rural network) read within 1.6 dB of the laws fitted
+/// on them and Great Britain's random sample, those below from -4.6 to +6.8 dB (Germany's federal
+/// and Poland's voivodeship roads the busy part of the tertiary class, Finland's matched state
+/// roads a quiet part).
+pub(crate) const REPRESENTATIVE_COVERAGE: f64 = 0.5;
+
+/// Whether a counted row stands for the uncounted roads of its class: a random sample always, a
+/// whole network that covers most of its class, never sites a publisher selected.
+pub(crate) fn represents_its_class(r: &CountedRow) -> bool {
+    match r.design {
+        SamplingDesign::RandomSample => true,
+        SamplingDesign::WholeNetwork => r.class_coverage > REPRESENTATIVE_COVERAGE,
+        SamplingDesign::SelectedSites | SamplingDesign::Undeclared => false,
+    }
+}
+
 /// The fit of one main class at the candidate radius that predicts best, on the rows of `rows`
-/// whose counts represent their class (a whole network or a random sample), with its support:
+/// whose counts represent their class ([`represents_its_class`]), with its support:
 /// each candidate's weighted mean absolute error and, for every row of `rows`, the residuals of
 /// each country and design at the chosen law.
 fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
@@ -29,7 +49,7 @@ fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
         let population: Vec<&CountedRow> = rows
             .iter()
             .copied()
-            .filter(|r| r.around[radius] > 0.0 && r.design.represents_its_class())
+            .filter(|r| r.around[radius] > 0.0 && represents_its_class(r))
             .collect();
         let weights = country_weights(
             &population
@@ -322,13 +342,31 @@ pub(crate) fn fit_models(rows: &[CountedRow]) -> Result<(RoadModels, Value)> {
     ))
 }
 
+/// Each country's main classes, on and off a rural road network: mapped km, km under a whole
+/// network's counts, their share and whether they stand for the class.
+fn coverage_record(coverage: &super::road_model_rows::Coverage) -> Value {
+    json!(
+        coverage
+            .iter()
+            .filter(|(_, [_, counted])| *counted > 0.0)
+            .map(|((country, class, network), [mapped, counted])| {
+                let share = counted / mapped;
+                json!({"country": String::from_utf8_lossy(country), "class": class,
+                    "rural_network": network, "mapped_km": (mapped / 100.0).round() / 10.0,
+                    "whole_network_km": (counted / 100.0).round() / 10.0, "share": share,
+                    "represents_its_class": share > REPRESENTATIVE_COVERAGE})
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
 /// The year run's step: the counted rows of every prepared square with mapped buildings.
 pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
     ensure!(
         !output.exists(),
         "building-road-models needs a new output path"
     );
-    let (rows, squares) = super::road_model_rows::collect(inputs)?;
+    let (rows, coverage, squares) = super::road_model_rows::collect(inputs)?;
     eprintln!(
         "building-road-models: {} counted rows in {} squares",
         rows.len(),
@@ -337,6 +375,7 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
     let (models, mut support) = fit_models(&rows).context("building-road-models")?;
     crate::source_tables::write_rows(output, &[models]).map_err(|e| anyhow!(e))?;
     support["squares"] = json!(squares);
+    support["coverage"] = coverage_record(&coverage);
     support["minimum_country_rows"] = json!(super::road_model_regression::MINIMUM_COUNTRY_ROWS);
     std::fs::write(
         output.with_extension("samples.json"),

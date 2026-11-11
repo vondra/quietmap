@@ -27,6 +27,9 @@ pub(crate) struct CountedRow {
     pub rural_network: bool,
     /// How its publisher chose where to count.
     pub design: SamplingDesign,
+    /// The share of its country's mapped length of its class (on or off a rural road network) that
+    /// whole-network counts cover.
+    pub class_coverage: f64,
     pub length_m: f64,
     pub total: f64,
     pub around: [f64; 4],
@@ -60,14 +63,25 @@ fn column<'a>(
         .ok_or_else(|| anyhow!("roads.arrow has no {name}"))
 }
 
+/// A main class's mapped length in a country, on or off a rural road network.
+pub(crate) type CoverageKey = ([u8; 2], u8, bool);
+
+/// Mapped metres and metres carrying a whole-network count, by country, class and network.
+pub(crate) type Coverage = std::collections::BTreeMap<CoverageKey, [f64; 2]>;
+
 /// The counted rows of one prepared square, none where its buildings are not mapped (the model
-/// is fitted where it is applied).
-fn counted_rows(dev4: &Dev4, traffic: &Path, square: Square) -> Result<Vec<CountedRow>> {
+/// is fitted where it is applied), and its main classes' coverage, whatever its buildings.
+fn counted_rows(
+    dev4: &Dev4,
+    traffic: &Path,
+    square: Square,
+) -> Result<(Vec<CountedRow>, Coverage)> {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Float32Type, Float64Type, Int32Type, UInt8Type, UInt16Type};
     let context = || format!("square {}:{}", square.x, square.y);
+    let mut coverage = Coverage::new();
     let Some(table) = dev4.table(square, "roads.arrow").map_err(|e| anyhow!(e))? else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), coverage));
     };
     for (key, value) in [
         ("grid", "z30"),
@@ -83,20 +97,41 @@ fn counted_rows(dev4: &Dev4, traffic: &Path, square: Square) -> Result<Vec<Count
     for batch in &table.batches {
         let class = column(batch, "road_class")?.as_primitive::<UInt8Type>();
         let length = column(batch, "length_m")?.as_primitive::<Float32Type>();
-        lengths.extend(
-            (0..batch.num_rows()).map(|row| (class.value(row), f64::from(length.value(row)))),
-        );
-        let measured = column(batch, "traffic_observation_measured").with_context(context)?;
-        any_measured |= measured.as_boolean().true_count() > 0;
+        let country = column(batch, "country_iso")?.as_primitive::<UInt16Type>();
+        let reference = column(batch, "ref")?.as_string::<i32>();
+        let source = column(batch, "source_id")?.as_primitive::<UInt16Type>();
+        let measured = column(batch, "traffic_observation_measured")
+            .with_context(context)?
+            .as_boolean();
+        let design = column(batch, "traffic_observation_design")?.as_primitive::<UInt8Type>();
+        for row in 0..batch.num_rows() {
+            let metres = f64::from(length.value(row));
+            lengths.push((class.value(row), metres));
+            if !MAIN_CLASSES.contains(&class.value(row)) {
+                continue;
+            }
+            let key = (
+                country.value(row).to_le_bytes(),
+                class.value(row),
+                thai_rural_road_ref(reference.value(row)),
+            );
+            let whole = measured.value(row)
+                && source.value(row) != crate::roads::CONTINUITY_SOURCE
+                && design.value(row) == SamplingDesign::WholeNetwork.code();
+            let entry = coverage.entry(key).or_default();
+            entry[0] += metres;
+            entry[1] += if whole { metres } else { 0.0 };
+        }
+        any_measured |= measured.true_count() > 0;
     }
     if !any_measured {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), coverage));
     }
     let local_km = super::road_traffic::local_km(lengths.into_iter());
     let Some(buildings) =
         BuildingTraffic::load(traffic, square, local_km).map_err(|e| anyhow!(e))?
     else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), coverage));
     };
     let copies = super::road::copied_counts(&table).map_err(|e| anyhow!(e))?;
     let mut rows = Vec::new();
@@ -159,6 +194,7 @@ fn counted_rows(dev4: &Dev4, traffic: &Path, square: Square) -> Result<Vec<Count
                 rural_network: thai_rural_road_ref(reference.value(row)),
                 design: SamplingDesign::from_code(design.value(row))
                     .ok_or_else(|| anyhow!("unknown sampling design {}", design.value(row)))?,
+                class_coverage: 0.0,
                 length_m: f64::from(length.value(row)),
                 total,
                 around: RADII_M.map(|radius| buildings.around(middle, radius)),
@@ -166,12 +202,12 @@ fn counted_rows(dev4: &Dev4, traffic: &Path, square: Square) -> Result<Vec<Count
         }
         first += batch.num_rows();
     }
-    Ok(rows)
+    Ok((rows, coverage))
 }
 
-/// The counted rows of every square of the prepared tree whose buildings are mapped, and the
-/// squares that hold them.
-pub(crate) fn collect(inputs: &YearInputs) -> Result<(Vec<CountedRow>, Vec<[u32; 2]>)> {
+/// The counted rows of every square of the prepared tree whose buildings are mapped, each with
+/// its class's coverage; the coverage itself; and the squares that hold counted rows.
+pub(crate) fn collect(inputs: &YearInputs) -> Result<(Vec<CountedRow>, Coverage, Vec<[u32; 2]>)> {
     let prepared = PathBuf::from(inputs.required(Kind::Prepared).map_err(|e| anyhow!(e))?);
     let traffic = PathBuf::from(inputs.required(Kind::RoadTraffic).map_err(|e| anyhow!(e))?);
     let squares: Vec<Square> = crate::roads::prepared_squares(&prepared)?;
@@ -179,14 +215,30 @@ pub(crate) fn collect(inputs: &YearInputs) -> Result<(Vec<CountedRow>, Vec<[u32;
         prepared,
         rasters: PathBuf::new(),
     };
-    let parts: Vec<(Square, Vec<CountedRow>)> = squares
+    let parts: Vec<(Square, (Vec<CountedRow>, Coverage))> = squares
         .par_iter()
-        .map(|&square| counted_rows(&dev4, &traffic, square).map(|rows| (square, rows)))
+        .map(|&square| counted_rows(&dev4, &traffic, square).map(|part| (square, part)))
         .collect::<Result<_>>()?;
     let held: Vec<[u32; 2]> = parts
         .iter()
-        .filter(|(_, rows)| !rows.is_empty())
+        .filter(|(_, (rows, _))| !rows.is_empty())
         .map(|(square, _)| [square.x, square.y])
         .collect();
-    Ok((parts.into_iter().flat_map(|(_, rows)| rows).collect(), held))
+    let mut coverage = Coverage::new();
+    let mut rows = Vec::new();
+    for (_, (part, metres)) in parts {
+        for (key, [mapped, counted]) in metres {
+            let entry = coverage.entry(key).or_default();
+            entry[0] += mapped;
+            entry[1] += counted;
+        }
+        rows.extend(part);
+    }
+    for row in &mut rows {
+        if let Some([mapped, counted]) = coverage.get(&(row.country, row.class, row.rural_network))
+        {
+            row.class_coverage = counted / mapped;
+        }
+    }
+    Ok((rows, coverage, held))
 }
