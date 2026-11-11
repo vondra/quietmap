@@ -218,8 +218,12 @@ struct SquareScene {
     frame_north_m_per_unit: f32,
 }
 
+/// Bytes of one point's receiver on the card (kernels/evaluate.cuh Receiver: its position and
+/// altitude, its building and its weather, PERIODS x 16 sectors and BANDS floats).
+const RECEIVER_BYTES: usize = 248;
+
 /// The sizes of the structs above, in the order the kernel `struct_sizes` reports the device's.
-const HOST_STRUCT_SIZES: [usize; 7] = [
+const HOST_STRUCT_SIZES: [usize; 8] = [
     std::mem::size_of::<TerrainTile>(),
     std::mem::size_of::<TerrainScene>(),
     std::mem::size_of::<ObstacleTile>(),
@@ -227,6 +231,7 @@ const HOST_STRUCT_SIZES: [usize; 7] = [
     std::mem::size_of::<DeviceCandidate>(),
     std::mem::size_of::<DeviceAttribute>(),
     std::mem::size_of::<SquareScene>(),
+    RECEIVER_BYTES,
 ];
 
 /// The bytes of plain old data (the `#[repr(C)]` structs above, without padding holes that
@@ -247,6 +252,8 @@ pub struct Gpu {
     pub name: String,
     /// Held while cudarc records and waits on the device's one event (`crate::stream`).
     pub(crate) event: Mutex<()>,
+    /// Weather states a block of the loudness mixtures takes (`crate::loudness::block_states`).
+    pub(crate) loudness_block_states: usize,
 }
 
 impl Gpu {
@@ -258,6 +265,9 @@ impl Gpu {
         let minor = attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
         let multiprocessors =
             attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
+        let loudness_block_states = crate::loudness::block_states(attribute(
+            CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR,
+        )? as usize);
         let arch: &'static str = Box::leak(format!("compute_{major}{minor}").into_boxed_str());
         let source = format!(
             "{COMMON}{}{}#define THREADS_PER_BLOCK {THREADS_PER_BLOCK}\n{PHYSICS}",
@@ -281,6 +291,7 @@ impl Gpu {
             ptx,
             "paint",
             &[
+                "point_receivers",
                 "pair_rays",
                 "ray_transfers",
                 "pair_bands_to_points",
@@ -288,7 +299,10 @@ impl Gpu {
             ],
         ))?;
         // The pixels' loudness, in full precision (fast math moved a sum's bin at its edges).
-        let loudness = format!("{COMMON}{}", crate::loudness::loudness_source());
+        let loudness = format!(
+            "{COMMON}{}",
+            crate::loudness::loudness_source(loudness_block_states)
+        );
         let ptx = compile_ptx_with_opts(
             loudness,
             CompileOptions {
@@ -353,6 +367,7 @@ impl Gpu {
             device,
             name: format!("{name} (sm_{major}{minor}, {multiprocessors} SMs)"),
             event: Mutex::new(()),
+            loudness_block_states,
         })
     }
 
@@ -369,32 +384,39 @@ impl Gpu {
         driver(self.device.dtoh_sync_copy(bands))
     }
 
-    /// Per pair (receiver position in the square's frame, building it stands in or 0, candidate
-    /// index, its point's index in `bands`): what the candidate delivers there per period, mixed,
-    /// calm and downwind, and the failure, 0 for none; its mixed bands added to the point's.
+    /// Per receiver its position in the square's frame and the building it stands in (or 0); per
+    /// pair its candidate index, its receiver and its point's index in `bands`: what the candidate
+    /// delivers there per period, mixed, calm and downwind, and the failure, 0 for none; its mixed
+    /// bands added to the point's.
     pub fn evaluate_pairs(
         &self,
         square: &DeviceSquare,
         (receivers, own_footprint): (&[[f64; 2]], &[u64]),
-        (candidates, points, band_weights): (&[u32], &[u32], &[f32]),
+        (candidates, receiver_of_pair, points, band_weights): (&[u32], &[u32], &[u32], &[f32]),
         bands: &mut CudaSlice<f32>,
         pair_spectra: Option<&mut Vec<f32>>,
     ) -> Result<(Vec<[f32; PAIR_SUMS]>, Vec<u32>), String> {
         let count = candidates.len();
-        if receivers.len() != count
-            || own_footprint.len() != count
+        if own_footprint.len() != receivers.len()
+            || receiver_of_pair.len() != count
             || points.len() != count
             || band_weights.len() != count
         {
-            return Err("evaluate_pairs: a receiver, an owner and a point per candidate".into());
+            return Err(
+                "evaluate_pairs: an owner a receiver, a receiver and a point a candidate".into(),
+            );
         }
         if candidates.iter().any(|&index| index >= square.candidates)
+            || receiver_of_pair
+                .iter()
+                .any(|&at| at as usize >= receivers.len())
             || points
                 .iter()
                 .any(|&point| (point as usize + 1) * POINT_BANDS > bands.len())
         {
             return Err(
-                "evaluate_pairs: a candidate outside the square or a point outside the bands"
+                "evaluate_pairs: a candidate outside the square, a receiver outside the receivers \
+                 or a point outside the bands"
                     .into(),
             );
         }
@@ -405,6 +427,13 @@ impl Gpu {
         let device = &self.device;
         let xy = driver(device.htod_sync_copy(&xy))?;
         let own = driver(device.htod_sync_copy(own_footprint))?;
+        let receiver_count = receivers.len();
+        // SAFETY (the next two): `point_receivers` writes every receiver's failure and every
+        // receiver that does not fail, which alone are read.
+        let point_receivers =
+            driver(unsafe { device.alloc::<u8>(RECEIVER_BYTES * receiver_count) })?;
+        let receiver_failed = driver(unsafe { device.alloc::<u32>(receiver_count) })?;
+        let receiver_of_pair = driver(device.htod_sync_copy(receiver_of_pair))?;
         let index = driver(device.htod_sync_copy(candidates))?;
         let point_index = driver(device.htod_sync_copy(points))?;
         let band_weights = driver(device.htod_sync_copy(band_weights))?;
@@ -430,17 +459,33 @@ impl Gpu {
         // The pairs' kernels on a stream of their own (once the buffers above are zeroed): another
         // pass's or square's kernels run beside them on the card.
         let stream = self.fork()?;
-        // SAFETY (each launch): every buffer holds what the kernel indexes: 2 receiver coordinates,
-        // an owner, a candidate and a point (within `bands`, checked) per pair; a count, an offset,
+        // SAFETY (each launch): every buffer holds what the kernel indexes: 2 coordinates, an owner,
+        // a receiver (RECEIVER_BYTES) and a failure per receiver; a receiver (within the receivers,
+        // checked), a candidate and a point (within `bands`, checked) per pair; a count, an offset,
         // PAIR_SUMS sums, PERIODS x BANDS bands and a failure per pair; a PairRay (PAIR_RAY_BYTES) per ray.
+        driver(unsafe {
+            kernel("point_receivers")?.launch_on_stream(
+                &stream,
+                threads(receiver_count),
+                (
+                    &square.scene,
+                    &xy,
+                    &own,
+                    receiver_count as u32,
+                    &point_receivers,
+                    &receiver_failed,
+                ),
+            )
+        })?;
         driver(unsafe {
             kernel("pair_rays")?.launch_on_stream(
                 &stream,
                 threads(count),
                 (
                     &square.scene,
-                    &xy,
-                    &own,
+                    &point_receivers,
+                    &receiver_failed,
+                    &receiver_of_pair,
                     &index,
                     count as u32,
                     none,
@@ -466,8 +511,9 @@ impl Gpu {
                     threads(count),
                     (
                         &square.scene,
-                        &xy,
-                        &own,
+                        &point_receivers,
+                        &receiver_failed,
+                        &receiver_of_pair,
                         &index,
                         count as u32,
                         &offsets,
@@ -493,8 +539,8 @@ impl Gpu {
                     threads(total as usize),
                     (
                         &square.scene,
-                        &xy,
-                        &own,
+                        &point_receivers,
+                        &receiver_of_pair,
                         &index,
                         &rays,
                         total,

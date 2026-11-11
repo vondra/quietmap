@@ -34,26 +34,29 @@ __device__ bool loud_same_weather(const float* in, const int* start, const int* 
     return __all_sync(LOUD_FULL_MASK, same);
 }
 
-// The pixels' mixtures: a warp a task (a pixel's period, group of hours and weather state,
-// LOUD_TASK_*), each layer's distribution and the place's added with the task's share of the period
-// into the pixel's mixtures, which start at zero. A pixel none of whose lines follows the hours has
-// one group a period: its tasks of the other groups do nothing.
-extern "C" __global__ void pixel_mixtures(const float* input, const u64* offsets, u32 task_count, float* mixtures) {
-    __shared__ LoudWarp warps[LOUD_TASK_WARPS];
-    int lane = threadIdx.x % LOUD_LANES;
-    LoudWarp& w = warps[threadIdx.x / LOUD_LANES];
-    u32 task = blockIdx.x * LOUD_TASK_WARPS + threadIdx.x / LOUD_LANES;
-    if (task >= task_count) return;
-    u32 pixel = task / LOUD_TASKS;
-    int k = task % LOUD_TASKS;
-    int p = LOUD_TASK_PERIOD[k], group = LOUD_TASK_GROUP[k], state = LOUD_TASK_STATE[k];
+// The pixels' mixtures: a block LOUD_BLOCK_STATES weather states of a pixel's period and group of
+// hours (LOUD_PERIOD_GROUP_*), a warp a state, each layer's distribution and the place's added with
+// the state's share of the period into the pixel's mixtures, which start at zero. A pixel none of
+// whose lines follows the hours has one group a period: its blocks of the other groups do nothing. A
+// state equal to the one before is that one's, which adds it with its time.
+extern "C" __global__ void __launch_bounds__(LOUD_BLOCK_STATES * LOUD_LANES) pixel_mixtures(const float* input,
+                                                                                             const u64* offsets, float* mixtures) {
+    __shared__ LoudWarp warps[LOUD_BLOCK_STATES];
+    __shared__ u32 adders[LOUD_BLOCK_STATES];
+    const int state_blocks = LOUD_STATES / LOUD_BLOCK_STATES;
+    int lane = threadIdx.x % LOUD_LANES, warp = threadIdx.x / LOUD_LANES;
+    int state = (blockIdx.x % state_blocks) * LOUD_BLOCK_STATES + warp;
+    LoudWarp& w = warps[warp];
+    u32 pixel = blockIdx.x / (state_blocks * LOUD_PERIOD_GROUPS);
+    int k = blockIdx.x / state_blocks % LOUD_PERIOD_GROUPS;
+    int p = LOUD_PERIOD_GROUP_PERIOD[k], group = LOUD_PERIOD_GROUP_GROUP[k];
     const float* in = input + offsets[pixel];
     int start[LOUD_LAYERS], count[LOUD_LAYERS];
     bool profiled = loud_layers(in, start, count);
     if (!profiled && group > 0) return;
-    if (state > 0 && loud_same_weather(in, start, count, p, state - 1, state, lane)) return;
+    bool skip = state > 0 && loud_same_weather(in, start, count, p, state - 1, state, lane);
     int repeats = 1;
-    while (state + repeats < LOUD_STATES && loud_same_weather(in, start, count, p, state, state + repeats, lane)) repeats++;
+    while (!skip && state + repeats < LOUD_STATES && loud_same_weather(in, start, count, p, state, state + repeats, lane)) repeats++;
     float weight = profiled ? (float)LOUD_GROUP_SLOTS[p * LOUD_GROUPS_MAX + group] / (LOUD_PERIOD_HOURS[p] * LOUD_STATES)
                             : 1.0f / LOUD_STATES;
     weight *= repeats;
@@ -63,20 +66,24 @@ extern "C" __global__ void pixel_mixtures(const float* input, const u64* offsets
     bool moves[LOUD_LAYERS];
     float floor = 0.0f;
     for (int l = 0; l < LOUD_LAYERS; l++) {
+        floors[l] = held[l] = 0.0f;
+        moves[l] = false;
+        if (skip) continue;
         floors[l] = loud_floor(in + start[l], count[l], in[start[l] - PERIODS - 1 + p], p, group, state, &held[l], &moves[l]);
         if (!moves[l]) floor += floors[l];
     }
-    loud_steady(floor, w.whole[0], lane);
+    if (!skip) loud_steady(floor, w.whole[0], lane);
     int whole = 0;
     for (int l = 0; l < LOUD_LAYERS; l++) {
-        int own = loud_layer(in + start[l], count[l], floors[l], held[l], moves[l], p, group, state, w, lane);
+        int own = loud_layer(in + start[l], count[l], floors[l], held[l], moves[l], p, group, state, skip, warps, adders, lane);
+        if (skip) continue;
         loud_accumulate(mixture + l * LOUD_BINS * 2, w.layer[own], weight, lane);
         if (moves[l]) {
             loud_with_distribution(w.whole[whole], w.layer[own], w.values, w.whole[1 - whole], lane);
             whole = 1 - whole;
         }
     }
-    loud_accumulate(mixture + LOUD_LAYERS * LOUD_BINS * 2, w.whole[whole], weight, lane);
+    if (!skip) loud_accumulate(mixture + LOUD_LAYERS * LOUD_BINS * 2, w.whole[whole], weight, lane);
 }
 
 // physics/src/loudness.rs core_loudness and zwicker_loudness_sone: ISO 532-1 of third-octave

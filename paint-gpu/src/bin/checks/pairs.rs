@@ -102,6 +102,7 @@ pub(super) fn check(
         (
             &chosen[..warm],
             &point_of_pair[..warm],
+            &point_of_pair[..warm],
             &band_weights[..warm],
         ),
         &mut bands,
@@ -118,6 +119,7 @@ pub(super) fn check(
             (&receivers[start..start + count], &own[..count]),
             (
                 &chosen[start..start + count],
+                &point_of_pair[..count],
                 &point_of_pair[..count],
                 &band_weights[..count],
             ),

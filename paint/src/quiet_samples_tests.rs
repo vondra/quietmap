@@ -132,3 +132,56 @@ fn a_layer_under_half_a_sone_agrees_within_a_tenth_of_a_sone_but_the_total_by_ha
     blended_total[LAYERS] = 0.45;
     assert!(!agrees_with_interpolation(&quiet_total, &blended_total));
 }
+
+/// A field bilinear in each quarter passes the coarse probes, at blocks of 8 and 16, and the block
+/// then blends every pixel from the coarse lattice, a probe within the tolerance taking the blend;
+/// a probe over half a phon or half a decibel off, or a coarse sample unknown, sends the block to
+/// the fine lattice.
+#[test]
+fn a_coarse_lattice_blends_a_block_only_where_its_quadrant_probes_agree() {
+    for b in [8, 16] {
+        let (axis, positions) = sample_positions(b);
+        let middle = axis[2] as f64;
+        let field = |x: usize, y: usize| {
+            let (x, y) = (x as f64, y as f64);
+            1.0 + 0.05 * x
+                + 0.02 * y
+                + if x > middle {
+                    0.03 * (x - middle) * y
+                } else {
+                    0.0
+                }
+        };
+        let painted = |value: f64| Some(([value; LAYERS], [value; LAYERS + 1]));
+        let mut values: Vec<Option<Painted>> = vec![None; positions.len()];
+        for &k in &COARSE_FIRST {
+            let (x, y) = positions[k];
+            values[k] = painted(field(x, y));
+        }
+        let (px, py) = positions[18];
+        values[18] = painted(field(px, py) * 1.02);
+        let samples = QuietSamples {
+            axis,
+            values: coarse_lattice(axis, &values).expect("a field within tolerance agrees"),
+            accepted: [true; 16],
+        };
+        for y in 0..b {
+            for x in 0..b {
+                let known = samples.known_at(x, y).unwrap();
+                assert!(
+                    (known.1[LAYERS] - field(x, y)).abs() < 1e-12,
+                    "block {b} pixel {x},{y}"
+                );
+            }
+        }
+        let mut loud = values.clone();
+        loud[18] = painted(field(px, py) * 1.05);
+        assert!(coarse_lattice(axis, &loud).is_none());
+        let mut energetic = values.clone();
+        energetic[18] = Some(([field(px, py) * 1.2; LAYERS], [field(px, py); LAYERS + 1]));
+        assert!(coarse_lattice(axis, &energetic).is_none());
+        let mut unknown = values;
+        unknown[24] = None;
+        assert!(coarse_lattice(axis, &unknown).is_none());
+    }
+}

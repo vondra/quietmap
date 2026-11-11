@@ -18,7 +18,8 @@ use popup::evaluate::Scratch;
 use rayon::prelude::*;
 use std::sync::OnceLock;
 
-/// Pairs one launch takes: 172 bytes per pair, 24 per ray and 576 per reached point.
+/// Pairs one launch takes: 160 bytes per pair, 24 per ray, 576 per reached point and 268 per
+/// receiver.
 const PAIRS_PER_LAUNCH: usize = 2_000_000;
 
 #[path = "hum_pairs.rs"]
@@ -66,37 +67,53 @@ fn by_candidate(pairs: &[Pair], candidates: usize) -> Vec<u32> {
     order
 }
 
-/// One launch's inputs as the card takes them.
+/// One launch's inputs as the card takes them: each of its points' receiver once, and per pair its
+/// candidate, receiver, slot and weight.
 #[derive(Default)]
 struct LaunchInputs {
     receivers: Vec<[f64; 2]>,
     own: Vec<u64>,
     candidates: Vec<u32>,
+    receiver_of_pair: Vec<u32>,
     at: Vec<u32>,
     weights: Vec<f32>,
+    /// Each point's receiver in this launch (`u32::MAX`: none), cleared after each gather.
+    receiver_of_point: Vec<u32>,
+    points: Vec<u32>,
 }
 
 impl LaunchInputs {
-    /// The launch's pairs' inputs, each pair read once (`slot_of` each point's slot).
+    /// The launch's pairs' inputs, each pair read once (`slot_of` each point's slot), each point's
+    /// receiver once in the order its pairs first come.
     fn gather(&mut self, launch: &[u32], (points, pairs): (&[Point], &[Pair]), slot_of: &[u32]) {
         self.receivers.clear();
         self.own.clear();
         self.candidates.clear();
+        self.receiver_of_pair.clear();
         self.at.clear();
         self.weights.clear();
-        self.receivers.reserve(launch.len());
-        self.own.reserve(launch.len());
         self.candidates.reserve(launch.len());
+        self.receiver_of_pair.reserve(launch.len());
         self.at.reserve(launch.len());
         self.weights.reserve(launch.len());
+        self.receiver_of_point.resize(points.len(), u32::MAX);
         for &k in launch {
             let pair = &pairs[k as usize];
-            let point = &points[pair.point as usize];
-            self.receivers.push(point.position);
-            self.own.push(point.own_footprint);
+            let receiver = &mut self.receiver_of_point[pair.point as usize];
+            if *receiver == u32::MAX {
+                let point = &points[pair.point as usize];
+                *receiver = self.receivers.len() as u32;
+                self.receivers.push(point.position);
+                self.own.push(point.own_footprint);
+                self.points.push(pair.point);
+            }
+            self.receiver_of_pair.push(*receiver);
             self.candidates.push(pair.candidate);
             self.at.push(slot_of[pair.point as usize]);
             self.weights.push(pair.band_weight as f32);
+        }
+        for point in self.points.drain(..) {
+            self.receiver_of_point[point as usize] = u32::MAX;
         }
     }
 }
@@ -166,7 +183,12 @@ impl GpuBatch<'_> {
                 self.gpu.evaluate_pairs(
                     self.device_square,
                     (&gathered.receivers, &gathered.own),
-                    (&gathered.candidates, &gathered.at, &gathered.weights),
+                    (
+                        &gathered.candidates,
+                        &gathered.receiver_of_pair,
+                        &gathered.at,
+                        &gathered.weights,
+                    ),
                     &mut device_bands,
                     None,
                 )

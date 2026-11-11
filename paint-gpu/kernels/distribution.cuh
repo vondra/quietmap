@@ -228,10 +228,24 @@ __device__ void loud_with_distribution(const LoudDistribution& d, const LoudDist
     loud_with_line(d, v, 1.0f, out, lane);
 }
 
+// Where `lambda` falls in the quantiles' table: its row and the fraction toward the next, the same at
+// every node (AtProbabilities::relative_intensities takes the logarithm once too).
+struct LoudRow {
+    int row;
+    float fraction;
+};
+
+__device__ __forceinline__ LoudRow loud_row(float lambda) {
+    float position = clampf(log10f(lambda / LOUD_LAMBDA_MIN) * LOUD_STEPS_PER_DECADE, 0.0f, (float)(LOUD_ROWS_COUNT - 1));
+    int row = (int)floorf(position);
+    return LoudRow{row, position - (float)row};
+}
+
 // physics/src/percentile.rs AtProbabilities::relative_intensities for node `k` (the probabilities
 // of distribution.rs nodes, then the table's last quantile's and the held test's), the parts that
-// hang on lambda alone (`at_top`, `passing_top`) given.
-__device__ float loud_relative_intensity(float lambda, int k, float at_top, float passing_top) {
+// hang on lambda alone (`at_top`, `passing_top`, `at`, its place in the table) given. The table is
+// row-major, so the lanes' nodes read one row's neighbouring entries.
+__device__ float loud_relative_intensity(float lambda, int k, float at_top, float passing_top, LoudRow at) {
     if (isinf(lambda)) return 1.0f;
     if (lambda <= 0.0f) return 0.0f;
     if (lambda >= LOUD_SIMULATED_LAMBDA_MAX) {
@@ -242,22 +256,19 @@ __device__ float loud_relative_intensity(float lambda, int k, float at_top, floa
         float s = -LOUD_LN_P[k] / (2.0f * lambda);
         return at_top + 1.0f / (lambda * QM_PI * (1.0f + s * s)) - passing_top;
     }
-    const float* rows = &LOUD_ROWS[k * LOUD_ROWS_COUNT];
-    if (lambda < LOUD_LAMBDA_MIN) return lambda / LOUD_LAMBDA_MIN * expf(rows[0]);
-    float position = clampf(log10f(lambda / LOUD_LAMBDA_MIN) * LOUD_STEPS_PER_DECADE, 0.0f, (float)(LOUD_ROWS_COUNT - 1));
-    int row = (int)floorf(position);
-    float fraction = position - (float)row;
-    float low = rows[row], high = rows[min(row + 1, LOUD_ROWS_COUNT - 1)];
-    return expf(low + fraction * (high - low));
+    if (lambda < LOUD_LAMBDA_MIN) return lambda / LOUD_LAMBDA_MIN * expf(LOUD_ROWS[k]);
+    float low = LOUD_ROWS[at.row * LOUD_ROW_NODES + k];
+    float high = LOUD_ROWS[min(at.row + 1, LOUD_ROWS_COUNT - 1) * LOUD_ROW_NODES + k];
+    return expf(low + at.fraction * (high - low));
 }
 
 // The parts of a sparse line's intensity above the table that hang on lambda alone: its intensity
 // at the table's last quantile and that quantile's passing term.
-__device__ void loud_top(float lambda, float* at_top, float* passing_top) {
+__device__ void loud_top(float lambda, LoudRow at, float* at_top, float* passing_top) {
     *at_top = 0.0f;
     *passing_top = 0.0f;
     if (isinf(lambda) || lambda <= 0.0f || lambda >= LOUD_SIMULATED_LAMBDA_MAX) return;
-    *at_top = loud_relative_intensity(lambda, LOUD_TOP_NODE, 0.0f, 0.0f);
+    *at_top = loud_relative_intensity(lambda, LOUD_TOP_NODE, 0.0f, 0.0f, at);
     float s = -LOUD_LN_P[LOUD_TOP_NODE] / (2.0f * lambda);
     *passing_top = 1.0f / (lambda * QM_PI * (1.0f + s * s));
 }
@@ -266,9 +277,10 @@ __device__ void loud_top(float lambda, float* at_top, float* passing_top) {
 // the lanes a node each in turn.
 __device__ void loud_kurze(float lambda, LoudValues& v, int lane) {
     float at_top, passing_top;
-    loud_top(lambda, &at_top, &passing_top);
+    LoudRow at = loud_row(lambda);
+    loud_top(lambda, at, &at_top, &passing_top);
     for (int k = lane; k < LOUD_NODES; k += LOUD_LANES) {
-        v.value[k] = loud_relative_intensity(lambda, k, at_top, passing_top);
+        v.value[k] = loud_relative_intensity(lambda, k, at_top, passing_top, at);
         v.shares_from[k] = LOUD_SHARES[k];
     }
     if (lane == 0) v.count = LOUD_NODES;
@@ -280,8 +292,9 @@ __device__ void loud_kurze(float lambda, LoudValues& v, int lane) {
 // relative to its mean.
 __device__ float loud_exceeded(float lambda) {
     float at_top, passing_top;
-    loud_top(lambda, &at_top, &passing_top);
-    return loud_relative_intensity(lambda, LOUD_HELD_NODE, at_top, passing_top);
+    LoudRow at = loud_row(lambda);
+    loud_top(lambda, at, &at_top, &passing_top);
+    return loud_relative_intensity(lambda, LOUD_HELD_NODE, at_top, passing_top, at);
 }
 
 // An event's values relative to its mean: silent off its duty, its mean over the duty on it.
@@ -361,30 +374,58 @@ __device__ float loud_floor(const float* lines, int count, float steady, int p, 
     return floor;
 }
 
-// percentiles.rs layer_states for one state: the layer's floor (loud_floor's, with its `held` and
-// `moves`), then its moving lines added in moment()'s order (the events, then the others); returns
-// which of `w.layer` holds the result.
+// percentiles.rs layer_states, a warp a weather state of one block (`state` the warp's, `warp` its
+// place among the block's `warps`): the layer's floor (loud_floor's, with its `held` and `moves`),
+// then its moving lines added in moment()'s order (the events, then the others); returns which of the
+// warp's `layer` holds the result. A line's values hang on its duty or its lambda alone, never on the
+// state (layer_states shares the shapes alike): the lines come the block's warp count at a time, each
+// made once by one warp in its `values` for every state of the block that adds it (`adders`, a bit a
+// warp), a state skipped (`skip`) adding none. Every warp of the block calls this alike: its barriers
+// are the block's.
 __device__ int loud_layer(const float* lines, int count, float floor, float held, bool moves, int p, int group, int state,
-                          LoudWarp& w, int lane) {
-    loud_steady(floor, w.layer[0], lane);
+                          bool skip, LoudWarp* warps, u32* adders, int lane) {
+    int warp = threadIdx.x / LOUD_LANES;
+    LoudWarp& w = warps[warp];
+    bool active = !skip && moves;
+    if (!skip) loud_steady(floor, w.layer[0], lane);
     int now = 0;
-    for (int pass = 0; pass < 2 && moves; pass++) {
-        for (int i = 0; i < count; i++) {
-            LoudLine line{lines + i * LOUD_LINE_FLOATS};
-            float factor = line.factor(p, group);
-            float mean = line.mean(p, state) * factor;
-            if (line.energy(p) <= 0.0f || mean <= 0.0f) continue;
-            float duty = line.duty(p), lambda = line.lambda(p) * factor;
-            if (pass == 0) {
-                if (isnan(duty) || duty <= 0.0f) continue;
-                loud_event(duty, w.values, lane);
-            } else {
-                if (!isnan(duty) || lambda >= LOUD_HOLDS_MEAN_LAMBDA) continue;
-                if (mean * loud_exceeded(lambda) < LOUD_HELD_SHARE * held) continue;
-                loud_kurze(lambda, w.values, lane);
+    if (!__syncthreads_or(active)) return now;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int first = 0; first < count; first += LOUD_BLOCK_STATES) {
+            if (threadIdx.x < LOUD_BLOCK_STATES) adders[threadIdx.x] = 0u;
+            __syncthreads();
+            for (int k = 0; k < LOUD_BLOCK_STATES && first + k < count; k++) {
+                LoudLine line{lines + (first + k) * LOUD_LINE_FLOATS};
+                float factor = line.factor(p, group);
+                float mean = line.mean(p, state) * factor;
+                float duty = line.duty(p), lambda = line.lambda(p) * factor;
+                // The one-state loop's tests as they were, negated (a NaN skips alike).
+                bool adds = active && !(line.energy(p) <= 0.0f || mean <= 0.0f);
+                if (pass == 0) {
+                    adds = adds && !(isnan(duty) || duty <= 0.0f);
+                } else {
+                    adds = adds && !(!isnan(duty) || lambda >= LOUD_HOLDS_MEAN_LAMBDA)
+                        && !(mean * loud_exceeded(lambda) < LOUD_HELD_SHARE * held);
+                }
+                if (adds && lane == 0) atomicOr(&adders[k], 1u << warp);
             }
-            loud_with_line(w.layer[now], w.values, mean, w.layer[1 - now], lane);
-            now = 1 - now;
+            __syncthreads();
+            // This warp's line of the run: its values for the states that add it.
+            if (adders[warp] != 0u) {
+                LoudLine line{lines + (first + warp) * LOUD_LINE_FLOATS};
+                if (pass == 0) loud_event(line.duty(p), w.values, lane);
+                else loud_kurze(line.lambda(p) * line.factor(p, group), w.values, lane);
+            }
+            __syncthreads();
+            for (int k = 0; k < LOUD_BLOCK_STATES && first + k < count; k++) {
+                if (!((adders[k] >> warp) & 1u)) continue;
+                LoudLine line{lines + (first + k) * LOUD_LINE_FLOATS};
+                float mean = line.mean(p, state) * line.factor(p, group);
+                loud_with_line(w.layer[now], warps[k].values, mean, w.layer[1 - now], lane);
+                now = 1 - now;
+            }
+            // The next run's values overwrite these once every state has added them.
+            __syncthreads();
         }
     }
     return now;
