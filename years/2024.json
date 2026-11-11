@@ -7980,7 +7980,7 @@
         "horizontal_crs": "EPSG:4326",
         "vertical_crs": 3855,
         "nodata": 3.4028234663852886e+38,
-        "priority": 0,
+        "priority": 7,
         "feather_nodes": 0
       },
       {
@@ -8133,7 +8133,7 @@
         "horizontal_crs": "EPSG:4326",
         "vertical_crs": 3855,
         "nodata": null,
-        "priority": 1,
+        "priority": 0,
         "feather_nodes": 0
       },
       {
@@ -8142,7 +8142,7 @@
         "horizontal_crs": "EPSG:4326",
         "vertical_crs": 3855,
         "nodata": null,
-        "priority": 2,
+        "priority": 1,
         "feather_nodes": 0
       },
       {
@@ -8151,7 +8151,7 @@
         "horizontal_crs": "EPSG:4326",
         "vertical_crs": 3855,
         "nodata": null,
-        "priority": 3,
+        "priority": 2,
         "feather_nodes": 0
       },
       {
@@ -8160,7 +8160,7 @@
         "horizontal_crs": "EPSG:4326",
         "vertical_crs": 3855,
         "nodata": null,
-        "priority": 4,
+        "priority": 3,
         "feather_nodes": 0
       },
       {
@@ -8393,7 +8393,7 @@
         "horizontal_crs": "EPSG:4326",
         "vertical_crs": 3855,
         "nodata": null,
-        "priority": 5,
+        "priority": 4,
         "feather_nodes": 0
       },
       {
@@ -8402,7 +8402,7 @@
         "horizontal_crs": "EPSG:4326",
         "vertical_crs": 3855,
         "nodata": null,
-        "priority": 6,
+        "priority": 5,
         "feather_nodes": 0
       },
       {
@@ -8411,7 +8411,7 @@
         "horizontal_crs": "EPSG:4326",
         "vertical_crs": 3855,
         "nodata": null,
-        "priority": 7,
+        "priority": 6,
         "feather_nodes": 0
       },
       {
