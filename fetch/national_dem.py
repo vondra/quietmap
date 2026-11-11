@@ -3,6 +3,7 @@
 import argparse
 import gzip
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -64,7 +65,7 @@ def download(url, attempts=4, timeout=600):
                 return None
             if error.code < 500 or attempt == attempts - 1:
                 raise
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead):
             if attempt == attempts - 1:
                 raise
         time.sleep(10 * 2 ** attempt)
