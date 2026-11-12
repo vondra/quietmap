@@ -145,9 +145,9 @@ struct RayStream {
     float closing_x;
     Moments closing_prefix;
     int closing_vertex;
-    // The walk's indices of a chunk's candidate vertices waiting for the crossings before them (the
-    // ends' vertices, the middle stretches' crests), in order: one a vertex walked, and a crest
-    // carried in. Its bytes a multiple of 16 keep the hulls after it aligned for wide loads (65
+    // The walk's indices of a chunk's candidate vertices (the ends' vertices, the middle stretches'
+    // crests), in order, which the chunk's end takes with its crossings: one a vertex walked, and a
+    // crest carried in. Its bytes a multiple of 16 keep the hulls after it aligned for wide loads (65
     // entries cost a dense city square's rays 7 % on compute capability 7.5, 2026-10-20).
     u16 candidates[2 * CHUNK_VERTICES];
     StateStream states[2];
@@ -160,10 +160,13 @@ __device__ __forceinline__ float cover_inside_crowns(float altitude, const Groun
 }
 
 // The crowns the states' rays have passed so far: the last vertex's ground and distance from the
-// source, and each state's cover-weighted metres inside them (physics/src/foliage.rs depth_m).
+// source, each state's ray altitude there once a covered stretch took it (`behind_z_taken`), and
+// each state's cover-weighted metres inside them (physics/src/foliage.rs depth_m).
 struct Crowns {
     GroundSample behind;
     float behind_x;
+    float behind_z[2];
+    bool behind_z_taken;
     float metres[2];
 };
 
@@ -173,15 +176,22 @@ struct Crowns {
 __device__ __forceinline__ void add_foliage(const PlanePoint& source, const PlanePoint& receiver, const StateRay* rays, Crowns& crowns,
                                             float x, const GroundSample& ground) {
     const GroundSample& behind = crowns.behind;
-    if (behind.forest_cover > 0.0f || ground.forest_cover > 0.0f) {
+    bool covered = behind.forest_cover > 0.0f || ground.forest_cover > 0.0f;
+    if (covered) {
+#pragma unroll
         for (int state = 0; state < 2; state++) {
-            float za = chord_altitude(source, receiver, crowns.behind_x)
-                + ray_height_above_chord(rays[state], source, receiver, crowns.behind_x);
-            float zb = chord_altitude(source, receiver, x) + ray_height_above_chord(rays[state], source, receiver, x);
+            const StateRay ray = unrolled_state_ray(rays, state);
+            // A covered stretch after a covered one starts where that one's ray ended.
+            float za = crowns.behind_z_taken ? crowns.behind_z[state]
+                                             : chord_altitude(source, receiver, crowns.behind_x)
+                                                   + ray_height_above_chord(ray, source, receiver, crowns.behind_x);
+            float zb = chord_altitude(source, receiver, x) + ray_height_above_chord(ray, source, receiver, x);
             float cover = cover_inside_crowns(za, behind) + cover_inside_crowns(zb, ground);
             crowns.metres[state] += 0.5f * cover * hypotf(x - crowns.behind_x, zb - za);
+            crowns.behind_z[state] = zb;
         }
     }
+    crowns.behind_z_taken = covered;
     crowns.behind = ground;
     crowns.behind_x = x;
 }

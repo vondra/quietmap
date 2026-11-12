@@ -68,10 +68,11 @@ struct GroundSample {
     float canopy_m;             // the crowns' height above the ground, of the nearest node
 };
 
-// The trees of node (row, column) of a read tile into `out`; false where it has no forest data.
-__device__ bool tile_trees(const TerrainScene& sc, const TerrainTile& tile, u32 row, u32 column, GroundSample* out) {
+// The trees of node (row, column) of a read tile, whose record the caller read, into `out`; false
+// where it has no forest data.
+__device__ bool tile_trees(const TerrainScene& sc, const TerrainTile& tile, u32 row, u32 column, u32 record, GroundSample* out) {
     u64 index = (u64)row * tile.columns + column;
-    u32 forest = *(const u32*)(sc.nodes + tile.nodes_offset + 4 * index) >> 24;
+    u32 forest = record >> 24;
     out->forest_cover = (float)forest * 0.01f;
     out->canopy_m = (float)sc.nodes[tile.canopy_offset + index];
     return forest <= PERCENT_MAX;
@@ -131,7 +132,7 @@ __device__ bool cell_sample(const TerrainScene& scene, const TerrainTile& tile, 
     }
     out->height_m = height;
     out->ground_factor = 1.0f - imperviousness * 0.01f;
-    return tile_trees(scene, tile, corner_row[nearest], corner_column[nearest], out);
+    return tile_trees(scene, tile, corner_row[nearest], corner_column[nearest], record[nearest], out);
 }
 
 // terrain::Terrain::sample at a point `east_m`, `north_m` of the frame, the tile's fine detail added
@@ -235,10 +236,12 @@ __device__ bool walk_next(const TerrainScene& sc, LatticeWalk* w, float to, floa
     return true;
 }
 
-// Node (row, column) of a read tile, false outside its window or without data.
-__device__ bool tile_node(const TerrainScene& sc, const TerrainTile& tile, int row, int column, float* height, float* imperviousness) {
+// Node (row, column) of a read tile and its record, false outside its window or without data.
+__device__ bool tile_node(const TerrainScene& sc, const TerrainTile& tile, int row, int column, float* height, float* imperviousness,
+                          u32* record_out) {
     if (row < 0 || column < 0 || row >= (int)tile.rows || column >= (int)tile.columns) return false;
     u32 record = *(const u32*)(sc.nodes + tile.nodes_offset + 4 * ((u64)row * tile.columns + (u64)column));
+    *record_out = record;
     if ((record & 0xffff) == HEIGHT_MISSING || ((record >> 16) & 0xff) > PERCENT_MAX) return false;
     *height = -500.0f + (float)(record & 0xffff) * 0.2f;
     *imperviousness = (float)((record >> 16) & 0xff);
@@ -266,11 +269,13 @@ __device__ bool tile_edge_sample(const TerrainScene& sc, const TerrainTile& tile
         f = clampf((y0 - north_m) / (y0 - y1), 0.0f, 1.0f);
     }
     float h0 = 0.0f, i0 = 0.0f, h1 = 0.0f, i1 = 0.0f;
-    if (f < 1.0f && !tile_node(sc, tile, r0, c0, &h0, &i0)) return false;
-    if (f > 0.0f && !tile_node(sc, tile, r1, c1, &h1, &i1)) return false;
+    u32 record0 = 0, record1 = 0;
+    if (f < 1.0f && !tile_node(sc, tile, r0, c0, &h0, &i0, &record0)) return false;
+    if (f > 0.0f && !tile_node(sc, tile, r1, c1, &h1, &i1, &record1)) return false;
     if (f <= 0.0f) { h1 = h0; i1 = i0; }
     if (f >= 1.0f) { h0 = h1; i0 = i1; }
     out->height_m = h0 + f * (h1 - h0);
     out->ground_factor = 1.0f - (i0 + f * (i1 - i0)) * 0.01f;
-    return f < 0.5f ? tile_trees(sc, tile, (u32)r0, (u32)c0, out) : tile_trees(sc, tile, (u32)r1, (u32)c1, out);
+    // The nearest node, read above: f < 0.5 reads node 0, f >= 0.5 node 1.
+    return f < 0.5f ? tile_trees(sc, tile, (u32)r0, (u32)c0, record0, out) : tile_trees(sc, tile, (u32)r1, (u32)c1, record1, out);
 }
