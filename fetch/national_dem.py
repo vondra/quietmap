@@ -6,6 +6,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -25,6 +26,9 @@ NODATA = -9999.0
 # publisher does not have: blobs of 100-255 m in Flemish polders, single-pixel 0 m lines across
 # Polish mountains, both absent from the native 1 m data at the same places.
 SERVER_SCALING = {"SCALESIZE", "SCALEFACTOR", "SCALEAXES", "SCALEEXTENT"}
+# A header value's leading number, as GDAL reads it: 21 Polish sheets of 2024-08-23 write
+# "cellsize 1.00.000141320112294", which GDAL, averaging them, reads as 1.00.
+LEADING_NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 
 
 def unscaled(url):
@@ -188,12 +192,12 @@ def sheet(arguments, row):
 
 
 def sheet_extent(path):
-    """West, south, east, north of an ASCII grid sheet, from its header."""
+    """West, south, east, north of an ASCII grid sheet, from its header as GDAL reads it."""
     with gzip.open(path, "rt") as source:
         header = {}
         while len(header) < 5:
             key, value = source.readline().split()[:2]
-            header[key.lower()] = float(value)
+            header[key.lower()] = float(LEADING_NUMBER.match(value)[0])
     half = header["cellsize"] / 2 if "xllcenter" in header else 0
     west = header.get("xllcorner", header.get("xllcenter", 0) - half)
     south = header.get("yllcorner", header.get("yllcenter", 0) - half)

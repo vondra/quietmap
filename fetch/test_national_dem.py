@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import numpy as np
 from osgeo import gdal
-from national_dem import average_tile, sheet, unscaled, wcs_window
+from national_dem import average_tile, sheet, sheet_extent, unscaled, wcs_window
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FLEMISH = "https://geo.api.vlaanderen.be/DHMV/wcs"
@@ -61,6 +61,18 @@ class NationalDemTests(unittest.TestCase):
                 finally:
                     server.shutdown()
                     worker.join()
+
+    def test_sheet_extent_reads_a_malformed_cellsize_as_gdal_does(self):
+        # GUGiK sheet 5.156.24.02.2 (2024-08-23) writes "cellsize 1.00.000141320112294".
+        for cellsize in (b"1.00", b"1.00.000141320112294"):
+            with self.subTest(cellsize=cellsize), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "sheet.asc.gz"
+                path.write_bytes(gzip.compress(b"ncols 3\nnrows 2\nxllcenter 248698.76\nyllcenter 407048.53\n"
+                                               b"cellsize " + cellsize + b"\nnodata_value -9999\n1 2 3\n4 5 6\n"))
+                west, step, _, north, _, negative = gdal.Open(f"/vsigzip/{path}").GetGeoTransform()
+                self.assertEqual((west, step, north, negative), (248698.26, 1.0, 407050.03, -1.0))
+                np.testing.assert_allclose(sheet_extent(path), (248698.26, 407048.03, 248701.26, 407050.03),
+                                           rtol=0, atol=1e-9)
 
     def test_server_scaling_is_refused_for_every_wcs_scaling_parameter(self):
         # The two requests whose responses held heights absent from the publisher's native data.
