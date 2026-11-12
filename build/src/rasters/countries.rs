@@ -11,7 +11,7 @@ struct Country {
 }
 
 /// Countries in code order; a node's label is its country's index plus one, 0 at sea and on
-/// disputed land, which belong to no country.
+/// disputed land (flagged disputed, with or without a claimant's code), which belong to no country.
 #[derive(Default)]
 pub struct Countries {
     countries: Vec<Country>,
@@ -25,7 +25,7 @@ impl Countries {
         .map_err(|error| format!("{}: {error}", path.display()))?;
         let mut rings = BTreeMap::<String, Vec<Vec<[f64; 2]>>>::new();
         for region in file.regions {
-            if let Some(code) = region.country {
+            if let Some(code) = region.country.filter(|_| !region.disputed) {
                 rings
                     .entry(code)
                     .or_default()
@@ -82,12 +82,19 @@ impl Countries {
                     continue;
                 }
                 for ring in &country.rings {
-                    for (vertex, &[x0, y0]) in ring.iter().enumerate() {
-                        let [x1, y1] = ring[(vertex + 1) % ring.len()];
-                        // The rows whose node latitude lies in [lower, upper) of this edge.
-                        let (lower, upper) = (y0.min(y1) * density, y0.max(y1) * density);
-                        let first = (f64::from(window.north_node) - upper).floor() as i64 + 1;
-                        let last = (f64::from(window.north_node) - lower).floor() as i64;
+                    for (vertex, &start) in ring.iter().enumerate() {
+                        let end = ring[(vertex + 1) % ring.len()];
+                        // From the lower end, so a vertex on a node row crosses it at its own
+                        // longitude whichever way its ring runs.
+                        let ([x0, y0], [x1, y1]) = if start[1] <= end[1] {
+                            (start, end)
+                        } else {
+                            (end, start)
+                        };
+                        // The rows whose node latitude lies in [y0, y1) of this edge.
+                        let first =
+                            (f64::from(window.north_node) - y1 * density).floor() as i64 + 1;
+                        let last = (f64::from(window.north_node) - y0 * density).floor() as i64;
                         for row in first.max(0)..=last.min(rows as i64 - 1) {
                             let latitude = (f64::from(window.north_node) - row as f64) / density;
                             let longitude = x0 + (latitude - y0) * (x1 - x0) / (y1 - y0) + shift;
@@ -167,5 +174,42 @@ mod tests {
             columns: 4,
         };
         assert_eq!(countries.labels(across), [0, 3, 3, 0]);
+    }
+
+    #[test]
+    fn a_diamond_labels_alike_either_way_round_and_disputed_land_has_no_country() {
+        // A diamond whose side vertices lie on a node row: interpolated from the upper end, they
+        // crossed one node apart in one direction of the ring and not the other.
+        let (side, tip) = (0.1 / 7.0, 1.0 / f64::from(NODES_PER_DEGREE));
+        let diamond = vec![
+            [0.0, -tip],
+            [side, 0.0],
+            [0.0, tip],
+            [-side, 0.0],
+            [0.0, -tip],
+        ];
+        let reversed: Vec<_> = diamond.iter().rev().copied().collect();
+        let window = Window {
+            north_node: 2,
+            west_node: -53,
+            rows: 5,
+            columns: 107,
+        };
+        let labels =
+            |ring| Countries::new(BTreeMap::from([("A".into(), vec![ring])])).labels(window);
+        assert_eq!(labels(diamond), labels(reversed));
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("regions.json");
+        let region = |country: &str, disputed| {
+            serde_json::json!({"country": country, "continent": 1, "disputed": disputed,
+                "polygons": [[[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0], [-1.0, -1.0]]]]})
+        };
+        let file = serde_json::json!({"regions": [region("A", false), region("B", true)]});
+        std::fs::write(&path, file.to_string()).unwrap();
+        let countries = Countries::read(&path).unwrap();
+        assert_eq!(
+            (countries.label("A"), countries.label("B")),
+            (Some(1), None)
+        );
     }
 }

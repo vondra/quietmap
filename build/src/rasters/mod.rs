@@ -240,8 +240,6 @@ fn build_every_square<Worker>(
                 format!("{}:{}: {error}", square.x, square.y)
             })
         })
-        .collect::<Vec<_>>()
-        .into_iter()
         .flatten()
         .collect();
     if failures.is_empty() {

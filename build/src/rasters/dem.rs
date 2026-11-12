@@ -42,12 +42,11 @@ fn read(
         true,
     )?;
     if let Some(own) = source.country {
-        if !matches!(labels, Some((window, _)) if *window == work) {
-            *labels = Some((work, countries.labels(work)));
+        if labels.as_ref().is_some_and(|(window, _)| *window != work) {
+            *labels = None;
         }
-        if let Some((_, labels)) = labels {
-            keep_own_country(&mut sampled, own, labels);
-        }
+        let (_, labels) = labels.get_or_insert_with(|| (work, countries.labels(work)));
+        keep_own_country(&mut sampled, own, labels);
     }
     datum::convert(&mut sampled, work, source)?;
     Ok(sampled)
