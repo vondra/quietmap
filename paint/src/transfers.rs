@@ -29,9 +29,11 @@ impl Block {
     /// what the other corners leave out, up to fourfold beside it. A direction without one
     /// takes its layer's, a layer without one every layer's, a block without one all. Against
     /// the blend, not against each corner: where a shadow's edge crosses the block the corners in
-    /// the shadow hold none of a direction, in what is left out as in the far sources traced, and
-    /// the ratio takes that out (each corner's own ratio read a pixel on the lit side of a suburb's
-    /// block 4 phon quiet beside its neighbours).
+    /// the shadow hold little of a direction, in what is left out as in the far sources traced,
+    /// and the ratio takes that out (each corner's own ratio read a pixel on the lit side of a
+    /// suburb's block 4 phon quiet beside its neighbours). What a corner beyond their reach holds
+    /// of none of them fades toward it with its weight: sources at the edge of their reach, of
+    /// 20 dB at most there.
     pub fn transfers(
         &self,
         weights: [f64; 4],

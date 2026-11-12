@@ -1,10 +1,10 @@
 //! A block's lattice of exact samples: which patches blend from it, which carry its loudness, and each pixel's paint from it.
 //!
 //! A patch's pixels take the lattice's blend only after the patch's probe agreed with it as far as
-//! a visitor sees ([`crate::visible`]); a refused patch keeps its exact lattice and probe values,
-//! and where its probe confirms it, its other pixels take their loudness from the lattice and their
-//! own energies ([`crate::lattice_blend::carried_loudness`]). An empirical safeguard verified
-//! against the independent etalon, not a bound on unsampled rays.
+//! a visitor sees ([`crate::visible`]); a refused patch keeps its exact lattice values, and where
+//! its probe confirms it, its other pixels take their loudness from the lattice and their own
+//! energies ([`crate::lattice_blend::carried_loudness`]). A probe pixel paints as its patch does.
+//! An empirical safeguard verified against the independent etalon, not a bound on unsampled rays.
 
 use crate::exact::LAYERS;
 use crate::lattice_blend::{blend, carried_loudness, within_lattice_range};
@@ -150,8 +150,8 @@ impl QuietSamples {
 
     /// The paint of the pixel (x, y) where the block knows it: a lattice point's own; a probe's
     /// as its patch paints the pixels around it (the blend where the patch is accepted, its own
-    /// energies with the carried loudness where the patch carries, else its own); another pixel's
-    /// blend in an accepted patch. A probe that kept its own value in an accepted patch stood
+    /// energies with the carried loudness where the patch carries them, else its own); another
+    /// pixel's blend in an accepted patch. A probe that kept its own value in an accepted patch stood
     /// alone among its neighbours by half a phon at 2.3 % of the probes on even ground, seven
     /// times as often as other pixels (the world sample, 2026-11-12).
     pub fn known_at(&self, x: usize, y: usize) -> Option<Painted> {

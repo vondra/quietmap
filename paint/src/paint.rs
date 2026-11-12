@@ -4,7 +4,8 @@
 //! there (`popup::candidates::loud`) is evaluated exactly, and the corner's paint taken from them
 //! ([`crate::quiet_corners`]). A block's pixels evaluate exactly the loud sources crossing it or
 //! the eight blocks around and those its corners choose: each corner's loudest far source of every
-//! layer and direction and its loudest until half of each layer is traced
+//! layer and direction and its loudest until half of each layer (four fifths of a railway's) is
+//! traced
 //! ([`crate::corner_sources`], [`crate::blocks`]). What is left out is blended from the corners,
 //! each layer's and direction's as far as the block's far sources of that direction reach the
 //! pixel against the corners' blend of them; where that changes much of the pixel's sound, the

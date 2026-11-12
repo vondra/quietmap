@@ -55,7 +55,8 @@ pub(crate) fn loudness_slopes(lattice: &[Option<Painted>]) -> [f64; LAYERS + 1] 
 const CARRIED_BEYOND: f64 = 0.115_129_254_649_702_28;
 
 /// A layer under this Lden energy at a pixel and at its lattice points (20 dB) is not asked to lie
-/// within their range: no visitor sees it.
+/// within their range: no visitor sees it (carried so, no layer under 20 dB reads over 0.27 sone
+/// in the world sample's 56 million cells).
 const HEARD_FROM: f64 = 100.0;
 
 /// Whether a pixel's `energies` lie within the range of its patch's outdoor lattice points'

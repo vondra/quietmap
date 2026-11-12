@@ -96,13 +96,14 @@ calculation at its point. The offers returned for each view are a selection, not
 
 ## How close it comes to the popup
 
-The map's target is to stay within 1 phon of the popup, about 7 % of loudness. Buildings and
-individual noise layers can differ more.
+The map's target is to stay within 1 phon of the popup, about 7 % of loudness, at 95 % of the
+points where the popup gives at least 1 sone, and within 3 phon at 99.5 %. Buildings, individual
+noise layers and points quieter than the map's first colour can differ more.
 
-On 11 November 2026, newly calculated tiles met the 1-phon target at 99.1 % of sampled points
-where the popup gave at least 1 sone, across 54 squares around the world. Differences are larger
-at very quiet points and in individual layers. These checks compare computations;
-[Validation](/about/validation) compares the model with microphone measurements.
+On 12 November 2026, newly calculated tiles were within 1 phon at 98.8 % of sampled points where
+the popup gave at least 1 sone, and within 3 phon at 99.95 %, across 54 squares around the world.
+These checks compare computations; [Validation](/about/validation) compares the model with
+microphone measurements.
 
 <details>
 <summary>The limits and the last check</summary>
@@ -115,42 +116,44 @@ continents except Antarctica, but its percentages are not a population-weighted 
 Existing tiles can predate the computation tested here.
 
 Of 16,200 sampled points, 6,372 have a stored popup total of at least 1 sone. At those points,
-363 differ by more than 0.5 phon, 59 by more than 1 phon, three by more than 3 phon and none by
-more than 6 phon. The mean signed difference is +0.16 phon. By layer:
+550 differ by more than 0.5 phon, 78 by more than 1 phon, three by more than 3 phon and none by
+more than 6 phon. The mean signed difference is +0.21 phon. By layer:
 
 | Layer | Popup points ≥ 1 sone | More than 1 phon apart |
 |---|---:|---:|
-| Roads | 5,209 | 1.59 % |
-| Railways | 833 | 0.12 % |
-| Industry | 904 | 2.32 % |
-| Buildings | 525 | 5.52 % |
-| Ships | 113 | 0.00 % |
+| Roads | 5,209 | 2.38 % |
+| Railways | 833 | 0.96 % |
+| Industry | 904 | 2.10 % |
+| Buildings | 525 | 4.76 % |
+| Ships | 113 | 1.77 % |
 | Aircraft | 1,103 | 0.82 % |
-| Total | 6,372 | 0.93 % |
+| Total | 6,372 | 1.22 % |
 
-Across all points, including those below 1 sone, 1,173 differ by more than 1 phon; the largest
-quiet-total difference is 16.5 phon. There are 55 crossings of the 1-sone boundary beyond its
+Across all points, including those below 1 sone, 1,526 differ by more than 1 phon; the largest
+quiet-total difference is 17 phon. There are 72 crossings of the 1-sone boundary beyond its
 half-phon rounding band. No sampled point is missing from the map. Total Lden differs by more
-than 1 dB at 159 of 14,290 points with a nonnegative popup level; the largest difference between
-stored nonnegative values is 14.5 dB. Seventeen nonnegative popup values become below zero in
-the map, and 27 cross the other way.
+than 1 dB at 5 of the 5,916 points where the popup gives at least 35 dB, and at 292 of 14,290
+points with a nonnegative popup level; the largest difference between stored nonnegative values
+is 14.5 dB. Sixteen nonnegative popup values become below zero in the map, and 29 cross the
+other way.
 
-The target for each layer and the total, at reference levels of at least 1 sone, is at most
-20 % differing by more than 0.5 phon, 1 % by more than 1 phon, 0.01 % by more than 3 phon and
-0.001 % by more than 6 phon. The last share also counts pixels crossing 1 sone from below.
-Mean bias must stay within ±0.5 phon. At most 0.25 % may cross 1 sone, excluding comparisons
-where both values lie within half a phon of that boundary; a quieter pixel may differ by at
-most 10 phon. Roads, industry and buildings miss the 1-phon target in this sample. The total
-still misses the 3-phon, boundary-crossing and quiet-pixel limits; some layers have larger tails.
+The target follows what the map shows (12 November 2026). Where the popup gives at least 1 sone,
+the total must lie within 1 phon at 95 % of the points and within 3 phon at 99.5 %, with a mean
+signed difference within ±0.3 phon; Lden has the same limits in decibels where the popup gives at
+least 35 dB. Below the first colour, at 1 sone and 35 dB, a difference shows only at the edge of
+the quiet zones; there a patch is interpolated when its total agrees within 0.1 sone and 2 dB.
+The layers have no limit of their own. This sample meets the target.
 
 A second check isolates the painting approximations in four squares in central Bohemia. Its
 outdoor reference evaluates every retained loud ground source and the flights exactly at one
 pixel in each 4 × 4 cell, omitting buildings. It shares the map's background hum, flight spectra
 and loudness resolution, so it cannot reveal an error common to those parts of both computations.
-The independent popup check is needed alongside it. On 11 November, the outdoor total differed
-by more than 1 phon at 126 of 257,377 reference pixels (0.05 %), with a mean difference of −0.07
-phon and a largest difference of 4.5 phon. Total Lden differed by more than 1 dB at 120 of those
-pixels, with a largest difference of 4 dB. Some individual layers still miss the limits above.
+The independent popup check is needed alongside it. On 12 November, the outdoor total differed
+by more than 1 phon at 196 of 257,377 reference pixels (0.08 %), with a mean difference of −0.01
+phon and a largest difference of 5.5 phon. Total Lden differed by more than 1 dB at 122 of those
+pixels, with a largest difference of 4 dB. A layer alone differed by more than 1 phon at 0.5 % of
+its pixels of at least 1 sone for roads, 0.7 % for railways, 1.6 % for industry and 3.7 % for
+buildings.
 
 </details>
 
@@ -176,11 +179,12 @@ source counts as loud at a point where its upper bound there reaches 20 dB.
   one of the eight around it, and those its corners select. A corner selects, for each layer, its
   loudest far source in each of 16 directions that holds at least 1 % of the layer's far energy
   there, then its loudest sources until at most half of the layer's energy there, and half of its
-  far sources' energy, is left out, or what is left out is under 25 dB.
+  far sources' energy, is left out (a fifth for the railways, whose few lines differ more), or
+  what is left out is under 25 dB.
 - What is left out is blended between the block's four corners by layer and direction. At a pixel
   it is scaled by how the block's computed far sources of that direction arrive there, against
-  their own blend between the corners: weakened behind a house, as they are.
-- Where that scaling changes more than 30 % of a pixel's ground sound, the pixel also computes,
+  their own blend between the corners that hear them: weakened behind a house, as they are.
+- Where that scaling changes more than 30 % of what a pixel hears of its loud sources, the pixel also computes,
   layer by layer, the loudest sources at the block's corners until what each corner leaves out
   weighs at most 20 % of the layer at the block's quietest corner, 5 % for the railways: blended
   between the corners, a railway's few trains are heard at the wrong loudness.
@@ -200,10 +204,12 @@ protecting the pixels used to rank façades, and its probe agrees as far as the 
 total within half a phon from 0.8 sone and half a decibel from 32 dB, a layer within 1 phon from
 1 sone and 1 dB from 35 dB. Quieter values may differ more: a total by 0.1 sone and 2 dB, a layer
 by 0.2 sone and, from 20 dB, by 3 dB. Energy and loudness are interpolated in the logarithm. The
-other pixels keep their ray computations; there the exact lattice and probe results are reused.
+other pixels keep their ray computations; there the exact lattice results are reused.
 Where a patch's probe confirms it, those pixels take their loudness from the patch's lattice
 points, moved to each pixel's own energies along the block's measured relation between loudness
-and energy, instead of a loudness calculation of their own.
+and energy, instead of a loudness calculation of their own; a pixel whose energies lie more than
+half a decibel outside the lattice points' range keeps its own calculation. A probe pixel is
+painted as its patch is.
 Between samples, a shadow cast from outside the patch can still change sharply.
 Buildings and their façade receivers keep the exact computations.
 

@@ -42,13 +42,13 @@ fn the_directions_are_sixteen_from_the_west_anticlockwise() {
     assert_eq!(sector_of([-1.0, 0.2]), 15);
 }
 
-/// A corner traces the loudest far source of each direction, then its loudest until half the
-/// layer and half its far sources are traced: the two directions' loudest (1, 3) leave 32 of
+/// A road's corner traces the loudest far source of each direction, then its loudest until half
+/// the layer and half its far sources are traced: the two directions' loudest (1, 3) leave 32 of
 /// the far 100 untraced, within its half, and the near source (90) brings the layer within
 /// its half. One direction of three far sources of 40, 35 and 25 takes the second too. A
 /// layer under 25 dB keeps none.
 #[test]
-fn a_corner_traces_each_directions_loudest_and_half_of_each_layer() {
+fn a_roads_corner_traces_each_directions_loudest_and_half_of_its_layer() {
     let k = 1000.0;
     let two = corner(
         Layer::Road,
@@ -199,6 +199,17 @@ fn a_deeper_trace_leaves_a_fifth_of_the_quietest_corners_layer_and_a_twentieth_o
             .sum();
         assert!((left / expected - 1.0).abs() < 1e-12);
     }
+    // One corner hearing the same roads at half: the fifth is of its 50, so the louder corners
+    // trace down to 10 left, the fourth road too.
+    let halved: Vec<(u32, f64, u8)> = (sources.iter())
+        .map(|&(index, lden, sector)| (index, lden / 2.0, sector))
+        .collect();
+    let (loud, quiet) = (corner(Layer::Road, &sources), corner(Layer::Road, &halved));
+    assert_eq!(quiet.traced, vec![1, 2]);
+    let block = admit(vec![], [&loud, &loud, &loud, &quiet]);
+    assert_eq!((block.exact.clone(), block.most), (vec![1, 2], 4));
+    let deep = admit_deeper(&block, [&loud, &loud, &loud, &quiet]);
+    assert_eq!(deep.exact, vec![1, 2, 3, 4]);
 }
 
 /// A pixel asks a deeper trace where the transfers change more than three tenths of what it

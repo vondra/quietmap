@@ -19,15 +19,22 @@ fn even(energy: f64, sone: f64) -> Painted {
 }
 
 /// A field linear in the blend's domain (the logarithm over the floors) within every patch, its
-/// slope changing at the block's middle lines, is blended exactly at every pixel of a block, at
-/// blocks of 8 and 16: a pixel blended from a neighbouring patch's points would miss it.
+/// slope changing at every lattice line, is blended exactly at every pixel of a block, at blocks
+/// of 8 and 16: a pixel blended from a neighbouring patch's points would miss it.
 #[test]
 fn the_sample_grid_covers_every_pixel_without_extrapolation() {
     for b in [8, 16] {
         let (axis, positions) = sample_positions(b);
         assert_eq!(positions.len(), 41);
-        let bent = |at: usize| at as f64 + 1.5 * at.saturating_sub(b / 2) as f64;
-        let level = |x: usize, y: usize| (0.5 + 0.1 * bent(x) + 0.2 * bent(y)).exp();
+        // A slope of its own between each two lattice lines.
+        let bent = |at: usize| -> f64 {
+            (0..4)
+                .map(|k| {
+                    [0.1, 0.25, 0.05, 0.3][k] * (at.clamp(axis[k], axis[k + 1]) - axis[k]) as f64
+                })
+                .sum()
+        };
+        let level = |x: usize, y: usize| (0.5 + bent(x) + 2.0 * bent(y)).exp();
         let values = axis
             .into_iter()
             .flat_map(|y| {
@@ -73,8 +80,8 @@ fn rejected_patches_reuse_exact_lattice_and_probe_values() {
 }
 
 /// A probe paints as its patch paints the pixels around it: the lattice's blend in an accepted
-/// patch, its own energies with the carried loudness in a patch that carries, its own paint in
-/// any other.
+/// patch; in a patch that carries, its own energies with the lattice's loudness moved to them
+/// along the block's slope; its own paint in any other.
 #[test]
 fn a_probe_paints_as_its_patch_paints_the_pixels_around_it() {
     let (axis, positions) = sample_positions(16);
@@ -83,13 +90,18 @@ fn a_probe_paints_as_its_patch_paints_the_pixels_around_it() {
         vec![Some(even(1000.0, 2.0)); positions.len()],
         [false; 16],
     );
-    let probe = even(1100.0, 2.2);
+    samples.slopes = [0.4; LAYERS + 1];
+    let probe = even(1100.0, 2.5);
     samples.values[25] = Some(probe);
     assert_eq!(samples.known_at(2, 2), Some(probe));
     samples.carried[0] = true;
     let carried = samples.known_at(2, 2).unwrap();
     assert_eq!(carried.0, probe.0);
-    assert!((carried.1[0] - 2.0).abs() < 1e-12, "{carried:?}");
+    let moved = (2.0 + SONE_FLOOR) * ((1100.0 + ENERGY_FLOOR) / (1000.0 + ENERGY_FLOOR)).powf(0.4);
+    assert!(
+        (carried.1[0] - (moved - SONE_FLOOR)).abs() < 1e-12,
+        "{carried:?}"
+    );
     samples.accepted[0] = true;
     let blended = samples.known_at(2, 2).unwrap();
     assert!((blended.0[0] - 1000.0).abs() < 1e-9 && (blended.1[0] - 2.0).abs() < 1e-12);
@@ -154,4 +166,39 @@ fn a_pixels_loudness_follows_its_energy_along_the_lattices_slope() {
     assert!(!samples.carries_probe([0, 0], (2, 2), &louder));
     let flat = vec![Some(even(1000.0, 2.0)); 25];
     assert_eq!(loudness_slopes(&flat), [0.3; LAYERS + 1]);
+}
+
+/// Loudness is carried only where each layer a visitor could see, and the total, lie within the
+/// lattice points' range widened by half a decibel: a layer of 20 dB or more beyond it refuses
+/// the carry though the total lies within, a fainter layer does not.
+#[test]
+fn loudness_is_carried_only_within_the_lattice_points_energies_layer_by_layer() {
+    let (axis, positions) = sample_positions(16);
+    let layers = |road: f64, railway: f64| {
+        let mut energies = [0.0; LAYERS];
+        (energies[0], energies[1]) = (road, railway);
+        energies
+    };
+    let point = |road: f64, railway: f64| Some((layers(road, railway), [2.0; LAYERS + 1]));
+    let mut carrying = samples(
+        axis,
+        vec![point(10_000.0, 50.0); positions.len()],
+        [false; 16],
+    );
+    carrying.carried[0] = true;
+    assert!(
+        carrying
+            .loudness_from(2, 2, &layers(10_500.0, 50.0))
+            .is_some()
+    );
+    // The railway under 20 dB may differ: no visitor sees it.
+    assert!(
+        carrying
+            .loudness_from(2, 2, &layers(10_000.0, 90.0))
+            .is_some()
+    );
+    // At 20 dB and more it must lie within its own range, though the total does.
+    assert_eq!(carrying.loudness_from(2, 2, &layers(10_000.0, 150.0)), None);
+    assert_eq!(carrying.loudness_from(2, 2, &layers(12_000.0, 50.0)), None);
+    assert_eq!(carrying.loudness_from(2, 2, &layers(8_000.0, 50.0)), None);
 }
