@@ -11,15 +11,26 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type, UInt8Type, UInt16Type};
 use physics::bands::{BANDS, PERIOD_HOURS, PERIODS};
 use physics::emission::rail::{FreightRegion, RailType, line_emission_db};
-use tiles::sources::{Attribute, Layer};
+use std::collections::HashMap;
+use tiles::sources::{Attribute, GUESSED_TRAIN_SOURCES, Layer};
 
 /// Source height above the terrain: the wheel-rail contact (CNOSSOS-EU), a locomotive horn.
 const RAIL_SOURCE_HEIGHT_M: f64 = 0.5;
 const HORN_SOURCE_HEIGHT_M: f64 = 4.0;
 /// Half-width of the track bed within which the terrain may not rise above the source ground.
 const RAIL_PLATFORM_HALF_WIDTH_M: f64 = 2.5;
-/// Speed of an untagged high-speed line.
-const HIGH_SPEED_DEFAULT_KMH: f64 = 300.0;
+/// Speed of a high-speed row that posts none where no row of its line in the square posts one: the
+/// km-weighted median posted speed of the world's high-speed rows (111,860 km of dev4's 2026 rows,
+/// 250; 300 put Bangkok's Airport Rail Link, run at 160, 9 dB loud; evidence 2026-11-12, data-1).
+const HIGH_SPEED_DEFAULT_KMH: f64 = 250.0;
+/// A line run this fast or faster is built for high speed (the EU's category I, specially built
+/// lines "equipped for speeds generally equal to or greater than 250 km/h", Directive 96/48/EC):
+/// such lines carry passengers only unless mapped otherwise. dev4 gave its freight prior to every
+/// line not mapped passenger-only: the Shinkansen took 10 freight trains a day a track, 6.67 of them
+/// at night, on standard gauge no freight wagon of Japan's runs on.
+const HIGH_SPEED_LINE_KMH: f64 = 250.0;
+/// dev4's `traffic_mode` codes of OpenStreetMap's `railway:traffic_mode`: freight and mixed.
+const MAPPED_FREIGHT_MODES: [u8; 2] = [2, 3];
 fn usage_name(usage: u8) -> &'static str {
     match usage {
         0 => "main",
@@ -28,6 +39,59 @@ fn usage_name(usage: u8) -> &'static str {
         4 => "tourism",
         _ => "untagged",
     }
+}
+
+/// Whether a line run at `speed_kmh` takes guessed freight: below high speed, or mapped as carrying
+/// freight (`traffic_mode`).
+fn takes_guessed_freight(speed_kmh: f64, traffic_mode: u8) -> bool {
+    speed_kmh < HIGH_SPEED_LINE_KMH || MAPPED_FREIGHT_MODES.contains(&traffic_mode)
+}
+
+/// The posted speed of each named high-speed line in the square, `(name, ref)` to the km-weighted
+/// median of its high-speed rows that post one: a row of the line that posts none runs at it.
+fn high_speed_line_speeds(table: &Table) -> Result<HashMap<(String, String), f64>, String> {
+    let mut posted: HashMap<(String, String), Vec<(f64, f64)>> = HashMap::new();
+    for batch in &table.batches {
+        let i32s = |name| column(batch, name).map(|a| a.as_primitive::<Int32Type>());
+        let ends = [
+            (i32s("start_gx")?, i32s("start_gy")?),
+            (i32s("end_gx")?, i32s("end_gy")?),
+        ];
+        let maxspeed = column(batch, "maxspeed")?.as_primitive::<UInt16Type>();
+        let high_speed = column(batch, "highspeed")?.as_boolean();
+        let (names, refs) = (
+            column(batch, "name")?.as_string::<i32>(),
+            column(batch, "ref")?.as_string::<i32>(),
+        );
+        for row in 0..batch.num_rows() {
+            let (name, reference) = (names.value(row), refs.value(row));
+            if !high_speed.value(row) || maxspeed.value(row) == 0 || (name, reference) == ("", "") {
+                continue;
+            }
+            let line = (name.to_string(), reference.to_string());
+            let [a, b] = ends.map(|(x, y)| z30_corner_mercator_m(x.value(row), y.value(row)));
+            posted.entry(line).or_default().push((
+                f64::from(maxspeed.value(row)),
+                (a[0] - b[0]).hypot(a[1] - b[1]),
+            ));
+        }
+    }
+    Ok(posted
+        .into_iter()
+        .map(|(line, mut speeds)| {
+            speeds.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let half = speeds.iter().map(|(_, length)| length).sum::<f64>() / 2.0;
+            let mut length = 0.0;
+            let median = speeds
+                .iter()
+                .find(|(_, row_length)| {
+                    length += row_length;
+                    length >= half
+                })
+                .map_or(speeds[0].0, |(speed, _)| *speed);
+            (line, median)
+        })
+        .collect())
 }
 
 /// Converts the rail rows of one dev4 square, a row on a bridge on its deck from `decks`; returns
@@ -43,6 +107,7 @@ pub fn convert(
     };
     require_rail_stamps(&table)?;
     let run = run_trains(&table)?;
+    let line_speeds = high_speed_line_speeds(&table)?;
     let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {
@@ -57,7 +122,8 @@ pub fn convert(
             i32s("end_gx")?,
             i32s("end_gy")?,
         );
-        let (rail_type, usage) = (u8s("rail_type")?, u8s("usage")?);
+        let (rail_type, usage, traffic_mode) =
+            (u8s("rail_type")?, u8s("usage")?, u8s("traffic_mode")?);
         let (maxspeed, country) = (u16s("maxspeed")?, u16s("country_iso")?);
         let (tunnel, bridge, high_speed) = (
             column(batch, "tunnel")?.as_boolean(),
@@ -98,8 +164,34 @@ pub fn convert(
             } else {
                 FreightRegion::World
             };
-            let (passenger_trains, freight_trains, calendar_estimated_shares) =
+            let (passenger_trains, mut freight_trains, mut calendar_estimated_shares) =
                 trains.scaled(tables, kind, iso, tier, region);
+            let (name, reference) = (names.value(row), refs.value(row));
+            let posted = (maxspeed.value(row) > 0).then(|| f64::from(maxspeed.value(row)));
+            let line_speed = high_speed
+                .value(row)
+                .then(|| line_speeds.get(&(name.to_string(), reference.to_string())))
+                .flatten()
+                .copied();
+            let (speed, speed_source) = match (posted, line_speed) {
+                (Some(posted), _) => (posted, "osm_posted"),
+                (None, Some(line)) => (line, "high_speed_line"),
+                (None, None) if high_speed.value(row) => {
+                    (HIGH_SPEED_DEFAULT_KMH, "high_speed_default")
+                }
+                (None, None) => (kind.default_speed_kmh(), "default_by_type"),
+            };
+            // A line built for high speed takes no guessed freight unless it is mapped as carrying
+            // freight (Germany's mixed lines are: Hannover-Würzburg, Mannheim-Stuttgart); its speed
+            // is a posted one, the row's or its line's (a Shinkansen's station approach is posted
+            // 120 on a line run at 285), never the default.
+            let built_for = posted.into_iter().chain(line_speed).fold(0.0, f64::max);
+            if GUESSED_TRAIN_SOURCES.contains(&freight_source)
+                && !takes_guessed_freight(built_for, traffic_mode.value(row))
+            {
+                freight_trains = [0.0; PERIODS];
+                calendar_estimated_shares[1] = 0.0;
+            }
             if tunnel.value(row)
                 || kind == RailType::Preserved
                 || passenger_trains
@@ -114,13 +206,6 @@ pub fn convert(
             if start == end {
                 continue;
             }
-            let (speed, speed_source) = if maxspeed.value(row) > 0 {
-                (f64::from(maxspeed.value(row)), "osm_posted")
-            } else if high_speed.value(row) {
-                (HIGH_SPEED_DEFAULT_KMH, "high_speed_default")
-            } else {
-                (kind.default_speed_kmh(), "default_by_type")
-            };
             let emission: [[f64; BANDS]; PERIODS] = std::array::from_fn(|period| {
                 line_emission_db(
                     kind,
@@ -131,7 +216,6 @@ pub fn convert(
                     region,
                 )
             });
-            let (name, reference) = (names.value(row), refs.value(row));
             let display = serde_json::json!([
                 name,
                 reference,
@@ -234,5 +318,16 @@ mod tests {
         assert_eq!(display_trains(12.345), 12.3);
         assert_eq!(display_trains(123.4), 123.0);
         assert_eq!(display_trains(0.0), 0.0);
+    }
+
+    /// The Tokaido Shinkansen (285 km/h, no traffic mode mapped) takes no guessed freight, a German
+    /// line mapped mixed at 280 km/h does, as does any line under 250 km/h.
+    #[test]
+    fn high_speed_lines_take_guessed_freight_only_where_mapped() {
+        assert!(!takes_guessed_freight(285.0, 0));
+        assert!(!takes_guessed_freight(250.0, 1));
+        assert!(takes_guessed_freight(280.0, 3));
+        assert!(takes_guessed_freight(280.0, 2));
+        assert!(takes_guessed_freight(160.0, 0));
     }
 }

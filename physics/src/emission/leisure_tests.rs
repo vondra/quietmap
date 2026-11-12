@@ -87,6 +87,19 @@ fn pitches_stop_growing_at_ten_hectares() {
     assert!(day(STADIUM, 1_000_000.0) > day(STADIUM, PITCH_AREA_CAP_M2));
 }
 
+/// A court, playground, pool or terrace counts at most its class's 99th-percentile polygon: a 46 ha
+/// dog run mapped as a playground is as loud as a playground of 6,280 m2.
+#[test]
+fn courts_playgrounds_pools_and_terraces_stop_at_their_largest_polygons() {
+    for class in [PADEL, TENNIS, BASKETBALL, PLAYGROUND, POOL, OUTDOOR_SEATING] {
+        let cap = leisure_profile(class).unwrap().area_cap_m2;
+        assert!(cap.is_finite(), "{class}");
+        assert_eq!(day(class, 460_000.0), day(class, cap));
+        assert!(day(class, cap) > day(class, 0.5 * cap));
+    }
+    assert_eq!(leisure_profile(PLAYGROUND).unwrap().area_cap_m2, 6_280.0);
+}
+
 #[test]
 fn areas_scale_three_decibels_per_doubling_and_padel_is_loudest() {
     let terrace = leisure_profile(OUTDOOR_SEATING).unwrap().reference_area_m2;

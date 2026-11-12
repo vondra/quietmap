@@ -28,11 +28,14 @@ fn by_built_up([rural, urban]: [f64; 2], built_up: u8) -> f64 {
     }
 }
 
+/// Whether the major-road model replaces a major row's guess: a class prior where the model beat
+/// the priors, never a fallback's total, a copy and a count or estimate the road cannot carry
+/// (`road_counts`) everywhere (a main road's count is no estimate of its ramp's).
 fn major_model_replaces(models: &RoadModels, guess: Guess, iso: [u8; 2]) -> bool {
     match guess {
         Guess::ClassPrior => models.major_countries.contains(&iso),
         Guess::Fallback => false,
-        Guess::Copy => true,
+        Guess::Copy | Guess::Implausible => true,
     }
 }
 
@@ -107,11 +110,16 @@ const RESIDENTIAL: u8 = 5;
 const UNCLASSIFIED: u8 = 9;
 const URBAN: u8 = 2;
 
+/// What a guessed row's own traffic is: dev4's class prior (no dataset), a country default or
+/// classification fallback, whose totals stand on a main road, a main road's count copied onto
+/// it (`road_copies`), none of its own, or a count or estimate that is not the road's
+/// (`road_counts`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Guess {
     ClassPrior,
     Fallback,
     Copy,
+    Implausible,
 }
 
 pub struct BuildingTraffic {
@@ -225,7 +233,7 @@ impl BuildingTraffic {
                     Some(routed)
                 }
             }
-            (_, _, Some(model)) if guess == Guess::ClassPrior => main(model),
+            (_, _, Some(model)) if guess != Guess::Fallback => main(model),
             _ => None,
         }
     }

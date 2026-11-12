@@ -362,3 +362,24 @@ fn shops_and_the_buildings_of_bars_and_restaurants_run_their_plant_in_its_hours(
     let unmapped = unmapped_place_hours(tables, &crate::sources::venues::customs(tables, CZ));
     assert_eq!(emission(HOSPITALITY, 3, Some(&unmapped)).len(), 2);
 }
+
+/// A shop's ground area without a building counts at most a large store's floor: Riyadh's 280 ha
+/// commercial ground emits as one of 6,190 m2, a ground area of 1,000 m2 as its own.
+#[test]
+fn a_ground_area_counts_at_most_a_large_stores_floor() {
+    let climate = climate_around(24.5, 46.8);
+    let sa = u16::from_le_bytes(*b"SA");
+    let emission = |area_m2: f64| {
+        let mut ground = row(COMMERCIAL, 0.0, 0, true);
+        ground.area_m2 = Some(area_m2);
+        building_emission(&ground, (sa, &climate, SourceTables::test_fixture()), None)
+    };
+    assert_eq!(
+        emission(2_800_000.0).unwrap().emitted,
+        emission(6_190.0).unwrap().emitted
+    );
+    assert_ne!(
+        emission(1_000.0).unwrap().emitted,
+        emission(6_190.0).unwrap().emitted
+    );
+}

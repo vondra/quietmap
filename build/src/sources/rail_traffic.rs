@@ -1,4 +1,5 @@
 //! Preserve measured and missing-day trains separately through run medians, country scaling and period allocation.
+use super::runs::{RunRow, run_medians};
 use super::tent::Tier;
 use crate::dev4::{Table, z30_corner_mercator_m};
 use crate::source_tables::{SourceTables, TrainScales};
@@ -7,7 +8,6 @@ use arrow_array::types::{Float64Type, Int32Type, UInt8Type, UInt16Type};
 use arrow_array::{Array, RecordBatch};
 use physics::bands::PERIODS;
 use physics::emission::rail::{FreightRegion, RailType};
-use std::collections::HashMap;
 use tiles::sources::GUESSED_TRAIN_SOURCES;
 
 /// The (freight, passenger) factors of a heavy rail row's guessed counts from its country's
@@ -89,13 +89,13 @@ pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
                 status: status.map(|column| column.value(row)),
                 source: source.map(|column| column.value(row)),
             };
-            let total = row_trains.passenger.iter().chain(&row_trains.freight).sum();
-            rows.push((
-                kind.value(row),
+            rows.push(RunRow {
+                meets: kind.value(row),
+                joins: Some(kind.value(row)),
                 ends,
-                (a[0] - b[0]).hypot(a[1] - b[1]),
-                total,
-            ));
+                length_m: (a[0] - b[0]).hypot(a[1] - b[1]),
+                value: row_trains.passenger.iter().chain(&row_trains.freight).sum(),
+            });
             trains.push(row_trains);
         }
     }
@@ -103,59 +103,6 @@ pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
         .into_iter()
         .map(|median| trains[median])
         .collect())
-}
-
-/// A rail row as its run sees it: kind, ends (z30), length (m) and trains a day.
-type RunRow = (u8, [(i32, i32); 2], f64, f64);
-
-/// Select each run's length-weighted median row. A run ends at switches or square boundaries.
-/// Legacy short pieces and bridges sometimes retained a whole-line or residual count beside
-/// a correctly shared track; connected pieces without a switch carry the same train service.
-fn run_medians(rows: &[RunRow]) -> Vec<usize> {
-    fn root(parent: &mut [usize], mut index: usize) -> usize {
-        while parent[index] != index {
-            parent[index] = parent[parent[index]];
-            index = parent[index];
-        }
-        index
-    }
-    let mut at: HashMap<((i32, i32), u8), Vec<usize>> = HashMap::new();
-    for (index, (kind, ends, _, _)) in rows.iter().enumerate() {
-        for end in ends {
-            at.entry((*end, *kind)).or_default().push(index);
-        }
-    }
-    let mut parent: Vec<usize> = (0..rows.len()).collect();
-    for meeting in at.values() {
-        if let [a, b] = meeting[..] {
-            let (a, b) = (root(&mut parent, a), root(&mut parent, b));
-            parent[a] = b;
-        }
-    }
-    let mut runs: HashMap<usize, Vec<usize>> = HashMap::new();
-    for index in 0..rows.len() {
-        runs.entry(root(&mut parent, index))
-            .or_default()
-            .push(index);
-    }
-    let mut median_of = vec![0; rows.len()];
-    for members in runs.values_mut() {
-        members.sort_by(|&a, &b| rows[a].3.total_cmp(&rows[b].3).then(a.cmp(&b)));
-        let half = members.iter().map(|&index| rows[index].2).sum::<f64>() / 2.0;
-        let mut length = 0.0;
-        let median = members
-            .iter()
-            .copied()
-            .find(|&index| {
-                length += rows[index].2;
-                length >= half
-            })
-            .unwrap_or(members[0]);
-        for &index in members.iter() {
-            median_of[index] = median;
-        }
-    }
-    median_of
 }
 
 fn read_missing_calendar_estimate(

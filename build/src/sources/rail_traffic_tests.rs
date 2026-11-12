@@ -1,28 +1,5 @@
 //! Regressions for per-run railway traffic and separately identified missing-calendar estimates.
 use super::*;
-/// Rows meeting end to end without a switch carry their run's trains, its length-weighted
-/// median: a 13 m bridge between two plain pieces of 123 takes 123 (dev4 left the whole line,
-/// 369, on it at Uvaly); a third row meeting at a node (a switch) ends the run; a tram on the
-/// same node is another kind.
-#[test]
-fn a_bridge_carries_its_runs_trains() {
-    let row = |kind: u8, from: (i32, i32), to: (i32, i32), length: f64, trains: f64| {
-        (kind, [from, to], length, trains)
-    };
-    let rows = [
-        row(0, (0, 0), (100, 0), 100.0, 123.0),
-        row(0, (100, 0), (113, 0), 13.0, 369.0),
-        row(0, (113, 0), (213, 0), 100.0, 123.0),
-        row(0, (213, 0), (300, 0), 87.0, 80.0),
-        row(0, (213, 0), (213, 50), 50.0, 10.0),
-        row(1, (0, 0), (100, 0), 100.0, 5.0),
-    ];
-    let medians = run_medians(&rows);
-    assert_eq!(rows[medians[1]].3, 123.0, "the bridge");
-    assert_eq!(medians[0], medians[1]);
-    assert_eq!((medians[3], medians[4], medians[5]), (3, 4, 5));
-}
-
 /// Guessed heavy rail counts take their country's factors; timetable rows, trams and
 /// countries without a factor keep theirs.
 #[test]
