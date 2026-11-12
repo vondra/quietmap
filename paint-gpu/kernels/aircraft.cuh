@@ -35,7 +35,8 @@ struct FlightPoint {
     u64 horizons;
 };
 
-// One point's boxes of one tile, file and band: `count` boxes from `first`, heard within
+// One point's boxes of one tile, file and band: `count` boxes named from `first` on in the call's
+// list (aircraft.rs listed_indices: their places among the square's boxes), heard within
 // `within_m`, each weighted by `weight` (FLIGHT_WEIGHT_*) at its distance, into sums `sum`: the
 // energy heard and the lambda's weights as `role` (FLIGHT_ROLE_* bits) says.
 struct FlightSegment {
@@ -241,8 +242,8 @@ __device__ void average_piece_sel(const FlightBox& b, const float* centroid_m, f
 // Per segment, a block: its boxes' energies and energies times their flights' Kurze lambda per
 // period (popup::aircraft::boxes::tile_flight_sums) added to its point's `sums` (FLIGHT_SUMS
 // doubles: the energy heard, then the lambda's weights, paint::flights::FlightSums).
-extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint* points, const float* horizons,
-                                       const FlightSegment* segments, double* sums) {
+extern "C" __global__ void flight_sums(const FlightBox* boxes, const u32* listed, const FlightPoint* points,
+                                       const float* horizons, const FlightSegment* segments, double* sums) {
     const FlightSegment segment = segments[blockIdx.x];
     const FlightPoint point = points[segment.point];
     const float* terrain = horizons + point.horizons;
@@ -250,7 +251,7 @@ extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint
     float reach_m = fminf(segment.within_m, AIRCRAFT_REACH_M);
     float energy[PERIODS] = {0.0f, 0.0f, 0.0f}, lambda[PERIODS] = {0.0f, 0.0f, 0.0f};
     for (u32 k = threadIdx.x; k < segment.count; k += blockDim.x) {
-        const FlightBox& b = boxes[segment.first + k];
+        const FlightBox& b = boxes[listed[segment.first + k]];
         float east_m = b.east_m - point.x, north_m = b.north_m - point.y;
         float distance_m = hypotf(east_m, north_m);
         if (distance_m > reach_m) continue;

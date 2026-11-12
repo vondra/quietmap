@@ -1,12 +1,13 @@
 //! A building on the map: every pixel of it takes its loudest façade's paint, as a click inside it is
 //! answered (`popup::building`). The façade is chosen by the popup's rule ([`crate::facade_choice`])
-//! and painted with its own flights: as a point of the block it stands in, its ranked sources exact,
-//! or, for a building crossing the square's edge, with every loud source exact, so that the square
-//! beside answers it alike.
+//! and painted with its own flights ([`crate::facade_flights`]): as a point of the block it stands
+//! in, its ranked sources exact, or, for a building crossing the square's edge, with every loud
+//! source exact and every aircraft box summed, so that the square beside answers it alike.
 
 use crate::etalon::paint_points;
 use crate::exact::Point;
 use crate::facade_choice::{buildings, choose, facade_point};
+use crate::facade_flights::flights_at_facades;
 use crate::flight_boxes::flights_at_points;
 use crate::flights::FlightSums;
 use crate::levels::Painted;
@@ -34,30 +35,27 @@ pub(crate) fn building_levels(
     let points: Vec<Point> = (buildings.par_iter().zip(&chosen))
         .map(|(building, &facade)| facade_point(square, &building.facades[facade]))
         .collect::<Result<_, String>>()?;
-    let flights = flights_at_points(
-        square,
-        &painter.corners.flight_boxes,
-        &points,
-        painter.batch,
-    )?;
     let pixels: Vec<usize> = (points.iter())
         .map(|point| background_pixel(square, n, point.position))
         .collect();
     let (edge, inner): (Vec<usize>, Vec<usize>) =
         (0..buildings.len()).partition(|&k| buildings[k].crosses_edge);
-    let take = |members: &[usize]| -> (Vec<Point>, Vec<FlightSums>, Vec<usize>) {
+    let take = |members: &[usize]| -> (Vec<Point>, Vec<usize>) {
         (
             members.iter().map(|&k| points[k].clone()).collect(),
-            members.iter().map(|&k| flights[k]).collect(),
             members.iter().map(|&k| pixels[k]).collect(),
         )
     };
-    let (edge_points, edge_flights, edge_pixels) = take(&edge);
+    let ((edge_points, edge_pixels), (inner_points, inner_pixels)) = (take(&edge), take(&inner));
+    let boxes = &painter.corners.flight_boxes;
+    // A building across the square's edge sums every box, as the square beside it does.
+    let edge_flights = || flights_at_points(square, boxes, &edge_points, painter.batch);
+    let inner_flights = flights_at_facades(square, boxes, &inner_points, painter.batch)?;
     let corners = &painter.corners;
     let edge_paint = paint_points(
         square,
         n,
-        (&edge_points, || Ok(edge_flights)),
+        (&edge_points, edge_flights),
         &edge_pixels,
         (&corners.hum, &corners.flight_spectra, &corners.displays),
         painter.batch,
@@ -71,7 +69,12 @@ pub(crate) fn building_levels(
                 .collect()
         })
         .collect();
-    let inner_paint = paint_in_blocks(painter, quiet, take(&inner), &heard)?;
+    let inner_paint = paint_in_blocks(
+        painter,
+        quiet,
+        (inner_points, inner_flights, inner_pixels),
+        &heard,
+    )?;
     let mut levels: HashMap<u64, Painted> = HashMap::new();
     for (members, paint) in [(&edge, edge_paint), (&inner, inner_paint)] {
         for (&k, paint) in members.iter().zip(paint) {

@@ -1,7 +1,8 @@
 //! Aircraft box energies at the painter's lattice points on the card, the popup's box physics in f32.
 //!
-//! A square's boxes, decoded once (`DeviceFlightBoxes`), and per request its point's horizons and
-//! its segments: one tile's boxes of one file and band, a block each (kernels/aircraft.cuh).
+//! A square's boxes, decoded once (`DeviceFlightBoxes`); per call the boxes its lists name, and per
+//! request its point's horizons and its segments: one tile's boxes of one file and band, a block
+//! each (kernels/aircraft.cuh).
 
 use crate::device::{Gpu, driver, read_back};
 use cudarc::driver::{CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig};
@@ -22,8 +23,7 @@ use physics::doc29::screening::{
 };
 use popup::aircraft::boxes::{AIRCRAFT_REACH_M, FLIGHT_SPEED_M_S};
 use popup::aircraft::horizons::{
-    BUILDING_SECTORS, HORIZON_BANDS, HORIZON_FLOATS, Horizons, TERRAIN_HORIZON_FLOATS,
-    TERRAIN_SECTORS,
+    BUILDING_SECTORS, HORIZON_BANDS, HORIZON_FLOATS, TERRAIN_HORIZON_FLOATS, TERRAIN_SECTORS,
 };
 use rayon::prelude::*;
 use tiles::aircraft::Group;
@@ -143,34 +143,33 @@ pub(crate) fn aircraft_constants() -> String {
     .concat()
 }
 
-/// A square's listed boxes on the card: per aircraft tile, file and band where its boxes begin.
+/// A square's boxes on the card, every one of its tiles' files: per aircraft tile and file where
+/// its boxes begin. A call names the boxes it reads by their place here ([`listed_indices`]).
 pub struct DeviceFlightBoxes {
     boxes: CudaSlice<DeviceFlightBox>,
-    first: Vec<[[u32; 2]; 2]>,
+    first: Vec<[u32; 2]>,
 }
 
 impl DeviceFlightBoxes {
-    /// Decodes and uploads every box `flight_boxes` lists.
-    pub fn upload(gpu: &Gpu, square: &Square, flight_boxes: &FlightBoxes) -> Result<Self, String> {
+    /// Decodes and uploads every box of the square's aircraft tiles.
+    pub fn upload(gpu: &Gpu, square: &Square) -> Result<Self, String> {
         let mut first = Vec::with_capacity(square.aircraft.len());
-        let mut lists = Vec::new();
+        let mut files = Vec::new();
         let mut count = 0u32;
-        for (tile, files) in square.aircraft.iter().zip(&flight_boxes.lists) {
+        for tile in &square.aircraft {
             first.push(std::array::from_fn(|file| {
-                std::array::from_fn(|band| {
-                    let at = count;
-                    if let Some(boxes) = [&tile.fine, &tile.far][file] {
-                        lists.push((tile.tile, *boxes, &files[file][band]));
-                        count += files[file][band].len() as u32;
-                    }
-                    at
-                })
+                let at = count;
+                if let Some(boxes) = [&tile.fine, &tile.far][file] {
+                    files.push((tile.tile, *boxes));
+                    count += boxes.box_count() as u32;
+                }
+                at
             }));
         }
-        let boxes: Vec<DeviceFlightBox> = lists
+        let boxes: Vec<DeviceFlightBox> = files
             .par_iter()
-            .flat_map_iter(|(tile, boxes, indices)| {
-                indices.iter().map(move |&index| {
+            .flat_map_iter(|(tile, boxes)| {
+                (0..boxes.box_count()).map(move |index| {
                     let record = boxes.aircraft_box(index);
                     let global = tile.global(record.place.centroid);
                     let [east_m, north_m] = square
@@ -219,6 +218,31 @@ impl DeviceFlightBoxes {
     }
 }
 
+/// The boxes `flight_boxes` lists, as their places among `device_boxes`, and per aircraft tile,
+/// file and band where its list begins among them.
+fn listed_indices(
+    flight_boxes: &FlightBoxes,
+    device_boxes: &DeviceFlightBoxes,
+) -> (Vec<u32>, Vec<[[u32; 2]; 2]>) {
+    let mut indices = Vec::new();
+    let starts = (flight_boxes.lists.iter().zip(&device_boxes.first))
+        .map(|(files, first)| {
+            std::array::from_fn(|file| {
+                std::array::from_fn(|band| {
+                    let at = indices.len() as u32;
+                    indices.extend(
+                        files[file][band]
+                            .iter()
+                            .map(|&index| first[file] + index as u32),
+                    );
+                    at
+                })
+            })
+        })
+        .collect();
+    (indices, starts)
+}
+
 impl Gpu {
     /// The flights of each request on the card (paint::flight_boxes::FlightBoxes::sums on the
     /// cores): per band its boxes' energy and the lambda's weights, the far boxes', also of the
@@ -230,6 +254,7 @@ impl Gpu {
         device_boxes: &DeviceFlightBoxes,
         requests: &[FlightRequest],
     ) -> Result<Vec<[FlightSums; 2]>, String> {
+        let (indices, starts) = listed_indices(flight_boxes, device_boxes);
         // Each request whose boxes are heard: its point with its horizons, and its segments.
         let prepared: Vec<Option<(Vec<f32>, Vec<DeviceFlightSegment>)>> = requests
             .par_iter()
@@ -240,13 +265,8 @@ impl Gpu {
                 if !flight_boxes.hears_any(&heard, request.weights) {
                     return Ok(None);
                 }
-                let horizons = Horizons::build(
-                    &square.ground,
-                    &square.obstacles,
-                    point.position,
-                    point.altitude_m,
-                    point.own_footprint,
-                )?;
+                let mut built = None;
+                let horizons = request.horizons(square, &mut built)?;
                 let mut floats = Vec::with_capacity(HORIZON_FLOATS);
                 horizons.write_f32(&mut floats);
                 let mut segments = Vec::new();
@@ -254,18 +274,21 @@ impl Gpu {
                     for (file, _, heard, weighs) in heard_parts(&tile) {
                         let role =
                             (u32::from(heard) * ROLE_ENERGY) | (u32::from(weighs) * ROLE_LAMBDA);
-                        for band in 0..2 {
-                            let Some(weight) = request.weights[band] else {
+                        let bands = (request.weights.iter())
+                            .zip(&flight_boxes.lists[tile.number][file])
+                            .zip(starts[tile.number][file]);
+                        for (band, ((weight, list), first)) in bands.enumerate() {
+                            let Some(weight) = weight else {
                                 continue;
                             };
-                            let count = flight_boxes.lists[tile.number][file][band].len() as u32;
+                            let count = list.len() as u32;
                             if count == 0 {
                                 continue;
                             }
                             segments.push(DeviceFlightSegment {
                                 point: slot as u32,
                                 sum: (2 * slot + band) as u32,
-                                first: device_boxes.first[tile.number][file][band],
+                                first,
                                 count,
                                 weight: match weight {
                                     FlightWeight::One => 0,
@@ -306,6 +329,7 @@ impl Gpu {
         let points = driver(device.htod_sync_copy(&points))?;
         let segment_count = segments.len() as u32;
         let segments = driver(device.htod_sync_copy(&segments))?;
+        let indices = driver(device.htod_sync_copy(&indices))?;
         let totals = driver(device.alloc_zeros::<f64>(2 * SUMS * requests.len()))?;
         let stream = self.fork()?;
         let kernel = device
@@ -316,13 +340,21 @@ impl Gpu {
             block_dim: (FLIGHT_THREADS, 1, 1),
             shared_mem_bytes: 0,
         };
-        // SAFETY: every segment's boxes lie in `boxes` (counted when they were uploaded), its point
-        // in `points`, its horizons in `horizons`, its sums (SUMS doubles) in `totals`.
+        // SAFETY: every segment's boxes lie in `indices` (from its list's start), each naming one of
+        // `boxes` (every box of the square's files was uploaded), its point in `points`, its
+        // horizons in `horizons`, its sums (SUMS doubles) in `totals`.
         driver(unsafe {
             kernel.launch_on_stream(
                 &stream,
                 config,
-                (&device_boxes.boxes, &points, &horizons, &segments, &totals),
+                (
+                    &device_boxes.boxes,
+                    &indices,
+                    &points,
+                    &horizons,
+                    &segments,
+                    &totals,
+                ),
             )
         })?;
         let totals = read_back(&stream, &totals)?;

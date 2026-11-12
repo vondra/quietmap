@@ -243,12 +243,19 @@ receiver; receivers it puts within 0.01 dB of the loudest are summed again on th
 precision, as the popup sums them. Of about 67,000 buildings in five squares the card alone chose
 another façade than the cores at 0.12 %, after that at 0.05 %: a rare sum the card misses by more
 can still tip a near tie. The chosen receiver hears its own flights, with its building screening
-part of the sky, and is otherwise computed like a pixel of the block it stands in, except that
+part of the sky. Where a square has 512 such receivers or more inside it, each aircraft box first takes a
+ceiling: the most it can bring to any of them, screened or not (its level from the nearest slant to
+its line the receivers allow, its piece's share of it from the closest the piece comes, its
+installation and lateral attenuation at their least). Ranked by it, the boxes are summed by a
+quarter, then to a half and all, and a receiver stops once the ceilings of those left are within
+0.1 dB of its every sum; one in a town or New York stops at half of them, one in Prague mostly at a
+quarter. The receiver is otherwise computed like a pixel of the block it stands in, except that
 those of the 100 pieces it was chosen by that are loud there count as the block's own: they are
 computed exactly, and the block's corners, behind the building or across it, which may not hear
 what the façade faces, blend none of them. A building crossing
 a painting square's boundary is chosen on the cores among all its receivers and computes every loud
-ground source at its chosen receiver exactly, so that both halves show the same façade, even when
+ground source and sums every aircraft box at its chosen receiver, so that both halves show the same
+façade, even when
 it is in the neighbouring square; only its background hum and flight spectrum use the nearest
 pixel's fields. New painting uses this rule; existing squares keep their earlier façade choice
 until repainted.
@@ -291,7 +298,9 @@ interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, t
 `paint/src/hum.rs` and `hum_samples.rs`, the aircraft boxes `paint/src/flights.rs` and
 `flight_boxes.rs` (on the card `paint-gpu/src/aircraft.rs`), the aircraft spectra
 `paint/src/flight_spectra.rs`, a
-building's façade `paint/src/facade_choice.rs` and `buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
+building's façade `paint/src/facade_choice.rs` and `buildings.rs`, its flights
+`paint/src/facade_flights.rs` with the boxes' ceilings `popup/src/aircraft/ceilings.rs` and
+`physics/src/doc29/box_ceiling.rs`, a pixel's loudness `paint/src/sone.rs` at
 `popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs` and `hm3_square.rs`: per layer and the total,
 four tiles of zoom 13 of 512 × 512 cells of 80 + 20 log₂ of the loudness in sone, twice the loudness
 level in phon from 1 sone up (80 one sone, a doubling 20; 254 silence under 1/16 sone, 255 not

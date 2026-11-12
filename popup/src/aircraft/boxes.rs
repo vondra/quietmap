@@ -96,6 +96,20 @@ impl ReceiverArea {
         area
     }
 
+    /// Its middle receiver and how far its receivers stand from it east, north and up (m).
+    pub fn middle_and_half_extent_m(&self) -> (AircraftReceiver, [f64; 3]) {
+        let middle = AircraftReceiver {
+            position: std::array::from_fn(|axis| 0.5 * (self.low[axis] + self.high[axis])),
+            altitude_m: 0.5 * (self.altitudes_m[0] + self.altitudes_m[1]),
+        };
+        let half_extent_m = [
+            0.5 * (self.high[0] - self.low[0]),
+            0.5 * (self.high[1] - self.low[1]),
+            0.5 * (self.altitudes_m[1] - self.altitudes_m[0]),
+        ];
+        (middle, half_extent_m)
+    }
+
     fn of(receiver: AircraftReceiver) -> Self {
         ReceiverArea {
             low: receiver.position,
@@ -140,20 +154,12 @@ pub fn minimum_box_slant_m(
     frame: &LocalFrame,
     area: ReceiverArea,
 ) -> f64 {
-    let midpoint = AircraftReceiver {
-        position: std::array::from_fn(|axis| 0.5 * (area.low[axis] + area.high[axis])),
-        altitude_m: 0.5 * (area.altitudes_m[0] + area.altitudes_m[1]),
-    };
+    let (midpoint, half_extent) = area.middle_and_half_extent_m();
     let [east, north] = centroid_offset_m(record.place.centroid, tile, frame, midpoint);
     let centroid = [
         east,
         north,
         record.centroid_altitude_m - midpoint.altitude_m,
-    ];
-    let half_extent = [
-        0.5 * (area.high[0] - area.low[0]),
-        0.5 * (area.high[1] - area.low[1]),
-        0.5 * (area.altitudes_m[1] - area.altitudes_m[0]),
     ];
     if record.centroid_altitude_m - record.place.ground_m < SCREENING_CEILING_ABOVE_GROUND_M
         || (east.abs() + half_extent[0]).hypot(north.abs() + half_extent[1]) > AIRCRAFT_REACH_M
@@ -171,7 +177,7 @@ pub fn minimum_box_slant_m(
 }
 
 /// A box centroid's horizontal offset from the receiver, east and north (m).
-fn centroid_offset_m(
+pub(super) fn centroid_offset_m(
     centroid: [i16; 2],
     tile: TileId,
     frame: &LocalFrame,
@@ -182,7 +188,7 @@ fn centroid_offset_m(
     [at[0] - receiver.position[0], at[1] - receiver.position[1]]
 }
 
-fn box_at(
+pub(super) fn box_at(
     record: &AircraftBox,
     horizontal_offset_m: [f64; 2],
     altitude_m: f64,
@@ -214,10 +220,10 @@ fn box_at(
 }
 
 /// A box's flights' Kurze lambda per period: the period's flights a day over its hours, times its
-/// closest slant over the flights' speed, the slant at least the NPD curves' nearest, where its
-/// sound exposure is read.
-fn box_lambda(record: &AircraftBox, sel: &BoxSel) -> [f64; PERIODS] {
-    let slant_m = sel.closest_slant_m.max(NPD_NEAREST_SLANT_M);
+/// closest slant `slant_m` over the flights' speed, the slant at least the NPD curves' nearest,
+/// where its sound exposure is read.
+pub(super) fn box_lambda(record: &AircraftBox, slant_m: f64) -> [f64; PERIODS] {
+    let slant_m = slant_m.max(NPD_NEAREST_SLANT_M);
     std::array::from_fn(|period| {
         record.flights_per_day[period] / (PERIOD_HOURS[period] * 3_600.0) * slant_m
             / FLIGHT_SPEED_M_S
@@ -257,7 +263,7 @@ pub fn tile_flight_sums(
                 horizons,
                 impedance_gain,
             );
-            let lambda = box_lambda(&record, &sel);
+            let lambda = box_lambda(&record, sel.closest_slant_m);
             let heard: [f64; PERIODS] = std::array::from_fn(|p| share * energy[p] * lambda[p]);
             (energy.map(|value| share * value), heard)
         })
@@ -406,7 +412,7 @@ pub fn tile_energy(
                 horizons,
                 impedance_gain,
             );
-            let lambda = box_lambda(&record, &sel);
+            let lambda = box_lambda(&record, sel.closest_slant_m);
             let bound = lamax_bound(
                 aircraft,
                 (tile, index),

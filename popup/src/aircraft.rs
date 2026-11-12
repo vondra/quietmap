@@ -3,6 +3,7 @@
 //! flights ([`flights`]) and what flies over the receiver ([`events`]).
 
 pub mod boxes;
+pub mod ceilings;
 pub mod events;
 pub mod flights;
 pub mod horizons;

@@ -311,7 +311,7 @@ impl Batch for GpuBatch<'_> {
         let device_boxes = match self.flight_boxes.get() {
             Some(device_boxes) => device_boxes,
             None => {
-                let uploaded = DeviceFlightBoxes::upload(self.gpu, square, boxes)?;
+                let uploaded = DeviceFlightBoxes::upload(self.gpu, square)?;
                 self.flight_boxes.get_or_init(|| uploaded)
             }
         };

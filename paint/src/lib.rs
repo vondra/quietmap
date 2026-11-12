@@ -16,6 +16,7 @@ mod buildings;
 pub mod etalon;
 pub mod exact;
 mod facade_choice;
+mod facade_flights;
 pub mod flight_boxes;
 pub mod flight_spectra;
 pub mod flights;

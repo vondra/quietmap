@@ -68,6 +68,51 @@ pub struct BoxSel {
     pub installation_fractions: [[f64; 3]; PERIODS],
 }
 
+/// A receiver's perpendicular to a line through `centroid_m` along `axis_rad` climbing `gradient`,
+/// in two parts: across the line's ground track and up in its vertical plane (the closest point's
+/// lateral distance and height), each with how far a receiver within `half_extent_m` of the origin
+/// moves it.
+#[derive(Debug, Clone, Copy)]
+pub struct LineOffsets {
+    pub across_m: f64,
+    pub across_extent_m: f64,
+    pub vertical_m: f64,
+    pub vertical_extent_m: f64,
+}
+
+impl LineOffsets {
+    pub fn of(centroid_m: [f64; 3], axis_rad: f64, gradient: f64, half_extent_m: [f64; 3]) -> Self {
+        let (sin, cos) = axis_rad.sin_cos();
+        let [east, north, up] = centroid_m;
+        let [east_extent, north_extent, up_extent] = half_extent_m;
+        let stretch = gradient.hypot(1.0);
+        LineOffsets {
+            across_m: -sin * east + cos * north,
+            across_extent_m: sin.abs() * east_extent + cos.abs() * north_extent,
+            vertical_m: (up - gradient * (cos * east + sin * north)) / stretch,
+            vertical_extent_m: (up_extent
+                + gradient.abs() * (cos.abs() * east_extent + sin.abs() * north_extent))
+                / stretch,
+        }
+    }
+
+    /// The least lateral distance any receiver has.
+    pub fn least_across_m(&self) -> f64 {
+        (self.across_m.abs() - self.across_extent_m).max(0.0)
+    }
+
+    /// The largest height (either side) any receiver has.
+    pub fn largest_vertical_m(&self) -> f64 {
+        self.vertical_m.abs() + self.vertical_extent_m
+    }
+
+    /// The least slant to the line any receiver has.
+    pub fn least_slant_m(&self) -> f64 {
+        let vertical = (self.vertical_m.abs() - self.vertical_extent_m).max(0.0);
+        self.least_across_m().hypot(vertical)
+    }
+}
+
 /// A lower bound on the closest-line slant for receivers within `half_extent_m` of the origin.
 pub fn minimum_line_slant_m(
     centroid_m: [f64; 3],
@@ -75,19 +120,7 @@ pub fn minimum_line_slant_m(
     gradient: f64,
     half_extent_m: [f64; 3],
 ) -> f64 {
-    let (sin, cos) = axis_rad.sin_cos();
-    let [east, north, up] = centroid_m;
-    let [east_extent, north_extent, up_extent] = half_extent_m;
-    let across = -sin * east + cos * north;
-    let across_extent = sin.abs() * east_extent + cos.abs() * north_extent;
-    let stretch = gradient.hypot(1.0);
-    let vertical = (up - gradient * (cos * east + sin * north)) / stretch;
-    let vertical_extent = (up_extent
-        + gradient.abs() * (cos.abs() * east_extent + sin.abs() * north_extent))
-        / stretch;
-    (across.abs() - across_extent)
-        .max(0.0)
-        .hypot((vertical.abs() - vertical_extent).max(0.0))
+    LineOffsets::of(centroid_m, axis_rad, gradient, half_extent_m).least_slant_m()
 }
 
 /// The average piece's length (m): the periods' lengths weighted by their energy at 1,000 ft.
@@ -133,7 +166,11 @@ pub fn scaled_distance_at_slant(lg_scaled_distance: &[f64; NPD_DISTANCES], slant
 /// A box's summed level at `slant_m`: its NPD curve up to 25,000 ft, beyond it spherical
 /// divergence and the absorption that takes the curve through its tail anchor (a mix of rows
 /// falls slower than one curve fitted to their sum).
-fn box_level_db(levels: &[f64; NPD_DISTANCES], tail_db: f64, position: &NpdPosition) -> f64 {
+pub(super) fn box_level_db(
+    levels: &[f64; NPD_DISTANCES],
+    tail_db: f64,
+    position: &NpdPosition,
+) -> f64 {
     let (last, slant_m) = (levels[NPD_DISTANCES - 1], position.slant_m);
     if slant_m < NPD_LAST_DISTANCE_M {
         return position.linear(levels);

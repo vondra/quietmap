@@ -34,11 +34,34 @@ impl FlightWeight {
 }
 
 /// One point's flights to sum: per band of boxes its weight (`None`: not summed), the boxes heard
-/// within `within_m`.
+/// within `within_m`, and its horizons where they are built already (else they are built for it).
 pub struct FlightRequest<'a> {
     pub point: &'a Point,
     pub weights: [Option<FlightWeight>; 2],
     pub within_m: f64,
+    pub horizons: Option<&'a Horizons>,
+}
+
+impl FlightRequest<'_> {
+    /// Its point's horizons: those it carries, else built in `built`.
+    pub fn horizons<'b>(
+        &'b self,
+        square: &Square,
+        built: &'b mut Option<Horizons>,
+    ) -> Result<&'b Horizons, String> {
+        if let Some(horizons) = self.horizons {
+            return Ok(horizons);
+        }
+        let point = self.point;
+        let horizons = Horizons::build(
+            &square.ground,
+            &square.obstacles,
+            point.position,
+            point.altitude_m,
+            point.own_footprint,
+        )?;
+        Ok(built.insert(horizons))
+    }
 }
 
 /// Per aircraft tile of the square, of its fine and its far boxes those in each band: near enough
@@ -115,13 +138,8 @@ impl FlightBoxes {
         if !self.hears_any(&heard, request.weights) {
             return Ok(total);
         }
-        let horizons = Horizons::build(
-            &square.ground,
-            &square.obstacles,
-            point.position,
-            point.altitude_m,
-            point.own_footprint,
-        )?;
+        let mut built = None;
+        let horizons = request.horizons(square, &mut built)?;
         let receiver = AircraftReceiver {
             position: point.position,
             altitude_m: point.altitude_m,
@@ -140,7 +158,7 @@ impl FlightBoxes {
                         tile.tile,
                         &square.frame,
                         receiver,
-                        &horizons,
+                        horizons,
                         (list.iter().copied(), &weight, request.within_m),
                     );
                     band_total.add(part_sums(sums, heard, weighs));
@@ -200,6 +218,7 @@ pub(crate) fn flights_at_points(
                     .occupied
                     .map(|occupied| occupied.then_some(FlightWeight::One)),
                 within_m: AIRCRAFT_REACH_M,
+                horizons: None,
             })
             .collect();
         let mut sums = match boxes.occupied.contains(&true) {

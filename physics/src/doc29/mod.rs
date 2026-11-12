@@ -14,6 +14,7 @@
 
 pub mod approach_generated;
 pub mod atmosphere;
+pub mod box_ceiling;
 pub mod box_geometry;
 pub mod box_sums;
 pub mod boxes;

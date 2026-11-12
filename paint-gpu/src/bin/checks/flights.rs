@@ -16,7 +16,7 @@ pub(super) fn check_flights(square: &Square, device: usize) -> Result<(), String
     let cpu_s = started.elapsed().as_secs_f64();
     let gpu = Gpu::new(device)?;
     let started = Instant::now();
-    let device_boxes = paint_gpu::aircraft::DeviceFlightBoxes::upload(&gpu, square, &boxes)?;
+    let device_boxes = paint_gpu::aircraft::DeviceFlightBoxes::upload(&gpu, square)?;
     let card = gpu.flight_sums(square, &boxes, &device_boxes, &requests)?;
     let gpu_s = started.elapsed().as_secs_f64();
     let sums = |sums: &paint::flights::FlightSums, kind: usize| {

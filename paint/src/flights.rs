@@ -127,8 +127,13 @@ pub fn tiles_heard<'a>(
         .collect()
 }
 
-/// The rolls heard at `point`, as the popup hears them for a click there.
-pub(crate) fn rolls_at(square: &Square, point: &Point) -> Result<FlightSums, String> {
+/// The rolls heard at `point`, as the popup hears them for a click there (with its `horizons` where
+/// they are built already).
+pub(crate) fn rolls_at(
+    square: &Square,
+    point: &Point,
+    horizons: Option<&Horizons>,
+) -> Result<FlightSums, String> {
     let within_reach = |start| {
         let [east, north] = square.frame.to_metres(start);
         (east - point.position[0]).hypot(north - point.position[1]) <= ROLL_REACH_M
@@ -136,13 +141,20 @@ pub(crate) fn rolls_at(square: &Square, point: &Point) -> Result<FlightSums, Str
     if !square.rolls.iter().any(|roll| within_reach(roll.start)) {
         return Ok(FlightSums::default());
     }
-    let horizons = Horizons::build(
-        &square.ground,
-        &square.obstacles,
-        point.position,
-        point.altitude_m,
-        point.own_footprint,
-    )?;
+    let built;
+    let horizons = match horizons {
+        Some(horizons) => horizons,
+        None => {
+            built = Horizons::build(
+                &square.ground,
+                &square.obstacles,
+                point.position,
+                point.altitude_m,
+                point.own_footprint,
+            )?;
+            &built
+        }
+    };
     let receiver = AircraftReceiver {
         position: point.position,
         altitude_m: point.altitude_m,
@@ -151,7 +163,7 @@ pub(crate) fn rolls_at(square: &Square, point: &Point) -> Result<FlightSums, Str
         &square.rolls,
         &square.frame,
         receiver,
-        &horizons,
+        horizons,
     )))
 }
 
@@ -172,7 +184,7 @@ pub(crate) fn add_rolls(
     sums.par_iter_mut()
         .zip(requests)
         .try_for_each(|(sums, request)| {
-            let rolls = rolls_at(square, request.point)?;
+            let rolls = rolls_at(square, request.point, request.horizons)?;
             sums[0].add(rolls);
             Ok(())
         })
@@ -231,6 +243,7 @@ pub fn lattice_requests<'a>(
                     .then_some(FlightWeight::One),
             ],
             within_m: AIRCRAFT_REACH_M,
+            horizons: None,
         }
     });
     let air = (0..air_side * air_side).map(|at| {
@@ -248,6 +261,7 @@ fn near_request<'a>(point: &'a Point, boxes: &FlightBoxes) -> FlightRequest<'a> 
         point,
         weights: [boxes.occupied[0].then_some(FlightWeight::Near), None],
         within_m: 3.0 * boxes.coarse_m,
+        horizons: None,
     }
 }
 
