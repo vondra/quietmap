@@ -122,9 +122,25 @@ impl HeldCounts {
         self.rows[self.carried[row]]
     }
 
-    /// The row's own traffic (its cross-section pairs it with its own other carriageway).
-    pub fn own(&self, row: usize) -> RowTraffic {
-        self.rows[row]
+    /// The cross-section `row` shows when it carries `vehicles` a day: a replaced row's own (none
+    /// for a one-way one, whose other carriageway's count may be real); a row carrying its run's
+    /// count its own pair's with its carriageway's change added (a carriageway of 1 vehicle a day in
+    /// a run of 46,000 multiplied its pair's 50,000 into 2.3 billion); any other its own, scaled.
+    pub fn cross_section(&self, row: usize, vehicles: f64, replaced: bool) -> f64 {
+        let own = self.rows[row];
+        let own_vehicles: f64 = own.flows.iter().sum();
+        match (replaced, own.oneway) {
+            (true, true) => 0.0,
+            (true, false) => vehicles,
+            _ if self.carried[row] == row => {
+                own.cross_section * vehicles / own_vehicles.max(f64::MIN_POSITIVE)
+            }
+            (false, true) if own.cross_section > own_vehicles => {
+                own.cross_section - own_vehicles + vehicles
+            }
+            (false, true) => 0.0,
+            (false, false) => vehicles,
+        }
     }
 
     /// The row's lanes, or where it tags none (a bridge of a run, often) its run median's.
@@ -322,5 +338,35 @@ mod tests {
             !implausible(Traffic::Estimate, 100.0, (4, false, 2, 2), || Some(5_000.0)),
             "a tertiary road"
         );
+    }
+
+    /// A carriageway of 1 vehicle a day paired into 50,000 carries its run's 46,000: its pair shows
+    /// 95,999, not 2.3 billion; a replaced one-way row shows none, a replaced two-way row its own; a
+    /// row carrying its own traffic scales its pair (20,000 for 10,000, modelled at 12,000: 24,000).
+    #[test]
+    fn a_cross_section_follows_its_own_carriageway() {
+        let row = |vehicles: f64, cross_section: f64, oneway: bool| RowTraffic {
+            flows: [vehicles, 0.0, 0.0, 0.0],
+            cross_section,
+            source: 23,
+            estimated: 0,
+            observation_estimated: 0,
+            lanes: 2,
+            oneway,
+        };
+        let held = HeldCounts {
+            carried: vec![1, 1, 2, 3],
+            rows: vec![
+                row(1.0, 50_000.0, true),
+                row(46_000.0, 92_000.0, true),
+                row(10_000.0, 20_000.0, true),
+                row(30_000.0, 30_000.0, false),
+            ],
+            implausible: HashSet::new(),
+        };
+        assert_eq!(held.cross_section(0, 46_000.0, false), 95_999.0);
+        assert_eq!(held.cross_section(0, 40_000.0, true), 0.0);
+        assert_eq!(held.cross_section(3, 25_000.0, true), 25_000.0);
+        assert_eq!(held.cross_section(2, 12_000.0, false), 24_000.0);
     }
 }

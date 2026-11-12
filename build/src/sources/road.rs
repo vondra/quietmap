@@ -796,17 +796,11 @@ pub fn convert(
                 daily[1] += scheduled[0];
                 daily[2] += scheduled[1];
             }
-            // The cross-section stays the row's own carriageway pair's, scaled to what it carries; a
-            // replaced one-way row pairs with nothing (its other carriageway's count may be real).
-            let own = held.own(batch_first_row + row);
-            let cross_section = if (copy || implausible) && oneway.value(row) != 0 {
-                0.0
-            } else if copy || implausible {
-                daily.iter().sum::<f64>()
-            } else {
-                own.cross_section * daily.iter().sum::<f64>()
-                    / own.flows.iter().sum::<f64>().max(f64::MIN_POSITIVE)
-            };
+            let cross_section = held.cross_section(
+                batch_first_row + row,
+                daily.iter().sum(),
+                copy || implausible,
+            );
             if tunnel.value(row) || daily.iter().sum::<f64>() <= 0.0 {
                 continue;
             }
