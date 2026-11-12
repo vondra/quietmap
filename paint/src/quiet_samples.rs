@@ -11,9 +11,7 @@
 use crate::blocks::{Block, meets};
 use crate::exact::{LAYERS, Point};
 use crate::levels::{Painted, SILENCE, cell};
-use crate::paint::{
-    PASS_BLOCKS, bilinear, metres_at, rectangle_at, runs_within, shortest_pixel_side_metres,
-};
+use crate::paint::{PASS_BLOCKS, bilinear, metres_at, rectangle_at, runs_within};
 use crate::points::PointPainter;
 use rayon::prelude::*;
 
@@ -128,12 +126,6 @@ pub(crate) fn sample_block_pixels(
     let (square, grid) = (painter.square, painter.grid);
     let side = grid.pixels / grid.block;
     let b = grid.block;
-    // A patch stays computed within a pixel and a façade receiver's offset of a crossing source or a
-    // wall: the margin kept exact the pixels the façades were once ranked by, and it keeps the outdoor
-    // pixels as they were painted until its own measurement.
-    let receiver_protection_pixels = 1.0
-        + popup::obstacles::FACADE_RECEIVER_OFFSET_M
-            / shortest_pixel_side_metres(square, grid.pixels);
     let (axis, positions) = sample_positions(b);
     let passes = (0..block_ids.len())
         .step_by(PASS_BLOCKS)
@@ -157,14 +149,14 @@ pub(crate) fn sample_block_pixels(
             rectangle_at(
                 square,
                 grid.pixels,
-                (base_x + low[0]) as f64 + 0.5 - receiver_protection_pixels,
-                (base_y + low[1]) as f64 + 0.5 - receiver_protection_pixels,
-                (base_x + high[0]) as f64 + 0.5 + receiver_protection_pixels,
-                (base_y + high[1]) as f64 + 0.5 + receiver_protection_pixels,
+                (base_x + low[0]) as f64 + 0.5,
+                (base_y + low[1]) as f64 + 0.5,
+                (base_x + high[0]) as f64 + 0.5,
+                (base_y + high[1]) as f64 + 0.5,
             )
         };
         // Whether block `slot` of the chunk has no exact source and no screening edge across a
-        // rectangle of its pixels (with the margin).
+        // rectangle of its pixels' centres.
         let clear = |slot: usize, at: usize, low: [usize; 2], high: [usize; 2]| {
             let (low, high) = rectangle_of(at, low, high);
             let near = blocks[slot].exact.iter().any(|&source| {
@@ -184,7 +176,7 @@ pub(crate) fn sample_block_pixels(
                 for (&k, value) in COARSE_FIRST.iter().zip(&coarse[slot]) {
                     values[slot][k] = *value;
                 }
-                // The quadrants' rectangles with their margins cover the block's with its margin.
+                // The quadrants' rectangles cover the block's.
                 match coarse_lattice(axis, &values[slot]) {
                     Some(lattice) if clear(run.start + slot, at, [0, 0], [axis[4], axis[4]]) => {
                         values[slot] = lattice;

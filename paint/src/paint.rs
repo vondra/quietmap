@@ -140,12 +140,6 @@ pub fn metres_at(square: &Square, n: usize, x: f64, y: f64) -> [f64; 2] {
     })
 }
 
-/// The shorter pixel side, which the screening-edge protection is measured in.
-pub(crate) fn shortest_pixel_side_metres(square: &Square, pixels: usize) -> f64 {
-    let [a, b] = [0.0, 1.0].map(|at| metres_at(square, pixels, at, at));
-    (b[0] - a[0]).abs().min((b[1] - a[1]).abs())
-}
-
 /// The pixel (row-major) holding `position` (frame metres), `None` outside the square.
 pub(crate) fn pixel_of(square: &Square, n: usize, position: [f64; 2]) -> Option<usize> {
     let mercator = square.frame.to_mercator(position);
