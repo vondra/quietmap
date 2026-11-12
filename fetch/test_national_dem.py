@@ -1,6 +1,7 @@
 """National terrain fetches retry truncation, refuse server scaling and preserve native block means."""
 import gzip
 import hashlib
+import json
 from http.client import IncompleteRead
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -11,8 +12,8 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
-from osgeo import gdal
-from national_dem import average_tile, sheet, sheet_extent, unscaled, wcs_window
+from osgeo import gdal, osr
+from national_dem import average_tile, sheet, sheet_extent, sheet_tiles, unscaled, wcs_window
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FLEMISH = "https://geo.api.vlaanderen.be/DHMV/wcs"
@@ -74,6 +75,43 @@ class NationalDemTests(unittest.TestCase):
                 np.testing.assert_allclose(sheet_extent(path), (248698.26, 407048.03, 248701.26, 407050.03),
                                            rtol=0, atol=1e-9)
 
+    def test_a_sheet_in_its_zone_system_is_averaged_into_the_lattice_tile_it_covers(self):
+        # Poland's 2000 system writes zone 5 into the easting's millions; the lattice is its 1992 system.
+        to_zone = osr.CoordinateTransformation(self.system(2180), self.system(2176))
+        east, north = (round(v) for v in to_zone.TransformPoint(275000.0, 355000.0)[:2])
+        plane = lambda e, n: 300 + 0.01 * (e - east) - 0.02 * (n - north)
+        columns, rows = 300, 200
+        cells = " \n".join(" ".join(f"{plane(east + c + .5, north + rows - r - .5):.4f}" for c in range(columns))
+                           for r in range(rows))
+        with tempfile.TemporaryDirectory() as temporary:
+            raw, out = Path(temporary) / "raw", Path(temporary) / "out"
+            raw.mkdir()
+            path = raw / "zone5.asc.gz"
+            path.write_bytes(gzip.compress(f"ncols {columns}\nnrows {rows}\nxllcorner {east}\nyllcorner {north}\n"
+                                           f"cellsize 1\nnodata_value -9999\n{cells}\n".encode()))
+            Path(str(path) + ".json").write_text(json.dumps(dict(path=str(path), updated="2024-07-06", url="u", sha256="s")))
+            sheet_tiles(SimpleNamespace(raw=raw, out=out, name="t_{x0}_{y0}.tif", epsg=2180, tile=10000, step=10.0,
+                                        jobs=1, zones={5: 2176}))
+            self.assertEqual(sorted(p.name for p in out.glob("*.tif")), ["t_270000_350000.tif"])
+            tile = gdal.Open(str(out / "t_270000_350000.tif"))
+            values = tile.ReadAsArray().astype(np.float64)
+        west, top = 270000, 360000
+        inside = 0
+        for row in range(450, 550):  # about the sheet: (275,000, 355,000) is cell (500, 500)
+            for column in range(450, 550):
+                e, n = to_zone.TransformPoint(float(west + 10 * column + 5), float(top - 10 * row - 5))[:2]
+                if east + 10 < e < east + columns - 10 and north + 10 < n < north + rows - 10:  # wholly inside
+                    self.assertAlmostEqual(values[row, column], plane(e, n), delta=0.01)
+                    inside += 1
+        self.assertGreater(inside, 300)
+
+    @staticmethod
+    def system(code):
+        system = osr.SpatialReference()
+        system.ImportFromEPSG(code)
+        system.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        return system
+
     def test_server_scaling_is_refused_for_every_wcs_scaling_parameter(self):
         # The two requests whose responses held heights absent from the publisher's native data.
         flemish = (f"{FLEMISH}?service=WCS&version=2.0.1&request=GetCoverage&CRS=EPSG:31370"
@@ -101,7 +139,7 @@ class NationalDemTests(unittest.TestCase):
             expected = native.reshape(cells, step, cells, step).mean(axis=(1, 3))
             with tempfile.TemporaryDirectory() as temporary:
                 target = Path(temporary) / "tile.tif"
-                average_tile([FIXTURES / name], epsg, [west, north - cells * step, west + cells * step, north],
+                average_tile([(FIXTURES / name, epsg)], epsg, [west, north - cells * step, west + cells * step, north],
                              step, target)
                 averaged = gdal.Open(str(target)).ReadAsArray()
             self.assertEqual(averaged.shape, expected.shape)

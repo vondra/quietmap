@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import http.client
 import json
+import math
 import os
 import re
 import shutil
@@ -17,7 +18,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-from osgeo import gdal
+from osgeo import gdal, osr
 
 gdal.UseExceptions()
 os.environ.setdefault("GDAL_PAM_ENABLED", "NO")  # never write sidecars next to retained publisher bytes
@@ -83,10 +84,13 @@ def publish(target, payload):
 
 
 def average_tile(sources, epsg, bounds, step, target):
-    """The mean of every valid native pixel inside each lattice cell, weighted by overlap; same CRS."""
+    """The mean of every valid native pixel inside each lattice cell, weighted by overlap; sources are
+    (path, EPSG) pairs, each warped from its own system onto the lattice's."""
     target.parent.mkdir(parents=True, exist_ok=True)
     staged = target.with_name(target.name + ".partial")
-    gdal.Warp(str(staged), [str(s) for s in sources], format="GTiff", srcSRS=f"EPSG:{epsg}",
+    source_datasets = [gdal.Translate("", str(path), format="VRT", outputSRS=f"EPSG:{source_epsg}")
+                       for path, source_epsg in sources]
+    gdal.Warp(str(staged), source_datasets, format="GTiff",
               dstSRS=f"EPSG:{epsg}", outputBounds=bounds, xRes=step, yRes=step, resampleAlg="average",
               srcNodata=NODATA, dstNodata=NODATA, outputType=gdal.GDT_Float32, errorThreshold=0,
               warpOptions=["NUM_THREADS=1"], creationOptions=["COMPRESS=DEFLATE", "PREDICTOR=3", "TILED=YES"])
@@ -121,7 +125,8 @@ def wcs_tile(arguments, x0, y0):
     record = dict(tile=name, epsg=arguments.epsg, step=arguments.step, windows=windows,
                   fetched_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     if sources:
-        average_tile(sources, arguments.epsg, [x0, y0, x0 + arguments.tile, y0 + arguments.tile],
+        average_tile([(path, arguments.epsg) for path in sources], arguments.epsg,
+                     [x0, y0, x0 + arguments.tile, y0 + arguments.tile],
                      arguments.step, target)
         record["sha256"] = sha256(target)
         publish(Path(str(target) + ".provenance.json"), (json.dumps(record, indent=1) + "\n").encode())
@@ -204,15 +209,36 @@ def sheet_extent(path):
     return west, south, west + header["ncols"] * header["cellsize"], south + header["nrows"] * header["cellsize"]
 
 
+def sheet_system(extent, epsg, zones):
+    """A sheet's EPSG and its extent in the lattice's EPSG: a Gauss-Krüger easting carries its zone's
+    number in the millions (8,025 of Poland's 67,891 sheets are in its 2000 system, the rest in 1992)."""
+    source = zones.get(int(extent[0] // 1_000_000), epsg)
+    if source == epsg:
+        return source, extent
+    systems = []
+    for code in (source, epsg):
+        system = osr.SpatialReference()
+        system.ImportFromEPSG(code)
+        system.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        systems.append(system)
+    return source, osr.CoordinateTransformation(*systems).TransformBounds(*extent, 21)
+
+
+def zone_systems(text):
+    """Gauss-Krüger zones and their EPSG codes, from 'ZONE=EPSG,..'."""
+    return dict(tuple(map(int, pair.split("="))) for pair in text.split(",") if pair)
+
+
 def sheet_tiles(arguments):
     """Average the fetched sheets onto lattice tiles; sheets are drawn in their drawing order."""
     receipts = [json.loads(p.read_text()) for p in arguments.raw.glob("*.gz.json")]
     receipts.sort(key=lambda r: (r["updated"], r["url"]))
-    extents = [(r, sheet_extent(r["path"])) for r in receipts]
     tiles = {}
-    for record, (west, south, east, north) in extents:
-        for x0 in range(int(west // arguments.tile) * arguments.tile, int(east), arguments.tile):
-            for y0 in range(int(south // arguments.tile) * arguments.tile, int(north), arguments.tile):
+    for record in receipts:
+        record["epsg"], (west, south, east, north) = sheet_system(sheet_extent(record["path"]), arguments.epsg,
+                                                                  arguments.zones)
+        for x0 in range(int(west // arguments.tile) * arguments.tile, math.ceil(east), arguments.tile):
+            for y0 in range(int(south // arguments.tile) * arguments.tile, math.ceil(north), arguments.tile):
                 tiles.setdefault((x0, y0), []).append(record)
 
     def work(corner):
@@ -221,7 +247,7 @@ def sheet_tiles(arguments):
         if target.exists():
             return target.name
         sheets = tiles[corner]
-        average_tile([f"/vsigzip/{s['path']}" for s in sheets], arguments.epsg,
+        average_tile([(f"/vsigzip/{s['path']}", s["epsg"]) for s in sheets], arguments.epsg,
                      [x0, y0, x0 + arguments.tile, y0 + arguments.tile], arguments.step, target)
         record = dict(tile=target.name, sha256=sha256(target), sheets=[dict(url=s["url"], sha256=s["sha256"],
                       updated=s["updated"]) for s in sheets])
@@ -262,6 +288,8 @@ def main():
     for flag in ("--epsg", "--tile"):
         averaged.add_argument(flag, type=int, required=True)
     averaged.add_argument("--step", type=float, required=True)
+    averaged.add_argument("--zones", default="", type=zone_systems,
+                          help="ZONE=EPSG,..: a sheet whose easting's millions are a listed zone is in its EPSG")
     averaged.add_argument("--jobs", type=int, default=4)
     arguments = parser.parse_args()
     if arguments.command == "sheet-index":
