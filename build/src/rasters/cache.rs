@@ -1,4 +1,5 @@
-//! Bind atomic raster squares to the exact manifest, executable and normalized source recipes.
+//! Bind atomic raster squares to the exact manifest, executable, normalized source recipes and
+//! country polygons.
 use super::source::Source;
 use crate::{
     pipeline_files::{digest, write_json},
@@ -18,9 +19,13 @@ pub(super) fn prepare(inputs: &YearInputs, sources: &[Source], root: &Path) -> R
                 ]))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let countries = inputs
+            .required(crate::year::Kind::PrepareRegions)
+            .map_err(anyhow::Error::msg)?;
         Ok(serde_json::json!({
             "manifest": digest(&inputs.manifest_path)?,
-            "builder": digest(&std::env::current_exe()?)?, "sources": files
+            "builder": digest(&std::env::current_exe()?)?, "sources": files,
+            "countries": digest(countries)?
         }))
     })()
     .map_err(|error| error.to_string())?;

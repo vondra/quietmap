@@ -3,6 +3,7 @@ mod blend;
 mod cache;
 mod canopy;
 pub mod config;
+mod countries;
 mod cover;
 mod datum;
 mod dem;
@@ -17,6 +18,7 @@ use crate::dev4::{Square, z9_raster_window};
 use crate::year::YearInputs;
 use chrono::{Datelike, NaiveDate};
 use config::Band;
+use countries::Countries;
 use rayon::prelude::*;
 use source::Source;
 use std::io::Write;
@@ -93,6 +95,7 @@ fn loss_year_before(cutoff: &str) -> Result<i32, String> {
 
 pub(super) fn open_sources(
     inputs: &YearInputs,
+    countries: &Countries,
     selected: impl Fn(Band) -> bool,
 ) -> Result<Vec<Source>, String> {
     let plan = inputs
@@ -101,11 +104,17 @@ pub(super) fn open_sources(
         .as_ref()
         .ok_or("year manifest has no raster plan")?;
     runtime::configure(inputs, plan)?;
-    open_configured_sources(inputs, selected)
+    open_configured_sources(inputs, countries, selected)
+}
+
+/// The year's country polygons, which bound each national terrain model to its own country.
+pub(super) fn read_countries(inputs: &YearInputs) -> Result<Countries, String> {
+    Countries::read(inputs.required(crate::year::Kind::PrepareRegions)?)
 }
 
 fn open_configured_sources(
     inputs: &YearInputs,
+    countries: &Countries,
     selected: impl Fn(Band) -> bool,
 ) -> Result<Vec<Source>, String> {
     let plan = inputs
@@ -123,6 +132,13 @@ fn open_configured_sources(
             .ok_or("raster input metadata is missing")?;
         let observed_year = observation.observed.bounds()?.1.year();
         let mut source = Source::open(spec.clone(), inputs.by_id(&spec.input)?, observed_year)?;
+        // A national survey holds its own country; the world's model is the only one tagged "world".
+        let region = observation.region.split(':').next().unwrap_or_default();
+        if spec.band == Band::GroundHeight && region != "world" {
+            source.country = Some(countries.label(region).ok_or_else(|| {
+                format!("{}: region {region} has no country polygon", spec.input)
+            })?);
+        }
         if let Some(wrapped) = &spec.antimeridian_input {
             source.antimeridian = Some(Box::new(Source::open(
                 spec.clone(),
@@ -164,15 +180,17 @@ pub fn build(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<(), 
             return Err(format!("invalid z9 square {square:?}"));
         }
     }
-    let sources = open_sources(inputs, |_| true)?;
+    let countries = read_countries(inputs)?;
+    let sources = open_sources(inputs, &countries, |_| true)?;
     cache::prepare(inputs, &sources, out)?;
     let coverage = land_coverage(&sources)?;
     drop(sources);
     let forest_year = loss_year_before(&inputs.manifest.as_of)?;
     // Configure GDAL once above; each worker owns separate datasets and PROJ transformations.
-    squares.par_iter().try_for_each_init(
-        || open_configured_sources(inputs, |_| true),
-        |sources, &square| {
+    build_every_square(
+        squares,
+        || open_configured_sources(inputs, &countries, |_| true),
+        |sources, square| {
             let sources = sources.as_ref().map_err(Clone::clone)?;
             let window = z9_raster_window(square);
             let land = touches_land(&coverage, window);
@@ -185,7 +203,7 @@ pub fn build(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<(), 
             }
             eprintln!("raster {}/{}: building four bands", square.x, square.y);
             let bands = if land {
-                let dem = dem::build(sources, window)?;
+                let dem = dem::build(sources, &countries, window)?;
                 let (imd, forest) = cover::build(sources, window, forest_year)?;
                 let canopy = canopy::build(sources, window)?;
                 [dem, imd, forest, canopy]
@@ -202,10 +220,37 @@ pub fn build(inputs: &YearInputs, squares: &[Square], out: &Path) -> Result<(), 
                 );
             }
             crate::pipeline_files::write_json(&root.join("complete.json"), &square_receipt(&root)?)
-                .map_err(|error| error.to_string())?;
-            Ok(())
+                .map_err(|error| error.to_string())
         },
     )
+}
+
+/// Builds every square, then fails with each failing square and its error, so that one defect
+/// neither stops the others nor hides the next behind a restart, and no failure passes unseen.
+fn build_every_square<Worker>(
+    squares: &[Square],
+    worker: impl Fn() -> Worker + Sync + Send,
+    build_square: impl Fn(&mut Worker, Square) -> Result<(), String> + Sync + Send,
+) -> Result<(), String> {
+    let failures: Vec<String> = squares
+        .par_iter()
+        .map_init(worker, |worker, &square| {
+            build_square(worker, square).err().map(|error| {
+                eprintln!("raster {}/{}: failed: {error}", square.x, square.y);
+                format!("{}:{}: {error}", square.x, square.y)
+            })
+        })
+        .flatten()
+        .collect();
+    if failures.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} of {} raster squares failed: {}",
+        failures.len(),
+        squares.len(),
+        failures.join("; ")
+    ))
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //! (`obstacle_index/builder.rs`): which rings and walls screen, at what height.
 
 use tiles::geo::GlobalSteps;
-use tiles::obstacles::{EnvelopeClass, OutlineKind};
+use tiles::obstacles::{EnvelopeClass, OutlineKind, tiles_crossed};
 
 /// The tallest building on Earth (Burj Khalifa, 828 m); a taller mapped value is a tag error.
 pub const BUILDING_HEIGHT_MAX_M: f64 = 828.0;
@@ -39,7 +39,8 @@ fn without_repeats(points: Vec<GlobalSteps>) -> Vec<GlobalSteps> {
 /// The outlines of one row: none below or at 0 m or non-finite; a building clamped at 828 m, each
 /// ring without repeated vertices (the closing repeat included, which quantisation can also
 /// create) and with three or more, a part dropped with its exterior; a wall with two points or
-/// more.
+/// more. A building part must fit every crossed tile intact; omitting just some copies
+/// loses crossings and makes outdoor points read as indoors. Its holes leave with it.
 pub fn row_outlines(
     footprint_id: u64,
     height_m: f64,
@@ -60,6 +61,7 @@ pub fn row_outlines(
         RowGeometry::Building { envelope, parts } => {
             let height_m = height_m.min(BUILDING_HEIGHT_MAX_M);
             for part in parts {
+                let first = out.len();
                 for (index, ring) in part.into_iter().enumerate() {
                     let mut vertices = without_repeats(ring);
                     while vertices.len() > 1 && vertices.first() == vertices.last() {
@@ -78,6 +80,18 @@ pub fn row_outlines(
                         OutlineKind::Hole
                     };
                     out.push(outline(kind, envelope, height_m, vertices));
+                }
+                if out[first..].iter().any(|ring| {
+                    tiles_crossed(&ring.vertices).iter().any(|tile| {
+                        ring.vertices
+                            .iter()
+                            .any(|&vertex| tile.local(vertex).is_none())
+                    })
+                }) {
+                    eprintln!(
+                        "structures {footprint_id:#x}: building part cannot fit every crossed tile; omitted with its holes"
+                    );
+                    out.truncate(first);
                 }
             }
         }
