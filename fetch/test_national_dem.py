@@ -2,6 +2,7 @@
 import gzip
 import hashlib
 import json
+import resource
 from http.client import IncompleteRead
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -21,6 +22,10 @@ CRS = "http://www.opengis.net/def/crs/EPSG/0/31370"
 
 
 class NationalDemTests(unittest.TestCase):
+    def setUp(self):
+        # sheet_tiles raises the process's soft open-file limit; each test gets its own back.
+        self.addCleanup(resource.setrlimit, resource.RLIMIT_NOFILE, resource.getrlimit(resource.RLIMIT_NOFILE))
+
     def test_interrupted_sheet_retries_without_publishing_partial_bytes(self):
         body = b"ncols 2\nnrows 2\nxllcorner 0\nyllcorner 0\ncellsize 1\nNODATA_value -9999\n1 2\n3 4\n"
 
@@ -104,6 +109,23 @@ class NationalDemTests(unittest.TestCase):
                     self.assertAlmostEqual(values[row, column], plane(e, n), delta=0.01)
                     inside += 1
         self.assertGreater(inside, 300)
+
+    def test_a_tile_of_more_sheets_than_the_soft_file_limit_is_averaged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            raw, out = Path(temporary) / "raw", Path(temporary) / "out"
+            raw.mkdir()
+            for index in range(300):  # sheets of 20 x 20 m in a row inside one tile's south edge
+                path = raw / f"{index}.asc.gz"
+                rows = "\n".join([" ".join([f"{index}.5"] * 20)] * 20)
+                path.write_bytes(gzip.compress(f"ncols 20\nnrows 20\nxllcorner {270000.5 + 20 * index}\nyllcorner 350000.5\n"
+                                               f"cellsize 1\nnodata_value -9999\n{rows}\n".encode()))
+                Path(str(path) + ".json").write_text(json.dumps(dict(path=str(path), updated="2024", url=str(index), sha256="s")))
+            resource.setrlimit(resource.RLIMIT_NOFILE, (256, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+            sheet_tiles(SimpleNamespace(raw=raw, out=out, name="t_{x0}_{y0}.tif", epsg=2180, tile=10000, step=10.0,
+                                        jobs=1, zones={}))
+            self.assertEqual([p.name for p in out.glob("*.tif")], ["t_270000_350000.tif"])
+            values = gdal.Open(str(out / "t_270000_350000.tif")).ReadAsArray()
+        np.testing.assert_array_equal(values[-2, 1:600:2], np.arange(300) + 0.5)  # each cell wholly in one sheet
 
     @staticmethod
     def system(code):

@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import resource
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -231,6 +232,9 @@ def zone_systems(text):
 
 def sheet_tiles(arguments):
     """Average the fetched sheets onto lattice tiles; sheets are drawn in their drawing order."""
+    # Each sheet stays open through its tile's warp: 304 sheets in one Polish tile, six tiles at once,
+    # pass the usual soft limit of 1,024 files, and GDAL then reports a sheet 'not recognized'.
+    resource.setrlimit(resource.RLIMIT_NOFILE, (resource.getrlimit(resource.RLIMIT_NOFILE)[1],) * 2)
     receipts = [json.loads(p.read_text()) for p in arguments.raw.glob("*.gz.json")]
     receipts.sort(key=lambda r: (r["updated"], r["url"]))
     tiles = {}
