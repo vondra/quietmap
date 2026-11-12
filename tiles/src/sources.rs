@@ -147,9 +147,11 @@ pub const GUESSED_TRAIN_SOURCES: [u16; 19] = [
 ];
 
 /// dev4's road datasets that are its own values per road class on a national network (its registry
-/// calls them proxies; the builder keeps them as data): Bolivia, China, Ecuador, India, the
-/// Philippines, Paraguay, Venezuela.
-pub const NETWORK_ESTIMATE_SOURCE_IDS: [u16; 7] = [1013, 1025, 1034, 1050, 1095, 1098, 1124];
+/// calls them proxies): Bolivia, China, Ecuador, India, the Philippines, Paraguay, Venezuela; and
+/// Saudi Arabia's ministry stations, one value per route (18 values over its 17,600 km of main
+/// roads). 90 % of each one's main-road km take at most eleven values, where a counting source takes
+/// hundreds to thousands (evidence 2026-11-12, data-1). The builder holds them as estimates.
+pub const NETWORK_ESTIMATE_SOURCE_IDS: [u16; 8] = [1013, 1025, 1034, 1050, 1095, 1098, 1102, 1124];
 /// Amsterdam's file of the EU city traffic volumes: the city's traffic model, not counts (dev4).
 pub const AMSTERDAM_MODEL_SOURCE_ID: u16 = 1103;
 /// dev4's rail sources whose counts come from a fixed table though the builder keeps them: China's

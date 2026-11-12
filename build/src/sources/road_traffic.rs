@@ -145,18 +145,18 @@ const MAJOR_MODEL_COUNTRIES: [[u8; 2]; 58] = [
 ];
 
 /// Whether the major-road model replaces a major row's guess: a class prior where the model beat
-/// the priors, never a fallback's total, a copy everywhere (a main road's count is no estimate of
-/// its ramp's).
+/// the priors, never a fallback's total, a copy and a count or estimate the road cannot carry
+/// (`road_counts`) everywhere (a main road's count is no estimate of its ramp's).
 fn major_model_replaces(guess: Guess, iso: [u8; 2]) -> bool {
     match guess {
         Guess::ClassPrior => MAJOR_MODEL_COUNTRIES.contains(&iso),
         Guess::Fallback => false,
-        Guess::Copy => true,
+        Guess::Copy | Guess::Implausible => true,
     }
 }
 
 /// The model group of a dev4 class: motorway, trunk, primary, a link of any of them.
-fn major_group(class: u8) -> Option<usize> {
+pub(super) fn major_group(class: u8) -> Option<usize> {
     match class {
         0 => Some(0),
         1 => Some(1),
@@ -265,13 +265,15 @@ const UNCLASSIFIED: u8 = 9;
 const URBAN: u8 = 2;
 
 /// What a guessed row's own traffic is: dev4's class prior (no dataset), a country default or
-/// classification fallback, whose totals stand on a main road, or a main road's count copied onto
-/// it (`road_copies`), none of its own.
+/// classification fallback, whose totals stand on a main road, a main road's count copied onto
+/// it (`road_copies`), none of its own, or a count or estimate that is not the road's
+/// (`road_counts`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Guess {
     ClassPrior,
     Fallback,
     Copy,
+    Implausible,
 }
 
 /// A square's building traffic as the conversion reads it.
@@ -409,7 +411,7 @@ impl BuildingTraffic {
                     Some(routed)
                 }
             }
-            (_, _, Some(model)) if guess == Guess::ClassPrior => main(model),
+            (_, _, Some(model)) if guess != Guess::Fallback => main(model),
             _ => None,
         }
     }

@@ -2,10 +2,11 @@
 //! period computed here once, and the display record of the road group.
 
 use super::bus::{BUS_PERIOD_SHARES, BusRoutes};
-use super::country_speeds::COUNTRY_SPEEDS;
+use super::country_speeds::{COUNTRY_SPEEDS, is_sign};
 use super::decks::Decks;
 use super::motorcycles::{LocalMotorcycles, country_share};
 use super::period_shares::period_shares;
+use super::road_counts::held_counts;
 use super::road_junctions::{Junctions, row_junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, chains, row_slopes};
 use super::road_traffic::{
@@ -36,7 +37,7 @@ const ROAD_SOURCE_HEIGHT_M: f64 = 0.05;
 /// Platform half-width per lane and shoulder (lanes x 3.5 m / 2 + 1.5 m), two lanes if untagged.
 const PLATFORM_HALF_LANE_M: f64 = 1.75;
 const PLATFORM_SHOULDER_M: f64 = 1.5;
-const DEFAULT_LANES: u8 = 2;
+pub(super) const DEFAULT_LANES: u8 = 2;
 /// dev4 `speed_limit` code of `maxspeed=none`, driven at 130 km/h.
 pub(crate) const DERESTRICTED_CODE: u8 = 255;
 pub(crate) const DERESTRICTED_SPEED_KMH: f64 = 130.0;
@@ -248,6 +249,7 @@ fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet
             i32s("end_gy")?,
         );
         let class = c.get("road_class")?.as_primitive::<UInt8Type>();
+        let oneway = c.get("oneway")?.as_primitive::<UInt8Type>();
         let estimated = c.get("traffic_estimated")?.as_primitive::<UInt8Type>();
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
         let names = c.get("name")?.as_string::<i32>();
@@ -285,6 +287,7 @@ fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet
             counted.push(super::road_copies::CountedRow {
                 row: first + row,
                 class: class.value(row),
+                oneway: oneway.value(row) != 0,
                 name: names.value(row).to_string(),
                 ends,
                 nodes,
@@ -342,7 +345,7 @@ fn local_motorcycles(
 
 /// Whether dev4 guessed a row's traffic: all four categories estimated by a class prior, a
 /// country default, a classification fallback or the service tree.
-fn guessed(source_id: u16, estimated: u8) -> bool {
+pub(super) fn guessed(source_id: u16, estimated: u8) -> bool {
     estimated == ALL_CATEGORIES_ESTIMATED
         && (GUESSED_SPLIT_SOURCES.contains(&source_id) || source_id == SERVICE_TREE_SOURCE_ID)
 }
@@ -658,7 +661,10 @@ pub fn convert(
         None => None,
     };
     let copies = copied_counts(&table)?;
-    let motorcycles = local_motorcycles(&table, &copies)?;
+    let held = held_counts(&table, building_traffic.as_ref(), &copies)?;
+    let replaced: std::collections::HashSet<usize> =
+        copies.union(&held.implausible).copied().collect();
+    let motorcycles = local_motorcycles(&table, &replaced)?;
     let (mut ways, rows) = way_rows(&table, reach)?;
     let chains = chains(&mut ways);
     let slopes = row_slopes(&chains, &heights, rows);
@@ -670,7 +676,6 @@ pub fn convert(
         let c = Columns { batch };
         let i32s = |name| c.get(name).map(|a| a.as_primitive::<Int32Type>());
         let u8s = |name| c.get(name).map(|a| a.as_primitive::<UInt8Type>());
-        let f64s = |name| c.get(name).map(|a| a.as_primitive::<Float64Type>());
         let (start_x, start_y, end_x, end_y) = (
             i32s("start_gx")?,
             i32s("start_gy")?,
@@ -684,20 +689,12 @@ pub fn convert(
         );
         // The graded-transition speed exists only where dev4's taper step ran; elsewhere none.
         let speed_taper = u8s("speed_taper").ok();
-        let (lanes, oneway, junction, built_up, estimated) = (
+        let (lanes, oneway, junction, built_up) = (
             u8s("lanes")?,
             u8s("oneway")?,
             u8s("junction")?,
             u8s("built_up")?,
-            u8s("traffic_estimated")?,
         );
-        let aadt = [
-            f64s("aadt_light")?,
-            f64s("aadt_medium")?,
-            f64s("aadt_heavy")?,
-            f64s("aadt_moto")?,
-        ];
-        let cross_section = f64s("cross_section_aadt")?;
         let access = u8s("access")?;
         let (tunnel, bridge) = (c.get("tunnel")?.as_boolean(), c.get("bridge")?.as_boolean());
         let (names, refs) = (
@@ -716,7 +713,6 @@ pub fn convert(
             })
             .collect();
         let country = c.get("country_iso")?.as_primitive::<UInt16Type>();
-        let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
         for row in 0..batch.num_rows() {
             if !within[row] {
                 continue;
@@ -743,18 +739,24 @@ pub fn convert(
                 None => slopes[batch_first_row + row],
             };
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
-            let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
+            // A counted row carries its run's count (`road_counts`); a row whose count or estimate is
+            // not the road's takes its model, bounded by its lanes' capacity.
+            let carried = held.of(batch_first_row + row);
+            let prior = carried.flows;
             let copy = copies.contains(&(batch_first_row + row));
-            let row_guessed = guessed(source_id.value(row), estimated.value(row)) || copy;
+            let implausible = held.implausible.contains(&(batch_first_row + row));
+            let row_guessed = guessed(carried.source, carried.estimated) || copy || implausible;
             // Which categories are estimates: all of a copy's, none of its count its own.
-            let estimated_categories = if copy {
+            let estimated_categories = if copy || implausible {
                 ALL_CATEGORIES_ESTIMATED
             } else {
-                estimated.value(row)
+                carried.estimated
             };
             let guess = if copy {
                 Guess::Copy
-            } else if source_id.value(row) == PRIOR_SOURCE_ID {
+            } else if implausible {
+                Guess::Implausible
+            } else if carried.source == PRIOR_SOURCE_ID {
                 Guess::ClassPrior
             } else {
                 Guess::Fallback
@@ -801,13 +803,14 @@ pub fn convert(
                 // A copy has no count of its own: where no model gives it one it carries none, its
                 // main road beside it carrying the count.
                 None if copy => [0.0; 4],
+                None if implausible => prior,
                 None => country_flows(
                     prior,
                     class_index,
                     built_up.value(row),
                     country.value(row),
-                    source_id.value(row),
-                    estimated.value(row),
+                    carried.source,
+                    carried.estimated,
                 ),
             };
             // The department's mean is the traffic across both directions and its shares count
@@ -832,6 +835,16 @@ pub fn convert(
             if closed {
                 daily = [0.0; 4];
             }
+            // A copy's or a rejected row's replacement is bounded as a count is, and an estimate over
+            // its lanes cut to them: no lane carries more than the busiest counted lanes (an HOV
+            // lane's model read 31,905 on one lane).
+            if copy || implausible || held.capped.contains(&(batch_first_row + row)) {
+                let most = held.capacity(batch_first_row + row);
+                let total: f64 = daily.iter().sum();
+                if total > most {
+                    daily = daily.map(|flow| flow * most / total);
+                }
+            }
             // Guessed traffic takes the motorcycles of the square's counted roads, else of the
             // country's fleet (dev4 put 2 % on Vietnam's and 15 % on Thailand's class priors).
             if row_guessed && highway.is_none() && us_mix.is_none() {
@@ -852,8 +865,11 @@ pub fn convert(
                 daily[1] += scheduled[0];
                 daily[2] += scheduled[1];
             }
-            let scale =
-                daily.iter().sum::<f64>() / prior.iter().sum::<f64>().max(f64::MIN_POSITIVE);
+            let cross_section = held.cross_section(
+                batch_first_row + row,
+                daily.iter().sum(),
+                copy || implausible,
+            );
             if tunnel.value(row) || daily.iter().sum::<f64>() <= 0.0 {
                 continue;
             }
@@ -863,7 +879,11 @@ pub fn convert(
                 continue;
             }
             let taper = speed_taper.map_or(0, |taper| taper.value(row));
-            let (base_speed, base_source, posted) = match speed_limit.value(row) {
+            // A posted value no main road is signed at is a typo, no sign (`is_sign`).
+            let sign = Some(speed_limit.value(row))
+                .filter(|&posted| posted == DERESTRICTED_CODE || is_sign(class_index, posted))
+                .unwrap_or(0);
+            let (base_speed, base_source, posted) = match sign {
                 DERESTRICTED_CODE => (DERESTRICTED_SPEED_KMH, "derestricted", None),
                 0 if taper > 0 => (f64::from(taper), "graded_transition", None),
                 0 => {
@@ -965,7 +985,7 @@ pub fn convert(
                 (daily[2] * 10.0).round() / 10.0,
                 (daily[3] * 10.0).round() / 10.0,
                 estimated_categories,
-                (scale * cross_section.value(row)).round(),
+                cross_section.round(),
                 posted,
                 speed,
                 speed_source,
@@ -981,11 +1001,11 @@ pub fn convert(
                     THAI_HIGHWAYS_SOURCE_ID
                 } else if modelled.is_some() {
                     BUILDING_TRAFFIC_SOURCE_ID
-                } else if copy {
-                    // Its buses alone: no dataset counted what it carries.
+                } else if copy || implausible {
+                    // Its buses alone, or its estimate bounded: no dataset counted what it carries.
                     PRIOR_SOURCE_ID
                 } else {
-                    source_id.value(row)
+                    carried.source
                 },
                 road_period_shares(daily, &shares),
             ]);

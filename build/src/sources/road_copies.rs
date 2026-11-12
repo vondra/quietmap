@@ -9,7 +9,13 @@
 //! keeps the source of a tunnel's count and zeroes its vehicles, as a tunnel emits nothing, and the
 //! streets over it carried the count (Brno's Kohoutova the Husovice tunnel's 44,000 a day, Madrid
 //! Río's avenues the M-30's 43,071 and 46,995; 117 ways in 6,771 squares with tunnels, 2026-10-18,
-//! `evidence/2026-10-18/tunnel-copies/`). Such a row takes its own model, as an uncounted row does.
+//! `evidence/2026-10-18/tunnel-copies/`). A main road's count also lies on main roads beside it:
+//! on a road of a lower class running alongside within the reach (San Francisco's Bayshore
+//! Boulevard, a primary road, carried US 101's 223,000 vehicles a day), and on a two-way row running
+//! between one-way carriageways with their cross-section (the reversible and HOV lanes of Houston's,
+//! Atlanta's and Chicago's freeways carried both carriageways' 160,000-320,000 a day on one or two
+//! lanes; `oneway=reversible` is not one-way; 190.7 km in four US city squares, evidence
+//! 2026-11-12, data-1). Such a row takes its own model, as an uncounted row does.
 
 use crate::rings::z30_cells;
 use std::collections::{HashMap, HashSet};
@@ -31,12 +37,13 @@ const SIDE_CLASSES: std::ops::RangeInclusive<u8> = 5..=7;
 /// The classes whose count a side lane of their name repeats: the main ones and their links.
 const NAMED_CLASSES: [std::ops::RangeInclusive<u8>; 2] = [0..=4, 10..=12];
 
-/// A row with a count of its own: its table row, dev4 class, name, ends (z30), its way's first and
-/// last OSM nodes, daily vehicles and the cross-section of its road (both carriageways; its own
-/// count where dev4 gives none).
+/// A row with a count of its own: its table row, dev4 class, whether it is one-way, name, ends
+/// (z30), its way's first and last OSM nodes, daily vehicles and the cross-section of its road (both
+/// carriageways; its own count where dev4 gives none).
 pub struct CountedRow {
     pub row: usize,
     pub class: u8,
+    pub oneway: bool,
     pub name: String,
     pub ends: [(i32, i32); 2],
     pub nodes: [i64; 2],
@@ -51,12 +58,19 @@ pub struct TunnelRow {
     pub nodes: [i64; 2],
 }
 
-/// A main road's row or tunnel row: its ends (z30) and the counts a copy of it repeats.
-type Road = ([(i32, i32); 2], Vec<f64>);
+/// A main road's row or tunnel row: its ends (z30), the counts a copy of it repeats, and as a main
+/// row its class and whether it is one-way.
+struct Road {
+    ends: [(i32, i32); 2],
+    counts: Vec<f64>,
+    main: Option<(u8, bool)>,
+}
 
 /// The rows below the main classes whose count is within `COPY_TOLERANCE` of the count or the
 /// cross-section of a main row or a main road's tunnel within `COPY_REACH_M`, at `latitude_deg`;
-/// and the side lanes with the very count of a road of their name.
+/// the side lanes with the very count of a road of their name; and the main rows running alongside
+/// a main road whose count they repeat: of a higher class, or of their own class as a two-way row
+/// with the cross-section of one-way carriageways ([`alongside_copy`]).
 pub fn copied_counts(
     rows: &[CountedRow],
     tunnels: &[TunnelRow],
@@ -80,15 +94,19 @@ pub fn copied_counts(
     let roads: Vec<Road> = rows
         .iter()
         .filter(|row| MAIN_CLASSES.contains(&row.class))
-        .map(|row| (row.ends, vec![row.vehicles, row.cross_section]))
+        .map(|row| Road {
+            ends: row.ends,
+            counts: vec![row.vehicles, row.cross_section],
+            main: Some((row.class, row.oneway)),
+        })
         .chain(tunnel_counts(rows, tunnels))
-        .filter(|(_, counts)| !counts.is_empty())
+        .filter(|road| !road.counts.is_empty())
         .collect();
     let mut main: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     let mut named: HashMap<&str, HashSet<i64>> = HashMap::new();
-    for (road, (ends, _)) in roads.iter().enumerate() {
-        for at in cells_of(*ends) {
-            main.entry(at).or_default().push(road);
+    for (index, road) in roads.iter().enumerate() {
+        for at in cells_of(road.ends) {
+            main.entry(at).or_default().push(index);
         }
     }
     for row in rows.iter().filter(|row| {
@@ -104,24 +122,83 @@ pub fn copied_counts(
         }
     }
     let repeats = |vehicles: f64, of: f64| of > 0.0 && (vehicles - of).abs() <= COPY_TOLERANCE * of;
+    let near = |row: &CountedRow| -> Vec<&Road> {
+        let mut found: Vec<usize> = cells_of(row.ends)
+            .filter_map(|at| main.get(&at))
+            .flatten()
+            .copied()
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        found.into_iter().map(|index| &roads[index]).collect()
+    };
     rows.iter()
-        .filter(|row| !MAIN_CLASSES.contains(&row.class))
         .filter(|row| {
+            if MAIN_CLASSES.contains(&row.class) {
+                // A one-way motorway row has no busier class and no carriageways to sit between.
+                return !(row.class == 0 && row.oneway) && alongside_copy(row, &near(row), reach);
+            }
             SIDE_CLASSES.contains(&row.class)
                 && named
                     .get(row.name.as_str())
                     .is_some_and(|counts| counts.contains(&(row.vehicles.round() as i64)))
-                || cells_of(row.ends)
-                    .filter_map(|at| main.get(&at))
-                    .flatten()
-                    .any(|&road| {
-                        let (ends, counts) = &roads[road];
-                        counts.iter().any(|&of| repeats(row.vehicles, of))
-                            && segments_apart(row.ends, *ends) <= reach
-                    })
+                || near(row).iter().any(|road| {
+                    road.counts.iter().any(|&of| repeats(row.vehicles, of))
+                        && segments_apart(row.ends, road.ends) <= reach
+                })
         })
         .map(|row| row.row)
         .collect()
+}
+
+/// Whether a main row repeats a main road it runs alongside: the rows of a higher class (a lower
+/// dev4 code) whose count or cross-section it repeats, or, for a two-way row, the one-way rows of
+/// its own class whose cross-section it repeats, running within 30 degrees of its direction, hold
+/// both its ends within `reach` (z30 cells) and none touches it, so it runs beside them, not on from
+/// them (a two-way road splitting into its carriageways meets them with their cross-section) nor
+/// across them (a bridge over the motorway).
+fn alongside_copy(row: &CountedRow, near: &[&Road], reach: f64) -> bool {
+    let repeated: Vec<&&Road> = near
+        .iter()
+        .filter(|road| {
+            let Some((class, oneway)) = road.main else {
+                return false;
+            };
+            let of =
+                |count: f64| count > 0.0 && (row.vehicles - count).abs() <= COPY_TOLERANCE * count;
+            // A one-way row's cross-section repeats both directions only where dev4 paired it
+            // (unpaired, it is the carriageway's own count).
+            let repeats = if class < row.class {
+                road.counts.iter().any(|&count| of(count))
+            } else {
+                class == row.class
+                    && oneway
+                    && !row.oneway
+                    && road.counts[1] > road.counts[0]
+                    && of(road.counts[1])
+            };
+            repeats && parallel(row.ends, road.ends)
+        })
+        .collect();
+    let point = |(x, y): (i32, i32)| (f64::from(x), f64::from(y));
+    let touches = repeated
+        .iter()
+        .any(|road| road.ends.iter().any(|end| row.ends.contains(end)));
+    let held = |end: (i32, i32)| {
+        repeated.iter().any(|road| {
+            point_to_segment(point(end), (point(road.ends[0]), point(road.ends[1]))) <= reach
+        })
+    };
+    !repeated.is_empty() && !touches && row.ends.iter().all(|&end| held(end))
+}
+
+/// Whether two segments (z30) run within 30 degrees of each other, either way.
+fn parallel(a: [(i32, i32); 2], b: [(i32, i32); 2]) -> bool {
+    let along = |[p, q]: [(i32, i32); 2]| (f64::from(q.0 - p.0), f64::from(q.1 - p.1));
+    let (u, v) = (along(a), along(b));
+    let cross = u.0 * v.1 - u.1 * v.0;
+    let dot = u.0 * v.0 + u.1 * v.1;
+    dot.abs() >= 3f64.sqrt() * cross.abs() && dot != 0.0
 }
 
 /// The rows of main roads' tunnels (a main class or a link) with their road's counts at the
@@ -169,9 +246,13 @@ fn tunnel_counts(rows: &[CountedRow], tunnels: &[TunnelRow]) -> Vec<Road> {
         counts.dedup();
     }
     (0..tunnels.len())
-        .map(|index| {
-            let counts = portals.get(&root(&mut chain, index));
-            (tunnels[index].ends, counts.cloned().unwrap_or_default())
+        .map(|index| Road {
+            ends: tunnels[index].ends,
+            counts: portals
+                .get(&root(&mut chain, index))
+                .cloned()
+                .unwrap_or_default(),
+            main: None,
         })
         .collect()
 }
@@ -225,6 +306,7 @@ mod tests {
         let row = |row, class, ends: [(f64, f64); 2], vehicles, cross_section| CountedRow {
             row,
             class,
+            oneway: matches!(class, 1 | 11),
             name: String::new(),
             ends: ends.map(|(x, y)| at(x, y)),
             nodes: [2 * row as i64, 2 * row as i64 + 1],
@@ -254,6 +336,7 @@ mod tests {
         let row = |row, class, name: &str, y_m, vehicles| CountedRow {
             row,
             class,
+            oneway: false,
             name: name.into(),
             ends: [at(0.0, y_m), at(200.0, y_m)],
             nodes: [2 * row as i64, 2 * row as i64 + 1],
@@ -281,6 +364,7 @@ mod tests {
             |row, class, [x0, x1]: [f64; 2], y_m, nodes, vehicles, cross_section| CountedRow {
                 row,
                 class,
+                oneway: class == 1,
                 name: String::new(),
                 ends: [at(x0, y_m), at(x1, y_m)],
                 nodes,
@@ -305,5 +389,83 @@ mod tests {
             tunnel([1_000.0, 1_200.0], [20, 21]),
         ];
         assert_eq!(copied_counts(&rows, &tunnels, 49.2), HashSet::from([1, 2]));
+    }
+
+    /// US 101 at San Francisco (37.7° N): its carriageways carry 111,500 each and 223,000 both; the
+    /// primary road 20 m beside them with 223,000 is a copy, as is the two-way express lane
+    /// between them; a primary road with a count of its own, a two-way motorway row splitting into
+    /// the carriageways (it touches them), a primary road bridging them with their very count and
+    /// the carriageways themselves are not.
+    #[test]
+    fn a_main_road_beside_a_busier_one_with_its_count_is_a_copy() {
+        let m = 1.0 / (crate::dev4::Z30_QUANTUM_M * 37.7f64.to_radians().cos());
+        let at = |x_m: f64, y_m: f64| ((x_m * m) as i32, (y_m * m) as i32);
+        let row =
+            |row, class, oneway, [a, b]: [(f64, f64); 2], vehicles: f64, cross_section: f64| {
+                CountedRow {
+                    row,
+                    class,
+                    oneway,
+                    name: String::new(),
+                    ends: [at(a.0, a.1), at(b.0, b.1)],
+                    nodes: [2 * row as i64, 2 * row as i64 + 1],
+                    vehicles,
+                    cross_section,
+                }
+            };
+        let rows = [
+            row(0, 0, true, [(0.0, 0.0), (400.0, 0.0)], 111_500.0, 223_000.0),
+            row(
+                1,
+                0,
+                true,
+                [(0.0, 20.0), (400.0, 20.0)],
+                111_500.0,
+                223_000.0,
+            ),
+            row(
+                2,
+                2,
+                false,
+                [(50.0, 40.0), (350.0, 40.0)],
+                223_000.0,
+                223_000.0,
+            ),
+            row(
+                3,
+                0,
+                false,
+                [(50.0, 10.0), (350.0, 10.0)],
+                223_000.0,
+                223_000.0,
+            ),
+            row(
+                4,
+                2,
+                false,
+                [(50.0, -25.0), (350.0, -25.0)],
+                18_000.0,
+                18_000.0,
+            ),
+            row(
+                5,
+                0,
+                false,
+                [(-200.0, 10.0), (0.0, 0.0)],
+                223_000.0,
+                223_000.0,
+            ),
+            row(
+                6,
+                2,
+                false,
+                [(200.0, -10.0), (200.0, 30.0)],
+                223_000.0,
+                223_000.0,
+            ),
+        ];
+        let mut copies: Vec<usize> = copied_counts(&rows, &[], 37.7).into_iter().collect();
+        copies.sort_unstable();
+        assert_eq!(copies, [2, 3]);
     }
 }

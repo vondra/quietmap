@@ -52,7 +52,23 @@ junctions and the place's yearly air temperature.
   vehicles a day a second time. A tunnel, which emits nothing and keeps no traffic in the data,
   counts as its road at its portals: in Brno, Kohoutova over the Husovice tunnel carried the
   tunnel's 44,000 vehicles a day; in Madrid the avenues over the buried M-30 carried the
-  motorway's.
+  motorway's. A main road running alongside a busier one with its count, and a two-way lane between
+  a freeway's carriageways with their two directions' count, are copies too: San Francisco's
+  Bayshore Boulevard carried US 101's 223,000 vehicles a day, Houston's and Atlanta's car-pool and
+  reversible lanes 270,000 to 320,000 on one or two lanes.
+- **A count held against its road.** Where road pieces meet end to end and no other road joins
+  them, no vehicle can enter or leave: a counted road carries one count there, the one most of its
+  length carries (on Argentina's Ruta 40 in La Rioja consecutive pieces carried 17,400, 58,222 and
+  200 vehicles a day from three stations). No lane carries more than the busiest counted lanes do,
+  29,400 vehicles a day on a one-way carriageway and 14,000 on a two-way road (a road that tags no
+  lanes has two): a count above that takes the model of its class, bounded by it, and a national
+  table's or a country's default value is cut to it (India's national table put 70,000 vehicles a
+  day on two-lane trunk roads). A count under a
+  fortieth of what the major roads' model predicts for its class, lanes and surroundings is not the
+  road's (Warsaw's Trasa Łazienkowska carried 32 vehicles a carriageway a day, another road's count
+  joined by its route number), nor is a national table's value or a country's default under the
+  lowest counts of its class and surroundings there (Riyadh's King Fahd Road 7,346 a carriageway):
+  those take the model too.
 - **Vehicle mix.** A count's own mix where it gives one; otherwise a main road takes the counted
   median of its class, a local street 1 % medium and 2 % heavy vehicles, a US road its state's mix
   ([<abbr title="the US Federal Highway Administration">FHWA</abbr>](https://www.fhwa.dot.gov/policyinformation/statistics.cfm),
@@ -67,7 +83,9 @@ junctions and the place's yearly air temperature.
   motorway and 70 on a trunk road; on primary, secondary, tertiary and unclassified roads the
   median signed speed of the class in the country replaces it where that is lower or no legal limit
   is known. A residential street takes 30 km/h and a living street, service road or track 20, or
-  the class's lower median sign (a German living street 10). On a two-way road outside towns, other
+  the class's lower median sign (a German living street 10). A main road signed slower than walking
+  pace or faster than any country's limit (140 km/h) counts as unsigned: Barcelona's Passeig de
+  Maragall was signed 4. On a two-way road outside towns, other
   than a motorway, at its country's open-road limit of 80 km/h or more, cars drive at 0.845 of it,
   the free-flow share measured in Great Britain. Lorries and buses drive at most 80 km/h, 90 to 105
   in thirteen countries.
@@ -160,7 +178,9 @@ horns.
   Switzerland, Norway and Great Britain 37.6 % of it runs between 22 and 06 h, as counted at the
   German monitors. Default passenger trains are lowered to fit the country's passenger
   train-kilometres in 12 European countries and Turkey. Lines mapped as passenger-only take no
-  default freight.
+  default freight, nor do lines run at 250 km/h or more that are not mapped as carrying freight:
+  high-speed lines carry passengers. A high-speed line that posts no speed runs at its line's
+  posted speed, else at 250 km/h, the median of the world's posted high-speed lines.
 - **Metro and crossings.** Above-ground metro uses the light-rail model; track underground emits
   nothing outdoors. At a level crossing, horns sound over up to a quarter mile before the crossing,
   for half the crossing's trains in each direction; US quiet zones stay silent, and partial ones at
@@ -349,7 +369,9 @@ deliveries, building sites, garden machinery, music and festivals.
   and runs the cooling of the service sector, in the share of floor it finds cooled in each EU
   country (Czechia 10 %, Spain 73 %; Europe's other countries their region's middle, Norway 8 %;
   the rest of the world where cooling saturates, 85 %), at the sound power manufacturers declare
-  for units of that capacity. It runs in business hours, Monday to Saturday 09-20, for the hours
+  for units of that capacity. A shop's ground mapped without a building counts at most a large
+  store's floor, 6,190 m² (the 99th percentile footprint of the mapped shops and offices). It runs
+  in business hours, Monday to Saturday 09-20, for the hours
   of full load the climate asks, and is heard while it runs, silent at night: in Czechia, where
   summers are cool, about 30 hours a year.
 - **Buildings of restaurants, cafés and bars** emit their cooling while their places are open, and
@@ -361,7 +383,9 @@ deliveries, building sites, garden machinery, music and festivals.
 - **Sports pitches** radiate [Sport England](https://www.sportengland.org)'s typical in-use level
   (58 dB LAeq,1h at 10 m) for their hours of play, a grass pitch 4 hours a week by day for 40
   weeks; courts, playgrounds, pools and terraces their active level for about an eighth of the day,
-  stadiums on match days. Each is heard while in use, not as a steady hum at its mean. Outdoor
+  stadiums on match days. A pitch counts at most 10 ha, a court, playground, pool or terrace at
+  most the largest of its kind (the 99th percentile of the mapped ones: a playground 6,280 m², a
+  terrace 760 m²): a 46 ha dog run mapped as a playground is a large playground. Each is heard while in use, not as a steady hum at its mean. Outdoor
   shooting ranges fire 20,000 shots a year by day.
 - **Car parks** follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
   (LfU 2007): 63 dB(A) for one movement an hour, 0.4 movements a space an hour from 06 to 22 h and

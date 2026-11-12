@@ -4,6 +4,35 @@
 //! (`scripts/gen-country-speed-defaults-rs.mjs` from `scripts/legal-default-speeds.json`).
 //! Buckets [urban, rural, motorway, motorroad]; 0 means no legal value.
 
+/// Walking pace (OpenStreetMap's `maxspeed=walk`): no main road is signed slower.
+const WALKING_PACE_KMH: u8 = 10;
+
+/// Whether a posted speed on a row of dev4 `class` is a sign: on a main road, link or unclassified
+/// road from walking pace to the fastest legal default of any country (Bulgaria's 140 on
+/// motorways). Barcelona's Passeig de Maragall, a secondary road, was posted 4 (40 typed short;
+/// 79 dB at 15 m where 40-50 km/h give 67), Riyadh's secondary roads 2; 254 is the extractor's
+/// clamp of a longer number. Local streets may post walking pace or less.
+pub fn is_sign(class: usize, posted: u8) -> bool {
+    !matches!(class, 0..=4 | 9..=12) || (WALKING_PACE_KMH..=FASTEST_LEGAL_KMH).contains(&posted)
+}
+
+/// The fastest legal default of any country in [`COUNTRY_SPEEDS`].
+const FASTEST_LEGAL_KMH: u8 = {
+    let mut fastest = 0;
+    let mut country = 0;
+    while country < COUNTRY_SPEEDS.len() {
+        let mut bucket = 0;
+        while bucket < 4 {
+            if COUNTRY_SPEEDS[country].1[bucket] > fastest {
+                fastest = COUNTRY_SPEEDS[country].1[bucket];
+            }
+            bucket += 1;
+        }
+        country += 1;
+    }
+    fastest
+};
+
 /// Sorted by ISO code for binary search.
 pub const COUNTRY_SPEEDS: &[(&[u8; 2], [u8; 4])] = &[
     (b"AD", [50, 60, 120, 0]),
@@ -164,3 +193,17 @@ pub const COUNTRY_SPEEDS: &[(&[u8; 2], [u8; 4])] = &[
     (b"ZA", [60, 100, 120, 0]),
     (b"ZM", [40, 100, 0, 0]),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn main_roads_are_signed_from_walking_pace_to_the_fastest_legal_limit() {
+        assert!(!is_sign(3, 4), "a secondary road at 4 km/h");
+        assert!(!is_sign(2, 254), "the clamp");
+        assert!(is_sign(0, 140) && !is_sign(0, 141));
+        assert!(is_sign(4, 10) && is_sign(2, 30));
+        assert!(is_sign(6, 5), "a living street at walking pace");
+    }
+}

@@ -29,6 +29,18 @@ const LEISURE_FLOOR_DBA: f64 = 40.0;
 /// Pitches count at most 10 ha (8,739 pitches over 10 ha, 413 over 100 ha, are ski runs and trail
 /// networks; one read 40 dB inside a desert singletrack).
 pub const PITCH_AREA_CAP_M2: f64 = 100_000.0;
+/// Courts, playgrounds, pools and terraces count at most the 99th percentile of their class's
+/// mapped polygons (dev4's leisure rows of 2026: 17,383 padel, 589,603 tennis, 367,089 ball-court,
+/// 1,033,330 playground, 98,344 pool and 377,973 terrace polygons; evidence 2026-11-12, data-1). A
+/// 46 ha dog run mapped as a playground, 15 ha of Ipanema's beach as a tennis court and Toronto's
+/// 46 ha motorboat exclusion zone as a pool read 40-49 dB Lden beside them; a mapped terrace of
+/// 6.9 ha seated 5,800 guests.
+const PADEL_AREA_CAP_M2: f64 = 9_860.0;
+const TENNIS_AREA_CAP_M2: f64 = 4_440.0;
+const BALL_COURT_AREA_CAP_M2: f64 = 2_450.0;
+const PLAYGROUND_AREA_CAP_M2: f64 = 6_280.0;
+const POOL_AREA_CAP_M2: f64 = 24_900.0;
+const TERRACE_AREA_CAP_M2: f64 = 760.0;
 
 /// A class's area law with its reference footprint (the area of a node without a polygon).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -54,6 +66,7 @@ const fn profile(
     spectrum: [f64; BANDS],
     evening: f64,
     night: f64,
+    area_cap_m2: f64,
 ) -> LeisureProfile {
     LeisureProfile {
         lw_per_m2_dba: per_m2,
@@ -63,7 +76,7 @@ const fn profile(
         night_offset_db: night,
         in_use_db: SEASON_AND_DUTY_DB,
         m2_per_parking_space: None,
-        area_cap_m2: f64::INFINITY,
+        area_cap_m2,
     }
 }
 
@@ -109,12 +122,18 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
     let car_park = |per_m2: f64, reference_m2: f64, m2_per_space: f64| LeisureProfile {
         in_use_db: 0.0,
         m2_per_parking_space: Some(m2_per_space),
-        ..profile(per_m2, reference_m2, CAR_PARK_SPECTRUM, -1.1, -6.3)
+        ..profile(
+            per_m2,
+            reference_m2,
+            CAR_PARK_SPECTRUM,
+            -1.1,
+            -6.3,
+            f64::INFINITY,
+        )
     };
     let pitch = |per_m2: f64, evening: f64, in_use_db: f64| LeisureProfile {
         in_use_db,
-        area_cap_m2: PITCH_AREA_CAP_M2,
-        ..profile(per_m2, 7_000.0, PLAYERS, evening, -25.0)
+        ..profile(per_m2, 7_000.0, PLAYERS, evening, -25.0, PITCH_AREA_CAP_M2)
     };
     Some(match class {
         PITCH => pitch(45.4, -1.2, GRASS_PITCH_IN_USE_DB),
@@ -125,6 +144,7 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
             [-6.0, -4.0, -2.0, -1.0, 0.0, 1.0, 2.0, 1.0],
             0.0,
             -15.0,
+            PADEL_AREA_CAP_M2,
         ),
         TENNIS => profile(
             50.0,
@@ -132,6 +152,7 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
             [-5.0, -4.0, -2.0, -1.0, 0.0, 1.0, 1.0, 0.0],
             -3.0,
             -20.0,
+            TENNIS_AREA_CAP_M2,
         ),
         BASKETBALL => profile(
             42.0,
@@ -139,6 +160,7 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
             [-4.0, -3.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0],
             -3.0,
             -20.0,
+            BALL_COURT_AREA_CAP_M2,
         ),
         PLAYGROUND => profile(
             48.0,
@@ -146,6 +168,7 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
             [-3.0, -1.0, 1.0, 2.0, 1.0, 0.0, -2.0, -5.0],
             -5.0,
             -25.0,
+            PLAYGROUND_AREA_CAP_M2,
         ),
         POOL => profile(
             50.0,
@@ -153,6 +176,7 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
             [-3.0, -2.0, 0.0, 1.0, 1.0, 0.0, -2.0, -5.0],
             -5.0,
             -25.0,
+            POOL_AREA_CAP_M2,
         ),
         OUTDOOR_SEATING => profile(
             55.0,
@@ -160,10 +184,11 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
             [-2.0, -1.0, 1.0, 2.0, 1.0, 0.0, -3.0, -6.0],
             0.0,
             -15.0,
+            TERRACE_AREA_CAP_M2,
         ),
         STADIUM => LeisureProfile {
             in_use_db: STADIUM_IN_USE_DB,
-            ..profile(40.0, 7_000.0, PLAYERS, -3.0, -12.0)
+            ..profile(40.0, 7_000.0, PLAYERS, -3.0, -12.0, f64::INFINITY)
         },
         CAR_PARK => car_park(45.3, 1_000.0, 23.8),
         CAR_PARK_STREET => car_park(47.8, 100.0, 13.3),
