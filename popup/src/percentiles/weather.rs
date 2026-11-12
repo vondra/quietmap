@@ -17,22 +17,35 @@ const SHARE_BINS: usize = 10;
 pub struct Weather(pub(super) [[[f64; PERIODS]; 3]; 2 * SHARE_BINS]);
 
 impl Weather {
-    /// Adds a piece of `energy` per period, the mix of its `states`; a piece without states
+    /// Where a piece's `energy` of one period falls, the mix of its `states` (homogeneous,
+    /// favourable): its bin, and its energy in either state and mixed; a piece without states
     /// (none computed) holds its mean in either.
+    pub fn binned(energy: f64, states: [f64; 2]) -> (usize, [f64; 3]) {
+        let [homogeneous, favourable] = if states[0] > 0.0 || states[1] > 0.0 {
+            states
+        } else {
+            [energy; 2]
+        };
+        let share = favourable_share(energy, homogeneous, favourable);
+        let calm_louder = usize::from(favourable < homogeneous);
+        let bin =
+            calm_louder * SHARE_BINS + ((share * SHARE_BINS as f64) as usize).min(SHARE_BINS - 1);
+        (bin, [homogeneous, favourable, energy])
+    }
+
+    /// Adds energy (homogeneous, favourable, mixed) to `bin` of `period` ([`Weather::binned`]).
+    pub fn add_binned(&mut self, period: usize, bin: usize, values: [f64; 3]) {
+        for (state, value) in self.0[bin].iter_mut().zip(values) {
+            state[period] += value;
+        }
+    }
+
+    /// Adds a piece of `energy` per period, the mix of its `states`.
     pub fn add(&mut self, energy: &[f64; PERIODS], states: &[[f64; PERIODS]; 2]) {
         for period in 0..PERIODS {
-            let [homogeneous, favourable] = if states[0][period] > 0.0 || states[1][period] > 0.0 {
-                [states[0][period], states[1][period]]
-            } else {
-                [energy[period]; 2]
-            };
-            let share = favourable_share(energy[period], homogeneous, favourable);
-            let calm_louder = usize::from(favourable < homogeneous);
-            let bin = &mut self.0[calm_louder * SHARE_BINS
-                + ((share * SHARE_BINS as f64) as usize).min(SHARE_BINS - 1)];
-            bin[0][period] += homogeneous;
-            bin[1][period] += favourable;
-            bin[2][period] += energy[period];
+            let (bin, values) =
+                Self::binned(energy[period], [states[0][period], states[1][period]]);
+            self.add_binned(period, bin, values);
         }
     }
 }

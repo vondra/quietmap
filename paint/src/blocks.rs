@@ -1,8 +1,9 @@
-//! A block of the painter's square: its corners' loud sources and which of them the block's pixels
-//! evaluate exactly, by dev1's rule (`crate::paint`); the energy the others leave at each corner.
+//! A block of the painter's square: the sources its pixels evaluate exactly and what they leave out at its corners by layer and direction.
 
-use crate::exact::{LAYERS, PairEnergy};
-use physics::bands::{PERIODS, lden_energy};
+use crate::corner_sources::{Corner, Ranked, SECTORS};
+use crate::exact::LAYERS;
+use physics::bands::PERIODS;
+use popup::percentiles::Weather;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -27,84 +28,69 @@ impl Hasher for IndexHasher {
 
 type IndexSet = HashSet<u32, BuildHasherDefault<IndexHasher>>;
 
-/// A block's corners admit their loudest sources, layer by layer, until the energy each corner has
-/// not admitted is at most this share of the block's quietest corner's, per layer in `Layer::ALL`'s
-/// order (road, railway, industry, building, ship, aircraft): dev1's speed dial
-/// (`relevance_partition.rs`; 0.15 chosen by the owner 2026-09-02, on dev1's etalon window
-/// breaking only the railways' rung over 6 dB). 0.20 since 2026-10-13, the owner's choice: with
-/// the left-out's reach on Dobris's four squares 13 % fewer pairs and 7 % less time, the total's
-/// drift within every rung (over 3 phon 0 -> 2 cells), the railway over 1 phon 1.4 -> 2.0 %, the
-/// buildings 0.8 -> 1.1 %; 0.25 no faster. The railways' 0.05 since 2026-11-09: a railway's few
-/// large pieces, left out, are blended from the corners as lines of passes, which read its
-/// loudness wrong where its energy is right (over 1 phon from the v10 etalon at 2.27 % of its
-/// cells, 0.49 % at 0.05, the other layers within 0.01 %, Dobris 2.7 % slower; 0.05 for every
-/// layer would admit 80 % more pieces).
-pub const DROP_BUDGET_FRACTIONS: [f64; LAYERS] = [0.20, 0.05, 0.20, 0.20, 0.20, 0.20];
+/// A pixel tracing deeper (`crate::transfers::Reaching::asks_deeper`) traces each corner's loudest
+/// sources, layer by layer in `Layer::ALL`'s order (road, railway, industry, building, ship,
+/// aircraft), until what the corner has not traced is at most this share of the block's quietest
+/// corner's layer: dev1's rule, and every pixel's until 2026-11-12. The railways' 0.05 since
+/// 2026-11-09: a railway's few large pieces, left out, are blended from the corners as lines of
+/// passes, which read its loudness wrong where its energy is right.
+const DEEPER_UNTRACED_SHARES: [f64; LAYERS] = [0.20, 0.05, 0.20, 0.20, 0.20, 0.20];
 
-/// A source loud at a corner: its index, its group, its Lden energy, its energy per period (mixed
-/// and in either weather state) and its emitters' distance from the corner's receiver.
-pub(crate) struct Ranked {
-    pub index: u32,
-    pub group: u64,
-    pub lden: f64,
-    pub energy: PairEnergy,
-    pub slant_distance_m: f64,
+/// Per layer and direction.
+pub(crate) type Strata<T> = [[T; SECTORS]; LAYERS];
+
+/// What a group left out sounds at one corner from one direction in one period and weather bin
+/// (`popup::percentiles::Weather::binned`): homogeneous, favourable and mixed. Each direction
+/// reaches a pixel by its own transfer, so the groups' lines take exactly what the layer's left-out
+/// energy holds of them, and the bins keep the pieces' weather apart as a click's contributor does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LeftBin {
+    pub corner: u8,
+    pub sector: u8,
+    pub period: u8,
+    pub bin: u8,
+    pub values: [f64; 3],
 }
 
-/// A block corner: per layer every source loud there, loudest first, and the layer's total Lden
-/// energy.
-#[derive(Default)]
-pub(crate) struct Corner {
-    pub ranked: [Vec<Ranked>; LAYERS],
-    pub totals: [f64; LAYERS],
-}
-
-impl Corner {
-    /// Adds source `index` of `group` and `layer` heard there with `energy` per period, its
-    /// emitters `slant_distance_m` away.
-    pub fn add(
-        &mut self,
-        layer: usize,
-        (index, group): (u32, u64),
-        (energy, slant_distance_m): (PairEnergy, f64),
-    ) {
-        let lden = lden_energy(&energy.mixed);
-        self.ranked[layer].push(Ranked {
-            index,
-            group,
-            lden,
-            energy,
-            slant_distance_m,
-        });
-        self.totals[layer] += lden;
-    }
-}
-
-/// A source group a block leaves out: its energy per period at each corner (north-west,
-/// north-east, south-west, south-east), mixed and in either weather state, the far pieces' calm and
-/// downwind apart by up to 17 dB at 700 m; its loudest source left out, whose display record its
-/// line takes; and at each corner its nearest source left out (`u32::MAX` where it has none there),
-/// whose distance its line takes where a pixel hears none of its other pieces, as a click takes a
-/// group's nearest piece.
+/// A source group a block leaves out: its loudest source left out, whose display record its line
+/// takes; at each corner (north-west, north-east, south-west, south-east) its nearest source left
+/// out (`u32::MAX` where it has none there), whose distance its line takes where a pixel hears
+/// none of its other pieces, as a click takes a group's nearest piece; and where its energy at the
+/// corners lies among the block's [`LeftBin`]s.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LeftGroup {
     pub key: u64,
-    pub at_corners: [PairEnergy; 4],
     pub loudest: u32,
     pub nearest: [u32; 4],
+    pub bins: std::ops::Range<u32>,
 }
 
-/// A block: the sources its pixels evaluate exactly (sorted), of them those its corners admit
-/// beyond its own (sorted) and their Lden energy at each corner, what they leave out at each corner
-/// per layer and period, and of it each source group's (sorted by group): it sounds with its passes
-/// at the pixels, not steady (a railway's farther ways carry the same trains).
+/// A source a block's pixels trace that does not cross it or the eight around: its layer, its Lden
+/// energy at each corner (0 where it is not loud there) and the direction each corner hears it
+/// from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Far {
+    pub index: u32,
+    pub layer: u8,
+    pub at_corners: [f64; 4],
+    pub sector: [u8; 4],
+}
+
+/// A block: the sources its pixels evaluate exactly (sorted: its own and its corners'), of them
+/// its own (crossing it or the eight around, sorted) and the far ones (sorted); the most sources a
+/// pixel of it may trace (its deeper list's count), which bounds a pass's pairs; what the exact
+/// sources leave out at each corner per layer, direction and period, and of it each source
+/// group's (sorted by group) with its weather bins: it sounds with its passes at the pixels, not
+/// steady (a railway's farther ways carry the same trains).
 #[derive(Clone)]
 pub(crate) struct Block {
     pub exact: Vec<u32>,
-    pub admitted: Vec<u32>,
-    pub admitted_at_corners: [f64; 4],
-    pub left_out: [[[f64; PERIODS]; LAYERS]; 4],
+    pub own: Vec<u32>,
+    pub far: Vec<Far>,
+    pub most: usize,
+    pub left_out: Box<[Strata<[f64; PERIODS]>; 4]>,
     pub left_groups: Vec<LeftGroup>,
+    pub left_bins: Vec<LeftBin>,
 }
 
 /// Whether the piece `a`-`b` meets the rectangle `low`-`high` (Liang-Barsky).
@@ -130,188 +116,226 @@ pub(crate) fn meets(a: [f64; 2], b: [f64; 2], low: [f64; 2], high: [f64; 2]) -> 
     t0 <= t1
 }
 
-/// dev1's admission of a block: its own sources `local`, then at each corner in turn, layer by
-/// layer, the corner's loudest until the energy it has not admitted is within the budget. The
-/// sources admitted (`local` first), of them those beyond `local`, and the set of all.
-fn admission(local: Vec<u32>, corners: [&Corner; 4]) -> (Vec<u32>, Vec<u32>, IndexSet) {
-    let mut admitted: IndexSet = local.iter().copied().collect();
+/// The sources a block's pixels evaluate exactly: its own `local` ones (crossing it or the eight
+/// around) and its four corners'.
+fn exact_sources(local: Vec<u32>, corners: [&Corner; 4]) -> (Vec<u32>, IndexSet) {
+    let mut set: IndexSet = local.iter().copied().collect();
     let mut exact = local;
-    let mut beyond = Vec::new();
-    for (layer, fraction) in DROP_BUDGET_FRACTIONS.into_iter().enumerate() {
+    for corner in corners {
+        for &own in &corner.traced {
+            if set.insert(own) {
+                exact.push(own);
+            }
+        }
+    }
+    (exact, set)
+}
+
+/// What a pixel tracing deeper adds to the sources of `set`: layer by layer each corner's loudest
+/// until what the corner has not traced is within [`DEEPER_UNTRACED_SHARES`] of the quietest
+/// corner's layer.
+fn deeper_additions(set: &IndexSet, corners: [&Corner; 4]) -> Vec<u32> {
+    let mut more = Vec::new();
+    let mut added = IndexSet::default();
+    for (layer, share) in DEEPER_UNTRACED_SHARES.into_iter().enumerate() {
         let quietest = (corners.iter())
             .map(|corner| corner.totals[layer])
             .fold(f64::INFINITY, f64::min);
-        let budget = fraction * quietest;
+        let budget = share * quietest;
         for corner in corners {
             let ranked = &corner.ranked[layer];
-            let mut unadmitted: f64 = (ranked.iter())
-                .filter(|source| !admitted.contains(&source.index))
+            let mut untraced: f64 = (ranked.iter())
+                .filter(|source| !set.contains(&source.index) && !added.contains(&source.index))
                 .map(|source| source.lden)
                 .sum();
             for source in ranked {
-                if unadmitted <= budget {
+                if untraced <= budget {
                     break;
                 }
-                if admitted.insert(source.index) {
-                    exact.push(source.index);
-                    beyond.push(source.index);
-                    unadmitted -= source.lden;
+                if !set.contains(&source.index) && added.insert(source.index) {
+                    more.push(source.index);
+                    untraced -= source.lden;
                 }
             }
         }
     }
-    (exact, beyond, admitted)
+    more
 }
 
-/// How many sources a block's pixels evaluate exactly and whether its corners leave any out: what
-/// a quiet block's test asks of every block, without the groups left out (building and sorting
-/// those was most of a dense city square's work on the cores, 2026-10-17).
+/// The most sources a pixel of a block may trace (its deeper list's count) and whether its corners
+/// leave any out of its exact sources: what a quiet block's test and a pass's bound ask of every
+/// block, without the groups left out (building and sorting those was most of a dense city
+/// square's work on the cores, 2026-10-17).
 pub(crate) fn admission_counts(local: Vec<u32>, corners: [&Corner; 4]) -> (usize, bool) {
-    let (exact, _, admitted) = admission(local, corners);
+    let (exact, set) = exact_sources(local, corners);
     let leaves_out = (corners.iter())
         .flat_map(|corner| corner.ranked.iter().flatten())
-        .any(|source| !admitted.contains(&source.index));
-    (exact.len(), leaves_out)
+        .any(|source| !set.contains(&source.index));
+    let most = exact.len() + deeper_additions(&set, corners).len();
+    (most, leaves_out)
 }
 
-/// dev1's admission of a block ([`admission`]) and the energy the admitted leave out at each
-/// corner, of it each source group's.
+/// A block's exact sources ([`exact_sources`]) and the energy they leave out at each corner by
+/// layer and direction, of it each source group's.
 pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
-    let (mut exact, mut beyond, admitted) = admission(local, corners);
-    let mut left_out = [[[0.0; PERIODS]; LAYERS]; 4];
+    let own_count = local.len();
+    let (exact, set) = exact_sources(local, corners);
+    let most = exact.len() + deeper_additions(&set, corners).len();
+    leave_out((own_count, most), exact, &set, corners)
+}
+
+/// `block` tracing deeper: its exact sources and what [`deeper_additions`] adds; what is then left
+/// out.
+pub(crate) fn admit_deeper(block: &Block, corners: [&Corner; 4]) -> Block {
+    let mut set: IndexSet = block.exact.iter().copied().collect();
+    let mut exact = block.own.clone();
+    let own: IndexSet = exact.iter().copied().collect();
+    exact.extend(block.exact.iter().filter(|index| !own.contains(index)));
+    let more = deeper_additions(&set, corners);
+    set.extend(more.iter().copied());
+    exact.extend(more);
+    leave_out((block.own.len(), exact.len()), exact, &set, corners)
+}
+
+/// The block whose pixels trace `exact` (its own sources its first `own_count`; `set` the same
+/// sources) and at most `most` sources: what they leave out at each corner by layer and direction,
+/// of it each source group's.
+fn leave_out(
+    (own_count, most): (usize, usize),
+    mut exact: Vec<u32>,
+    set: &IndexSet,
+    corners: [&Corner; 4],
+) -> Block {
+    let mut own = exact[..own_count].to_vec();
+    own.sort_unstable();
+    // The corners' sources beyond the block's own, each corner's energy and direction to come.
+    let mut far: Vec<(Far, [bool; 4])> = (exact[own_count..].iter())
+        .map(|&index| {
+            let far = Far {
+                index,
+                layer: 0,
+                at_corners: [0.0; 4],
+                sector: [0; 4],
+            };
+            (far, [false; 4])
+        })
+        .collect();
+    far.sort_unstable_by_key(|(far, _)| far.index);
+    let mut left_out = Box::new([[[[0.0; PERIODS]; SECTORS]; LAYERS]; 4]);
     // Each source left out at a corner as a small key (its group, Lden energy and index there) and
     // the corner: sorting the whole 360-byte groups moved more memory than anything else in a
     // dense city square (2026-10-17).
     let mut left: Vec<(u64, f64, u32, usize, &Ranked)> = Vec::new();
     for (c, corner) in corners.iter().enumerate() {
         for (layer, ranked) in corner.ranked.iter().enumerate() {
-            for source in ranked
-                .iter()
-                .filter(|source| !admitted.contains(&source.index))
-            {
-                for (total, value) in left_out[c][layer].iter_mut().zip(source.energy.mixed) {
-                    *total += value;
+            for source in ranked {
+                if !set.contains(&source.index) {
+                    let stratum = &mut left_out[c][layer][source.sector as usize];
+                    for (total, value) in stratum.iter_mut().zip(source.energy.mixed) {
+                        *total += value;
+                    }
+                    left.push((source.group, source.lden, source.index, c, source));
+                } else if let Ok(at) = far.binary_search_by_key(&source.index, |(far, _)| far.index)
+                {
+                    let (far, heard) = &mut far[at];
+                    far.layer = layer as u8;
+                    far.at_corners[c] = source.lden;
+                    (far.sector[c], heard[c]) = (source.sector, true);
                 }
-                left.push((source.group, source.lden, source.index, c, source));
             }
         }
     }
     // One entry a group: its loudest source (ties to the lowest index) the representative, at each
-    // corner the sum of its sources there in that order and its nearest.
+    // corner its sources' energy by direction, period and weather bin, and its nearest.
     left.sort_unstable_by(|a, b| {
         (a.0.cmp(&b.0))
             .then(b.1.total_cmp(&a.1))
             .then(a.2.cmp(&b.2))
     });
     let mut left_groups: Vec<LeftGroup> = Vec::new();
+    let mut left_bins: Vec<LeftBin> = Vec::new();
     let mut nearest_m = [f64::INFINITY; 4];
     for &(key, _, index, c, source) in &left {
-        match left_groups.last_mut() {
-            Some(group) if group.key == key => {
-                let into = &mut group.at_corners[c];
-                for p in 0..PERIODS {
-                    into.mixed[p] += source.energy.mixed[p];
-                    into.states[0][p] += source.energy.states[0][p];
-                    into.states[1][p] += source.energy.states[1][p];
-                }
-                if source.slant_distance_m < nearest_m[c] {
-                    (nearest_m[c], group.nearest[c]) = (source.slant_distance_m, index);
-                }
-            }
-            _ => {
-                let mut group = LeftGroup {
-                    key,
-                    at_corners: [PairEnergy::default(); 4],
-                    loudest: index,
-                    nearest: [u32::MAX; 4],
-                };
-                group.at_corners[c] = source.energy;
-                group.nearest[c] = index;
-                nearest_m = [f64::INFINITY; 4];
-                nearest_m[c] = source.slant_distance_m;
-                left_groups.push(group);
+        if left_groups.last().is_none_or(|group| group.key != key) {
+            close_group(&mut left_groups, &mut left_bins);
+            let start = left_bins.len() as u32;
+            left_groups.push(LeftGroup {
+                key,
+                loudest: index,
+                nearest: [u32::MAX; 4],
+                bins: start..start,
+            });
+            nearest_m = [f64::INFINITY; 4];
+        }
+        let group = left_groups.last_mut().unwrap();
+        let energy = &source.energy;
+        for period in 0..PERIODS {
+            let states = [energy.states[0][period], energy.states[1][period]];
+            let (bin, values) = Weather::binned(energy.mixed[period], states);
+            if values.iter().any(|&value| value > 0.0) {
+                left_bins.push(LeftBin {
+                    corner: c as u8,
+                    sector: source.sector,
+                    period: period as u8,
+                    bin: bin as u8,
+                    values,
+                });
             }
         }
+        if source.slant_distance_m < nearest_m[c] {
+            (nearest_m[c], group.nearest[c]) = (source.slant_distance_m, index);
+        }
     }
+    close_group(&mut left_groups, &mut left_bins);
     exact.sort_unstable();
-    beyond.sort_unstable();
-    let admitted_at_corners = corners.map(|corner| {
-        (corner.ranked.iter().flatten())
-            .filter(|source| beyond.binary_search(&source.index).is_ok())
-            .map(|source| source.lden)
-            .sum()
-    });
+    // A corner that does not hear a far source loud takes its direction from one that does.
+    let far = (far.into_iter())
+        .map(|(mut far, heard)| {
+            let known = heard.iter().position(|&heard| heard).unwrap_or(0);
+            let from_known = far.sector[known];
+            for (sector, heard) in far.sector.iter_mut().zip(heard) {
+                if !heard {
+                    *sector = from_known;
+                }
+            }
+            far
+        })
+        .collect();
     Block {
         exact,
-        admitted: beyond,
-        admitted_at_corners,
+        own,
+        far,
+        most,
         left_out,
         left_groups,
+        left_bins,
     }
+}
+
+/// Ends the last group's bins: one entry per corner, direction, period and bin, its sources' sum.
+fn close_group(groups: &mut [LeftGroup], bins: &mut Vec<LeftBin>) {
+    let Some(group) = groups.last_mut() else {
+        return;
+    };
+    let start = group.bins.start as usize;
+    let key = |entry: &LeftBin| (entry.corner, entry.sector, entry.period, entry.bin);
+    bins[start..].sort_unstable_by_key(key);
+    let mut kept = start;
+    for at in start..bins.len() {
+        if kept > start && key(&bins[kept - 1]) == key(&bins[at]) {
+            let values = bins[at].values;
+            for (sum, value) in bins[kept - 1].values.iter_mut().zip(values) {
+                *sum += value;
+            }
+        } else {
+            bins[kept] = bins[at];
+            kept += 1;
+        }
+    }
+    bins.truncate(kept);
+    group.bins.end = kept as u32;
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tiles::sources::Layer;
-
-    /// A corner of `layer` sources, each its own group, the same energy in every period, its index
-    /// in metres away.
-    fn corner(layer: Layer, sources: Vec<(u32, f64)>) -> Corner {
-        let mut corner = Corner::default();
-        for (index, energy) in sources {
-            let group = u64::from(index);
-            let energy = PairEnergy {
-                mixed: [energy; PERIODS],
-                states: [[energy; PERIODS]; 2],
-            };
-            corner.add(layer as usize, (index, group), (energy, f64::from(index)));
-        }
-        corner
-    }
-
-    /// dev1's rule: a block keeps its own sources (9), then each corner admits its loudest until
-    /// what it has not admitted is within 20 % of the quietest corner's layer. Corners of 93 and
-    /// 23 give a budget of 4.6: the loud corners admit both their sources and nothing is left out.
-    /// Four corners of 100 give 20: source 2's 12 is left out, blended from the corners; a
-    /// railway's corners of 100 give 5, and source 2 is computed exactly.
-    #[test]
-    fn a_block_admits_the_loudest_until_the_rest_is_within_the_quietest_corners_budget() {
-        let road = Layer::Road as usize;
-        let loud = corner(Layer::Road, vec![(1, 80.0), (2, 12.0), (9, 1.0)]);
-        let quiet = corner(Layer::Road, vec![(2, 12.0), (1, 10.0), (9, 1.0)]);
-        let block = admit(vec![9], [&loud, &loud, &quiet, &quiet]);
-        assert_eq!(block.exact, vec![1, 2, 9]);
-        assert!(
-            block
-                .left_out
-                .iter()
-                .all(|corner| corner[road] == [0.0; PERIODS])
-        );
-        assert!(block.left_groups.is_empty());
-        let even = corner(Layer::Road, vec![(1, 88.0), (2, 12.0)]);
-        let block = admit(Vec::new(), [&even; 4]);
-        assert_eq!(block.exact, vec![1]);
-        assert!(
-            block
-                .left_out
-                .iter()
-                .all(|corner| corner[road] == [12.0; PERIODS])
-        );
-        let twelve = PairEnergy {
-            mixed: [12.0; PERIODS],
-            states: [[12.0; PERIODS]; 2],
-        };
-        let left = LeftGroup {
-            key: 2,
-            at_corners: [twelve; 4],
-            loudest: 2,
-            nearest: [2; 4],
-        };
-        assert_eq!(block.left_groups, vec![left]);
-        let railway = corner(Layer::Railway, vec![(1, 88.0), (2, 12.0)]);
-        let block = admit(Vec::new(), [&railway; 4]);
-        assert_eq!(block.exact, vec![1, 2]);
-        assert!(block.left_groups.is_empty());
-    }
-}
+#[path = "blocks_tests.rs"]
+mod tests;

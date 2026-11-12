@@ -1,11 +1,12 @@
 //! Background blocks and checked sub-block fields expanded from shared loudness and exact pixel probes.
 //!
 //! The obstacle proof precedes pixel receivers, as dev1's quiet-region shortcut precedes rasters.
-//! Background blocks blend loudness at corners and evaluate their original energy fields. Source blocks check actual
-//! pixel receivers against sampled loudness; only patches away from sources and walls that agree
-//! omit work.
+//! Background blocks blend loudness at corners and evaluate their original energy fields. Source
+//! blocks check actual pixel receivers against their corners' paint, then against sampled
+//! lattices; only blocks and patches away from sources and walls that agree omit work.
 //! Source blocks retain their admissions; sampled pixel fields are evaluated in bounded chunks.
 
+use crate::block_samples::sample_block_pixels;
 use crate::blocks::Block;
 use crate::exact::LAYERS;
 use crate::flights::blend_flights;
@@ -13,16 +14,16 @@ use crate::levels::Painted;
 use crate::levels::{PaintedCells, layer_energy};
 use crate::paint::{corner_weights, rectangle_at};
 use crate::points::PointPainter;
-use crate::quiet_corners::loudness_at_corners;
-use crate::quiet_samples::{QuietSamples, sample_block_pixels};
+use crate::quiet_corners::paint_corners;
+use crate::quiet_samples::QuietSamples;
 use rayon::prelude::*;
 use std::borrow::Cow;
 
 pub(crate) struct QuietBlocks {
     pub known_blocks: Vec<bool>,
     admissions: Vec<Option<Block>>,
-    pub exact_source_counts: Vec<usize>,
-    loudness: Vec<[f64; LAYERS + 1]>,
+    pub most_source_counts: Vec<usize>,
+    corner_paint: Vec<Painted>,
     samples: Vec<Option<QuietSamples>>,
 }
 
@@ -33,7 +34,7 @@ impl QuietBlocks {
         let candidates = (0..side * side)
             .into_par_iter()
             .map_init(Vec::new, |near, at| {
-                let (exact, leaves_out) = painter.block_admission(near, at);
+                let (most, leaves_out) = painter.block_admission(near, at);
                 let (x, y) = ((at % side) * grid.block, (at / side) * grid.block);
                 let (low, high) = rectangle_at(
                     square,
@@ -44,32 +45,17 @@ impl QuietBlocks {
                     (y + grid.block) as f64,
                 );
                 (
-                    exact == 0 && !leaves_out && square.obstacles.is_open_rectangle(low, high),
-                    exact,
+                    most == 0 && !leaves_out && square.obstacles.is_open_rectangle(low, high),
+                    most,
                 )
             })
             .collect::<Vec<_>>();
-        let corner_side = side + 1;
-        let mut needed = vec![false; corner_side * corner_side];
-        for (at, &(background, _)) in candidates.iter().enumerate() {
-            if background {
-                let first = (at / side) * corner_side + at % side;
-                for corner in [
-                    first,
-                    first + 1,
-                    first + corner_side,
-                    first + corner_side + 1,
-                ] {
-                    needed[corner] = true;
-                }
-            }
-        }
-        let loudness = loudness_at_corners(painter, needed)?;
+        let corner_paint = paint_corners(painter)?;
         let mut quiet = Self {
             known_blocks: vec![false; candidates.len()],
             admissions: (0..candidates.len()).map(|_| None).collect(),
-            exact_source_counts: candidates.iter().map(|&(_, count)| count).collect(),
-            loudness,
+            most_source_counts: candidates.iter().map(|&(_, count)| count).collect(),
+            corner_paint,
             samples: (0..candidates.len()).map(|_| None).collect(),
         };
         let mut block_ids = Vec::new();
@@ -82,22 +68,23 @@ impl QuietBlocks {
         }
         let background = quiet.known_blocks.iter().filter(|&&quiet| quiet).count();
         let candidate_count = block_ids.len();
-        let sampled = sample_block_pixels(painter, block_ids)?;
+        let sampled = sample_block_pixels(painter, block_ids, &quiet.corner_paint)?;
         for (at, block) in sampled.admissions {
             quiet.admissions[at] = Some(block);
         }
-        let sampled = sampled.blocks;
-        let sampled_count = sampled.len();
-        let interpolated_patches: usize = sampled
-            .iter()
-            .map(|(_, samples)| samples.interpolated_patches())
-            .sum();
-        for (at, samples) in sampled {
+        let (mut whole, mut blended, mut carried) = (0, 0, 0);
+        for (at, samples) in sampled.blocks {
+            let patches = samples.patches();
+            whole += usize::from(samples.complete());
+            blended += patches.0;
+            carried += patches.1;
             quiet.known_blocks[at] = samples.complete();
             quiet.samples[at] = Some(samples);
         }
+        let patches = 16 * (candidate_count - whole);
         eprintln!(
-            "qm-paint: {background} open background blocks, {sampled_count}/{candidate_count} source blocks sampled, {interpolated_patches} checked patches interpolated"
+            "qm-paint: {background} open background blocks, {whole} of {candidate_count} source blocks blended whole; of the others' {patches} patches {} blended, {carried} with carried loudness",
+            blended - 16 * whole
         );
         Ok(quiet)
     }
@@ -124,6 +111,21 @@ impl QuietBlocks {
                 .is_some_and(|samples| samples.has_paint(x % grid.block, y % grid.block))
     }
 
+    /// The loudness the pixel `at` takes from its block's lattice and its own `energies`, where its
+    /// patch carries it (`QuietSamples::loudness_from`).
+    pub fn loudness_from(
+        &self,
+        painter: &PointPainter,
+        at: usize,
+        energies: &[f64; LAYERS],
+    ) -> Option<[f64; LAYERS + 1]> {
+        let grid = painter.grid;
+        let (x, y) = (at % grid.pixels, at / grid.pixels);
+        let block = (y / grid.block) * (grid.pixels / grid.block) + x / grid.block;
+        (self.samples[block].as_ref())
+            .and_then(|samples| samples.loudness_from(x % grid.block, y % grid.block, energies))
+    }
+
     /// A known pixel: sampled source fields, or background Nden corners and the original energy grids.
     /// The open proof keeps facade ranking out of the background path.
     pub fn paint_at(&self, painter: &PointPainter, at: usize) -> Painted {
@@ -141,7 +143,7 @@ impl QuietBlocks {
         let weights = corner_weights(fx, fy);
         let ndens = std::array::from_fn(|layer| {
             (0..4)
-                .map(|corner| weights[corner] * self.loudness[around[corner]][layer])
+                .map(|corner| weights[corner] * self.corner_paint[around[corner]].1[layer])
                 .sum()
         });
         // The open-rectangle proof excludes reflection throughout the receiver windows.

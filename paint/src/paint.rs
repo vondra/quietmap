@@ -1,20 +1,27 @@
 //! Square corners, block pixels and facade loudness from exact sources, sampled hum and aircraft fields.
 //!
-//! A square painted as dev1 painted it, in blocks of 16 x 16 pixels. At every block corner each
-//! ground source loud there (`popup::candidates::loud`) is evaluated exactly. A block's pixels
-//! evaluate exactly the loud sources crossing it or the eight blocks around and, layer by layer,
-//! the loudest at its corners until what is left out weighs at most a share of its quietest
-//! corner's ([`crate::blocks`]); what is left out is blended from the corners, the quiet hum from
-//! its points ([`Hum`]), the flights from the corners. Each pixel's loudness (Nden, sone) per layer
-//! and in total is the popup's model on those ([`crate::sone`]); a block hearing only the hum and
-//! the flights (no source of its own, no wall) blends its corners' ([`crate::quiet`]). Quiet
-//! blocks skip pixel receivers through [`crate::quiet`]; patches away from crossing sources and
-//! screening edges interpolate after their loudness lattice and pixel probe agree within half a phon.
+//! A square painted in blocks of 16 x 16 pixels. At every block corner each ground source loud
+//! there (`popup::candidates::loud`) is evaluated exactly, and the corner's paint taken from them
+//! ([`crate::quiet_corners`]). A block's pixels evaluate exactly the loud sources crossing it or
+//! the eight blocks around and those its corners choose: each corner's loudest far source of every
+//! layer and direction and its loudest until half of each layer is traced
+//! ([`crate::corner_sources`], [`crate::blocks`]). What is left out is blended from the corners,
+//! each layer's and direction's as far as the block's far sources of that direction reach the
+//! pixel against the corners' blend of them; where that changes much of the pixel's sound, the
+//! pixel traces the corners' loudest sources deeper ([`crate::transfers`], [`crate::traced`]).
+//! The quiet hum comes from its points ([`Hum`]), the flights from the corners. Each pixel's
+//! loudness (Nden, sone) per layer and in total is the popup's model on those ([`crate::sone`]),
+//! or its lattice's loudness carried to its own energies ([`crate::lattice_blend`]). A block
+//! hearing only the hum and the flights (no source of its own, no wall) blends its corners'
+//! ([`crate::quiet`]); a block no source or screening edge crosses blends from its corners or its
+//! coarse lattice where its quadrants' probes agree, and a patch from its lattice where its probe
+//! does, as far as a visitor sees ([`crate::block_samples`], [`crate::visible`]).
 //! A building's pixels take its loudest façade, painted at its likeliest loudest façade receivers as a
 //! click inside it is answered ([`crate::buildings`]).
 
-use crate::blocks::Corner;
+use crate::blocks::meets;
 use crate::buildings::{building_levels, facade_candidates, fill_buildings};
+use crate::corner_sources::{Corner, sector_of};
 use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all, loud_pairs};
 use crate::flight_spectra::FlightSpectra;
 use crate::flights::{FlightSums, flights_at_corners};
@@ -235,9 +242,13 @@ pub fn corners_of(
             for (pair, energy) in pairs.iter().zip(&evaluated.pairs) {
                 let (k, index) = (pair.point, pair.candidate);
                 let candidate = &square.candidates[index as usize];
-                let slant_distance_m = square.slant_distance_m(index, &corner_points[k as usize]);
+                let point = &corner_points[k as usize];
+                let slant_distance_m = square.slant_distance_m(index, point);
                 corners[k as usize].add(
-                    candidate.layer as usize,
+                    (
+                        candidate.layer as usize,
+                        sector_of(candidate.offset_from(point.position)),
+                    ),
                     (index, candidate.group_key),
                     (*energy, slant_distance_m),
                 );
@@ -289,10 +300,21 @@ pub fn corners_of(
             })
         })
         .collect();
-    corners.par_iter_mut().for_each(|corner| {
+    // Each corner's sources loudest first, and of them those its pixels trace: a far one lies
+    // beyond the four blocks around the corner and the blocks around those.
+    let corner_side = n / grid.block + 1;
+    let reach = 2.0 * grid.block as f64;
+    corners.par_iter_mut().enumerate().for_each(|(at, corner)| {
         for ranked in &mut corner.ranked {
             ranked.sort_unstable_by(|a, b| b.lden.total_cmp(&a.lden).then(a.index.cmp(&b.index)));
         }
+        let x = ((at % corner_side) * grid.block) as f64;
+        let y = ((at / corner_side) * grid.block) as f64;
+        let (low, high) = rectangle(x - reach, y - reach, x + reach, y + reach);
+        corner.choose_traced(|index| {
+            let [a, b] = square.candidates[index as usize].ends_m;
+            meets(a, b, low, high)
+        });
     });
     Ok(Some(Corners {
         corner_points,
@@ -325,13 +347,16 @@ pub fn paint_pixels(
         batch,
         corners,
         pairs: AtomicUsize::new(0),
+        points: AtomicUsize::new(0),
+        deeper: AtomicUsize::new(0),
+        sounds: AtomicUsize::new(0),
     };
     let blocks = n / grid.block;
     let area = grid.block * grid.block;
     let quiet = QuietBlocks::new(&painter)?;
     if quiet.known_blocks.iter().all(|&quiet| quiet) {
         let cells = quiet.cells(&painter);
-        report_pixels(corners_s, corner_pairs, started, painter.pairs.into_inner());
+        report_pixels(corners_s, corner_pairs, started, &painter);
         return cells;
     }
     // Every pixel, a run of blocks at a time (four block rows, fewer where their pairs would pass
@@ -359,7 +384,9 @@ pub fn paint_pixels(
         let points: Vec<Point> = (places.par_iter())
             .map(|&(_, at)| Point::at(square, metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5)))
             .collect::<Result<_, String>>()?;
-        let painted = painter.paint(&pass, &points, &places)?;
+        let painted = painter.paint_beside(&pass, &points, &places, &|at, energies| {
+            quiet.loudness_from(&painter, at, energies)
+        })?;
         let indoor = (points.iter().zip(&places))
             .filter(|(point, _)| point.own_footprint != 0)
             .map(|(point, &(_, at))| (at, point.own_footprint))
@@ -370,7 +397,7 @@ pub fn paint_pixels(
         Ok((outdoor, indoor))
     };
     let bounds: Vec<usize> = quiet
-        .exact_source_counts
+        .most_source_counts
         .par_iter()
         .enumerate()
         .map(|(block, &count)| {
@@ -407,15 +434,23 @@ pub fn paint_pixels(
             None => None,
         },
     ))?;
-    report_pixels(corners_s, corner_pairs, started, painter.pairs.into_inner());
+    report_pixels(corners_s, corner_pairs, started, &painter);
     Ok(cells)
 }
 
-fn report_pixels(corners_s: f64, corner_pairs: usize, started: std::time::Instant, pairs: usize) {
+fn report_pixels(
+    corners_s: f64,
+    corner_pairs: usize,
+    started: std::time::Instant,
+    painter: &PointPainter,
+) {
     eprintln!(
-        "qm-paint: hum and corners {corners_s:.1} s ({corner_pairs} pairs), pixels {:.1} s ({} pairs)",
+        "qm-paint: hum and corners {corners_s:.1} s ({corner_pairs} pairs), pixels {:.1} s ({} pairs at {} points, {} of them deeper, {} sounds)",
         started.elapsed().as_secs_f64(),
-        pairs,
+        painter.pairs.load(std::sync::atomic::Ordering::Relaxed),
+        painter.points.load(std::sync::atomic::Ordering::Relaxed),
+        painter.deeper.load(std::sync::atomic::Ordering::Relaxed),
+        painter.sounds.load(std::sync::atomic::Ordering::Relaxed),
     );
 }
 

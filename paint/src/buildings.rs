@@ -139,7 +139,7 @@ pub(crate) fn building_levels(
         }
     }
     let bounds: Vec<usize> = (blocks.iter())
-        .map(|(at, range)| range.len() * quiet.exact_source_counts[*at])
+        .map(|(at, range)| range.len() * quiet.most_source_counts[*at])
         .collect();
     let mut footprints = Vec::with_capacity(candidates.len());
     let mut pixels = Vec::with_capacity(candidates.len());

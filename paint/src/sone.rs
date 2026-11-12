@@ -4,7 +4,8 @@
 //! sounds with its passes too, joined to its line, or as a line of its own from its loudest
 //! source left out; the quiet hum held steady with its own bands; the flights one line.
 
-use crate::blocks::LeftGroup;
+use crate::blocks::{LeftBin, LeftGroup, Strata};
+use crate::corner_sources::SECTORS;
 use crate::exact::{LAYERS, PairEnergy, Point, PointBands};
 use crate::flights::FlightSums;
 use crate::square::Square;
@@ -64,15 +65,30 @@ impl Displays {
 
 /// What a pixel hears beside its exact pairs, its reflection not yet taken: per layer the energy
 /// per period not evaluated there (left out at the corners, humming) and its bands; of it the
-/// groups its block left out with the pixel's weights of the block's corners, and the share of
-/// what the block left out that reaches the pixel; the flights.
+/// groups its block left out; the flights.
 pub(crate) struct SoundBesideExactPairs<'a> {
     pub steady: [[f64; PERIODS]; LAYERS],
     pub bands: PointBands,
-    pub left_groups: (&'a [LeftGroup], [f64; 4]),
-    pub left_reach: f64,
+    pub left_out: LeftOut<'a>,
     pub flights: FlightSums,
 }
+
+/// The groups a block left out and their weather bins at its corners, with how much of each
+/// corner's layer and direction reaches the pixel: the direction's transfer times the pixel's
+/// weight of the corner (`crate::transfers::Reaching`).
+#[derive(Clone, Copy)]
+pub(crate) struct LeftOut<'a> {
+    pub groups: &'a [LeftGroup],
+    pub bins: &'a [LeftBin],
+    pub transfers: &'a [Strata<f64>; 4],
+}
+
+/// No group left out: a point that evaluates every loud source.
+pub(crate) const NOTHING_LEFT_OUT: LeftOut = LeftOut {
+    groups: &[],
+    bins: &[],
+    transfers: &[[[0.0; SECTORS]; LAYERS]; 4],
+};
 
 /// One source group's exact pairs at a pixel: its energy and binned weather, its nearest emitters'
 /// distance from the pixel's receiver, its loudest pair's display record (as a click's contributor)
@@ -230,19 +246,21 @@ pub(crate) fn pixel_sound(
     let mut steady = rest
         .steady
         .map(|layer| layer.map(|value| reflection * value));
-    let (left_groups, weights) = rest.left_groups;
+    let LeftOut {
+        groups: left_groups,
+        bins,
+        transfers,
+    } = rest.left_out;
     for group in left_groups {
-        let blend = |of: &dyn Fn(&PairEnergy) -> [f64; PERIODS]| -> [f64; PERIODS] {
-            std::array::from_fn(|p| {
-                reflection
-                    * rest.left_reach
-                    * (0..4)
-                        .map(|c| weights[c] * of(&group.at_corners[c])[p])
-                        .sum::<f64>()
-            })
-        };
-        let left = blend(&|energy| energy.mixed);
-        let states = [0, 1].map(|state| blend(&|energy| energy.states[state]));
+        let loudest = &square.candidates[group.loudest as usize];
+        let layer = loudest.layer as usize;
+        let reach =
+            |bin: &LeftBin| reflection * transfers[bin.corner as usize][layer][bin.sector as usize];
+        let bins = &bins[group.bins.start as usize..group.bins.end as usize];
+        let mut left = [0.0; PERIODS];
+        for bin in bins {
+            left[bin.period as usize] += reach(bin) * bin.values[2];
+        }
         if left.iter().all(|&value| value <= 0.0) {
             continue;
         }
@@ -250,7 +268,6 @@ pub(crate) fn pixel_sound(
             .filter(|&&index| index != u32::MAX)
             .map(|&index| square.slant_distance_m(index, point))
             .fold(f64::INFINITY, f64::min);
-        let loudest = &square.candidates[group.loudest as usize];
         let group_sound = groups.entry(group.key).or_insert_with(|| GroupSound {
             layer: loudest.layer,
             energy: [0.0; PERIODS],
@@ -259,8 +276,13 @@ pub(crate) fn pixel_sound(
             display: (loudest.display, lden_energy(&left)),
         });
         group_sound.slant_distance_m = group_sound.slant_distance_m.min(nearest_m);
-        group_sound.weather.add(&left, &states);
-        let layer = group_sound.layer as usize;
+        for bin in bins {
+            let reach = reach(bin);
+            if reach > 0.0 {
+                let values = bin.values.map(|value| reach * value);
+                (group_sound.weather).add_binned(bin.period as usize, bin.bin as usize, values);
+            }
+        }
         for p in 0..PERIODS {
             group_sound.energy[p] += left[p];
             steady[layer][p] = (steady[layer][p] - left[p]).max(0.0);

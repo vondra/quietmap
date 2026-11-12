@@ -164,36 +164,46 @@ A pixel inside a building shows the building's loudest façade, as the popup doe
 
 The map is painted in squares of 1,024 × 1,024 pixels. Every loud source is computed exactly at the
 corners of blocks 16 pixels wide and at the pixels it is near, or blended from exact samples there
-where the sound is smooth. What is far is blended between the corners, and the faint hum of far,
-quiet sources is computed on a coarser grid.
+where the sound is smooth. Of the far sources, a pixel computes the loudest of each direction; the
+rest is blended between the corners and follows them. The faint hum of far, quiet sources is
+computed on a coarser grid.
 
 A square is a tile of the web map's zoom 12, in blocks of 16 × 16 pixels (95 m in London). A ground
 source counts as loud at a point where its upper bound there reaches 20 dB.
 
 - At every block corner, each loud source is computed exactly.
 - A block's pixels compute exactly, of the sources loud at the pixel, those that cross the block or
-  one of the eight around it and, layer by layer, the loudest at the block's corners until what
-  each corner leaves out weighs at most 20 % of the layer's loud sources at the block's quietest
-  corner, 5 % for the railways: blended between the corners, a railway's few trains are heard at
-  the wrong loudness.
-- What is left out is blended between the block's four corners, and weakened at a pixel as much as
-  the block's computed far sources are there, as behind a house.
+  one of the eight around it, and those its corners select. A corner selects, for each layer, its
+  loudest far source in each of 16 directions that holds at least 1 % of the layer's far energy
+  there, then its loudest sources until at most half of the layer's energy there, and half of its
+  far sources' energy, is left out, or what is left out is under 25 dB.
+- What is left out is blended between the block's four corners by layer and direction. At a pixel
+  it is scaled by how the block's computed far sources of that direction arrive there, against
+  their own blend between the corners: weakened behind a house, as they are.
+- Where that scaling changes more than 30 % of a pixel's ground sound, the pixel also computes,
+  layer by layer, the loudest sources at the block's corners until what each corner leaves out
+  weighs at most 20 % of the layer at the block's quietest corner, 5 % for the railways: blended
+  between the corners, a railway's few trains are heard at the wrong loudness.
 - The hum, the sources under 20 dB, is estimated with the popup's physics and error budget at
   points 64 pixels apart (380 m in London), and blended between them in decibels: it falls off
   steeply from its nearest sources, and a blend in energy read quiet places by their loudest point.
 
 An open block hearing only the hum and flights takes its loudness from shared corners, without
-constructing a receiver at every pixel. Other blocks first compute a 3 × 3 grid of actual pixel
-receivers (the block's edges and middle) and one probe in each quarter. The whole block is
-interpolated from that grid only when all four probes agree with it as a patch's probe must
-(below) and no source or screening edge crosses the block or its margin; its four probes then
-take the interpolated values too. The other blocks use a 5 × 5 grid, the first grid's pixels
-among it, with one further pixel probe for each of its sixteen patches. A patch interpolates energy
-and loudness only when its probe agrees within half a phon in the total and in every layer of
-half a sone or more (a tenth of a sone in a quieter layer, which the map shows clear) and within
-half a decibel of Lden, and no source or screening edge crosses it or the margin protecting the
-pixels used to rank façades. The other pixels keep their ray computations; there the exact lattice
-and probe results are reused.
+constructing a receiver at every pixel. A block that no source or screening edge crosses, itself
+or its margin, first computes one probe pixel in each quarter. Where all four agree with the
+block's four corners interpolated, the corners paint the block: they hear every loud source.
+Otherwise the block computes a 3 × 3 grid of pixel receivers (its edges and middle) and is
+interpolated from that grid under the same test. The remaining blocks use a 5 × 5 grid, the first
+grid's pixels among it, with one further pixel probe for each of its sixteen patches. A patch
+interpolates energy and loudness only when no source or screening edge crosses it or the margin
+protecting the pixels used to rank façades, and its probe agrees as far as the map shows: the
+total within half a phon from 0.8 sone and half a decibel from 32 dB, a layer within 1 phon from
+1 sone and 1 dB from 35 dB. Quieter values may differ more: a total by 0.1 sone and 2 dB, a layer
+by 0.2 sone and, from 20 dB, by 3 dB. Energy and loudness are interpolated in the logarithm. The
+other pixels keep their ray computations; there the exact lattice and probe results are reused.
+Where a patch's probe confirms it, those pixels take their loudness from the patch's lattice
+points, moved to each pixel's own energies along the block's measured relation between loudness
+and energy, instead of a loudness calculation of their own.
 Between samples, a shadow cast from outside the patch can still change sharply.
 Buildings and their façade receivers keep the exact computations.
 
@@ -272,16 +282,19 @@ before. The exact pairs, the hum's sampled pairs, the aircraft boxes' sums at th
 lattices and every pixel's loudness run on the first CUDA card (`paint-gpu/kernels/`, the popup's
 physics in single precision, with fast math except the loudness; a ray's crossing of a building's
 edge is found in double wherever single precision cannot rule it out; each function cites its Rust) or
-on the cores. The runway rolls, the flight spectra, the loudness at open blocks' corners and a
-building across the square's edge stay on the cores. A square's samples, then its pixels, then its
+on the cores. The runway rolls, the flight spectra and a building across the square's edge stay on
+the cores. A square's samples, then its pixels, then its
 façades run in passes, four at once, at most two launching their pairs on the card while the
 others list and sound their pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
 one before.
 The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
 while the card computes the current chunk's loudness.
 The passes return in spatial order, so equal façade energies keep the same first candidate.
-Each file's header says what it does; the blocks are `paint/src/blocks.rs`, their quiet
-interpolation `paint/src/quiet.rs`, `quiet_corners.rs` and `quiet_samples.rs`, the hum
+Each file's header says what it does; the sources a corner selects are
+`paint/src/corner_sources.rs`, the blocks `blocks.rs`, what reaches a pixel of the sources left
+out `transfers.rs`, the pixels' rays `traced.rs`, the interpolation `quiet.rs`,
+`quiet_corners.rs`, `block_samples.rs`, `quiet_samples.rs`, `visible.rs` and `lattice_blend.rs`,
+the hum
 `paint/src/hum.rs` and `hum_samples.rs`, the aircraft boxes `paint/src/flights.rs` and
 `flight_boxes.rs` (on the card `paint-gpu/src/aircraft.rs`), the aircraft spectra
 `paint/src/flight_spectra.rs`, a
@@ -302,8 +315,8 @@ the logarithm, and is stored in half-decibel steps from 0 to 126.5 dB, capped ab
 254 means below 0 dB, 255 not assessed. It is
 compressed with the same predictor and lossless Brotli at quality 9. In open background blocks,
 Lden uses the original hum and aircraft energy fields at each pixel, while Nden keeps its shared
-corner blend. A sampled source patch must also agree with its exact probe within half a decibel
-in each layer and the total; otherwise its remaining pixels are calculated individually.
+corner blend. A sampled source patch must also agree with its exact probe in Lden, within the
+limits above; otherwise its remaining pixels are calculated individually.
 The bundle's directory points at compressed tile streams, identical tile grids encoded and stored
 once. Container version 8 holds both quantities; already painted version-7 bundles contain only
 Nden and remain complete. The Nden tile streams keep HM3 version 7; Lden streams use HMD version 1,
