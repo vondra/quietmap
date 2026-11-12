@@ -1,4 +1,5 @@
-//! Raster regressions for temporal masks, native rounding, coverage and publication safety.
+//! Raster regressions for temporal masks, native rounding, coverage, country extents and
+//! publication safety.
 use super::*;
 
 #[test]
@@ -22,10 +23,22 @@ fn interrupted_raster_squares_resume_only_when_all_atomic_bands_are_complete() {
 
 fn raster_source(root: &Path, name: &str, band: Band, data: Vec<f64>) -> Source {
     let step = 1.0 / NODES_PER_DEGREE as f64;
+    let corner = [-step / 2.0, step / 2.0];
+    raster_source_on_grid(root, name, band, (corner, step / 2.0, 2, 2), data)
+}
+
+/// A one-band source of `columns` x `rows` pixels of `pixel` degrees from the north-west `corner`.
+fn raster_source_on_grid(
+    root: &Path,
+    name: &str,
+    band: Band,
+    (corner, pixel, columns, rows): ([f64; 2], f64, usize, usize),
+    data: Vec<f64>,
+) -> Source {
     let dataset = warp::memory(
-        2,
-        2,
-        [-step / 2.0, step / 2.0, 0.0, step / 2.0, 0.0, -step / 2.0],
+        columns,
+        rows,
+        [corner[0], pixel, 0.0, corner[1], 0.0, -pixel],
         "EPSG:4326",
         data,
     )
@@ -67,6 +80,30 @@ fn one_node() -> Window {
 }
 
 #[test]
+fn every_square_is_built_before_the_step_fails_with_all_its_failing_squares() {
+    let built = std::sync::atomic::AtomicUsize::new(0);
+    let squares: Vec<_> = (0..6).map(|x| Square { x, y: 7 }).collect();
+    let error = build_every_square(
+        &squares,
+        || (),
+        |_, square| {
+            built.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match square.x {
+                1 | 4 => Err(format!("datum {}", square.x)),
+                _ => Ok(()),
+            }
+        },
+    )
+    .unwrap_err();
+    assert_eq!(built.into_inner(), 6);
+    assert_eq!(
+        error,
+        "2 of 6 raster squares failed: 1:7: datum 1; 4:7: datum 4"
+    );
+    assert!(build_every_square(&squares, || (), |_, _| Ok(())).is_ok());
+}
+
+#[test]
 fn forest_loss_is_cut_before_maximum_resampling() {
     let root = tempfile::tempdir().unwrap();
     let source = raster_source(
@@ -94,7 +131,7 @@ fn raw_height_metres_ignore_erroneous_scale_and_round_half_up() {
         Band::GroundHeight,
         vec![100.1; 4],
     );
-    let output = dem::build(&[source], one_node()).unwrap();
+    let output = dem::build(&[source], &Countries::default(), one_node()).unwrap();
     assert_eq!(u16::from_le_bytes(output.try_into().unwrap()), 3001);
 }
 
@@ -108,7 +145,7 @@ fn flight_height_cache_uses_the_native_dem_and_only_fills_missing_squares() {
         vec![100.1; 4],
     );
     let square = Square { x: 256, y: 256 };
-    let expected = dem::build(&[source], z9_raster_window(square)).unwrap();
+    let expected = dem::build(&[source], &Countries::default(), z9_raster_window(square)).unwrap();
     let source = raster_source(
         root.path(),
         "height.tif",
@@ -117,6 +154,7 @@ fn flight_height_cache_uses_the_native_dem_and_only_fills_missing_squares() {
     );
     let raw = ground::GroundHeights::from_sources(
         vec![source],
+        Countries::default(),
         vec![1.0; 360 * 180],
         root.path().join("cache"),
         2,
@@ -150,6 +188,7 @@ fn flight_height_cache_uses_the_native_dem_and_only_fills_missing_squares() {
                 Band::GroundHeight,
                 vec![100.1; 4],
             )],
+            Countries::default(),
             vec![1.0; 360 * 180],
             root.path().join("cache"),
             1,
@@ -163,7 +202,7 @@ fn flight_height_cache_uses_the_native_dem_and_only_fills_missing_squares() {
 fn empty_national_mosaic_does_not_change_the_base_averaging_window() {
     let root = tempfile::tempdir().unwrap();
     let base = || raster_source(root.path(), "base.tif", Band::GroundHeight, vec![100.1; 4]);
-    let expected = dem::build(&[base()], one_node()).unwrap();
+    let expected = dem::build(&[base()], &Countries::default(), one_node()).unwrap();
     let mut empty = raster_source(
         root.path(),
         "empty.tif",
@@ -171,7 +210,74 @@ fn empty_national_mosaic_does_not_change_the_base_averaging_window() {
         vec![f64::NAN; 4],
     );
     empty.spec.feather_nodes = 256;
-    assert_eq!(dem::build(&[base(), empty], one_node()).unwrap(), expected);
+    assert_eq!(
+        dem::build(&[base(), empty], &Countries::default(), one_node()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn a_national_model_holds_only_its_own_countrys_land_and_fades_in_from_the_border() {
+    // RGE ALTI's mosaic held zeros over Belgium and other heights over Switzerland and Spain, ranked
+    // above their own surveys. Here country A's model covers A (nodes west of 11.5), B (11.5 to
+    // 19.5) and the sea east of B, at 200 m over a world model of 100 m.
+    let root = tempfile::tempdir().unwrap();
+    let step = 1.0 / NODES_PER_DEGREE as f64;
+    let land = |west: f64, east: f64| {
+        let [west, east, south, north] = [west, east, -20.5, 20.5].map(|node| node * step);
+        vec![vec![
+            [west, south],
+            [east, south],
+            [east, north],
+            [west, north],
+            [west, south],
+        ]]
+    };
+    let countries = Countries::new(std::collections::BTreeMap::from([
+        ("A".to_string(), land(-20.5, 11.5)),
+        ("B".to_string(), land(11.5, 19.5)),
+    ]));
+    let grid = ([-20.5 * step, 20.5 * step], step, 61, 41);
+    let world = raster_source_on_grid(
+        root.path(),
+        "world.tif",
+        Band::GroundHeight,
+        grid,
+        vec![100.0; 61 * 41],
+    );
+    let mut national = raster_source_on_grid(
+        root.path(),
+        "a.tif",
+        Band::GroundHeight,
+        grid,
+        vec![200.0; 61 * 41],
+    );
+    national.spec.feather_nodes = 4;
+    national.spec.priority = 1;
+    national.country = countries.label("A");
+    let window = Window {
+        north_node: 0,
+        west_node: 0,
+        rows: 1,
+        columns: 24,
+    };
+    let heights: Vec<f64> = dem::build(&[world, national], &countries, window)
+        .unwrap()
+        .chunks_exact(2)
+        .map(|code| f64::from(u16::from_le_bytes([code[0], code[1]])) / 5.0 - 500.0)
+        .collect();
+    // B's land keeps the world model; A's model fades in over four nodes from the border on both
+    // its sides, its own land and the sea, and holds fully beyond.
+    assert!(heights[11..21].iter().all(|h| *h == 100.0), "{heights:?}");
+    assert!(heights[..8].iter().all(|h| *h == 200.0), "{heights:?}");
+    assert!(
+        heights[7..12].windows(2).all(|pair| pair[0] > pair[1]),
+        "{heights:?}"
+    );
+    assert!(
+        heights[20..].windows(2).all(|pair| pair[0] < pair[1]),
+        "{heights:?}"
+    );
 }
 
 #[test]

@@ -10,6 +10,8 @@ pub struct Source {
     pub observed_year: i32,
     geographic_bounds: [f64; 4],
     pub antimeridian: Option<Box<Source>>,
+    /// The country label of a national ground-height model: it holds heights on no other country's land.
+    pub country: Option<u16>,
 }
 
 fn xml(value: &str) -> String {
@@ -23,6 +25,7 @@ fn xml(value: &str) -> String {
 impl Source {
     pub(super) fn reopen(&self) -> Result<Self, String> {
         let mut source = Self::open(self.spec.clone(), self.path.clone(), self.observed_year)?;
+        source.country = self.country;
         source.antimeridian = self
             .antimeridian
             .as_ref()
@@ -92,6 +95,7 @@ impl Source {
             observed_year,
             geographic_bounds,
             antimeridian: None,
+            country: None,
         })
     }
 

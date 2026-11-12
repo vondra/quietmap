@@ -1,5 +1,5 @@
 //! Prepare missing flight-path heights from the same raw raster model, without building unrelated bands.
-use super::{config::Band, source::Source};
+use super::{config::Band, countries::Countries, source::Source};
 use crate::{dev4::Square, year::YearInputs};
 use std::path::{Path, PathBuf};
 use std::{
@@ -9,6 +9,7 @@ use std::{
 
 pub struct GroundHeights {
     sources: Vec<Mutex<Vec<Source>>>,
+    countries: Countries,
     coverage: Vec<f64>,
     root: PathBuf,
     squares: Mutex<HashMap<Square, Arc<Mutex<()>>>>,
@@ -16,13 +17,15 @@ pub struct GroundHeights {
 
 impl GroundHeights {
     pub fn open(inputs: &YearInputs, root: &Path) -> Result<Self, String> {
-        let sources = super::open_sources(inputs, |band| {
+        let countries = super::read_countries(inputs)?;
+        let sources = super::open_sources(inputs, &countries, |band| {
             matches!(band, Band::GroundHeight | Band::Coverage)
         })?;
         super::cache::prepare(inputs, &sources, root)?;
         let coverage = super::land_coverage(&sources)?;
         Self::from_sources(
             sources,
+            countries,
             coverage,
             root.to_owned(),
             rayon::current_num_threads(),
@@ -31,6 +34,7 @@ impl GroundHeights {
 
     pub(super) fn from_sources(
         sources: Vec<Source>,
+        countries: Countries,
         coverage: Vec<f64>,
         root: PathBuf,
         workers: usize,
@@ -47,6 +51,7 @@ impl GroundHeights {
         copies.push(Mutex::new(sources));
         Ok(Self {
             sources: copies,
+            countries,
             coverage,
             root,
             squares: Mutex::new(HashMap::new()),
@@ -77,7 +82,7 @@ impl GroundHeights {
                 let sources = self.sources[index]
                     .lock()
                     .map_err(|_| "raw-height worker lock poisoned")?;
-                super::dem::build(&sources, window)?
+                super::dem::build(&sources, &self.countries, window)?
             } else {
                 Vec::new()
             };

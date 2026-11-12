@@ -141,6 +141,14 @@ impl RasterPlan {
                     .filter_map(|s| s.antimeridian_input.clone()),
             )
             .chain(std::iter::once(self.runtime.datum_input.clone()))
+            // The country polygons bound each national terrain model to its own country.
+            .chain(
+                manifest
+                    .inputs
+                    .iter()
+                    .filter(|i| i.kind == crate::year::Kind::PrepareRegions)
+                    .map(|i| i.id.clone()),
+            )
             .collect();
         let output = manifest
             .inputs
@@ -196,14 +204,16 @@ mod tests {
                 })
             })
             .collect();
-        let dependencies: Vec<_> = bands.into_iter().chain(["datum"]).collect();
+        let dependencies: Vec<_> = bands.into_iter().chain(["datum", "regions"]).collect();
         let inputs: Vec<_> = dependencies
             .iter()
             .copied()
             .chain(["rasters"])
             .map(|id| {
                 json!({
-                    "id":id,"kind":if id == "rasters" {"rasters"} else {"raster-mosaic"},
+                    "id":id,"kind":match id {
+                        "rasters" => "rasters", "regions" => "prepare-regions", _ => "raster-mosaic"
+                    },
                     "region":"world","publisher":"Survey","url":"https://example.org/data",
                     "observed":{"start":"2000","end":"2000"},"published":null,
                     "licence":"CC0","public_ok":true,"description":"Synthetic observation.",

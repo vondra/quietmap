@@ -642,7 +642,10 @@ The map's Advanced layers show the terrain, the trees and the hard ground.
   the [GEDTM30](https://zenodo.org/records/18887460) world model, which keeps part of the forest
   canopy and of dense city blocks: around Prague it stood about 10 m above Czechia's national model
   in forests and 12.5 m in dense blocks, and the Old Town read 2 dB quieter on it. Cities without a
-  national model, such as São Paulo, keep that bias.
+  national model, such as São Paulo, keep that bias. A national model counts only in its own
+  country and at sea: France's mosaic reaches over Belgium, Switzerland and Spain with fill, up to
+  400 m off, and there the neighbour's model or GEDTM30 holds; each model fades in from the border
+  over about 8 km, as from any edge of its survey.
 - **Near a ray's two ends**, a national model of 5 m or finer adds what the one-arc-second grid
   misses: in Czechia, Germany, Switzerland, the Netherlands, Belgium and part of Portugal.
 - **Weather** is the 1991–2020 climatology of
@@ -779,8 +782,10 @@ described under Aircraft, and the runways' rolls.
 Year admission and paths: `build/src/year.rs`; dated tables: `build/src/source_tables/`; source-page generation: `frontend/scripts/year-sources.ts`.
 
 Raster preparation: `build/src/rasters/` reads the year's named GDAL rasters. The manifest gives
-each band's projection, vertical datum, missing-data value and overlap priority. Terrain is
-averaged before conversion to EGM2008; coverage edges blend continuously. Tree density is
+each band's projection, vertical datum, missing-data value and overlap priority. A national
+terrain model holds no height on another country's land in the year's country polygons
+(`osm-regions`); terrain is averaged before conversion to EGM2008; coverage edges, borders among
+them, blend continuously. Tree density is
 area-averaged; a newer survey takes precedence over the older baseline where available. Each
 survey loses only forest cleared after its observation year and before the map's cutoff.
 A missing loss observation leaves that survey unchanged; it does not establish that no loss occurred. Crown height averages only
