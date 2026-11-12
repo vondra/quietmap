@@ -58,25 +58,30 @@ impl DatumTransform {
             gdal_sys::CPLPopErrorHandler();
         }
         for i in 0..heights.len() {
-            match errors[i] {
-                0 if longitude[i].is_finite()
-                    && latitude[i].is_finite()
-                    && heights[i].is_finite() => {}
-                // PROJ 9.4 can return NaN with code zero at an exactly missing grid node:
-                // its nodata interpolation divides zero by zero. Only vertical NaN is missing.
-                0 if longitude[i].is_finite() && latitude[i].is_finite() && heights[i].is_nan() => {
-                }
-                // PROJ proj.h: COORD_TRANSFM (2048) + OUTSIDE_GRID (4) / GRID_AT_NODATA (5).
-                2052 | 2053 => heights[i] = f64::NAN,
-                code => {
-                    return Err(format!(
-                        "datum conversion failed with PROJ code {code}: {}",
-                        warp::error()
-                    ));
-                }
-            }
+            node_height(errors[i], longitude[i], latitude[i], &mut heights[i])?;
         }
         Ok(())
+    }
+}
+
+/// One node's converted height by its PROJ code. A node beyond the datum's reach is missing, and
+/// the sources below it fill it: a national model reaches past the datum's operations and grids,
+/// as CA-MRDEM-30 into Alaska, RGE ALTI into Andorra and MDT05 over the sea off Galicia.
+fn node_height(code: i32, longitude: f64, latitude: f64, height: &mut f64) -> Result<(), String> {
+    match code {
+        0 if longitude.is_finite() && latitude.is_finite() && height.is_finite() => Ok(()),
+        // PROJ 9.4 can return NaN with code zero at an exactly missing grid node:
+        // its nodata interpolation divides zero by zero. Only vertical NaN is missing.
+        0 if longitude.is_finite() && latitude.is_finite() && height.is_nan() => Ok(()),
+        // PROJ proj.h: COORD_TRANSFM (2048) + NO_OPERATION (3) / OUTSIDE_GRID (4) / GRID_AT_NODATA (5).
+        2051..=2053 => {
+            *height = f64::NAN;
+            Ok(())
+        }
+        code => Err(format!(
+            "datum conversion failed with PROJ code {code}: {}",
+            warp::error()
+        )),
     }
 }
 
@@ -100,8 +105,6 @@ pub fn convert(values: &mut [f64], window: Window, source: &Source) -> Result<()
         crs.set_axis_mapping_strategy(AxisMappingStrategy::TraditionalGisOrder);
     }
     let transform = DatumTransform::new(&from, &to, source.spec.datum_area)?;
-    let mut transformed = 0;
-    let had = values.iter().any(|v| v.is_finite());
     for (row, heights) in values.chunks_exact_mut(window.columns as usize).enumerate() {
         let indices: Vec<_> = heights
             .iter()
@@ -124,14 +127,7 @@ pub fn convert(values: &mut [f64], window: Window, source: &Source) -> Result<()
             .map_err(|error| format!("{}: {window:?}, row {row}: {error}", source.spec.input))?;
         for (i, height) in indices.into_iter().zip(elevations) {
             heights[i] = height;
-            transformed += usize::from(height.is_finite());
         }
-    }
-    if had && transformed == 0 {
-        return Err(format!(
-            "{}: datum conversion has no valid nodes",
-            source.spec.input
-        ));
     }
     Ok(())
 }
@@ -201,6 +197,18 @@ mod tests {
             .unwrap();
         assert!(height[0].is_nan());
         assert_eq!(height[1], 22.0);
+    }
+
+    #[test]
+    fn heights_beyond_the_datums_reach_are_missing_not_an_abort() {
+        // CA-MRDEM-30's Alaskan pixels (no operation), RGE ALTI's in Andorra and MDT05's over the sea
+        // off Galicia stopped z9 squares 55:116, 55:148, 258:189 and 241:186-189 and their whole run.
+        for code in [2051, 2052, 2053] {
+            let mut height = 100.0;
+            assert_eq!(node_height(code, -150.0, 64.0, &mut height), Ok(()));
+            assert!(height.is_nan());
+        }
+        assert!(node_height(2049, -150.0, 64.0, &mut 100.0).is_err());
     }
 
     #[test]
