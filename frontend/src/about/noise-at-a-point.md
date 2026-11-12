@@ -214,8 +214,8 @@ The popup reads the point's tile, its eight neighbours and the terrain out to 8 
 and sends a first answer. It reads one more ring of tiles at a time until every ground source
 within 12 km, every flight within 16 km and every runway roll starting within 8 km is covered,
 sending the whole answer again
-after each ring. At Greenwich in London it
-reads 225 MB in 119 reads, the flight tracks and the weather among them.
+after each ring. Once the receiver is placed, it skips ground-source tiles lying wholly beyond
+12 km; every source within reach still counts.
 
 Every flight uses the same horizon, built once from that terrain and the nearby buildings.
 

@@ -203,6 +203,12 @@ pub fn answer(
             tiles,
             kinds,
             |tile, kind| match kind {
+                // build::sources keeps pieces inside their tile (split_at_tile_edges, cells::point_piece).
+                // Wait for façade selection, then measure from that receiver with the same
+                // conservative metre of slack as the aircraft.
+                Kind::Sources => {
+                    !placed || frame.tile_gap_m(tile, receiver_m) <= GROUND_REACH_M + 1.0
+                }
                 Kind::Aircraft => fine(tile),
                 Kind::AircraftFar => holds_boxes_in_reach(&frame, tile, receiver_m),
                 Kind::AircraftRolls => !placed || holds_rolls_in_reach(&frame, tile, receiver_m),

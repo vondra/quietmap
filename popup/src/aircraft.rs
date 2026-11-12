@@ -28,13 +28,13 @@ pub const FINE_BOXES_WITHIN_M: f64 = 3_000.0;
 
 /// Whether `tile` is read with its fine boxes for a click at the origin of `frame`.
 pub fn reads_fine_boxes(frame: &LocalFrame, tile: TileId) -> bool {
-    tile_gap_m(frame, tile, [0.0, 0.0]) <= FINE_BOXES_WITHIN_M
+    frame.tile_gap_m(tile, [0.0, 0.0]) <= FINE_BOXES_WITHIN_M
 }
 
 /// Whether `tile` can hold the start of a roll within the rolls' reach of a receiver at `position`
 /// (click metres), a metre for the start's rounding to tile steps.
 pub fn holds_rolls_in_reach(frame: &LocalFrame, tile: TileId, position: [f64; 2]) -> bool {
-    tile_gap_m(frame, tile, position) <= rolls::ROLL_REACH_M + 1.0
+    frame.tile_gap_m(tile, position) <= rolls::ROLL_REACH_M + 1.0
 }
 
 /// Whether `tile` can hold a box within the aircraft reach of a receiver at `position` (click
@@ -43,21 +43,7 @@ pub fn holds_rolls_in_reach(frame: &LocalFrame, tile: TileId, position: [f64; 2]
 /// weighted middle, lies in its own tile: a tile further away than the reach holds none in it
 /// (a metre for the centroid's rounding to tile steps).
 pub fn holds_boxes_in_reach(frame: &LocalFrame, tile: TileId, position: [f64; 2]) -> bool {
-    tile_gap_m(frame, tile, position) <= boxes::AIRCRAFT_REACH_M + 1.0
-}
-
-/// The horizontal distance (m) from `position` (click metres) to the nearest point of `tile`.
-fn tile_gap_m(frame: &LocalFrame, tile: TileId, position: [f64; 2]) -> f64 {
-    let corner = |dx: f64, dy: f64| {
-        let m = frame.to_metres(tiles::geo::Mercator {
-            x: f64::from(tile.x) + dx,
-            y: f64::from(tile.y) + dy,
-        });
-        [m[0] - position[0], m[1] - position[1]]
-    };
-    let (a, b) = (corner(0.0, 0.0), corner(1.0, 1.0));
-    let gap = |low: f64, high: f64| (low.min(high)).max(-high.max(low)).max(0.0);
-    gap(a[0], b[0]).hypot(gap(a[1], b[1]))
+    frame.tile_gap_m(tile, position) <= boxes::AIRCRAFT_REACH_M + 1.0
 }
 
 /// The flights' Kurze lambda, their energy-weighted mean over the far boxes of the tiles heard
