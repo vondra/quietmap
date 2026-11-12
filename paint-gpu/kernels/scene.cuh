@@ -253,6 +253,8 @@ __device__ __forceinline__ bool crossing_before(const Crossing& a, const Crossin
 // from two cells at its crossing is dropped again by the stream (f32's t of one point agrees to a
 // few 1e-7).
 #define CELL_WINDOW_SLACK 1e-6f
+// The edges a cell's f32 filter keeps on a lane before they take their exact test (walk_crossings).
+#define KEPT_EDGES 16
 
 // obstacles::Scene::crossings, streamed: every crossing of the segment from -> to (frame metres)
 // with a building ring or wall, handed to `take` in order of (t, footprint, edge); `take` returns 0
@@ -316,52 +318,74 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                 while (more) {
                     more = false;
                     int count = 0;
-                    for (u32 run_index = run_begin; run_index < run_end; run_index++) {
-                        const u8* run = runs + (u64)RUN_BYTES * run_index;
-                        u32 outline_index = read_u32(run);
-                        u32 first_edge = read_u16(run + 4), edge_count = read_u16(run + 6);
-                        Outline outline = tile_outline(scene, *tile, outline_index);
-                        u32 first = outline.first_vertex + first_edge;
-                        int ax, ay;
-                        tile_vertex_local(scene, *tile, first, &ax, &ay);
-                        for (u32 next = first + 1; next <= first + edge_count; next++) {
+                    // The cell's runs and their edges in one loop through the f32 filter, then the edges
+                    // it kept, KEPT_EDGES at a time, through the exact test, the ordered insertion and the
+                    // roof check on every lane that kept one: taken where each lane met its edge, these ran
+                    // on 2.6 to 3.1 of a warp's 32 lanes. The same crossings in the same order.
+                    u32 run_index = run_begin, next = 1, last_edge = 0, outline_index = 0;
+                    int ax = 0, ay = 0;
+                    while (run_index < run_end || next <= last_edge) {
+                        u32 kept_edge[KEPT_EDGES], kept_outline[KEPT_EDGES];
+                        int kept = 0;
+                        while (kept < KEPT_EDGES) {
+                            if (next > last_edge) {
+                                if (run_index == run_end) break;
+                                const u8* run = runs + (u64)RUN_BYTES * run_index++;
+                                outline_index = read_u32(run);
+                                u32 first = tile_outline(scene, *tile, outline_index).first_vertex + read_u16(run + 4);
+                                tile_vertex_local(scene, *tile, first, &ax, &ay);
+                                next = first + 1;
+                                last_edge = first + read_u16(run + 6);
+                                if (next > last_edge) continue;
+                            }
                             int bx, by;
                             tile_vertex_local(scene, *tile, next, &bx, &by);
                             bool meets = high[0] >= min(ax, bx) && max(ax, bx) >= low[0] && high[1] >= min(ay, by) && max(ay, by) >= low[1];
-                            float a[2] = {offset[0] + (float)ax, offset[1] + (float)ay};
-                            float b[2] = {offset[0] + (float)bx, offset[1] + (float)by};
-                            double t;
-                            if (meets && !segment_surely_missed(start[0], start[1], delta[0], delta[1], a[0], a[1], b[0], b[1])
-                                && segment_intersection_t(start[0], start[1], delta[0], delta[1], a[0], a[1], b[0], b[1], &t)
-                                && t >= t_enter - CELL_WINDOW_SLACK && t <= t_exit + CELL_WINDOW_SLACK
-                                && t > endpoint_t && t < 1.0f - endpoint_t) {
-                                Crossing crossing;
-                                crossing.t = t;
-                                crossing.height_m = outline.height_m;
-                                crossing.bounds_roof = edge_bounds_roof(scene, *tile, outline_index, outline, next - 1,
-                                                                        start[0], start[1], delta[0], delta[1]);
-                                crossing.footprint_id = outline.footprint_id;
-                                crossing.edge = (slot << 32) | (u64)(next - 1);
-                                if (!have_taken || crossing_before(taken, crossing)) {
-                                    // Insert in order, keeping the first CELL_CROSSINGS.
-                                    int at = count;
-                                    if (count == CELL_CROSSINGS) {
-                                        more = true;
-                                        if (!crossing_before(crossing, found[count - 1])) at = -1;
-                                        else at = --count;
-                                    }
-                                    if (at >= 0) {
-                                        while (at > 0 && crossing_before(crossing, found[at - 1])) {
-                                            found[at] = found[at - 1];
-                                            at--;
-                                        }
-                                        found[at] = crossing;
-                                        count++;
-                                    }
-                                }
+                            if (meets
+                                && !segment_surely_missed(start[0], start[1], delta[0], delta[1], offset[0] + (float)ax, offset[1] + (float)ay,
+                                                          offset[0] + (float)bx, offset[1] + (float)by)) {
+                                kept_edge[kept] = next - 1;
+                                kept_outline[kept] = outline_index;
+                                kept++;
                             }
                             ax = bx;
                             ay = by;
+                            next++;
+                        }
+                        for (int k = 0; k < kept; k++) {
+                            u32 edge = kept_edge[k];
+                            int ex, ey, fx, fy;
+                            tile_vertex_local(scene, *tile, edge, &ex, &ey);
+                            tile_vertex_local(scene, *tile, edge + 1, &fx, &fy);
+                            float a[2] = {offset[0] + (float)ex, offset[1] + (float)ey};
+                            float b[2] = {offset[0] + (float)fx, offset[1] + (float)fy};
+                            double t;
+                            if (!segment_intersection_t(start[0], start[1], delta[0], delta[1], a[0], a[1], b[0], b[1], &t)
+                                || t < t_enter - CELL_WINDOW_SLACK || t > t_exit + CELL_WINDOW_SLACK
+                                || !(t > endpoint_t && t < 1.0f - endpoint_t)) continue;
+                            Outline outline = tile_outline(scene, *tile, kept_outline[k]);
+                            Crossing crossing;
+                            crossing.t = t;
+                            crossing.height_m = outline.height_m;
+                            crossing.footprint_id = outline.footprint_id;
+                            crossing.edge = (slot << 32) | (u64)edge;
+                            if (have_taken && !crossing_before(taken, crossing)) continue;
+                            // Insert in order, keeping the first CELL_CROSSINGS.
+                            int at = count;
+                            if (count == CELL_CROSSINGS) {
+                                more = true;
+                                if (!crossing_before(crossing, found[count - 1])) continue;
+                                at = --count;
+                            }
+                            // The roof check, which the order does not read, for the crossings kept.
+                            crossing.bounds_roof = edge_bounds_roof(scene, *tile, kept_outline[k], outline, edge, start[0], start[1],
+                                                                    delta[0], delta[1]);
+                            while (at > 0 && crossing_before(crossing, found[at - 1])) {
+                                found[at] = found[at - 1];
+                                at--;
+                            }
+                            found[at] = crossing;
+                            count++;
                         }
                     }
                     for (int k = 0; k < count; k++) {

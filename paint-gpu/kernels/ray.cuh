@@ -199,7 +199,7 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
     s.open_count = 0;
     s.closing_count = 0;
     s.vertices = 0;
-    Crowns crowns = {sample, 0.0f, {0.0f, 0.0f}};
+    Crowns crowns = {sample, 0.0f, {0.0f, 0.0f}, false, {0.0f, 0.0f}};
     TerrainPoint behind = {0.0f, 0.0f < platform ? fminf(sample.height_m, stand) : sample.height_m, sample.ground_factor};
     Moments prefix_behind = {0.0f, 0.0f, 0.0f};
     keep_vertex(s, behind, prefix_behind);
@@ -272,13 +272,10 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
                 }
                 open_group = group;
             } else if (ahead.x > 0.0f && ahead.x < length) {
-                // Streamed at once when nothing waits before it (most rays far from obstacles):
-                // re-read from the ring it cost a town square's rays 8 % (2026-10-20).
-                if (candidates == 0 && !(crossing_x < ahead.x)) {
-                    if ((failed = stream_candidate(s, bands, frame, BandCandidate{ahead.x, ahead.z, ahead.z, ahead.g, prefix}))) return failed;
-                } else {
-                    s.candidates[candidates++] = (u16)walked;
-                }
+                // Taken at the chunk's end with its crossings, by the walk's one stream_candidate (a
+                // second copy streaming it at once where nothing waited before it no longer pays,
+                // 2026-11-12).
+                s.candidates[candidates++] = (u16)walked;
             }
             behind = ahead;
             prefix_behind = prefix;

@@ -156,7 +156,7 @@ __device__ __forceinline__ u32 stream_candidate(RayStream& s, BandState* bands, 
     for (int state = 0; state < 2; state++) {
         StateStream& st = s.states[state];
         BandState& band = bands[state];
-        const StateRay& ray = f.rays[state];
+        const StateRay ray = unrolled_state_ray(f.rays, state);
         float lowered = c.z - frame_height_above_chord(f, state, c.x);
         if (lowered > chord) {
             band.blocked = true;
