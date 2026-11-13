@@ -6,6 +6,9 @@ pub struct CategoryFlow {
     pub status: u8,
     pub source_id: u16,
     pub matching: u8,
+    /// The stop whose departures stamp this flow (`local_match`), so a line counts each stop
+    /// once however many of its tracks the stop stamps; 0 for a routed or modelled flow.
+    pub stop: u32,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RowTraffic {

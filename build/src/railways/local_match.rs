@@ -87,14 +87,15 @@ fn grids(rows: &[Movement]) -> Vec<Cells> {
     groups
 }
 
-fn nearest<'a>(
-    rows: &'a [Movement],
+/// The index of the observation nearest the row from `a` to `b` within its reach.
+fn nearest(
+    rows: &[Movement],
     grids: &[Cells],
     kind: u8,
     a: [f64; 2],
     b: [f64; 2],
     radius: f64,
-) -> Option<&'a Movement> {
+) -> Option<usize> {
     let midpoint = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
     let (y, x) = cell(midpoint);
 
@@ -129,7 +130,7 @@ fn nearest<'a>(
                     };
                     if distance < best && distance < limit {
                         best = distance;
-                        nearest = Some(movement);
+                        nearest = Some(index);
                     }
                 }
             }
@@ -138,16 +139,20 @@ fn nearest<'a>(
     nearest
 }
 
+/// Stamps the squares' rows with their nearest observations; a stop's claims carry its identity,
+/// numbered from `stops` (one numbering over every source's groups), and the next free number is
+/// returned.
 pub fn apply(
     model: &RailModel,
     geography: &Path,
     movements: &[Movement],
     squares: &HashSet<[u16; 2]>,
     output: &mut Claims,
-) -> Result<(), String> {
+    stops: u32,
+) -> Result<u32, String> {
     let observations = observations(movements);
     if observations.is_empty() {
-        return Ok(());
+        return Ok(stops);
     }
     let grids = grids(&observations);
     let radius = observations
@@ -192,7 +197,7 @@ pub fn apply(
                 let midpoint = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
                 let region = observations
                     .iter()
-                    .find(|movement| match movement.location {
+                    .position(|movement| match movement.location {
                         Location::Region { bounds } => {
                             movement.rail_types.contains(&kind)
                                 && (bounds[0]..=bounds[2]).contains(&midpoint[0])
@@ -200,11 +205,12 @@ pub fn apply(
                         }
                         _ => false,
                     });
-                let Some(observation) =
+                let Some(index) =
                     region.or_else(|| nearest(&observations, &grids, kind, a, b, radius))
                 else {
                     continue;
                 };
+                let observation = &observations[index];
                 if !model.local_source_applies(observation.source_id, &observation.country, country)
                 {
                     continue;
@@ -248,12 +254,13 @@ pub fn apply(
                 let piece = pieces
                     .get(&(way, segment))
                     .ok_or("local railway observation lacks source piece")?;
-                output.entry(*square).or_default().push((
-                    interval(&movement, way, segment, piece.from_m, piece.to_m, 0),
-                    0,
-                ));
+                let mut claim = interval(&movement, way, segment, piece.from_m, piece.to_m, 0);
+                if matches!(movement.location, Location::Station { .. }) {
+                    claim.stop = stops + index as u32 + 1;
+                }
+                output.entry(*square).or_default().push((claim, 0));
             }
         }
     }
-    Ok(())
+    Ok(stops + observations.len() as u32)
 }

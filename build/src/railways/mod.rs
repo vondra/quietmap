@@ -91,4 +91,6 @@ mod fixture_tests;
 #[cfg(test)]
 mod prior_tests;
 #[cfg(test)]
+mod registry_tests;
+#[cfg(test)]
 mod ruler_fixture;

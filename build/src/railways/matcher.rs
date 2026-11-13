@@ -41,6 +41,7 @@ pub(super) fn interval(
         freight_status: movement.freight_status,
         matching,
         missing_calendar_estimate: movement.missing_calendar_estimate,
+        stop: 0,
     }
 }
 
@@ -67,6 +68,7 @@ pub fn read(
     };
     let mut unlocated = (0usize, 0.0, 0.0);
     let mut incomplete_zeros = 0;
+    let mut stops = 0;
     movements::read(flows, start, end, |record| {
         match record {
             Record::Movement(movement) => {
@@ -249,7 +251,14 @@ pub fn read(
                 ));
             }
         }
-        super::local_match::apply(model, geography, &movements, squares, &mut result.claims)?;
+        stops = super::local_match::apply(
+            model,
+            geography,
+            &movements,
+            squares,
+            &mut result.claims,
+            stops,
+        )?;
     }
     Ok(result)
 }

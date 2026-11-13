@@ -37,10 +37,16 @@ fn scope_value(
     winner: u16,
     category: fn(&RowTraffic) -> CategoryFlow,
 ) -> CategoryFlow {
+    // A stop's departures stamp every track near it (`local_match`): the line carries each stop's
+    // once, both directions where they share one, each direction's where its platform is its own
+    // stop. Summed once a track, a line counted every train once a track (Stockholm's Alvik, three
+    // lines at 1,430 a track each, audit 2026-11-12; New York's three-track lines three times).
+    let mut stops = std::collections::HashSet::new();
     let carriers: Vec<CategoryFlow> = members
         .iter()
         .map(|&member| category(&flows[member]))
         .filter(|flow| flow.status != STATUS_UNKNOWN && flow.source_id == winner)
+        .filter(|flow| flow.stop == 0 || stops.insert(flow.stop))
         .collect();
     let divisor = if model.stamps_whole_line(winner) {
         carriers.len() as f64
@@ -70,6 +76,7 @@ fn scope_value(
         },
         source_id: winner,
         matching: carriers.iter().fold(0, |mask, flow| mask | flow.matching),
+        stop: 0,
     }
 }
 
@@ -186,6 +193,7 @@ fn track_share(
             status: STATUS_ESTIMATED,
             source_id: 0,
             matching: 0,
+            stop: 0,
         };
     }
     CategoryFlow {

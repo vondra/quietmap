@@ -252,6 +252,17 @@
       "whole_line": false
     },
     {
+      "id": 2079,
+      "rank": 6,
+      "edition": 2026,
+      "owner": "US",
+      "countries": [
+        "US"
+      ],
+      "residual": false,
+      "whole_line": false
+    },
+    {
       "id": 9013,
       "rank": 3,
       "edition": 2024,
@@ -730,6 +741,12 @@
       -141.5,
       84.5,
       -51.5
+    ],
+    "2079:US": [
+      18.5,
+      -161.0,
+      49.5,
+      -66.4
     ],
     "9864:DE": [
       46.8,
