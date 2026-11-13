@@ -2349,20 +2349,884 @@
       "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 195 covered days, within 2024-06-03 through 2024-12-14. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
-      "id": "gtfs-archive-gtfs-us-mdb-11-202406100054-zip",
+      "id": "gtfs-archive-gtfs-us-amtrak-mdb-11-202412260016-zip",
       "kind": "prepare-timetable",
       "region": "US",
       "publisher": "Amtrak",
-      "url": "https://files.mobilitydatabase.org/mdb-11/mdb-11-202406100054/mdb-11-202406100054.zip",
+      "url": "https://files.mobilitydatabase.org/mdb-11/mdb-11-202412260016/mdb-11-202412260016.zip",
       "observed": {
-        "start": "2024-06-10",
-        "end": "2024-06-16"
+        "start": "2024-12-25",
+        "end": "2024-12-31"
       },
       "published": null,
       "licence": "Provider terms; no published open licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 7 covered days, within 2024-06-10 through 2024-06-16. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 7 covered days, within 2024-12-25 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-11-202412260016."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-mta-metro-north-mdb-524-202412090017-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metro-North Railroad",
+      "url": "https://files.mobilitydatabase.org/mdb-524/mdb-524-202412090017/mdb-524-202412090017.zip",
+      "observed": {
+        "start": "2024-11-27",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://web.mta.info/developers/developer-data-terms.html",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 35 covered days, within 2024-11-27 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-524-202412090017."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-mta-long-island-rail-road-mdb-507-202411250016-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metropolitan Transit Authority (MTA) (Long Island Rail Road)",
+      "url": "https://files.mobilitydatabase.org/mdb-507/mdb-507-202411250016/mdb-507-202411250016.zip",
+      "observed": {
+        "start": "2024-11-22",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://web.mta.info/developers/developer-data-terms.html",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 40 covered days, within 2024-11-22 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-507-202411250016."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-mta-nyc-subway-mdb-516-202408080013-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metropolitan Transit Authority (MTA) (NYC Subway)",
+      "url": "https://files.mobilitydatabase.org/mdb-516/mdb-516-202408080013/mdb-516-202408080013.zip",
+      "observed": {
+        "start": "2024-08-12",
+        "end": "2024-12-14"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 125 covered days, within 2024-08-12 through 2024-12-14. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-516-202408080013."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-nj-transit-rail-mdb-509-202412050056-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "New Jersey Transit (NJ Transit) (Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-509/mdb-509-202412050056/mdb-509-202412050056.zip",
+      "observed": {
+        "start": "2024-12-02",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.njtransit.com/developer-tools",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 30 covered days, within 2024-12-02 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-509-202412050056."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-panynj-path-mdb-517-202411280023-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Port Authority Trans-Hudson (PATH)",
+      "url": "https://files.mobilitydatabase.org/mdb-517/mdb-517-202411280023/mdb-517-202411280023.zip",
+      "observed": {
+        "start": "2024-11-27",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 35 covered days, within 2024-11-27 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-517-202411280023."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-septa-regional-rail-mdb-503-202411280039-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Southeastern Pennsylvania Transportation Authority (SEPTA) (Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-503/mdb-503-202411280039/mdb-503-202411280039.zip",
+      "observed": {
+        "start": "2024-11-03",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www3.septa.org/developer/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 59 covered days, within 2024-11-03 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-503-202411280039."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-septa-metro-mdb-502-202411280022-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Southeastern Pennsylvania Transportation Authority (SEPTA) (Bus)",
+      "url": "https://files.mobilitydatabase.org/mdb-502/mdb-502-202411280022/mdb-502-202411280022.zip",
+      "observed": {
+        "start": "2024-09-08",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www3.septa.org/developer/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 115 covered days, within 2024-09-08 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-502-202411280022."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-patco-speedline-mdb-505-202411070009-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "PATCO Speedline",
+      "url": "https://files.mobilitydatabase.org/mdb-505/mdb-505-202411070009/mdb-505-202411070009.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-505-202411070009."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-metra-mdb-1187-202404220016-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metra",
+      "url": "https://files.mobilitydatabase.org/mdb-1187/mdb-1187-202404220016/mdb-1187-202404220016.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://metra.com/gtfs-realtime-api-key-request-license-agreement",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-1187-202404220016."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-cta-mdb-389-202410170023-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Chicago Transit Authority (CTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-389/mdb-389-202410170023/mdb-389-202410170023.zip",
+      "observed": {
+        "start": "2024-10-14",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 79 covered days, within 2024-10-14 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-389-202410170023."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-nictd-south-shore-line-mdb-585-202405200019-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "South Shore Line",
+      "url": "https://files.mobilitydatabase.org/mdb-585/mdb-585-202405200019/mdb-585-202405200019.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-585-202405200019."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-wmata-metrorail-mdb-1847-202412050051-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Washington Metropolitan Area Transit Authority (WMATA) (Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-1847/mdb-1847-202412050051/mdb-1847-202412050051.zip",
+      "observed": {
+        "start": "2024-12-02",
+        "end": "2024-12-13"
+      },
+      "published": null,
+      "licence": "Provider terms: https://developer.wmata.com/license",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 12 covered days, within 2024-12-02 through 2024-12-13. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-1847-202412050051."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-mta-maryland-marc-mdb-468-202412160054-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Maryland Transit Administration (MARC Train)",
+      "url": "https://files.mobilitydatabase.org/mdb-468/mdb-468-202412160054/mdb-468-202412160054.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-468-202412160054."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-mta-maryland-light-rail-mdb-469-202412160035-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Maryland Transit Administration (Light Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-469/mdb-469-202412160035/mdb-469-202412160035.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-469-202412160035."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-mta-maryland-metro-subway-mdb-470-202412160047-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Maryland Transit Administration Metro Subway (Metro SubwayLink)",
+      "url": "https://files.mobilitydatabase.org/mdb-470/mdb-470-202412160047/mdb-470-202412160047.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-470-202412160047."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-caltrain-mdb-54-202411210007-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Caltrain",
+      "url": "https://files.mobilitydatabase.org/mdb-54/mdb-54-202411210007/mdb-54-202411210007.zip",
+      "observed": {
+        "start": "2024-11-04",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 58 covered days, within 2024-11-04 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-54-202411210007."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-sfmta-muni-mdb-50-202406240012-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "San Francisco Municipal Transportation Agency (SFMTA - Muni)",
+      "url": "https://files.mobilitydatabase.org/mdb-50/mdb-50-202406240012/mdb-50-202406240012.zip",
+      "observed": {
+        "start": "2024-06-22",
+        "end": "2024-08-16"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.sfmta.com/reports/gtfs-transit-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 56 covered days, within 2024-06-22 through 2024-08-16. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-50-202406240012."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-vta-mdb-57-202411180028-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Santa Clara Valley Transportation Authority (VTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-57/mdb-57-202411180028/mdb-57-202411180028.zip",
+      "observed": {
+        "start": "2024-10-28",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 65 covered days, within 2024-10-28 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-57-202411180028."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-altamont-corridor-express-mdb-1133-202405060014-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Altamont Corridor Express",
+      "url": "https://files.mobilitydatabase.org/mdb-1133/mdb-1133-202405060014/mdb-1133-202405060014.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://511.org/sites/default/files/pdfs/511_Data_Agreement_Final.pdf",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-1133-202405060014."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-smart-sonoma-marin-mdb-815-202411180042-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Sonoma Marin Area Rail Transit (SMART)",
+      "url": "https://files.mobilitydatabase.org/mdb-815/mdb-815-202411180042/mdb-815-202411180042.zip",
+      "observed": {
+        "start": "2024-11-14",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://511.org/sites/default/files/pdfs/511_Data_Agreement_Final.pdf",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 48 covered days, within 2024-11-14 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-815-202411180042."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-la-metro-rail-mdb-30-202412160056-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Los Angeles County Metropolitan Transportation Authority (LA Metro) (Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-30/mdb-30-202412160056/mdb-30-202412160056.zip",
+      "observed": {
+        "start": "2024-12-14",
+        "end": "2024-12-28"
+      },
+      "published": null,
+      "licence": "Provider terms: https://developer.metro.net/terms-conditions/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 15 covered days, within 2024-12-14 through 2024-12-28. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-30-202412160056."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-metrolink-mdb-96-202411250032-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metrolink",
+      "url": "https://files.mobilitydatabase.org/mdb-96/mdb-96-202411250032/mdb-96-202411250032.zip",
+      "observed": {
+        "start": "2024-11-21",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 41 covered days, within 2024-11-21 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-96-202411250032."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-san-diego-mts-mdb-13-202411280000-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "San Diego International Airport, Metropolitan Transit System (MTS)",
+      "url": "https://files.mobilitydatabase.org/mdb-13/mdb-13-202411280000/mdb-13-202411280000.zip",
+      "observed": {
+        "start": "2024-09-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.sdmts.com/business-center-developers/terms-and-conditions",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 122 covered days, within 2024-09-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-13-202411280000."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-nctd-mdb-14-202409230033-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "North County Transit District (NCTD)",
+      "url": "https://files.mobilitydatabase.org/mdb-14/mdb-14-202409230033/mdb-14-202409230033.zip",
+      "observed": {
+        "start": "2024-09-20",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 103 covered days, within 2024-09-20 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-14-202409230033."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-sound-transit-mdb-268-202412230052-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Sound Transit",
+      "url": "https://files.mobilitydatabase.org/mdb-268/mdb-268-202412230052/mdb-268-202412230052.zip",
+      "observed": {
+        "start": "2024-12-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 31 covered days, within 2024-12-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-268-202412230052."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-trimet-mdb-247-202412260012-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "TriMet, Portland Streetcar",
+      "url": "https://files.mobilitydatabase.org/mdb-247/mdb-247-202412260012/mdb-247-202412260012.zip",
+      "observed": {
+        "start": "2024-12-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 31 covered days, within 2024-12-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-247-202412260012."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-marta-mdb-368-202410210034-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metropolitan Atlanta Rapid Transit Authority (MARTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-368/mdb-368-202410210034/mdb-368-202410210034.zip",
+      "observed": {
+        "start": "2024-09-02",
+        "end": "2024-12-13"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 103 covered days, within 2024-09-02 through 2024-12-13. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-368-202410210034."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-miami-dade-transit-mdb-331-202412120057-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Miami-Dade Transit",
+      "url": "https://files.mobilitydatabase.org/mdb-331/mdb-331-202412120057/mdb-331-202412120057.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-331-202412120057."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-brightline-mdb-1126-202412050033-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Brightline Trains LLC",
+      "url": "https://files.mobilitydatabase.org/mdb-1126/mdb-1126-202412050033/mdb-1126-202412050033.zip",
+      "observed": {
+        "start": "2024-12-03",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 29 covered days, within 2024-12-03 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-1126-202412050033."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-sunrail-mdb-626-202412230046-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Florida Department of Transportation (SunRail)",
+      "url": "https://files.mobilitydatabase.org/mdb-626/mdb-626-202412230046/mdb-626-202412230046.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://corporate.sunrail.com/about-sunrail/gtfs-data-download/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-626-202412230046."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-dart-dallas-mdb-152-202411250044-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Dallas Area Rapid Transit (DART)",
+      "url": "https://files.mobilitydatabase.org/mdb-152/mdb-152-202411250044/mdb-152-202411250044.zip",
+      "observed": {
+        "start": "2024-11-18",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.dart.org/transitdata/legalnotices.asp",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 44 covered days, within 2024-11-18 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-152-202411250044."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-trinity-metro-mdb-885-202412050016-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Trinity Metro",
+      "url": "https://files.mobilitydatabase.org/mdb-885/mdb-885-202412050016/mdb-885-202412050016.zip",
+      "observed": {
+        "start": "2024-09-15",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://ridetrinitymetro.org/gtfs-data/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 108 covered days, within 2024-09-15 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-885-202412050016."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-houston-metro-mdb-2060-202412050029-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "METRO Houston",
+      "url": "https://files.mobilitydatabase.org/mdb-2060/mdb-2060-202412050029/mdb-2060-202412050029.zip",
+      "observed": {
+        "start": "2024-09-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.ridemetro.org/about/news-media/digital-assets",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 122 covered days, within 2024-09-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2060-202412050029."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-capmetro-mdb-150-202411250032-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Capital Metro",
+      "url": "https://files.mobilitydatabase.org/mdb-150/mdb-150-202411250032/mdb-150-202411250032.zip",
+      "observed": {
+        "start": "2024-11-20",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.capmetro.org/metrolabs/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 42 covered days, within 2024-11-20 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-150-202411250032."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-rtd-denver-mdb-178-202412300014-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Regional Transportation District (RTD)",
+      "url": "https://files.mobilitydatabase.org/mdb-178/mdb-178-202412300014/mdb-178-202412300014.zip",
+      "observed": {
+        "start": "2024-09-29",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.rtd-denver.com/business-center/open-spatial-data/gtfs-license-agreement",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 94 covered days, within 2024-09-29 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-178-202412300014."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-uta-mdb-170-202411280000-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Utah Transit Authority (UTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-170/mdb-170-202411280000/mdb-170-202411280000.zip",
+      "observed": {
+        "start": "2024-08-18",
+        "end": "2024-12-07"
+      },
+      "published": null,
+      "licence": "Provider terms: http://developer.rideuta.com/TermsOfUse.aspx",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 112 covered days, within 2024-08-18 through 2024-12-07. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-170-202411280000."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-valley-metro-phoenix-mdb-147-202411180040-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Valley Metro (VM)",
+      "url": "https://files.mobilitydatabase.org/mdb-147/mdb-147-202411180040/mdb-147-202411180040.zip",
+      "observed": {
+        "start": "2024-10-28",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://www.opendefinition.org/licenses/odc-by",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 65 covered days, within 2024-10-28 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-147-202411180040."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-metro-transit-minneapolis-mdb-205-202412020034-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metro Transit",
+      "url": "https://files.mobilitydatabase.org/mdb-205/mdb-205-202412020034/mdb-205-202412020034.zip",
+      "observed": {
+        "start": "2024-11-30",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 32 covered days, within 2024-11-30 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-205-202412020034."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-metro-st-louis-mdb-190-202412300054-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metro St. Louis",
+      "url": "https://files.mobilitydatabase.org/mdb-190/mdb-190-202412300054/mdb-190-202412300054.zip",
+      "observed": {
+        "start": "2024-12-02",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 30 covered days, within 2024-12-02 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-190-202412300054."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-pittsburgh-regional-transit-mdb-409-202412190002-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Port Authority of Allegheny County",
+      "url": "https://files.mobilitydatabase.org/mdb-409/mdb-409-202412190002/mdb-409-202412190002.zip",
+      "observed": {
+        "start": "2024-10-20",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.portauthority.org/business-center/developer-resources/developer-license-agreement/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 73 covered days, within 2024-10-20 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-409-202412190002."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-greater-cleveland-rta-mdb-406-202409190001-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Greater Cleveland Regional Transit Authority",
+      "url": "https://files.mobilitydatabase.org/mdb-406/mdb-406-202409190001/mdb-406-202409190001.zip",
+      "observed": {
+        "start": "2024-09-22",
+        "end": "2024-12-21"
+      },
+      "published": null,
+      "licence": "Provider terms: http://www.riderta.com/developers",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 91 covered days, within 2024-09-22 through 2024-12-21. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-406-202409190001."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-sacrt-mdb-2137-202411250046-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Sacramento Regional Transit (SacRT)",
+      "url": "https://files.mobilitydatabase.org/mdb-2137/mdb-2137-202411250046/mdb-2137-202411250046.zip",
+      "observed": {
+        "start": "2024-08-18",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.sacrt.com/transit-data-portal/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 136 covered days, within 2024-08-18 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2137-202411250046."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-hampton-roads-transit-mdb-473-202411040032-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Hampton Roads Transit (HRT)",
+      "url": "https://files.mobilitydatabase.org/mdb-473/mdb-473-202411040032/mdb-473-202411040032.zip",
+      "observed": {
+        "start": "2024-10-27",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 66 covered days, within 2024-10-27 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-473-202411040032."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-cincinnati-metro-mdb-307-202412090040-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Cincinnati Metro",
+      "url": "https://files.mobilitydatabase.org/mdb-307/mdb-307-202412090040/mdb-307-202412090040.zip",
+      "observed": {
+        "start": "2024-12-01",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 31 covered days, within 2024-12-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-307-202412090040."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-kcata-mdb-187-202412300012-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Kansas City Area Transportation Authority (KCATA)",
+      "url": "https://files.mobilitydatabase.org/mdb-187/mdb-187-202412300012/mdb-187-202412300012.zip",
+      "observed": {
+        "start": "2024-10-06",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 87 covered days, within 2024-10-06 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-187-202412300012."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-detroit-people-mover-mdb-2281-202412300007-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Detroit People Mover",
+      "url": "https://files.mobilitydatabase.org/mdb-2281/mdb-2281-202412300007/mdb-2281-202412300007.zip",
+      "observed": {
+        "start": "2024-10-31",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 62 covered days, within 2024-10-31 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2281-202412300007."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-king-county-metro-mdb-1330-202412020006-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "King County Metro",
+      "url": "https://files.mobilitydatabase.org/mdb-1330/mdb-1330-202412020006/mdb-1330-202412020006.zip",
+      "observed": {
+        "start": "2024-11-19",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 43 covered days, within 2024-11-19 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-1330-202412020006."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-shore-line-east-mdb-550-202407150027-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Shore Line East (CTrail)",
+      "url": "https://files.mobilitydatabase.org/mdb-550/mdb-550-202407150027/mdb-550-202407150027.zip",
+      "observed": {
+        "start": "2024-04-07",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://www.cttransit.com/about/developers/gtfsdata/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 269 covered days, within 2024-04-07 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-550-202407150027."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-mbta-mdb-437-202411250050-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Massachusetts Bay Transportation Authority (MBTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-437/mdb-437-202411250050/mdb-437-202411250050.zip",
+      "observed": {
+        "start": "2024-11-15",
+        "end": "2024-12-14"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.mass.gov/files/documents/2017/10/27/develop_license_agree_0.pdf",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 30 covered days, within 2024-11-15 through 2024-12-14. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-437-202411250050."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-bart-mdb-53-202412090052-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Bay Area Rapid Transit (BART)",
+      "url": "https://files.mobilitydatabase.org/mdb-53/mdb-53-202412090052/mdb-53-202412090052.zip",
+      "observed": {
+        "start": "2024-08-12",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://www.bart.gov/schedules/developers/developer-license-agreement",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 142 covered days, within 2024-08-12 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-53-202412090052. Its declared feed window ends before its service calendars begin, so the calendars bound its coverage."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-virginia-railway-express-tld-61-202412300035-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Virginia Railway Express",
+      "url": "https://files.mobilitydatabase.org/tld-61/tld-61-202412300035/tld-61-202412300035.zip",
+      "observed": {
+        "start": "2024-11-04",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 58 covered days, within 2024-11-04 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset tld-61-202412300035."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-tri-rail-mdb-333-202411250040-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "South Florida Regional Transportation Authority",
+      "url": "https://files.mobilitydatabase.org/mdb-333/mdb-333-202411250040/mdb-333-202411250040.zip",
+      "observed": {
+        "start": "2024-11-20",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 42 covered days, within 2024-11-20 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-333-202411250040."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-norta-new-orleans-ntd-60032-202412090019-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "New Orleans Regional Transit Authority (NORTA)",
+      "url": "https://files.mobilitydatabase.org/ntd-60032/ntd-60032-202412090019/ntd-60032-202412090019.zip",
+      "observed": {
+        "start": "2024-09-08",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 115 covered days, within 2024-09-08 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset ntd-60032-202412090019."
+    },
+    {
+      "id": "gtfs-archive-gtfs-us-ctrail-hartford-line-wayback-20230727191838-zip",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Connecticut Department of Transportation (CTrail Hartford Line)",
+      "url": "https://web.archive.org/web/20230727191838id_/https://www.ctrides.com/hlgtfs.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-06-09"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.cttransit.com/about/developers/terms-of-use",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 161 covered days, within 2024-01-01 through 2024-06-09. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "gtfs-archive-gtfs-ca-mdb-735-202405270036-zip",
@@ -3019,6 +3883,102 @@
       "public_ok": true,
       "depends_on": [],
       "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 366 covered days, within 2024-01-01 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+    },
+    {
+      "id": "gtfs-archive-gtfs-silesia-gzm-24-ztm-katowice-20240703-zip",
+      "kind": "prepare-timetable",
+      "region": "PL",
+      "publisher": "ZTM – Zarząd Transportu Metropolitalnego (GZM), republished by gtfs-proxies",
+      "url": "https://github.com/gtfs-proxies/24-ZTM-Katowice/releases/download/2024-07-03/24-ZTM-Katowice.zip",
+      "observed": {
+        "start": "2024-06-28",
+        "end": "2024-07-20"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 23 covered days, within 2024-06-28 through 2024-07-20. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+    },
+    {
+      "id": "gtfs-archive-gtfs-polish-trains-mdb-2087-202412230036-zip",
+      "kind": "prepare-timetable",
+      "region": "PL",
+      "publisher": "Mikołaj Kuranowski",
+      "url": "https://files.mobilitydatabase.org/mdb-2087/mdb-2087-202412230036/mdb-2087-202412230036.zip",
+      "observed": {
+        "start": "2024-11-10",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "CC-BY-4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 52 covered days, within 2024-11-10 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+    },
+    {
+      "id": "gtfs-archive-gtfs-polish-trains-mdb-2088-202412050033-zip",
+      "kind": "prepare-timetable",
+      "region": "PL",
+      "publisher": "Mikołaj Kuranowski",
+      "url": "https://files.mobilitydatabase.org/mdb-2088/mdb-2088-202412050033/mdb-2088-202412050033.zip",
+      "observed": {
+        "start": "2024-12-04",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "CC-BY-4.0",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 28 covered days, within 2024-12-04 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+    },
+    {
+      "id": "gtfs-archive-gtfs-polish-trains-mdb-1908-202412020035-zip",
+      "kind": "prepare-timetable",
+      "region": "PL",
+      "publisher": "Koleje Małopolskie sp. z o.o.",
+      "url": "https://files.mobilitydatabase.org/mdb-1908/mdb-1908-202412020035/mdb-1908-202412020035.zip",
+      "observed": {
+        "start": "2024-11-28",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 34 covered days, within 2024-11-28 through 2024-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+    },
+    {
+      "id": "gtfs-archive-gtfs-polish-trains-24-koleje-slaskie-20240329-zip",
+      "kind": "prepare-timetable",
+      "region": "PL",
+      "publisher": "Koleje Śląskie, republished by gtfs-proxies",
+      "url": "https://github.com/gtfs-proxies/24-Koleje-Slaskie/releases/download/2024-03-29/24-Koleje-Slaskie.zip",
+      "observed": {
+        "start": "2024-01-01",
+        "end": "2024-12-14"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 349 covered days, within 2024-01-01 through 2024-12-14. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+    },
+    {
+      "id": "gtfs-archive-gtfs-polish-trains-02-koleje-dolnoslaskie-20240330-zip",
+      "kind": "prepare-timetable",
+      "region": "PL",
+      "publisher": "kiedyPrzyjedzie.pl",
+      "url": "https://github.com/gtfs-proxies/02-Koleje-Dolnoslaskie/releases/download/2024-03-30/02-Koleje-Dolnoslaskie.zip",
+      "observed": {
+        "start": "2024-03-30",
+        "end": "2024-12-14"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 366 days of the flow window, including exceptions and weekends. Selected operators have 260 covered days, within 2024-03-30 through 2024-12-14. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
     },
     {
       "id": "gtfs-archive-gtfs-cp-comboios-mdb-2057-202410140040-zip",
@@ -5563,7 +6523,61 @@
         "gtfs-archive-gtfs-no-mdb-1078-202406100055-zip",
         "gtfs-archive-gtfs-fi-gtfs-all-wayback-20241127154525-zip",
         "gtfs-archive-gtfs-be-mdb-686-202406100028-zip",
-        "gtfs-archive-gtfs-us-mdb-11-202406100054-zip",
+        "gtfs-archive-gtfs-us-amtrak-mdb-11-202412260016-zip",
+        "gtfs-archive-gtfs-us-mta-metro-north-mdb-524-202412090017-zip",
+        "gtfs-archive-gtfs-us-mta-long-island-rail-road-mdb-507-202411250016-zip",
+        "gtfs-archive-gtfs-us-mta-nyc-subway-mdb-516-202408080013-zip",
+        "gtfs-archive-gtfs-us-nj-transit-rail-mdb-509-202412050056-zip",
+        "gtfs-archive-gtfs-us-panynj-path-mdb-517-202411280023-zip",
+        "gtfs-archive-gtfs-us-septa-regional-rail-mdb-503-202411280039-zip",
+        "gtfs-archive-gtfs-us-septa-metro-mdb-502-202411280022-zip",
+        "gtfs-archive-gtfs-us-patco-speedline-mdb-505-202411070009-zip",
+        "gtfs-archive-gtfs-us-metra-mdb-1187-202404220016-zip",
+        "gtfs-archive-gtfs-us-cta-mdb-389-202410170023-zip",
+        "gtfs-archive-gtfs-us-nictd-south-shore-line-mdb-585-202405200019-zip",
+        "gtfs-archive-gtfs-us-wmata-metrorail-mdb-1847-202412050051-zip",
+        "gtfs-archive-gtfs-us-mta-maryland-marc-mdb-468-202412160054-zip",
+        "gtfs-archive-gtfs-us-mta-maryland-light-rail-mdb-469-202412160035-zip",
+        "gtfs-archive-gtfs-us-mta-maryland-metro-subway-mdb-470-202412160047-zip",
+        "gtfs-archive-gtfs-us-caltrain-mdb-54-202411210007-zip",
+        "gtfs-archive-gtfs-us-sfmta-muni-mdb-50-202406240012-zip",
+        "gtfs-archive-gtfs-us-vta-mdb-57-202411180028-zip",
+        "gtfs-archive-gtfs-us-altamont-corridor-express-mdb-1133-202405060014-zip",
+        "gtfs-archive-gtfs-us-smart-sonoma-marin-mdb-815-202411180042-zip",
+        "gtfs-archive-gtfs-us-la-metro-rail-mdb-30-202412160056-zip",
+        "gtfs-archive-gtfs-us-metrolink-mdb-96-202411250032-zip",
+        "gtfs-archive-gtfs-us-san-diego-mts-mdb-13-202411280000-zip",
+        "gtfs-archive-gtfs-us-nctd-mdb-14-202409230033-zip",
+        "gtfs-archive-gtfs-us-sound-transit-mdb-268-202412230052-zip",
+        "gtfs-archive-gtfs-us-trimet-mdb-247-202412260012-zip",
+        "gtfs-archive-gtfs-us-marta-mdb-368-202410210034-zip",
+        "gtfs-archive-gtfs-us-miami-dade-transit-mdb-331-202412120057-zip",
+        "gtfs-archive-gtfs-us-brightline-mdb-1126-202412050033-zip",
+        "gtfs-archive-gtfs-us-sunrail-mdb-626-202412230046-zip",
+        "gtfs-archive-gtfs-us-dart-dallas-mdb-152-202411250044-zip",
+        "gtfs-archive-gtfs-us-trinity-metro-mdb-885-202412050016-zip",
+        "gtfs-archive-gtfs-us-houston-metro-mdb-2060-202412050029-zip",
+        "gtfs-archive-gtfs-us-capmetro-mdb-150-202411250032-zip",
+        "gtfs-archive-gtfs-us-rtd-denver-mdb-178-202412300014-zip",
+        "gtfs-archive-gtfs-us-uta-mdb-170-202411280000-zip",
+        "gtfs-archive-gtfs-us-valley-metro-phoenix-mdb-147-202411180040-zip",
+        "gtfs-archive-gtfs-us-metro-transit-minneapolis-mdb-205-202412020034-zip",
+        "gtfs-archive-gtfs-us-metro-st-louis-mdb-190-202412300054-zip",
+        "gtfs-archive-gtfs-us-pittsburgh-regional-transit-mdb-409-202412190002-zip",
+        "gtfs-archive-gtfs-us-greater-cleveland-rta-mdb-406-202409190001-zip",
+        "gtfs-archive-gtfs-us-sacrt-mdb-2137-202411250046-zip",
+        "gtfs-archive-gtfs-us-hampton-roads-transit-mdb-473-202411040032-zip",
+        "gtfs-archive-gtfs-us-cincinnati-metro-mdb-307-202412090040-zip",
+        "gtfs-archive-gtfs-us-kcata-mdb-187-202412300012-zip",
+        "gtfs-archive-gtfs-us-detroit-people-mover-mdb-2281-202412300007-zip",
+        "gtfs-archive-gtfs-us-king-county-metro-mdb-1330-202412020006-zip",
+        "gtfs-archive-gtfs-us-shore-line-east-mdb-550-202407150027-zip",
+        "gtfs-archive-gtfs-us-mbta-mdb-437-202411250050-zip",
+        "gtfs-archive-gtfs-us-bart-mdb-53-202412090052-zip",
+        "gtfs-archive-gtfs-us-virginia-railway-express-tld-61-202412300035-zip",
+        "gtfs-archive-gtfs-us-tri-rail-mdb-333-202411250040-zip",
+        "gtfs-archive-gtfs-us-norta-new-orleans-ntd-60032-202412090019-zip",
+        "gtfs-archive-gtfs-us-ctrail-hartford-line-wayback-20230727191838-zip",
         "gtfs-archive-gtfs-ca-mdb-735-202405270036-zip",
         "gtfs-archive-gtfs-fr-mdb-1205-202406100014-zip",
         "gtfs-archive-gtfs-fr-mdb-1782-202406100054-zip",
@@ -5605,6 +6619,12 @@
         "gtfs-archive-gtfs-warsaw-ztm-mdb-2092-202409160000-zip",
         "gtfs-archive-gtfs-krakow-tram-mdb-1270-202406100016-zip",
         "gtfs-archive-gtfs-wkd-warszawa-mdb-863-202402080126-zip",
+        "gtfs-archive-gtfs-silesia-gzm-24-ztm-katowice-20240703-zip",
+        "gtfs-archive-gtfs-polish-trains-mdb-2087-202412230036-zip",
+        "gtfs-archive-gtfs-polish-trains-mdb-2088-202412050033-zip",
+        "gtfs-archive-gtfs-polish-trains-mdb-1908-202412020035-zip",
+        "gtfs-archive-gtfs-polish-trains-24-koleje-slaskie-20240329-zip",
+        "gtfs-archive-gtfs-polish-trains-02-koleje-dolnoslaskie-20240330-zip",
         "gtfs-archive-gtfs-cp-comboios-mdb-2057-202410140040-zip",
         "gtfs-archive-gtfs-metro-porto-mdb-2147-202410310048-zip",
         "gtfs-archive-gtfs-carris-metropolitana-mdb-2027-202406100009-zip",
@@ -7742,13 +8762,6 @@
       "depends_on": []
     },
     {
-      "id": "pl-timetable-silesia-gzm",
-      "kind": "prepare-timetable",
-      "region": "PL",
-      "description": "national GTFS silesia-gzm: no timetable at or before the map date is admitted; lines not covered by another feed retain their class defaults.",
-      "depends_on": []
-    },
-    {
       "id": "cz-prague-tsk-praha-intenzity-dopravy",
       "kind": "prepare-road-counts",
       "region": "CZ:Prague",
@@ -7803,6 +8816,27 @@
       "region": "ID",
       "depends_on": [],
       "description": "The retained publisher response contains an error instead of observations. Repeat retrieval returned the same error; this part is not used."
+    },
+    {
+      "id": "us-timetable-charlotte-cats",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "description": "Charlotte Area Transit System (CATS): no timetable at or before the map date is admitted; lines not covered by another feed retain their class defaults.",
+      "depends_on": []
+    },
+    {
+      "id": "us-timetable-honolulu-thebus-skyline",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "description": "TheBus: no timetable at or before the map date is admitted; lines not covered by another feed retain their class defaults.",
+      "depends_on": []
+    },
+    {
+      "id": "pl-timetable-polish-trains",
+      "kind": "prepare-timetable",
+      "region": "PL",
+      "description": "national GTFS polish-trains: no 2024 timetable is admitted for PKP SKM Trójmiasto, Koleje Wielkopolskie, Łódzka Kolej Aglomeracyjna, Arriva RP, Leo Express or RegioJet; their lines not covered by another feed retain their class defaults.",
+      "depends_on": []
     }
   ],
   "validity": {
@@ -9361,8 +10395,8 @@
       },
       {
         "format": "gtfs",
-        "input": "gtfs-archive-gtfs-us-mdb-11-202406100054-zip",
-        "source_id": 100,
+        "input": "gtfs-archive-gtfs-us-amtrak-mdb-11-202412260016-zip",
+        "source_id": 2079,
         "country": "US",
         "directories": [
           "."
@@ -9380,7 +10414,2241 @@
           108,
           109
         ],
-        "tram_route_types": [],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false,
+        "excluded_agency_names": [
+          "MARC",
+          "Shore Line East"
+        ]
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-mta-metro-north-mdb-524-202412090017-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-mta-long-island-rail-road-mdb-507-202411250016-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-mta-nyc-subway-mdb-516-202408080013-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-nj-transit-rail-mdb-509-202412050056-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-panynj-path-mdb-517-202411280023-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-septa-regional-rail-mdb-503-202411280039-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-septa-metro-mdb-502-202411280022-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-patco-speedline-mdb-505-202411070009-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-metra-mdb-1187-202404220016-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-cta-mdb-389-202410170023-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-nictd-south-shore-line-mdb-585-202405200019-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-wmata-metrorail-mdb-1847-202412050051-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-mta-maryland-marc-mdb-468-202412160054-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-mta-maryland-light-rail-mdb-469-202412160035-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-mta-maryland-metro-subway-mdb-470-202412160047-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-caltrain-mdb-54-202411210007-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-sfmta-muni-mdb-50-202406240012-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-vta-mdb-57-202411180028-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-altamont-corridor-express-mdb-1133-202405060014-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-smart-sonoma-marin-mdb-815-202411180042-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-la-metro-rail-mdb-30-202412160056-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-metrolink-mdb-96-202411250032-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-san-diego-mts-mdb-13-202411280000-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-nctd-mdb-14-202409230033-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          0
+        ],
+        "tram_route_types": [
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-sound-transit-mdb-268-202412230052-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-trimet-mdb-247-202412260012-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-marta-mdb-368-202410210034-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-miami-dade-transit-mdb-331-202412120057-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-brightline-mdb-1126-202412050033-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-sunrail-mdb-626-202412230046-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-dart-dallas-mdb-152-202411250044-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-trinity-metro-mdb-885-202412050016-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          0
+        ],
+        "tram_route_types": [
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-houston-metro-mdb-2060-202412050029-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-capmetro-mdb-150-202411250032-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          0
+        ],
+        "tram_route_types": [
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-rtd-denver-mdb-178-202412300014-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-uta-mdb-170-202411280000-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-valley-metro-phoenix-mdb-147-202411180040-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-metro-transit-minneapolis-mdb-205-202412020034-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-metro-st-louis-mdb-190-202412300054-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-pittsburgh-regional-transit-mdb-409-202412190002-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-greater-cleveland-rta-mdb-406-202409190001-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-sacrt-mdb-2137-202411250046-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-hampton-roads-transit-mdb-473-202411040032-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-cincinnati-metro-mdb-307-202412090040-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-kcata-mdb-187-202412300012-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-detroit-people-mover-mdb-2281-202412300007-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-king-county-metro-mdb-1330-202412020006-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-shore-line-east-mdb-550-202407150027-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-mbta-mdb-437-202411250050-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-bart-mdb-53-202412090052-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": true
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-virginia-railway-express-tld-61-202412300035-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-tri-rail-mdb-333-202411250040-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-norta-new-orleans-ntd-60032-202412090019-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-us-ctrail-hartford-line-wayback-20230727191838-zip",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
         "excluded_route_names": [],
         "ignore_feed_window": false
       },
@@ -10969,6 +14237,252 @@
       {
         "format": "gtfs",
         "input": "gtfs-archive-gtfs-wkd-warszawa-mdb-863-202402080126-zip",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-silesia-gzm-24-ztm-katowice-20240703-zip",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": true
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-polish-trains-mdb-2087-202412230036-zip",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-polish-trains-mdb-2088-202412050033-zip",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-polish-trains-mdb-1908-202412020035-zip",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-polish-trains-24-koleje-slaskie-20240329-zip",
+        "source_id": 2066,
+        "country": "PL",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "gtfs-archive-gtfs-polish-trains-02-koleje-dolnoslaskie-20240330-zip",
         "source_id": 2066,
         "country": "PL",
         "directories": [

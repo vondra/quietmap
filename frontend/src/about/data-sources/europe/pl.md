@@ -1,6 +1,6 @@
 ---
 title: Poland
-intro: GDDKiA census of national and provincial roads (2020/2021), five timetables for trains and trams. Streets in cities with county rights not covered; rail freight from the national train-kilometres.
+intro: GDDKiA census of national and provincial roads (2020/2021), timetables for trains and trams. Streets in cities with county rights not covered; rail freight from the national train-kilometres.
 ---
 
 ## Roads
@@ -26,6 +26,8 @@ Timetables are averaged over the observation year. The archived Polish Trains, W
 | [Kraków](https://gtfs.ztp.krakow.pl/GTFS_KRK_T.zip) | Kraków trams |
 | [GZM](https://mkuran.pl/gtfs/gzm.zip) | Silesian trams |
 | [WKD](https://mkuran.pl/gtfs/wkd.zip) | Warsaw commuter railway |
+
+For 2024 the joint Polish Trains feed did not yet exist: the map reads the 2024 archives of Koleje Mazowieckie, PolRegio, PKP Intercity, Koleje Małopolskie, Koleje Śląskie and Koleje Dolnośląskie, with the Warsaw, Kraków, WKD and Silesian (23 summer days) feeds. No open 2024 archive was found for SKM Trójmiasto, Koleje Wielkopolskie, ŁKA, Arriva, Leo Express or RegioJet; track that no other timetable covers keeps the class defaults.
 
 Trams without a feed (Gdańsk, Poznań, Wrocław, Łódź and others) default to 120 per day on every track. The timetables are passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 

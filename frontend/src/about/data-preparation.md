@@ -348,6 +348,14 @@ Amtrak's and 53 commuter, metro and light-rail feeds, are archives of the Mobili
 last stored before the window's end that covers four weeks of it, or the days a shorter publishing
 horizon covers, or for SunRail and Sacramento a later archive that still covers part of it.
 
+For 2024, the window is the calendar year. The United States' timetables are the same systems'
+archives stored in 2024 and chosen by the same rule, 54 of them, with San Diego's Coaster and
+Sprinter and the Kansas City streetcar, and the Hartford Line's own trains from a copy of July 2023
+whose calendar runs to 9 June 2024. No 2024 archive was found for Charlotte's light rail,
+Honolulu's Skyline or Buffalo's Metro Rail; their track keeps estimates. Poland's trains are the 2024 archives of PolRegio,
+PKP Intercity and four regional railways, as the joint feed that 2026 reads did not yet exist; the
+Silesian trams cover 23 days of the summer.
+
 Calendar dates, additions and removals follow the
 [GTFS schedule specification](https://gtfs.org/documentation/schedule/reference/).
 The [publisher converters](https://github.com/vondra/quietmap/tree/main/fetch/rail_inputs)
