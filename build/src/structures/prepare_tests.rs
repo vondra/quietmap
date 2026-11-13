@@ -53,6 +53,13 @@ fn height_evidence_precedence_and_storeys_survive_quantization() {
     assert_eq!(model.height(None, None, 0, Some(2.49), 100.0), (7.4, 2));
     assert_eq!(model.height(None, None, 0, Some(2.5), 100.0), (2.5, 5));
     assert_eq!(model.height(None, None, 0, None, 30.0), (3.5, 2));
+    // A tag no building can have is no evidence; the tallest building's own height is.
+    assert_eq!(model.height(None, Some(828.0), 1, None, 100.0), (828.0, 0));
+    assert_eq!(
+        model.height(None, Some(320_000.0), 1, None, 100.0),
+        (6.0, 1)
+    );
+    assert_eq!(model.height(None, None, 0, Some(5_000.0), 30.0), (3.5, 2));
     assert_eq!(model.storeys(0, Some(8.49)), 2);
     assert_eq!(model.storeys(0, Some(8.5)), 3);
     assert_eq!(model.storeys(0, None), 1);
@@ -68,6 +75,12 @@ fn height_evidence_precedence_and_storeys_survive_quantization() {
         model.wall_height(8.0, false, u16::from_le_bytes(*b"US")),
         (4.45, 8)
     );
+    for tag_error in [-1.0, 320_000.0] {
+        assert_eq!(
+            model.wall_height(tag_error, true, u16::from_le_bytes(*b"US")),
+            (4.45, 8)
+        );
+    }
 }
 
 #[test]

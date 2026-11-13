@@ -1,5 +1,6 @@
 //! The common screening-height ladder and demand storeys, parameterized by admitted measurements.
 
+use crate::screening::BUILDING_HEIGHT_MAX_M;
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use std::{collections::BTreeMap, path::Path};
@@ -100,6 +101,8 @@ impl HeightModel {
         f64::from(floors) * range.slope_m + range.intercept_m
     }
 
+    /// A tagged height (OSM or Overture) taller than any building is a tag error, not evidence
+    /// (2024's OSM tags 75 buildings above it, up to 320,000 m): the ladder goes on to the next.
     pub fn height(
         &self,
         measured: Option<f64>,
@@ -113,12 +116,12 @@ impl HeightModel {
                 value.clamp(self.measured_bounds_m[0], self.measured_bounds_m[1]),
                 3,
             )
-        } else if let Some(value) = mapped.filter(|h| h.is_finite() && *h > 0.0) {
+        } else if let Some(value) = mapped.filter(|h| *h > 0.0 && *h <= BUILDING_HEIGHT_MAX_M) {
             (value, 0)
         } else if floors > 0 {
             (self.floors_height(floors), 1)
         } else if let Some(value) =
-            overture.filter(|h| h.is_finite() && *h >= self.overture_minimum_m)
+            overture.filter(|h| (self.overture_minimum_m..=BUILDING_HEIGHT_MAX_M).contains(h))
         {
             (value, 5)
         } else {
@@ -143,7 +146,8 @@ impl HeightModel {
     }
 
     pub fn wall_height(&self, mapped: f32, has_height: bool, country: u16) -> (f64, u8) {
-        if has_height {
+        // A wall's tag obeys the same bound; outside it the country's wall height stands in.
+        if has_height && (0.0..=BUILDING_HEIGHT_MAX_M).contains(&f64::from(mapped)) {
             return (f64::from(mapped), 0);
         }
         let bytes = country.to_le_bytes();
