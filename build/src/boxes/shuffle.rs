@@ -87,8 +87,9 @@ fn squares_of(segment: &FlightSegment, scope: &HashSet<Square>) -> Vec<Square> {
     };
     let (a, b) = (square(segment.start), square(segment.end));
     let (x0, x1, y0, y1) = (a.0.min(b.0), a.0.max(b.0), a.1.min(b.1), a.1.max(b.1));
-    if (x1 - x0 + 1) * (y1 - y0 + 1) > 16 {
-        // A long segment (a gap in coverage): every scope square in its box.
+    // The fewer of the box's cells and the scope's squares are walked: a gap in coverage spans
+    // hundreds of cells, a world scope 262,144 squares.
+    if (x1 - x0 + 1) * (y1 - y0 + 1) > scope.len() as i64 {
         return scope
             .iter()
             .filter(|square| {
@@ -447,6 +448,38 @@ mod tests {
             vec![Square { x: 276, y: 173 }, Square { x: 277, y: 173 }]
         );
         assert!(squares_of(&segment(10.0, 10.1), &scope).is_empty());
+    }
+
+    /// A long segment's box walked by its cells (under a world scope) and by the scope's squares
+    /// (under a scope smaller than the box) finds the same squares, so which walk runs never
+    /// changes a shuffle: an oceanic gap and a hop over the antimeridian.
+    #[test]
+    fn a_box_walked_by_cells_or_by_scope_finds_the_same_squares() {
+        let world: HashSet<Square> = (0..512)
+            .flat_map(|x| (0..512).map(move |y| Square { x, y }))
+            .collect();
+        for (start, end) in [
+            ([50.0, -30.0], [45.0, -27.0]),
+            ([65.0, 179.9], [65.5, -179.9]),
+        ] {
+            let segment = FlightSegment {
+                start: [start[0], start[1], 0.0],
+                end: [end[0], end[1], 0.0],
+                ..FlightSegment::default()
+            };
+            let mut by_cells = squares_of(&segment, &world);
+            by_cells.sort();
+            assert!(by_cells.len() > 16);
+            // Two squares fewer than the box, and one outside it.
+            let smaller: HashSet<Square> = by_cells[2..]
+                .iter()
+                .copied()
+                .chain([Square { x: 0, y: 0 }])
+                .collect();
+            let mut by_scope = squares_of(&segment, &smaller);
+            by_scope.sort();
+            assert_eq!(by_scope, by_cells[2..]);
+        }
     }
 
     /// A shuffle holds one scope: rerun with another it refuses, and the boxes and events refuse
