@@ -50,8 +50,9 @@ use crate::{
     year::{Kind, YearInputs},
 };
 use anyhow::{Result, ensure};
+use rayon::prelude::*;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -100,6 +101,92 @@ fn inferred_roads(
     Ok(())
 }
 
+/// The eight neighbours in the order their one-way pieces enter a square's alternatives index,
+/// which allocation's candidate order, and so its ties, follow.
+fn neighbours_in_index_order(square: Square) -> impl Iterator<Item = Square> {
+    (-1..=1).flat_map(move |dx| {
+        (-1..=1).filter_map(move |dy| {
+            let y = square.y as i32 + dy;
+            ((0..512).contains(&y) && (dx, dy) != (0, 0)).then(|| Square {
+                x: (square.x as i32 + dx).rem_euclid(512) as u32,
+                y: y as u32,
+            })
+        })
+    })
+}
+
+/// The year's inputs every square's road preparation reads.
+struct Preparation<'a> {
+    mapped: &'a Path,
+    structures: &'a Path,
+    matcher: &'a matching::Matcher,
+    continuity: &'a continuity::Plan,
+    model: &'a model::Model,
+}
+
+impl Preparation<'_> {
+    /// A square's sorted source batches and its pieces with their counts and continuations.
+    fn matched(
+        &self,
+        square: Square,
+    ) -> Result<Option<(Vec<arrow_array::RecordBatch>, Vec<input::Road>)>> {
+        let path = road_path(self.mapped, square);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let batches = input::load(&path)?;
+        let mut roads = matched_roads(&batches, self.matcher, self.model)?;
+        self.continuity.apply(square, &mut roads);
+        Ok(Some((batches, roads)))
+    }
+
+    /// A square's one-way pieces as its neighbours' alternatives see them: inferred over the
+    /// whole square, as settlement and street demand read every piece of it.
+    fn one_way_roads(&self, square: Square) -> Result<Vec<input::Road>> {
+        let Some((_, mut roads)) = self.matched(square)? else {
+            return Ok(Vec::new());
+        };
+        if roads.iter().any(|r| r.direction != 0) {
+            inferred_roads(self.structures, square, &mut roads, self.model)?;
+        }
+        roads.retain(|r| r.direction != 0);
+        Ok(roads)
+    }
+
+    /// Writes a square's prepared pieces, split where its own or its neighbours' one-way
+    /// carriageways run alongside.
+    fn write(
+        &self,
+        square: Square,
+        one_way: &BTreeMap<Square, Vec<input::Road>>,
+        output: &Path,
+    ) -> Result<()> {
+        let Some((batches, mut roads)) = self.matched(square)? else {
+            return Ok(());
+        };
+        inferred_roads(self.structures, square, &mut roads, self.model)?;
+        let mut alternatives = roads
+            .iter()
+            .filter(|r| r.direction != 0)
+            .cloned()
+            .collect::<Vec<_>>();
+        for neighbour in neighbours_in_index_order(square) {
+            alternatives.extend(one_way[&neighbour].iter().cloned());
+        }
+        let index = spatial::RoadIndex::new(alternatives);
+        let target = road_path(output, square);
+        std::fs::create_dir_all(target.parent().expect("square parent"))?;
+        write::stage(&target, &batches, &roads, &index, self.model)?;
+        eprintln!(
+            "roads: {}/{}: {} mapped pieces",
+            square.x,
+            square.y,
+            roads.len()
+        );
+        Ok(())
+    }
+}
+
 pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<()> {
     ensure!(!output.exists(), "road output must be a new tree");
     ensure!(
@@ -123,54 +210,37 @@ pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<(
     let selected = squares.iter().copied().collect::<BTreeSet<_>>();
     let continuity = continuity::build(mapped, &selected, &matcher, &model)?;
     std::fs::create_dir(output)?;
-    for square in selected {
-        let path = road_path(mapped, square);
-        if !path.exists() {
-            continue;
-        }
-        let batches = input::load(&path)?;
-        let mut roads = matched_roads(&batches, &matcher, &model)?;
-        continuity.apply(square, &mut roads);
-        let structures = inputs
+    let preparation = Preparation {
+        mapped,
+        structures: inputs
             .required(Kind::Structures)
-            .map_err(anyhow::Error::msg)?;
-        inferred_roads(structures, square, &mut roads, &model)?;
-        let mut neighbors = roads
+            .map_err(anyhow::Error::msg)?,
+        matcher: &matcher,
+        continuity: &continuity,
+        model: &model,
+    };
+    let mut rows = BTreeMap::<u32, Vec<Square>>::new();
+    for square in selected {
+        rows.entry(square.y).or_default().push(square);
+    }
+    // Row by row, each square's one-way pieces are inferred once and kept only while the rows on
+    // either side of it are written, so memory holds three rows of them, not the world's.
+    let mut one_way = BTreeMap::<Square, Vec<input::Road>>::new();
+    for (row, written) in rows {
+        one_way.retain(|square, _| square.y + 1 >= row);
+        let missing = written
             .iter()
-            .filter(|r| r.direction != 0)
-            .cloned()
-            .collect::<Vec<_>>();
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                let y = square.y as i32 + dy;
-                if !(0..512).contains(&y) || (dx == 0 && dy == 0) {
-                    continue;
-                }
-                let neighbor = Square {
-                    x: (square.x as i32 + dx).rem_euclid(512) as u32,
-                    y: y as u32,
-                };
-                let path = road_path(mapped, neighbor);
-                if path.exists() {
-                    let mut adjacent = matched_roads(&input::load(&path)?, &matcher, &model)?;
-                    continuity.apply(neighbor, &mut adjacent);
-                    if adjacent.iter().any(|r| r.direction != 0) {
-                        inferred_roads(structures, neighbor, &mut adjacent, &model)?;
-                        neighbors.extend(adjacent.into_iter().filter(|r| r.direction != 0));
-                    }
-                }
-            }
-        }
-        let index = spatial::RoadIndex::new(neighbors);
-        let target = road_path(output, square);
-        std::fs::create_dir_all(target.parent().expect("square parent"))?;
-        write::stage(&target, &batches, &roads, &index, &model)?;
-        eprintln!(
-            "roads: {}/{}: {} mapped pieces",
-            square.x,
-            square.y,
-            roads.len()
-        );
+            .flat_map(|&square| neighbours_in_index_order(square).chain([square]))
+            .filter(|square| !one_way.contains_key(square))
+            .collect::<BTreeSet<_>>();
+        let inferred = missing
+            .into_par_iter()
+            .map(|square| Ok((square, preparation.one_way_roads(square)?)))
+            .collect::<Result<Vec<_>>>()?;
+        one_way.extend(inferred);
+        written
+            .par_iter()
+            .try_for_each(|&square| preparation.write(square, &one_way, output))?;
     }
     Ok(())
 }

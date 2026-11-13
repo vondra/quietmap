@@ -1,4 +1,4 @@
-//! Reordering mapped rows must not move a building's trips between equally near streets.
+//! Reordering mapped rows or squares must not move a building's trips or a road's alternatives.
 
 use super::{input, model::Model};
 use arrow_array::{
@@ -203,4 +203,12 @@ fn service_roads_keep_their_prior_when_no_demand_bounds_are_admitted() {
             .sum::<f64>()
             > 0.0
     }));
+}
+
+#[test]
+fn neighbours_enter_the_alternatives_index_column_by_column_across_the_antimeridian() {
+    let order = super::neighbours_in_index_order(crate::dev4::Square { x: 0, y: 0 })
+        .map(|square| (square.x, square.y))
+        .collect::<Vec<_>>();
+    assert_eq!(order, [(511, 0), (511, 1), (0, 1), (1, 0), (1, 1)]);
 }
