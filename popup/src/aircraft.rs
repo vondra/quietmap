@@ -9,7 +9,7 @@ pub mod horizons;
 pub mod rolls;
 pub mod tracks;
 
-use boxes::{AIRCRAFT_REACH_M, AircraftReceiver, FLIGHT_KINDS, tile_energy, tile_flight_sums};
+use boxes::{AircraftReceiver, FLIGHT_KINDS, tile_energy};
 use flights::FlightTotals;
 use physics::bands::PERIODS;
 use physics::doc29::screening::ReceiverHorizons;
@@ -19,8 +19,6 @@ use tiles::geo::{LocalFrame, TileId};
 
 /// Boxes computed between two looks at the list's entry level.
 const SEARCH_CHUNK: usize = 16;
-/// Far boxes a core sums at a time for the lambda (`tile_energy`'s run).
-const FAR_RUN: usize = 1_024;
 /// Fine boxes are read for the tiles whose nearest point lies within this of the click, far boxes
 /// (four times the edges) for the others: a few kilometres off, the steepest slope is a fraction
 /// of the one at a low box's clearance, and far boxes are a seventh of the fine ones.
@@ -46,67 +44,80 @@ pub fn holds_boxes_in_reach(frame: &LocalFrame, tile: TileId, position: [f64; 2]
     frame.tile_gap_m(tile, position) <= boxes::AIRCRAFT_REACH_M + 1.0
 }
 
-/// The flights' Kurze lambda, their energy-weighted mean over the far boxes of the tiles heard
-/// (also where their fine boxes give the energy) and the runways' rolls: per period those boxes'
-/// and rolls' own energy and energy times lambda. A box
-/// counts the flights crossing it, so its lambda depends on how the boxes group the flights; read
-/// from one grouping everywhere, the lambda does not change where a tile's fine boxes give way to
-/// its far ones. Of
-/// the two, the far boxes' gave the loudness nearest to the boxes' crossings simulated as streams
-/// one by one (measured 2026-11-08 at 23 places: the far boxes' within 2.5 phon, the fine boxes' 5
-/// to 8 phon quieter).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct LambdaSums {
-    pub energy: [f64; PERIODS],
-    pub energy_lambda: [f64; PERIODS],
+/// The classes of the flights' passes: [`PASS_CLASS_DB`] wide from [`PASS_LOWEST_DB`] (dB). The
+/// real flights of 34 days of the year past 14 places, each moment a class of its own level, read
+/// their time series' loudness within 4 % in classes of 1 and of 3 dB, 4 to 8 % louder in classes
+/// of 10 dB.
+pub const PASS_CLASSES: usize = 48;
+pub const PASS_CLASS_DB: f64 = 3.0;
+pub const PASS_LOWEST_DB: f64 = -30.0;
+
+/// The flights heard as passes. While a flight is in a box it is heard at the box's level: the
+/// box's received energy over the share of the period its flights are in it (`boxes::box_passing`:
+/// their number, the cell's mean chord along their axis, their speed). Per period and class of
+/// that level, the boxes' energy (Leq, linear) and their shares of the period: a class is one
+/// stream of passes at its mean level, the flights at that level at a moment Poisson with the
+/// class's summed share as their mean, the classes independent (`percentiles::Line::flight_passes`).
+/// At those 14 places the click reads the real flights' loudness 9 % quieter to 30 % louder, the
+/// median 9 % louder: a box takes all its flights at one level, though their levels spread by 2
+/// to 5 dB in it, and its chord and kept speeds stand for their times in it (the flights' own
+/// times in the boxes read no nearer; with the spread of their levels 0 to 19 % louder, the
+/// median 7 %). One Kurze line at the boxes' energy-weighted lambda (the slant
+/// over 70 m/s) read it 2 to 157 % louder, the median 73 %: Doc 29's pass is half as long as a
+/// point's at the same distance and shorter still far away, cruise flies three times as fast,
+/// and one line gives every pass one peak.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlightPasses {
+    pub energy: [[f64; PASS_CLASSES]; PERIODS],
+    pub passing: [[f64; PASS_CLASSES]; PERIODS],
 }
 
-impl From<([f64; PERIODS], [f64; PERIODS])> for LambdaSums {
-    /// Energies and energies times lambda, as `boxes::tile_flight_sums` sums them.
-    fn from((energy, energy_lambda): ([f64; PERIODS], [f64; PERIODS])) -> Self {
-        LambdaSums {
-            energy,
-            energy_lambda,
+impl Default for FlightPasses {
+    fn default() -> Self {
+        FlightPasses {
+            energy: [[0.0; PASS_CLASSES]; PERIODS],
+            passing: [[0.0; PASS_CLASSES]; PERIODS],
         }
     }
 }
 
-impl LambdaSums {
-    pub fn add(&mut self, other: &LambdaSums) {
+impl FlightPasses {
+    /// Adds passes heard with `energy` (Leq, linear) in `period`, in progress `passing` of it.
+    pub fn add_pass(&mut self, period: usize, energy: f64, passing: f64) {
+        if energy <= 0.0 || passing <= 0.0 {
+            return;
+        }
+        let level_db = 10.0 * (energy / passing).log10();
+        let class =
+            (((level_db - PASS_LOWEST_DB) / PASS_CLASS_DB).max(0.0) as usize).min(PASS_CLASSES - 1);
+        self.energy[period][class] += energy;
+        self.passing[period][class] += passing;
+    }
+
+    pub fn add(&mut self, other: &FlightPasses) {
         for period in 0..PERIODS {
-            self.energy[period] += other.energy[period];
-            self.energy_lambda[period] += other.energy_lambda[period];
-        }
-    }
-
-    /// The flights' lambda per period (infinite with no energy: a steady line).
-    pub fn lambda(&self) -> [f64; PERIODS] {
-        std::array::from_fn(|period| {
-            if self.energy[period] > 0.0 {
-                self.energy_lambda[period] / self.energy[period]
-            } else {
-                f64::INFINITY
+            for class in 0..PASS_CLASSES {
+                self.energy[period][class] += other.energy[period][class];
+                self.passing[period][class] += other.passing[period][class];
             }
-        })
+        }
     }
 }
 
-/// One tile of a ring: the boxes the receiver hears (its fine ones within
-/// [`FINE_BOXES_WITHIN_M`], else its far ones) and, where those are its fine ones, its far ones,
-/// which the flights' lambda is read from ([`LambdaSums`]; `None`: the heard ones).
+/// One tile of a ring and the boxes the receiver hears of it: its fine ones within
+/// [`FINE_BOXES_WITHIN_M`], else its far ones.
 #[derive(Clone, Copy)]
 pub struct RingTile<'a> {
     pub tile: TileId,
     pub heard: Aircraft<'a>,
-    pub far: Option<Aircraft<'a>>,
 }
 
 /// One ring's boxes at the receiver.
 pub struct RingAircraft {
     /// Period energies (Leq, linear).
     pub energy: [f64; PERIODS],
-    /// What the flights' lambda is weighted from.
-    pub lambda: LambdaSums,
+    /// The flights' passes.
+    pub passes: FlightPasses,
     /// The Lden energies per flight kind ([`boxes::FLIGHT_KINDS`]).
     pub kinds: [f64; FLIGHT_KINDS],
     /// Boxes within reach.
@@ -126,47 +137,17 @@ pub fn ring_aircraft(
 ) -> RingAircraft {
     let mut ring = RingAircraft {
         energy: [0.0; PERIODS],
-        lambda: LambdaSums::default(),
+        passes: FlightPasses::default(),
         kinds: [0.0; FLIGHT_KINDS],
         heard: 0,
     };
-    // The far boxes of the tiles heard in their fine ones, for the lambda only: in runs of boxes
-    // over every core (the click's own tile alone may hold them), added in order, so that a click
-    // always sums them alike.
-    let runs: Vec<(usize, std::ops::Range<usize>)> = (tiles.iter().enumerate())
-        .filter_map(|(at, ring_tile)| ring_tile.far.map(|far| (at, far.box_count())))
-        .flat_map(|(at, count)| {
-            (0..count)
-                .step_by(FAR_RUN)
-                .map(move |start| (at, start..(start + FAR_RUN).min(count)))
-        })
-        .collect();
-    let run_lambdas: Vec<LambdaSums> = runs
-        .par_iter()
-        .map(|(at, boxes)| {
-            let ring_tile = &tiles[*at];
-            let far = ring_tile.far.expect("a run of far boxes");
-            let whole: &dyn Fn(f64) -> f64 = &|_| 1.0;
-            let reach = (boxes.clone(), whole, AIRCRAFT_REACH_M);
-            tile_flight_sums(&far, ring_tile.tile, frame, receiver, horizons, reach).into()
-        })
-        .collect();
-    let mut far_lambdas: Vec<Option<LambdaSums>> = (tiles.iter())
-        .map(|ring_tile| ring_tile.far.map(|_| LambdaSums::default()))
-        .collect();
-    for ((at, _), run) in runs.iter().zip(&run_lambdas) {
-        if let Some(sums) = &mut far_lambdas[*at] {
-            sums.add(run);
-        }
-    }
     let mut bounds: Vec<(f64, usize, usize)> = Vec::new();
-    for (tile_index, (ring_tile, far_lambda)) in tiles.iter().zip(far_lambdas).enumerate() {
+    for (tile_index, ring_tile) in tiles.iter().enumerate() {
         let answer = tile_energy(&ring_tile.heard, ring_tile.tile, frame, receiver, horizons);
         for period in 0..PERIODS {
             ring.energy[period] += answer.energy[period];
         }
-        ring.lambda
-            .add(&far_lambda.unwrap_or((answer.energy, answer.energy_lambda).into()));
+        ring.passes.add(&answer.passes);
         for (kind, tile_kind) in ring.kinds.iter_mut().zip(answer.kinds) {
             *kind += tile_kind;
         }

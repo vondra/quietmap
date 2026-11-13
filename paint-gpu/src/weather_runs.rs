@@ -2,12 +2,9 @@
 //! distinct weather states, read from the pixels' packed floats (kernels/distribution.cuh's layout).
 
 use paint::exact::LAYERS;
+use paint::sone::PACKED_LINE_FLOATS as LINE_FLOATS;
 use physics::bands::PERIODS;
 use popup::percentiles::WEATHER_STATES;
-
-/// Floats a packed line takes: energy per period, its mean in each state per period, lambda per
-/// period, its profile, its duty per period.
-const LINE_FLOATS: usize = PERIODS + PERIODS * WEATHER_STATES + PERIODS + 1 + PERIODS;
 
 /// A pixel's packed weather: per period the first state of each run of states in which every line
 /// of every layer has the same mean (as the card reads them), and whether a line follows the hours.
@@ -82,20 +79,46 @@ mod tests {
     /// A packed pixel of one line in the first layer (`means` its ten state means every period,
     /// `profile` -1 for none), the other layers empty.
     fn pixel(means: [f32; WEATHER_STATES], profile: f32) -> Vec<f32> {
-        let mut floats = vec![0.0; PERIODS];
-        floats.push(1.0);
-        floats.extend([1.0; PERIODS]);
-        for _ in 0..PERIODS {
-            floats.extend(means);
+        let mut line = [f32::NAN; LINE_FLOATS];
+        for period in 0..PERIODS {
+            line[PERIODS + period * WEATHER_STATES..][..WEATHER_STATES].copy_from_slice(&means);
         }
-        floats.extend([1.0; PERIODS]);
-        floats.push(profile);
-        floats.extend([f32::NAN; PERIODS]);
+        line[2 * PERIODS + PERIODS * WEATHER_STATES] = profile;
+        one_layer(1, &line)
+    }
+
+    /// A packed pixel whose first layer holds `count` lines (`lines` their floats), the other
+    /// layers empty.
+    fn one_layer(count: usize, lines: &[f32]) -> Vec<f32> {
+        let mut floats = vec![0.0; PERIODS];
+        floats.push(count as f32);
+        floats.extend(lines);
         for _ in 1..LAYERS {
             floats.extend([0.0; PERIODS]);
             floats.push(0.0);
         }
         floats
+    }
+
+    /// The runs read every line as the host packs it (a packed line grew by its passes in
+    /// progress while this reader kept its own count of a line's floats, and read past the pixel).
+    #[test]
+    fn the_runs_read_the_lines_the_host_packs() {
+        let mut passes = popup::aircraft::FlightPasses::default();
+        for class in [20, 21] {
+            passes.energy[0][class] = 1.0;
+            passes.passing[0][class] = 0.1;
+        }
+        let lines = popup::percentiles::Line::flight_passes(&passes);
+        let mut packed = Vec::new();
+        for line in &lines {
+            paint::sone::pack_line(line, &mut packed);
+        }
+        assert_eq!(packed.len(), 2 * LINE_FLOATS);
+        let (heads, profiled) = pixel_runs(&one_layer(lines.len(), &packed));
+        // Flights sound alike in every weather state and follow no hourly profile.
+        assert!(!profiled);
+        assert!(heads.iter().all(|heads| heads == &[0]));
     }
 
     /// Equal consecutive states share a block's warp with their run's length; a pixel without

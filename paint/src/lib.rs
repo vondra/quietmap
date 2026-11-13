@@ -20,6 +20,7 @@ pub mod etalon;
 pub mod exact;
 pub mod flight_boxes;
 pub mod flight_spectra;
+mod flight_streams;
 pub mod flights;
 pub mod hm3;
 mod hm3_square;

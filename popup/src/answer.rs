@@ -9,7 +9,7 @@ use crate::aircraft::flights::FlightTotals;
 use crate::aircraft::horizons::{Horizons, TERRAIN_REACH_M};
 use crate::aircraft::rolls::{RollSums, prepare as prepare_rolls, roll_sums};
 use crate::aircraft::{
-    LambdaSums, RingTile, holds_boxes_in_reach, holds_rolls_in_reach, reads_fine_boxes,
+    FlightPasses, RingTile, holds_boxes_in_reach, holds_rolls_in_reach, reads_fine_boxes,
     ring_aircraft,
 };
 use crate::building::{BuildingClick, loudest_facade};
@@ -148,9 +148,8 @@ pub fn answer(
     // the rolls read wait for the last ring of ground (whose reach passes every roll within the
     // rolls'), so that what screens them is read, as the painter has it.
     let mut rolls_read = Vec::new();
-    // The flights' energy, and what their lambda is weighted from, per period, for the percentile
-    // levels.
-    let (mut flight_energy, mut flight_lambda) = ([0.0; PERIODS], LambdaSums::default());
+    // The flights' energy per period and their passes, for the percentile levels.
+    let (mut flight_energy, mut flight_passes) = ([0.0; PERIODS], FlightPasses::default());
     // The flights' Lden energies per kind (airliners, regional and business jets, propeller
     // aircraft, helicopters), for what the aircraft layer is made of.
     let mut flight_kinds = [0.0; crate::aircraft::boxes::FLIGHT_KINDS];
@@ -184,8 +183,7 @@ pub fn answer(
         if reads_ground {
             kinds.extend([Kind::Obstacles, Kind::Sources]);
         }
-        // Fine boxes near the click, far boxes elsewhere and for the flights' lambda everywhere;
-        // the rolls within their reach.
+        // Fine boxes near the click, far boxes elsewhere; the rolls within their reach.
         if ring <= aircraft_rings {
             kinds.extend([Kind::Aircraft, Kind::AircraftFar, Kind::AircraftRolls]);
         }
@@ -210,7 +208,7 @@ pub fn answer(
                     !placed || frame.tile_gap_m(tile, receiver_m) <= GROUND_REACH_M + 1.0
                 }
                 Kind::Aircraft => fine(tile),
-                Kind::AircraftFar => holds_boxes_in_reach(&frame, tile, receiver_m),
+                Kind::AircraftFar => !fine(tile) && holds_boxes_in_reach(&frame, tile, receiver_m),
                 Kind::AircraftRolls => !placed || holds_rolls_in_reach(&frame, tile, receiver_m),
                 _ => true,
             },
@@ -278,11 +276,7 @@ pub fn answer(
                 ring_sources.push((index, tile, sources));
             }
             if let Some(heard) = fine.or(far) {
-                ring_aircraft_tiles.push(RingTile {
-                    tile,
-                    heard,
-                    far: fine.and(far),
-                });
+                ring_aircraft_tiles.push(RingTile { tile, heard });
             }
             if let Some(rolls) = rolls {
                 let square = tiles::square::Square::of(tile);
@@ -509,8 +503,8 @@ pub fn answer(
             aircraft.energy[period] += heard;
             *flights += heard;
         }
-        flight_lambda.add(&ring_flights.lambda);
-        flight_lambda.add(&(rolls_heard.energy, rolls_heard.energy_lambda).into());
+        flight_passes.add(&ring_flights.passes);
+        flight_passes.add(&rolls_heard.passes);
         for (kind, (boxes, rolls)) in flight_kinds
             .iter_mut()
             .zip(ring_flights.kinds.into_iter().zip(rolls_heard.kinds))
@@ -585,15 +579,11 @@ pub fn answer(
         let mut listed_flights = flights.loudest();
         // The time levels and the loudness come with the final answer only (the partial ones do
         // not show them).
-        let flights_heard = (flight_energy, flight_lambda.lambda());
-        let flights_weather = crate::percentiles::flight_weather(&flights_heard);
+        let flight_lines = crate::percentiles::Line::flight_passes(&flight_passes);
         let timing = last_ring.then(|| -> Result<_, String> {
             // The place's lines together: what the rows' shares are taken over.
-            let (lines, steady) = crate::percentiles::click_lines(
-                &selections,
-                (&flights_weather, flights_heard),
-                &passes,
-            )?;
+            let (lines, steady) =
+                crate::percentiles::click_lines(&selections, &flight_lines, &passes)?;
             let flight_sound = crate::loudness::FlightSound {
                 energy: flight_energy,
                 spectrum_db: Some(
@@ -615,7 +605,7 @@ pub fn answer(
                 &groups,
                 &sounds,
                 (&curves, &layer_curves),
-                (&flights_weather, flights_heard),
+                &flight_lines,
                 &passes,
                 Resolution::CLICK,
             )?;

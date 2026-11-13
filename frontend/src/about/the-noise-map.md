@@ -244,9 +244,13 @@ by more than 1 dB. Their spectra use 33 × 33 points:
 alternating points and cell centres are computed, others blended only where the spectra change
 little and their centre agrees. The square's edges are computed. Cruise boxes use 5 × 5 points
 where screening does not apply, every corner reads the same boxes within reach, and their pieces
-and average flight lines stay at least 8 km away. Their energies are blended to the block corners, and so is what
-the flights' lambda is weighted from, keeping how their noise changes over time: the far boxes' energies and
-energies times the flights' rate and passing duration, also where the fine boxes give the energy, and the rolls'. The
+and average flight lines stay at least 8 km away. Their energies are blended to the block corners
+in the popup's classes of the level a flight has while it passes, 3 dB apart, each with the share
+of the time its flights are passing, and the runway rolls with them. At a corner, eight
+neighbouring classes then form one stream of passes that keeps their energy and, by the loudness
+curve of the square's typical flight spectrum, their loudness while they pass; a pixel hears the
+streams blended from its corners. Against every class as a stream of its own, as the popup takes
+them, the aircraft layer alone reads a quarter of a phon louder. The
 quiet sources may be omitted only when their summed bounds can change a layer's exact loud
 energy by at most 0.1 dB in every period. Otherwise the painter uses the popup's bound-proportional
 sampling and 0.05 dB confidence budget, batches the selected rays on the graphics card and
@@ -302,8 +306,8 @@ out `transfers.rs`, the pixels' rays `traced.rs`, the interpolation `quiet.rs`,
 `quiet_corners.rs`, `block_samples.rs`, `quiet_samples.rs`, `visible.rs` and `lattice_blend.rs`,
 the hum
 `paint/src/hum.rs` and `hum_samples.rs`, the aircraft boxes `paint/src/flights.rs` and
-`flight_boxes.rs` (on the card `paint-gpu/src/aircraft.rs`), the aircraft spectra
-`paint/src/flight_spectra.rs`, a
+`flight_boxes.rs` (on the card `paint-gpu/src/aircraft.rs`), their streams of passes
+`paint/src/flight_streams.rs`, the aircraft spectra `paint/src/flight_spectra.rs`, a
 building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
 `popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs` and `hm3_square.rs`: per layer and the total,
 four tiles of zoom 13 of 512 × 512 cells of 80 + 20 log₂ of the loudness in sone, twice the loudness

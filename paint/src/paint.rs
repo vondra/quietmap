@@ -25,6 +25,7 @@ use crate::buildings::{building_levels, facade_candidates, fill_buildings};
 use crate::corner_sources::{Corner, sector_of};
 use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all, loud_pairs};
 use crate::flight_spectra::FlightSpectra;
+use crate::flight_streams::fewer_streams;
 use crate::flights::{FlightSums, flights_at_corners};
 use crate::hum::Hum;
 use crate::levels::{Painted, PaintedCells};
@@ -285,6 +286,13 @@ pub fn corners_of(
         },
     );
     let (flights, flight_spectra) = (flights?, flight_spectra?);
+    // The corners' classes of passes in the map's fewer streams, which the pixels blend.
+    let flights: Vec<FlightSums> = (flights.into_par_iter())
+        .map(|sums| FlightSums {
+            energy: sums.energy,
+            passes: fewer_streams(&sums.passes),
+        })
+        .collect();
     let (mut corners, corner_bands, corner_pairs, hum) = ground?;
     let mut near = Vec::new();
     let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);

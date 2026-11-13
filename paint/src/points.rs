@@ -10,7 +10,7 @@
 use crate::blocks::{Block, admission_counts, admit, meets};
 use crate::corner_sources::Corner;
 use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Point};
-use crate::flights::blend_flights;
+use crate::flights::{blend_flight_energy, blend_flights};
 use crate::levels::Painted;
 use crate::paint::{Corners, Grid, corner_weights, rectangle_at};
 use crate::passes::paint_passes;
@@ -165,12 +165,12 @@ impl PointPainter<'_> {
                     steady[layer][p] += left[layer][p].iter().sum::<f64>();
                 }
             }
-            let flights = blend_flights(around.map(|corner| corners.flights[corner]), fx, fy);
+            let flights_around = around.map(|corner| &corners.flights[corner]);
             let reflection = point.reflection();
             let layers = crate::levels::layer_energy(
                 square,
                 &steady,
-                &flights.energy,
+                &blend_flight_energy(flights_around, fx, fy),
                 reflection,
                 list,
                 energies,
@@ -202,7 +202,7 @@ impl PointPainter<'_> {
                     bins: &block.left_bins,
                     transfers: &transfers,
                 },
-                flights,
+                flights: blend_flights(flights_around, fx, fy),
             };
             self.sounds.fetch_add(1, Ordering::Relaxed);
             let sound = pixel_sound(

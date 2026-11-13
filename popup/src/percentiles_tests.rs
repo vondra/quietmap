@@ -9,15 +9,13 @@ use physics::percentile::relative_intensity;
 
 const BIN_DB: f64 = Resolution::CLICK.bin_db;
 
-/// The distributions of `selections` and `flights`, `fields` the contributors' displays.
+/// The distributions of `selections` without flights, `fields` the contributors' displays.
 fn distributions(
     selections: &[LayerSelection],
-    flights: ([f64; PERIODS], [f64; PERIODS]),
     fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
 ) -> [Distribution; PERIODS] {
-    let weather = flight_weather(&flights);
     let passes = |group: &Group| fields(group).map(|fields| Passes::read(group.layer, &fields));
-    let (lines, steady) = click_lines(selections, (&weather, flights), &passes).unwrap();
+    let (lines, steady) = click_lines(selections, &[], &passes).unwrap();
     distributions_of(&lines, steady, Resolution::CLICK)
 }
 
@@ -26,11 +24,7 @@ fn levels(
     selections: &[LayerSelection],
     fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
 ) -> Percentiles {
-    Percentiles::of(&distributions(
-        selections,
-        ([0.0; PERIODS], [0.0; PERIODS]),
-        fields,
-    ))
+    Percentiles::of(&distributions(selections, fields))
 }
 
 pub(crate) fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) -> Contributor {
@@ -112,6 +106,7 @@ fn a_road_follows_its_hours_and_movements_their_periods() {
         lambda: [1e6; PERIODS],
         profile: Some(2),
         duty: None,
+        passing: None,
     };
     let mut loudest = f64::NEG_INFINITY;
     let mut shares = 0.0;
@@ -353,11 +348,9 @@ fn the_weather_moves_the_levels_smoothly() {
         site.weather
             .add(&[mean; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
         site.energy = [mean; PERIODS];
-        distributions(
-            &[selection(Layer::Industry, vec![site])],
-            ([0.0; PERIODS], [0.0; PERIODS]),
-            &|_| Ok(serde_json::Value::Null),
-        )
+        distributions(&[selection(Layer::Industry, vec![site])], &|_| {
+            Ok(serde_json::Value::Null)
+        })
     };
     let (below, above) = (spread(0.249), spread(0.251));
     let mean = |distribution: &Distribution| -> f64 {
@@ -405,7 +398,6 @@ fn events_sound_for_their_duty_and_are_silent_otherwise() {
             ),
             selection(Layer::Building, vec![bells.clone()]),
         ],
-        ([0.0; PERIODS], [0.0; PERIODS]),
         &bells_fields,
     )[0];
     // Ringing, 40 dB over the duty's 2 %: 40 + 10 log10(1 + 50) for 2 % of the day.
@@ -414,6 +406,59 @@ fn events_sound_for_their_duty_and_are_silent_otherwise() {
     let fields = bells_fields(&bells.group()).unwrap();
     let heard_bells = passes_at(&bells, &fields).unwrap();
     assert!(!heard_bells.steady && (heard_bells.per_hour[0] - 3.0).abs() < 1e-9);
+}
+
+/// The flights heard as passes: a class in progress 2 % of the day at a mean of 40 dB beside a
+/// steady 40 dB sounds 2 % of the time at 40 + 10 lg 51 dB and leaves the rest at 40 (one Kurze
+/// line of that energy put every moment above 40); the same energy in progress ten times as
+/// long moves the level longer and less; a class of 80 passes in progress on average holds its
+/// mean. A faint class beside a loud one is silent between its own passes: both in progress 1 %
+/// of the day at 55 and 100 dB a pass, the level exceeded half and nine tenths of the time
+/// stays the steady 30 dB (held at its mean beside the loud one, the faint one hummed at 35).
+#[test]
+fn flights_are_heard_while_they_pass() {
+    use crate::aircraft::FlightPasses;
+    let heard = |classes: &[(f64, f64)], steady_db: f64| {
+        let mut flights = FlightPasses::default();
+        for &(passing, leq_db) in classes {
+            flights.add_pass(0, energy(leq_db), passing);
+        }
+        let passes = |group: &Group| Ok(Passes::read(group.layer, &serde_json::Value::Null));
+        let plant = selection(
+            Layer::Industry,
+            vec![contributor(1, Layer::Industry, steady_db, 50.0)],
+        );
+        let (lines, steady) =
+            click_lines(&[plant], &Line::flight_passes(&flights), &passes).unwrap();
+        distributions_of(&lines, steady, Resolution::CLICK)[0].clone()
+    };
+    let day = |passing: f64, leq_db: f64| heard(&[(passing, leq_db)], 40.0);
+    let mean_db = |distribution: &Distribution| {
+        10.0 * (distribution.levels())
+            .map(|(level, share)| share * energy(level))
+            .sum::<f64>()
+            .log10()
+    };
+    let rare = day(0.02, 40.0);
+    let passing_db = 10.0 * 51f64.log10() + 40.0;
+    assert!((rare.exceeded_db(0.015) - passing_db).abs() <= BIN_DB / 2.0);
+    assert!((rare.exceeded_db(0.05) - 40.0).abs() < 1e-9);
+    assert!((rare.exceeded_db(0.9) - 40.0).abs() < 1e-9);
+    let often = day(0.2, 40.0);
+    assert!((often.exceeded_db(0.1) - (10.0 * 6f64.log10() + 40.0)).abs() <= BIN_DB / 2.0);
+    for (distribution, flights_db) in [(&rare, 40.0), (&often, 40.0)] {
+        let whole = 10.0 * (energy(40.0) + energy(flights_db)).log10();
+        assert!((mean_db(distribution) - whole).abs() < 1e-6);
+    }
+    let dense = day(80.0, 40.0);
+    let whole = 10.0 * (2.0 * energy(40.0)).log10();
+    assert!((dense.exceeded_db(0.01) - whole).abs() < 1e-9);
+    assert!((dense.exceeded_db(0.99) - whole).abs() < 1e-9);
+    let two = heard(&[(0.01, 35.0), (0.01, 80.0)], 30.0);
+    for exceeded in [0.5, 0.9] {
+        assert!((two.exceeded_db(exceeded) - 30.0).abs() < 1e-9);
+    }
+    assert!((two.exceeded_db(0.015) - 55.0).abs() <= BIN_DB);
 }
 
 /// Consecutive weather states whose every line stays within the spread take their mean (the
@@ -427,6 +472,7 @@ fn close_weather_states_merge_and_keep_their_energy() {
         lambda: [1e6; PERIODS],
         profile: None,
         duty: None,
+        passing: None,
     };
     let near = line([1.10, 1.05, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
     let far = line([4.0, 4.0, 4.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);

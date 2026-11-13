@@ -122,12 +122,13 @@ fn box_of_flights(pieces: &[(SegmentEmission, [f64; 3], [f64; 3])]) -> AircraftB
 
 /// The aircraft layer's day energy of a click at the tile centre.
 fn aircraft_day_energy(release: &Release) -> (f64, usize) {
-    let (energy, boxes, _) = aircraft_answer(release);
+    let (energy, boxes, _, _) = aircraft_answer(release);
     (energy, boxes)
 }
 
-/// The aircraft layer's day energy, boxes heard and own Nden (sone) of a click at the tile centre.
-fn aircraft_answer(release: &Release) -> (f64, usize, f64) {
+/// The aircraft layer's day energy, boxes heard and own Nden (sone) of a click at the tile centre,
+/// and the payloads it read.
+fn aircraft_answer(release: &Release) -> (f64, usize, f64, usize) {
     let (lat, lon) = TILE.centre().to_degrees();
     let mut last = None;
     answer(
@@ -149,6 +150,7 @@ fn aircraft_answer(release: &Release) -> (f64, usize, f64) {
                 layer.energy[0],
                 layer.evaluated,
                 layer.nden_sone.unwrap_or(f64::NAN),
+                update.statistics.reads,
             ));
             Ok(())
         },
@@ -257,8 +259,8 @@ fn each_period_counts_its_own_flights() {
         receiver,
         &Unscreened,
     );
-    let lambda = |period: usize| heard.energy_lambda[period] / heard.energy[period];
-    let ratio = lambda(2) / lambda(0);
+    let passing = |period: usize| heard.passes.passing[period].iter().sum::<f64>();
+    let ratio = passing(2) / passing(0);
     assert!(
         (ratio - PERIOD_HOURS[0] / PERIOD_HOURS[2]).abs() < 1e-9,
         "{ratio}"
@@ -378,61 +380,121 @@ fn every_flight_ring_uses_the_complete_terrain_horizon() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// A click hears its tile's fine boxes and reads its far ones for how often the flights pass: two
-/// departures a day 100 m apart, a fine box each, heard as often as the far box holding both says
-/// (their Nden falls when the far box holds one of them a day, at the same energy; it stays when the
-/// far box is 10 dB louder, its lambda weighted by its own energy), and as their own boxes say where
-/// the tile has no far ones.
+/// A box's flights are in it for its cell's and slab's mean chord along their axis over their
+/// speed: twenty departures a day northward up a gradient of 0.08 through a zoom-18 cell and its
+/// 98 m slab at their kept pieces' 320 and 160 kt (the harmonic mean, 213 kt), at 135 kt where the
+/// box keeps none, at the NPD curves' 160 kt where its piece hovers; the passes carry all the
+/// box's energy.
 #[test]
-fn a_click_reads_how_often_the_flights_pass_from_the_far_boxes() {
+fn a_boxs_flights_pass_through_it_at_their_kept_speed() {
+    use popup::aircraft::boxes::{AircraftReceiver, tile_energy};
+    use tiles::aircraft::{Aircraft, Flight, FlightPiece};
+    let (emission, start, end) = departure(1_000.0);
+    let record = AircraftBox {
+        flights_per_day: [20.0, 0.0, 0.0],
+        ..box_of(&emission, start, end)
+    };
+    let frame = LocalFrame::at(TILE.centre());
+    let receiver = AircraftReceiver {
+        position: [0.0, 0.0],
+        altitude_m: RECEIVER_ALTITUDE_M,
+    };
+    let flight = Flight {
+        icao: 0x49_d0_a1,
+        callsign: *b"CSA123  ",
+        type_designator: *b"A320",
+        start_unix: 1_756_684_800,
+    };
+    let passing = |speeds_kt: &[f64]| {
+        let pieces: Vec<FlightPiece> = (speeds_kt.iter())
+            .map(|&speed_kt| FlightPiece {
+                flight: 0,
+                ends: [record.place.centroid; 2],
+                altitudes_m: [588.0, 612.0],
+                speed_kt,
+                class: emission.class as u16,
+                power_code: 0,
+                flags: 1,
+                period: 0,
+            })
+            .collect();
+        let mut kept = record.clone();
+        kept.place.piece_count = pieces.len() as u8;
+        kept.place.loudest_lamax_db = if pieces.is_empty() {
+            f64::NEG_INFINITY
+        } else {
+            80.0
+        };
+        let flights = if pieces.is_empty() {
+            vec![]
+        } else {
+            vec![flight.clone()]
+        };
+        let bytes = encode(&[kept], &flights, &pieces);
+        let aircraft = Aircraft::parse(&bytes).unwrap();
+        let heard = tile_energy(&aircraft, TILE, &frame, receiver, &Unscreened);
+        let classes: f64 = heard.passes.energy[0].iter().sum();
+        assert!((classes / heard.energy[0] - 1.0).abs() < 1e-12);
+        assert_eq!(heard.passes.passing[1].iter().sum::<f64>(), 0.0);
+        heard.passes.passing[0].iter().sum::<f64>()
+    };
+    let (east_m, north_m) = (frame.east_m_per_unit / 64.0, frame.north_m_per_unit / 64.0);
+    // Northward (its axis a quarter turn from east): the cell's north edge, shortened by the
+    // climb through the slab's top.
+    let chord_m =
+        east_m * north_m * 98.0 / (east_m * 98.0 + record.gradient.abs() * east_m * north_m);
+    assert!(
+        (record.axis_rad - std::f64::consts::FRAC_PI_2).abs() < 1e-6
+            && (chord_m - 91.0).abs() < 2.0
+    );
+    let expected = |speed_kt: f64| 20.0 / 43_200.0 * chord_m / (speed_kt * 1_852.0 / 3_600.0);
+    for (speeds_kt, speed_kt) in [
+        (&[320.0, 160.0][..], 2.0 / (1.0 / 320.0 + 1.0 / 160.0)),
+        (&[][..], 70.0 * 3_600.0 / 1_852.0),
+        (&[5.0][..], 160.0),
+    ] {
+        let got = passing(speeds_kt);
+        assert!(
+            (got / expected(speed_kt) - 1.0).abs() < 1e-3,
+            "{speeds_kt:?}: {got}"
+        );
+    }
+}
+
+/// A click hears the flights as the passes of the boxes it hears: two departures a day 100 m
+/// apart, a fine box each. Their tile's far file is not read (ten decibels louder in it, the
+/// answer and its reads stay: the far boxes' lambda took it). Ten times the flights at the same
+/// energy, each a tenth as loud, are in progress ten times as long and sound louder in sone.
+#[test]
+fn a_click_hears_the_flights_as_the_passes_of_its_boxes() {
     let [west, east] = [-50.0, 50.0].map(departure);
     let daily = |pieces: &[(SegmentEmission, [f64; 3], [f64; 3])], flights: f64| AircraftBox {
         flights_per_day: [flights, 0.0, 0.0],
         ..box_of_flights(pieces)
     };
-    let fine = [daily(&[west], 1.0), daily(&[east], 1.0)];
-    let answer = |name: &str, far: Option<(f64, f64)>| {
-        let far = far.map(|(flights, louder_db)| {
-            let mut far = daily(&[west, east], flights);
-            far.energy_db = far
-                .energy_db
-                .map(|levels| levels.map(|level| level + louder_db));
-            far.tail_energy_db = far.tail_energy_db.map(|level| level + louder_db);
-            [far]
-        });
+    let answer = |name: &str, flights: f64, far: bool| {
+        let fine = [daily(&[west], flights), daily(&[east], flights)];
+        let mut louder = daily(&[west, east], 2.0 * flights);
+        louder.energy_db = louder
+            .energy_db
+            .map(|levels| levels.map(|level| level + 10.0));
+        louder.tail_energy_db = louder.tail_energy_db.map(|level| level + 10.0);
+        let louder = [louder];
         let mut files: Vec<(TileId, Kind, &[AircraftBox])> = vec![(TILE, Kind::Aircraft, &fine)];
-        if let Some(far) = &far {
-            files.push((TILE, Kind::AircraftFar, far));
+        if far {
+            files.push((TILE, Kind::AircraftFar, &louder));
         }
         let root = release_with_files(name, &files);
         let heard = aircraft_answer(&Release::open(&root, "2026").unwrap());
         std::fs::remove_dir_all(&root).unwrap();
         heard
     };
-    let (both, louder, one, own) = (
-        answer("far-both", Some((2.0, 0.0))),
-        answer("far-louder", Some((2.0, 10.0))),
-        answer("far-one", Some((1.0, 0.0))),
-        answer("fine-only", None),
+    let (own, with_far, often) = (
+        answer("passes-own", 1.0, false),
+        answer("passes-far", 1.0, true),
+        answer("passes-often", 10.0, false),
     );
-    assert_eq!((both.0, both.1), (louder.0, louder.1));
-    assert!(
-        (louder.2 / both.2 - 1.0).abs() < 1e-9,
-        "{} sone vs {}",
-        louder.2,
-        both.2
-    );
-    assert_eq!(
-        (both.0, both.1),
-        (one.0, one.1),
-        "the energy is the fine boxes'"
-    );
-    assert_eq!((both.0, both.1), (own.0, own.1));
-    assert!(both.2 > 1.05 * one.2, "{} sone vs {}", both.2, one.2);
-    assert!(
-        (own.2 / one.2 - 1.0).abs() < 0.02,
-        "{} sone vs {}",
-        own.2,
-        one.2
-    );
+    assert_eq!(own, with_far);
+    assert_eq!((own.0, own.1), (often.0, often.1));
+    assert!(often.2 > 1.5 * own.2, "{} sone vs {}", often.2, own.2);
 }

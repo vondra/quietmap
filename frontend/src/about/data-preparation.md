@@ -493,7 +493,7 @@ a smooth field's information is the residual of a planar prediction of its heigh
 | `obstacles` | the outlines and heights of buildings and walls, listed by cells 48 m wide in London | 130 GB, 1.4 million tiles in 37,434 files |
 | `sources` | every ground source, as points and straight pieces | 169 GB, 2.2 million tiles in 70,810 files |
 | `aircraft` | a year of flights, summed into boxes of airspace | 466 GB, 2.6 million tiles in 57,670 files |
-| `aircraft-far` | the same in boxes four times larger, read beyond 3 km and everywhere for the flights' lambda | 64 GB, 2.6 million tiles in 57,670 files |
+| `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 64 GB, 2.6 million tiles in 57,670 files |
 | `aircraft-events` | per cell 380 m wide in London, the flights of a day whose loudest moment reaches 50, 60 and 70 dB | 9.6 GB, 1.6 million tiles in 35,830 files |
 | `aircraft-rolls` | the take-off and landing rolls that start in the tile, one for each runway direction, operation and aircraft class | 26 bytes a roll |
 
@@ -633,7 +633,7 @@ baseline days, flights only the secondary provider saw over the increment days) 
 of one average piece, read as two at the gradient plus and minus the spread of its pieces'
 gradients, counts its flights and installation mix per period, and keeps its two loudest pieces for
 the flight list (by LAmax at their height above the box's ground, one per flight). Far boxes, read
-beyond 3 km and everywhere for the flights' lambda (how often they pass), span D = 12 dB.
+beyond 3 km, span D = 12 dB.
 
 `aircraft-events` counts at every z16 cell each flight once, at its loudest moment there, with the
 boxes' day weights. `aircraft-tracks` keeps every flight of the year flat, its segments' ends within

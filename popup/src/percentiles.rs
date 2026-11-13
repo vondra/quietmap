@@ -4,9 +4,8 @@
 //! (`physics::percentile`) at its own lambda = (emitters per metre) x (its distance): vehicles on
 //! a road (the daily flow over the period's share and hours, over the speed), trains on a track
 //! (the period's trains over its hours, over the speed), airport movements on an aeroway (at taxi
-//! speed); the flights heard one more line at the energy-weighted lambda of the far boxes and the
-//! runways' roll paths (`crate::aircraft::LambdaSums`, `crate::aircraft::rolls`, a path's classes
-//! one stream); events (church
+//! speed). The flights heard and the runways' rolls are streams of passes of one level each, a
+//! Poisson number in progress (`crate::aircraft::FlightPasses`); events (church
 //! bells) on for their duty, the share of the period they sound, at their mean over it; industry,
 //! buildings, ships and the unlisted remainder steady at their mean. A road's flow follows the
 //! hours of the day within each period (measured hourly profiles: a night's 3 am carries a fifth
@@ -17,7 +16,7 @@
 //! sound.
 
 use crate::candidates::DisplayRef;
-use crate::distribution::{Distribution, LineValues, line_values};
+use crate::distribution::{Distribution, LineValues, line_values, pass_values};
 use crate::selection::LayerSelection;
 use physics::bands::{PERIOD_HOURS, PERIODS};
 use physics::percentile::relative_intensity;
@@ -29,13 +28,14 @@ mod traffic;
 mod weather;
 pub(crate) use lines::at_mean_flow;
 pub use lines::{
-    Group, HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Line, LineParts, click_lines, place_lines,
+    Group, HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Line, LineParts, PASSES_HOLD_MEAN,
+    click_lines, place_lines,
 };
 use traffic::lambda;
 pub use traffic::{Heard, Passes, hour_factor, hour_groups, passes_at};
 pub(crate) use weather::favourable_share;
 use weather::weather_means;
-pub use weather::{WEATHER_STATES, Weather, flight_weather, merge_close_states};
+pub use weather::{WEATHER_STATES, Weather, merge_close_states};
 
 /// The levels (dB, `-inf` silent) exceeded 5, 10, 50 and 90 % of the time per period.
 #[derive(Debug, Clone, Copy, PartialEq)]

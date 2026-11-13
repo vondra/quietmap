@@ -6,7 +6,7 @@
 use crate::device::{Gpu, driver, read_back};
 use cudarc::driver::{CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig};
 use paint::flight_boxes::{FlightBoxes, FlightRequest, FlightWeight};
-use paint::flights::{FlightSums, heard_parts, tiles_heard};
+use paint::flights::{FlightSums, tiles_heard};
 use paint::square::Square;
 use physics::bands::{PERIOD_HOURS, PERIODS, energy};
 use physics::doc29::atmosphere::receiver_impedance_db;
@@ -20,19 +20,21 @@ use physics::doc29::screening::{
     GRAZING_LOSS_DB, PATH_DIFFERENCE_SLOPE_PER_M, SCREENING_CAP_DB,
     SCREENING_CEILING_ABOVE_GROUND_M,
 };
-use popup::aircraft::boxes::{AIRCRAFT_REACH_M, FLIGHT_SPEED_M_S};
+use popup::aircraft::boxes::{AIRCRAFT_REACH_M, box_passing};
 use popup::aircraft::horizons::{
     BUILDING_SECTORS, HORIZON_BANDS, HORIZON_FLOATS, Horizons, TERRAIN_HORIZON_FLOATS,
     TERRAIN_SECTORS,
 };
+use popup::aircraft::{PASS_CLASS_DB, PASS_CLASSES, PASS_LOWEST_DB};
 use rayon::prelude::*;
 use tiles::aircraft::Group;
 
 /// Threads of a segment's block (kernels/aircraft.cuh FLIGHT_THREADS).
 const FLIGHT_THREADS: u32 = 128;
-/// Doubles of one point's sums of a band (kernels/aircraft.cuh FLIGHT_SUMS): the energy, then the
-/// lambda's weights, its energy and energy times lambda, per period.
-const SUMS: usize = 3 * PERIODS;
+/// Doubles of one point's sums of a band (kernels/aircraft.cuh FLIGHT_SUMS): the energy per period,
+/// then per period the passes' classes' energies, then their passing shares
+/// (`popup::aircraft::FlightPasses`).
+const SUMS: usize = PERIODS + 2 * PERIODS * PASS_CLASSES;
 
 /// kernels/aircraft.cuh FlightBox.
 #[repr(C)]
@@ -51,7 +53,7 @@ pub(crate) struct DeviceFlightBox {
     tail_levels_db: [f32; PERIODS],
     lg_scaled_distance: [f32; NPD_DISTANCES],
     installation_shares: [[[f32; 3]; 2]; PERIODS],
-    lambda_per_slant: [f32; PERIODS],
+    passing: [f32; PERIODS],
     screened: u32,
     helicopter: u32,
     silent: [u32; PERIODS],
@@ -77,15 +79,9 @@ pub(crate) struct DeviceFlightSegment {
     first: u32,
     count: u32,
     weight: u32,
-    role: u32,
     within_m: f32,
     coarse_m: f32,
 }
-
-/// What a segment's boxes add to (kernels/aircraft.cuh FLIGHT_ROLE_*): the energy heard, the
-/// lambda's weights (paint::flights::FlightSums), or both.
-const ROLE_ENERGY: u32 = 1;
-const ROLE_LAMBDA: u32 = 2;
 
 // SAFETY: plain records of f32, u32 and u64 fields in the kernel's order (checked by
 // `flight_struct_sizes` when the module loads).
@@ -137,8 +133,9 @@ pub(crate) fn aircraft_constants() -> String {
         format!("#define TERRAIN_HORIZON_FLOATS {TERRAIN_HORIZON_FLOATS}\n"),
         format!("#define FLIGHT_THREADS {FLIGHT_THREADS}\n"),
         format!("#define FLIGHT_SUMS {SUMS}\n"),
-        format!("#define FLIGHT_ROLE_ENERGY {ROLE_ENERGY}u\n"),
-        format!("#define FLIGHT_ROLE_LAMBDA {ROLE_LAMBDA}u\n"),
+        format!("#define PASS_CLASSES {PASS_CLASSES}\n"),
+        define("PASS_CLASS_DB", PASS_CLASS_DB),
+        define("PASS_LOWEST_DB", PASS_LOWEST_DB),
     ]
     .concat()
 }
@@ -167,6 +164,7 @@ impl DeviceFlightBoxes {
                 })
             }));
         }
+        let tile_m = [square.frame.east_m_per_unit, square.frame.north_m_per_unit];
         let boxes: Vec<DeviceFlightBox> = lists
             .par_iter()
             .flat_map_iter(|(tile, boxes, indices)| {
@@ -197,11 +195,7 @@ impl DeviceFlightBoxes {
                         installation_shares: record
                             .installation_shares
                             .map(|slants| slants.map(|shares| shares.map(|s| s as f32))),
-                        lambda_per_slant: std::array::from_fn(|period| {
-                            (record.flights_per_day[period]
-                                / (PERIOD_HOURS[period] * 3_600.0)
-                                / FLIGHT_SPEED_M_S) as f32
-                        }),
+                        passing: f(box_passing(boxes, &record, tile_m)),
                         screened: u32::from(
                             record.centroid_altitude_m - record.place.ground_m
                                 < SCREENING_CEILING_ABOVE_GROUND_M,
@@ -221,8 +215,7 @@ impl DeviceFlightBoxes {
 
 impl Gpu {
     /// The flights of each request on the card (paint::flight_boxes::FlightBoxes::sums on the
-    /// cores): per band its boxes' energy and the lambda's weights, the far boxes', also of the
-    /// tiles heard in their fine ones.
+    /// cores): per band its boxes' energy and passes.
     pub fn flight_sums(
         &self,
         square: &Square,
@@ -251,32 +244,27 @@ impl Gpu {
                 horizons.write_f32(&mut floats);
                 let mut segments = Vec::new();
                 for tile in heard {
-                    for (file, _, heard, weighs) in heard_parts(&tile) {
-                        let role =
-                            (u32::from(heard) * ROLE_ENERGY) | (u32::from(weighs) * ROLE_LAMBDA);
-                        for band in 0..2 {
-                            let Some(weight) = request.weights[band] else {
-                                continue;
-                            };
-                            let count = flight_boxes.lists[tile.number][file][band].len() as u32;
-                            if count == 0 {
-                                continue;
-                            }
-                            segments.push(DeviceFlightSegment {
-                                point: slot as u32,
-                                sum: (2 * slot + band) as u32,
-                                first: device_boxes.first[tile.number][file][band],
-                                count,
-                                weight: match weight {
-                                    FlightWeight::One => 0,
-                                    FlightWeight::Far => 1,
-                                    FlightWeight::Near => 2,
-                                },
-                                role,
-                                within_m: request.within_m as f32,
-                                coarse_m: flight_boxes.coarse_m as f32,
-                            });
+                    for band in 0..2 {
+                        let Some(weight) = request.weights[band] else {
+                            continue;
+                        };
+                        let count = flight_boxes.lists[tile.number][tile.file][band].len() as u32;
+                        if count == 0 {
+                            continue;
                         }
+                        segments.push(DeviceFlightSegment {
+                            point: slot as u32,
+                            sum: (2 * slot + band) as u32,
+                            first: device_boxes.first[tile.number][tile.file][band],
+                            count,
+                            weight: match weight {
+                                FlightWeight::One => 0,
+                                FlightWeight::Far => 1,
+                                FlightWeight::Near => 2,
+                            },
+                            within_m: request.within_m as f32,
+                            coarse_m: flight_boxes.coarse_m as f32,
+                        });
                     }
                 }
                 Ok(Some((floats, segments)))
@@ -331,8 +319,12 @@ impl Gpu {
                 let at = (2 * slot + band) * SUMS;
                 for period in 0..PERIODS {
                     band_sums.energy[period] = totals[at + period];
-                    band_sums.lambda.energy[period] = totals[at + PERIODS + period];
-                    band_sums.lambda.energy_lambda[period] = totals[at + 2 * PERIODS + period];
+                    let classes = at + PERIODS + period * PASS_CLASSES;
+                    for class in 0..PASS_CLASSES {
+                        band_sums.passes.energy[period][class] = totals[classes + class];
+                        band_sums.passes.passing[period][class] =
+                            totals[classes + PERIODS * PASS_CLASSES + class];
+                    }
                 }
             }
         }

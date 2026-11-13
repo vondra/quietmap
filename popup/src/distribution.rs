@@ -274,9 +274,66 @@ pub(crate) fn line_values(lambda: f64, duty: Option<f64>) -> LineValues {
     })
 }
 
+/// The intensities, relative to their mean, of a stream of passes of one level of which `mean`
+/// are in progress on average: at a moment their number is Poisson, each at the stream's mean over
+/// `mean`; the numbers up to the one a moment in 1e12 exceeds, which takes what is left of the
+/// time and of the mean. The time left after the silence is 1 - exp(-mean) read as
+/// `-exp_m1(-mean)`: as a difference it is zero under a mean of 1e-16, and the stream's one pass
+/// then took none of the time at an infinite intensity.
+pub(crate) fn pass_values(mean: f64) -> LineValues {
+    let mut share = (-mean).exp();
+    let mut pairs = vec![(0.0, share)];
+    let (mut time_left, mut mean_left) = (-(-mean).exp_m1(), 1.0);
+    let mut count = 0.0;
+    loop {
+        count += 1.0;
+        share *= mean / count;
+        if time_left - share <= 1e-12 {
+            pairs.push((mean_left / time_left, time_left));
+            return LineValues::of(pairs);
+        }
+        time_left -= share;
+        mean_left -= share * count / mean;
+        pairs.push((count / mean, share));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stream's passes in progress are Poisson: their shares fill the time and keep the mean,
+    /// a sparse stream sounding its share of the time at its mean over it, a dense one near its
+    /// mean; so does a stream too sparse for 1 - exp(-mean) to hold its share of the time.
+    #[test]
+    fn passes_in_progress_fill_the_time_and_keep_the_mean() {
+        for mean in [f64::MIN_POSITIVE, 1e-18, 1e-4, 0.03, 0.7, 5.0, 60.0] {
+            let values = pass_values(mean);
+            assert!(
+                (values.pairs().iter()).all(|(value, share)| value.is_finite() && *share >= 0.0),
+                "{mean}"
+            );
+            let (shares, energy) = values
+                .pairs()
+                .iter()
+                .fold((0.0, 0.0), |(shares, energy), &(value, share)| {
+                    (shares + share, energy + share * value)
+                });
+            assert!(
+                (shares - 1.0).abs() < 1e-9 && (energy - 1.0).abs() < 1e-9,
+                "{mean}"
+            );
+        }
+        let sparse = pass_values(0.01);
+        assert!((sparse.pairs()[0].1 - 0.990_05).abs() < 1e-5);
+        assert_eq!(sparse.pairs()[1].0, 100.0);
+        let dense = pass_values(60.0);
+        let within: f64 = (dense.pairs().iter())
+            .filter(|(value, _)| (0.75..=1.25).contains(value))
+            .map(|(_, share)| share)
+            .sum();
+        assert!(within > 0.94, "{within}");
+    }
 
     /// Adding many lines loses no energy to the grid: 500 identical lines, each soon a small part
     /// of a step of their sum, keep their summed mean (rounding to the grid lost 1.2 dB).

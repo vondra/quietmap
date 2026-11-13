@@ -4,13 +4,14 @@
 //! (`physics::doc29::boxes`), all of them; their linear SEL sums per period become period
 //! energies (Leq), as the ground layers report.
 
+use crate::aircraft::FlightPasses;
 use physics::bands::{PERIOD_HOURS, PERIODS, energy, lden_energy};
 use physics::doc29::atmosphere::receiver_impedance_db;
 use physics::doc29::boxes::{
     AircraftBoxAtReceiver, BoxSel, box_sel_at_receiver, minimum_line_slant_m,
 };
-use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
-use physics::doc29::npd::{NPD_NEAREST_SLANT_M, lamax_rise_bound_db};
+use physics::doc29::corrections::{INSTALLATION_CORRECTION_MAX_DB, SLOWEST_OWN_SPEED_KT};
+use physics::doc29::npd::{class_anchor, lamax_rise_bound_db};
 use physics::doc29::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M};
 use rayon::prelude::*;
 use tiles::aircraft::{Aircraft, AircraftBox, BoxPlace, Group};
@@ -27,7 +28,8 @@ pub struct AircraftReceiver {
     pub altitude_m: f64,
 }
 
-/// Speed of a flight near the ground for its passing's duration (m/s): 135 kt.
+/// Speed of a flight near the ground (m/s): 136 kt. The flights of a box keeping no piece pass
+/// at it.
 pub const FLIGHT_SPEED_M_S: f64 = 70.0;
 
 /// What the flights heard are: wing-mounted jets (airliners), fuselage-mounted jets (regional and
@@ -37,7 +39,8 @@ pub const FLIGHT_KINDS: usize = 4;
 /// One box at the receiver.
 struct BoxAnswer {
     energy: [f64; PERIODS],
-    lambda: [f64; PERIODS],
+    /// The share of each period its flights are in it ([`box_passing`]).
+    passing: [f64; PERIODS],
     /// The box's received Lden energy shared over the flight kinds.
     kinds: [f64; FLIGHT_KINDS],
     bound: Option<f64>,
@@ -46,7 +49,7 @@ struct BoxAnswer {
 
 const BEYOND_REACH: BoxAnswer = BoxAnswer {
     energy: [0.0; PERIODS],
-    lambda: [0.0; PERIODS],
+    passing: [0.0; PERIODS],
     kinds: [0.0; FLIGHT_KINDS],
     bound: None,
     within_reach: false,
@@ -58,9 +61,8 @@ pub struct TileAnswer {
     pub energy: [f64; PERIODS],
     /// The boxes' Lden energy per flight kind.
     pub kinds: [f64; FLIGHT_KINDS],
-    /// Per period the boxes' energies times their flights' Kurze lambda (flights per second of
-    /// the period times the slant over the speed): the energy-weighted lambda of the flights heard.
-    pub energy_lambda: [f64; PERIODS],
+    /// The boxes' flights as passes.
+    pub passes: FlightPasses,
     pub boxes: usize,
     /// Per box within reach that keeps pieces: its index and the most maximum level (dB) its
     /// pieces can reach at the receiver (Eq. 4-8a: Delta_I adds at most
@@ -160,7 +162,7 @@ pub fn minimum_box_slant_m(
     {
         return 0.0;
     }
-    // SEL and passing duration depend on the extended line even when its piece is far away.
+    // The SEL depends on the extended line even when its piece is far away.
     [
         record.gradient - record.gradient_spread,
         record.gradient + record.gradient_spread,
@@ -213,63 +215,100 @@ fn box_at(
     (energy, sel)
 }
 
-/// A box's flights' Kurze lambda per period: the period's flights a day over its hours, times its
-/// closest slant over the flights' speed, the slant at least the NPD curves' nearest, where its
-/// sound exposure is read.
-fn box_lambda(record: &AircraftBox, sel: &BoxSel) -> [f64; PERIODS] {
-    let slant_m = sel.closest_slant_m.max(NPD_NEAREST_SLANT_M);
+/// The share of each period a box's flights are in it: the period's flights a day over its
+/// seconds times a flight's time in the box, the cell's and slab's mean chord along the flights'
+/// axis (the box's volume over its shadow along them, the mean of its two average pieces' at the
+/// gradient less and plus its spread, as its energy is read) over their ground speed, the
+/// harmonic mean of the kept pieces' (a piece too slow for a speed of its own passes at its
+/// class's NPD reference speed, as its exposure was read). `tile_m`: a tile's edges east and
+/// north.
+pub fn box_passing(
+    aircraft: &Aircraft<'_>,
+    record: &AircraftBox,
+    tile_m: [f64; 2],
+) -> [f64; PERIODS] {
+    let place = &record.place;
+    let cells = f64::from(1u32 << (place.zoom - 12));
+    let [east_m, north_m] = tile_m.map(|edge_m| edge_m / cells);
+    let up_m = place.height_m.max(1.0);
+    let (sin, cos) = record.axis_rad.sin_cos();
+    let level_shadow = cos.abs() * north_m * up_m + sin.abs() * east_m * up_m;
+    let chord_m = [-1.0, 1.0]
+        .map(|side| {
+            let gradient = record.gradient + side * record.gradient_spread;
+            east_m * north_m * up_m / (level_shadow + gradient.abs() * east_m * north_m)
+        })
+        .iter()
+        .sum::<f64>()
+        / 2.0;
+    let pieces = usize::from(place.piece_count);
+    let seconds_per_metre = if pieces == 0 {
+        1.0 / FLIGHT_SPEED_M_S
+    } else {
+        (0..pieces)
+            .map(|k| {
+                let piece = aircraft.piece(place, k);
+                let speed_kt = if piece.speed_kt > SLOWEST_OWN_SPEED_KT {
+                    piece.speed_kt
+                } else {
+                    class_anchor(usize::from(piece.class)).v_ref_kt
+                };
+                3_600.0 / (speed_kt * 1_852.0)
+            })
+            .sum::<f64>()
+            / pieces as f64
+    };
     std::array::from_fn(|period| {
-        record.flights_per_day[period] / (PERIOD_HOURS[period] * 3_600.0) * slant_m
-            / FLIGHT_SPEED_M_S
+        record.flights_per_day[period] / (PERIOD_HOURS[period] * 3_600.0)
+            * chord_m
+            * seconds_per_metre
     })
 }
 
-/// Selected boxes of one tile within the aircraft reach: energy and energy times lambda per period.
-pub fn tile_flight_sums(
+/// Selected boxes of one tile within the aircraft reach, each weighed by `weight` at its
+/// horizontal distance (a lattice of the map, `paint/src/flight_boxes.rs`): their energy per
+/// period and their passes. A box's weight takes its energy and its passing share alike, so its
+/// passes keep their level.
+pub fn tile_flight_passes(
     aircraft: &Aircraft<'_>,
     tile: TileId,
     frame: &LocalFrame,
     receiver: AircraftReceiver,
     horizons: &impl ReceiverHorizons,
     (indices, weight, reach_m): (impl Iterator<Item = usize>, &dyn Fn(f64) -> f64, f64),
-) -> ([f64; PERIODS], [f64; PERIODS]) {
+) -> ([f64; PERIODS], FlightPasses) {
     let heard = |distance_m: f64| distance_m <= reach_m.min(AIRCRAFT_REACH_M);
     let impedance_gain = energy(receiver_impedance_db(receiver.altitude_m));
-    // Reject out-of-reach centroids before decoding their spectra.
-    indices
-        .filter_map(|index| {
-            let centroid = aircraft.box_centroid(index);
-            let [east_m, north_m] = centroid_offset_m(centroid, tile, frame, receiver);
-            let distance = east_m.hypot(north_m);
-            let share = if heard(distance) {
-                weight(distance)
-            } else {
-                0.0
-            };
-            (share > 0.0).then_some((index, share, [east_m, north_m]))
-        })
-        .map(|(index, share, horizontal_offset_m)| {
-            let record = aircraft.aircraft_box(index);
-            let (energy, sel) = box_at(
-                &record,
-                horizontal_offset_m,
-                receiver.altitude_m,
-                horizons,
-                impedance_gain,
-            );
-            let lambda = box_lambda(&record, &sel);
-            let heard: [f64; PERIODS] = std::array::from_fn(|p| share * energy[p] * lambda[p]);
-            (energy.map(|value| share * value), heard)
-        })
-        .fold(
-            ([0.0; PERIODS], [0.0; PERIODS]),
-            |(energy, lambda), (e, l)| {
-                (
-                    std::array::from_fn(|p| energy[p] + e[p]),
-                    std::array::from_fn(|p| lambda[p] + l[p]),
-                )
-            },
-        )
+    let tile_m = [frame.east_m_per_unit, frame.north_m_per_unit];
+    let mut total = ([0.0; PERIODS], FlightPasses::default());
+    for index in indices {
+        // Reject out-of-reach centroids before decoding their spectra.
+        let centroid = aircraft.box_centroid(index);
+        let [east_m, north_m] = centroid_offset_m(centroid, tile, frame, receiver);
+        let distance = east_m.hypot(north_m);
+        let share = if heard(distance) {
+            weight(distance)
+        } else {
+            0.0
+        };
+        if share <= 0.0 {
+            continue;
+        }
+        let record = aircraft.aircraft_box(index);
+        let (energy, _) = box_at(
+            &record,
+            [east_m, north_m],
+            receiver.altitude_m,
+            horizons,
+            impedance_gain,
+        );
+        let passing = box_passing(aircraft, &record, tile_m);
+        for period in 0..PERIODS {
+            total.0[period] += share * energy[period];
+            (total.1).add_pass(period, share * energy[period], share * passing[period]);
+        }
+    }
+    total
 }
 
 /// The nearest a box's kept pieces come to a receiver of `area` (m): the gap between the area and
@@ -387,6 +426,7 @@ pub fn tile_energy(
     // The NPD curves at the receiver's elevation (Doc 29 4.2.1); helicopters carry no impedance.
     let impedance_db = receiver_impedance_db(receiver.altitude_m);
     let impedance_gain = energy(impedance_db);
+    let tile_m = [frame.east_m_per_unit, frame.north_m_per_unit];
     let per_box: Vec<BoxAnswer> = (0..aircraft.box_count())
         .into_par_iter()
         .with_min_len(1_024)
@@ -406,7 +446,7 @@ pub fn tile_energy(
                 horizons,
                 impedance_gain,
             );
-            let lambda = box_lambda(&record, &sel);
+            let passing = box_passing(aircraft, &record, tile_m);
             let bound = lamax_bound(
                 aircraft,
                 (tile, index),
@@ -432,7 +472,7 @@ pub fn tile_energy(
             });
             BoxAnswer {
                 energy,
-                lambda,
+                passing,
                 kinds,
                 bound,
                 within_reach: true,
@@ -442,14 +482,16 @@ pub fn tile_energy(
     let mut answer = TileAnswer {
         energy: [0.0; PERIODS],
         kinds: [0.0; FLIGHT_KINDS],
-        energy_lambda: [0.0; PERIODS],
+        passes: FlightPasses::default(),
         boxes: 0,
         lamax_bounds: Vec::new(),
     };
     for (index, heard) in per_box.iter().enumerate() {
         for period in 0..PERIODS {
             answer.energy[period] += heard.energy[period];
-            answer.energy_lambda[period] += heard.energy[period] * heard.lambda[period];
+            answer
+                .passes
+                .add_pass(period, heard.energy[period], heard.passing[period]);
         }
         for (kind, part) in answer.kinds.iter_mut().zip(heard.kinds) {
             *kind += part;

@@ -98,13 +98,6 @@ pub(super) fn weather_means(
 /// Equally likely weather states of the place, one for every ray of it (a night's inversion bends
 /// them alike).
 pub const WEATHER_STATES: usize = 10;
-/// The flights' weather: their mean in either state.
-pub fn flight_weather(flights: &([f64; PERIODS], [f64; PERIODS])) -> Weather {
-    let mut weather = Weather::default();
-    weather.add(&flights.0, &[flights.0; 2]);
-    weather
-}
-
 /// The weather states merged where their difference cannot show: per period, each run of
 /// consecutive states in which every line's mean stays finite and within `spread` (its largest
 /// over its smallest) takes each line's mean over the run in all its states. The energy stays; the

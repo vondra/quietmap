@@ -9,7 +9,7 @@
 use crate::block_samples::sample_block_pixels;
 use crate::blocks::Block;
 use crate::exact::LAYERS;
-use crate::flights::blend_flights;
+use crate::flights::blend_flight_energy;
 use crate::levels::Painted;
 use crate::levels::{PaintedCells, layer_energy};
 use crate::paint::{corner_weights, rectangle_at};
@@ -148,9 +148,10 @@ impl QuietBlocks {
         });
         // The open-rectangle proof excludes reflection throughout the receiver windows.
         let steady = painter.corners.hum.energies_at(x, y);
-        let flights = blend_flights(around.map(|at| painter.corners.flights[at]), fx, fy);
+        let flights = around.map(|at| &painter.corners.flights[at]);
+        let flights = blend_flight_energy(flights, fx, fy);
         (
-            layer_energy(painter.square, &steady, &flights.energy, 1.0, &[], &[]),
+            layer_energy(painter.square, &steady, &flights, 1.0, &[], &[]),
             ndens,
         )
     }

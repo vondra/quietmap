@@ -79,7 +79,7 @@ impl LoudestIndex {
         };
         let heard = tiles_heard(square, receiver.position, AIRCRAFT_REACH_M);
         let lists: Vec<&[(f64, u32)]> = (heard.iter())
-            .map(|tile| &self.lists[tile.number][usize::from(!tile.fine)][..])
+            .map(|tile| &self.lists[tile.number][tile.file][..])
             .collect();
         if lists.iter().all(|list| list.is_empty()) {
             return Ok(());

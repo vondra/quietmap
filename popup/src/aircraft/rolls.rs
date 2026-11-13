@@ -89,12 +89,14 @@ pub fn prepare(tile: TileId, rolls: &[Roll], place: &PlaceAtmosphere) -> Vec<Hea
     paths.into_values().collect()
 }
 
-/// The rolls heard at a receiver: per period their energy (Leq, linear) and energy times their
-/// Kurze lambda, their Lden energy per flight kind, and how many were within reach.
+/// The rolls heard at a receiver: per period their energy (Leq, linear) and their passes (a
+/// stream's passes in progress pi times its Kurze lambda of the time: a point's pass at its
+/// loudest for as long as its exposure holds); their Lden energy per flight kind, and how many
+/// were within reach.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RollSums {
     pub energy: [f64; PERIODS],
-    pub energy_lambda: [f64; PERIODS],
+    pub passes: crate::aircraft::FlightPasses,
     pub kinds: [f64; FLIGHT_KINDS],
     pub heard: usize,
 }
@@ -105,9 +107,9 @@ pub struct RollSums {
 /// where the sound exposure is read) around its point nearest the receiver, the stretch shifted to
 /// lie on the roll. The classes of a path passing the receiver nearest at one point make one stream,
 /// whose lambda is theirs summed, as a box's flights do: those whose rolls reach past the
-/// receiver's nearest point on the path, and those ending at one point before it; the streams join
-/// at their energy-weighted lambda, as the boxes do, so a short roll over long before a long one
-/// passes adds its sound at its own rate, not to the long one's.
+/// receiver's nearest point on the path, and those ending at one point before it; each stream is
+/// a pass in progress pi times its lambda of the time, at its own level, so a short roll over long
+/// before a long one passes adds its sound at its own rate, not to the long one's.
 pub fn roll_sums(
     paths: &[HeardPath],
     frame: &LocalFrame,
@@ -162,7 +164,11 @@ pub fn roll_sums(
         for (_, energy, lambda) in streams {
             for period in 0..PERIODS {
                 sums.energy[period] += energy[period];
-                sums.energy_lambda[period] += energy[period] * lambda[period];
+                sums.passes.add_pass(
+                    period,
+                    energy[period],
+                    std::f64::consts::PI * lambda[period],
+                );
             }
         }
     }

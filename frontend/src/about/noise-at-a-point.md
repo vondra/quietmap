@@ -353,12 +353,19 @@ much of the time the level spends at each value (Kurze's statistics of moving so
 distance runs from the point, 4 m up, to the vehicles or trains where they pass nearest, as if
 they drove on the point's own ground (on a bridge, on its deck): over a road's middle it is about
 4 m, not none; beside a cutting it reads short, beside an embankment long. A road with 600
-vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m;
-one flight a day 1 km away is near its peak for about half a minute; a take-off passes a house
-100 m beside its start of roll in about 11 seconds, as it sets off from rest. The flights heard
-and the runways' rolls are one stream, its rate and passing time weighted by sound energy; the
-flights' come from the coarse boxes of airspace everywhere, also where the fine boxes give the
-sound, so the stream does not jump where one gives way to the other. Sources add up only within the same moment, so the sum is taken
+vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m. A
+take-off passes a house 100 m beside its start of roll in about 11 seconds, as it sets off from
+rest.
+
+Flights are heard while they pass. A box of airspace holds how many flights cross it a day and
+how fast its loudest fly, so its flights are in it a known share of the time, at the level its
+sound has at the point. Boxes of like level, in steps of 3 dB, form one stream of passes, and
+several flights can pass at once. Against the real flights of 34 days of the year at 14 places,
+each followed second by second, the flights' loudness reads 9 % quieter to 30 % louder, 9 %
+louder at the typical place: a box takes all its flights at one level, though a climbing jet and a
+gliding one differ.
+
+Sources add up only within the same moment, so the sum is taken
 for every hour of road traffic and ten states of the weather; bells, calls, a car park's cars, a
 range's shots, courts, pitches, playgrounds, pools and terraces in use, the guests outside bars
 and restaurants and the plant of shops, offices and restaurants while it runs sound in their share

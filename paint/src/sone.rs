@@ -2,7 +2,8 @@
 //! resolution (`popup::percentiles::Resolution::MAP`). The sources evaluated exactly there, each
 //! group a line (a road, a railway) by its display fields; what the block left out of a group
 //! sounds with its passes too, joined to its line, or as a line of its own from its loudest
-//! source left out; the quiet hum held steady with its own bands; the flights one line.
+//! source left out; the quiet hum held steady with its own bands; the flights a line a stream of
+//! their passes (`crate::flight_streams`).
 
 use crate::blocks::{LeftBin, LeftGroup, Strata};
 use crate::corner_sources::SECTORS;
@@ -18,10 +19,33 @@ use popup::loudness::{
     Curve, FlightSound, LayerSound, PlacedLayer, curves, layer_curves, layers_loudness,
     place_layers,
 };
-use popup::percentiles::{Group, Passes, Resolution, Weather, flight_weather, merge_close_states};
+use popup::percentiles::{
+    Group, Line, Passes, Resolution, WEATHER_STATES, Weather, merge_close_states,
+};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tiles::sources::Layer;
+
+/// Floats a packed line takes ([`PixelSound::pack`], the card's `LoudLine`): its energy per period,
+/// its mean in each weather state per period, its lambda per period, its hourly profile, its duty
+/// and its passes in progress per period.
+pub const PACKED_LINE_FLOATS: usize =
+    PERIODS + PERIODS * WEATHER_STATES + PERIODS + 1 + 2 * PERIODS;
+
+/// A line as the card reads it: [`PACKED_LINE_FLOATS`] floats, no profile -1, no duty or no passes
+/// NaN.
+pub fn pack_line(line: &Line, out: &mut Vec<f32>) {
+    let parts = line.parts();
+    out.extend(parts.energy.map(|value| value as f32));
+    for means in &parts.means {
+        out.extend(means.iter().map(|&value| value as f32));
+    }
+    out.extend(parts.lambda.map(|value| value as f32));
+    out.push(parts.profile.map_or(-1.0, |profile| profile as f32));
+    for shares in [parts.duty, parts.passing] {
+        out.extend(shares.map_or([f32::NAN; PERIODS], |share| share.map(|value| value as f32)));
+    }
+}
 
 /// How every source group a square's candidates point at sounds in time, read once from its
 /// display record: where a line's traffic and events come from.
@@ -169,18 +193,7 @@ impl PixelSound {
             out.extend(steady.map(|value| value as f32));
             out.push(lines.len() as f32);
             for line in lines {
-                let parts = line.parts();
-                out.extend(parts.energy.map(|value| value as f32));
-                for means in &parts.means {
-                    out.extend(means.iter().map(|&value| value as f32));
-                }
-                out.extend(parts.lambda.map(|value| value as f32));
-                out.push(parts.profile.map_or(-1.0, |profile| profile as f32));
-                out.extend(
-                    parts
-                        .duty
-                        .map_or([f32::NAN; PERIODS], |duty| duty.map(|value| value as f32)),
-                );
+                pack_line(line, out);
             }
         }
         let place = std::iter::once(&self.curves);
@@ -289,11 +302,7 @@ pub(crate) fn pixel_sound(
         }
     }
     // Each layer: its steady rest and its groups, its spectrum the exact bands and the rest's.
-    let FlightSums {
-        energy: flights,
-        lambda,
-    } = rest.flights;
-    let flights_lambda = lambda.lambda();
+    let flights = rest.flights.energy;
     let mut energies = steady;
     for group_sound in groups.values() {
         for (total, value) in energies[group_sound.layer as usize]
@@ -325,18 +334,13 @@ pub(crate) fn pixel_sound(
             display: group_sound.display.0,
         })
         .collect();
-    let weather = flight_weather(&(flights, flights_lambda));
     let passes = |group: &Group| displays.of_group(group);
     let flight_sound = FlightSound {
         energy: flights,
         spectrum_db: Some(*flight_spectrum_db),
     };
-    let mut placed = place_layers(
-        &views,
-        &sounds,
-        (&weather, (flights, flights_lambda)),
-        &passes,
-    )?;
+    let flight_lines = Line::flight_passes(&rest.flights.passes);
+    let mut placed = place_layers(&views, &sounds, &flight_lines, &passes)?;
     merge_close_states(&mut placed, MAP_WEATHER_SPREAD);
     Ok(PixelSound {
         placed,

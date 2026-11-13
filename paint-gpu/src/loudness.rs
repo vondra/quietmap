@@ -7,6 +7,7 @@ use crate::device::{Gpu, driver, read_back};
 use crate::weather_runs::mixture_blocks;
 use cudarc::driver::{LaunchAsync, LaunchConfig};
 use paint::exact::LAYERS;
+use paint::sone::PACKED_LINE_FLOATS;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS};
 use physics::loudness::{A0, DCB, DLL, LTQ, RAP, RNS, SILENT_DB, THIRD_OCTAVES, USL, ZUP};
 use physics::percentile::{
@@ -16,8 +17,8 @@ use physics::percentile::{
 use popup::distribution::{LEVEL_MIN_DB, SPAN_DB, node_probabilities};
 use popup::loudness::{CURVE_HIGH_DB, CURVE_LOW_DB};
 use popup::percentiles::{
-    HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Resolution, WEATHER_STATES, hour_factor,
-    hour_groups,
+    HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, PASSES_HOLD_MEAN, Resolution, WEATHER_STATES,
+    hour_factor, hour_groups,
 };
 
 const DISTRIBUTION: &str = include_str!("../kernels/distribution.cuh");
@@ -152,7 +153,14 @@ fn loudness_constants() -> String {
             HOLDS_MEAN_LAMBDA as f32
         ),
         format!("#define LOUD_HELD_SHARE {:?}f\n", HELD_SHARE as f32),
+        format!(
+            "#define LOUD_PASSES_HOLD_MEAN {:?}f\n",
+            PASSES_HOLD_MEAN as f32
+        ),
+        // The share of the time under which the card ends a stream's passes in progress.
+        "#define LOUD_PASS_TAIL 1e-9f\n".to_string(),
         format!("#define LOUD_LAYERS {LAYERS}\n"),
+        format!("#define LOUD_LINE_FLOATS {PACKED_LINE_FLOATS}\n"),
         format!("#define LOUD_THIRDS {THIRD_OCTAVES}\n"),
         format!("#define LOUD_CURVE_LOW_DB ({:?}f)\n", CURVE_LOW_DB as f32),
         format!(

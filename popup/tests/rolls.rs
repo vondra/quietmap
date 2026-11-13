@@ -53,10 +53,11 @@ fn lden_db(class: u8, landing: bool, per_day: f64, receiver: [f64; 2]) -> f64 {
     10.0 * lden_energy(&sums.energy).log10()
 }
 
-/// The rolls' Kurze lambda by day at `receiver`: how many pass it at a time.
+/// The rolls' Kurze lambda by day at `receiver`, how many pass it at a time: their passes in
+/// progress over pi, every stream's together.
 fn lambda(rolls: &[Roll], receiver: [f64; 2]) -> f64 {
     let sums = heard(rolls, receiver);
-    sums.energy_lambda[0] / sums.energy[0]
+    sums.passes.passing[0].iter().sum::<f64>() / std::f64::consts::PI
 }
 
 /// A hundred A320 take-offs a day, 300 m beside the runway: loudest beside the start of roll
@@ -112,7 +113,7 @@ fn the_rolls_are_heard_to_eight_kilometres() {
 /// heard as one roll or as two of fifty pass it as often, and an A320's and a 737's as often as
 /// both apart (each roll's own rate had heard a runway's forty classes as rare as one of them, and
 /// its loudness fell where its level rose); two runway directions leaving one point at 57 deg left
-/// and right of east, their cosines equal, stay two streams.
+/// and right of east, their cosines equal, stay two streams, whose passes add.
 #[test]
 fn the_classes_rolling_one_path_pass_as_one_stream() {
     let a320 = class("A320-232");
@@ -133,7 +134,7 @@ fn the_classes_rolling_one_path_pass_as_one_stream() {
     };
     let one = lambda(&[turned(1.0)], [500.0, 0.0]);
     let both = lambda(&[turned(1.0), turned(-1.0)], [500.0, 0.0]);
-    assert!((both / one - 1.0).abs() < 1e-9, "{both} vs {one}");
+    assert!((both / one - 2.0).abs() < 1e-9, "{both} vs {one}");
 }
 
 /// A roll passes a receiver for as long as its own speeds take over the pass's distance around
@@ -162,8 +163,8 @@ fn a_roll_passes_for_as_long_as_its_speeds_take() {
 }
 
 /// Beside the middle of an A320's roll a Cessna's 300 m roll on the same path, over 600 m back,
-/// passes nearest at its own end: a stream of its own, joining the A320's at its energy's weight
-/// (its passes counted into the A320's had tripled their lambda), as two paths do.
+/// passes nearest at its own end: a stream of its own beside the A320's, each in the class of its
+/// own level (its passes counted into the A320's had tripled their lambda), as two paths are.
 #[test]
 fn a_short_roll_passes_in_its_own_stream_beside_a_longer_ones_middle() {
     let a320 = roll(class("A320-232"), false, 90.0);
@@ -177,11 +178,18 @@ fn a_short_roll_passes_in_its_own_stream_beside_a_longer_ones_middle() {
         heard(std::slice::from_ref(&a320), at),
         heard(std::slice::from_ref(&cessna), at),
     );
-    let weighted =
-        (jet.energy_lambda[0] + piston.energy_lambda[0]) / (jet.energy[0] + piston.energy[0]);
-    let together = lambda(&[a320, cessna], at);
-    assert!(
-        (together / weighted - 1.0).abs() < 1e-9,
-        "{together} vs {weighted}"
-    );
+    let together = heard(&[a320, cessna], at);
+    let mut apart = jet.passes;
+    apart.add(&piston.passes);
+    for class in 0..popup::aircraft::PASS_CLASSES {
+        for (both, each) in [
+            (together.passes.energy[0][class], apart.energy[0][class]),
+            (together.passes.passing[0][class], apart.passing[0][class]),
+        ] {
+            assert!(
+                (both - each).abs() <= 1e-9 * each,
+                "class {class}: {both} vs {each}"
+            );
+        }
+    }
 }
