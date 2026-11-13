@@ -150,6 +150,8 @@ impl Preparation<'_> {
             inferred_roads(self.structures, square, &mut roads, self.model)?;
         }
         roads.retain(|r| r.direction != 0);
+        // Three rows of these are kept; without this they would keep every piece's room.
+        roads.shrink_to_fit();
         Ok(roads)
     }
 
@@ -220,7 +222,10 @@ pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<(
         model: &model,
     };
     let mut rows = BTreeMap::<u32, Vec<Square>>::new();
-    for square in selected {
+    for square in selected
+        .into_iter()
+        .filter(|&square| road_path(mapped, square).exists())
+    {
         rows.entry(square.y).or_default().push(square);
     }
     // Row by row, each square's one-way pieces are inferred once and kept only while the rows on
@@ -230,7 +235,7 @@ pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<(
         one_way.retain(|square, _| square.y + 1 >= row);
         let missing = written
             .iter()
-            .flat_map(|&square| neighbours_in_index_order(square).chain([square]))
+            .flat_map(|&square| neighbours_in_index_order(square))
             .filter(|square| !one_way.contains_key(square))
             .collect::<BTreeSet<_>>();
         let inferred = missing
