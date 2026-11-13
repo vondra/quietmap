@@ -7,6 +7,7 @@ use crate::sources::cells::ring_cell;
 use crate::year::{Kind, YearInputs};
 use anyhow::{Context, Result, anyhow, ensure};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, UInt8Array};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
@@ -231,24 +232,41 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
     let mut matched = BTreeMap::<(&str, u8), Sums>::new();
     let mut unmatched = BTreeMap::<&str, Sums>::new();
     let mut rated_squares = Vec::new();
-    for (&square, lodgings) in &squares {
-        let Some(table) = structures
-            .table(square, "structures.arrow")
-            .map_err(anyhow::Error::msg)?
-        else {
+    let squares = squares.into_iter().collect::<Vec<_>>();
+    // Each square's buildings are read in parallel; the sums below add in square order, as an f64 sum's
+    // value depends on its order.
+    let buildings_of_lodgings = squares
+        .par_iter()
+        .map(|(square, lodgings)| {
+            let Some(table) = structures
+                .table(*square, "structures.arrow")
+                .map_err(anyhow::Error::msg)?
+            else {
+                return Ok(None);
+            };
+            require_stamp(&table, "structures_contract", "structures_v5")
+                .map_err(anyhow::Error::msg)?;
+            let buildings = SquareBuildings::read(&table)?;
+            Ok(Some(
+                lodgings
+                    .iter()
+                    .map(|lodging| buildings.of(lodging))
+                    .collect::<Vec<_>>(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for ((square, lodgings), buildings) in squares.iter().zip(buildings_of_lodgings) {
+        let Some(buildings) = buildings else {
             for lodging in lodgings {
                 let without = unmatched.entry("square-without-structures").or_default();
                 without.add(lodging.rooms, 0.0);
             }
             continue;
         };
-        require_stamp(&table, "structures_contract", "structures_v5")
-            .map_err(anyhow::Error::msg)?;
-        let buildings = SquareBuildings::read(&table)?;
         let mut rated = Sums::default();
-        for lodging in lodgings {
+        for (lodging, building) in lodgings.iter().zip(buildings) {
             let how = if lodging.node { "node-inside" } else { "by-id" };
-            match buildings.of(lodging) {
+            match building {
                 Some((building_use, floor)) => {
                     matched
                         .entry((how, building_use))
@@ -269,7 +287,7 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
             }
         }
         if rated.lodgings > 0 {
-            rated_squares.push((square, rated));
+            rated_squares.push((*square, rated));
         }
     }
     let rated = rated_squares

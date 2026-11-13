@@ -1,8 +1,13 @@
 //! Fit signed-speed medians by the same country, road class and building-density cells used by the reader.
 use crate::year::{Kind, YearInputs};
 use anyhow::{Result, ensure};
+use rayon::prelude::*;
 use serde_json::json;
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 // The retained tagged-speed estimator requires thirty mapped pieces per class/environment cell.
 const MINIMUM_CELL_ROWS: u64 = 30;
@@ -46,36 +51,51 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
     let structures = inputs
         .required(Kind::Structures)
         .map_err(anyhow::Error::msg)?;
-    let mut histograms = Histogram::new();
-    let mut squares = Vec::new();
-    for (square, path) in super::topology::squares(mapped)? {
-        let mut roads = super::input::load(&path)?
-            .iter()
-            .map(super::input::roads)
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .filter(|road| {
-                (2..=9).contains(&road.class)
-                    && road.speed_limit > 0
-                    && road.speed_limit < 255
-                    && road.country.0 != 0
-            })
-            .collect::<Vec<_>>();
-        super::settlement::classify(structures, &mut roads)?;
-        for road in roads {
-            if !(1..=2).contains(&road.built_up) {
-                continue;
+    let squares = super::topology::squares(mapped)?
+        .into_iter()
+        .collect::<Vec<_>>();
+    let classified = AtomicUsize::new(0);
+    let per_square = squares
+        .par_iter()
+        .map(|(_, path)| {
+            let mut roads = super::input::load(path)?
+                .iter()
+                .map(super::input::roads)
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
+                .filter(|road| {
+                    (2..=9).contains(&road.class)
+                        && road.speed_limit > 0
+                        && road.speed_limit < 255
+                        && road.country.0 != 0
+                })
+                .collect::<Vec<_>>();
+            super::settlement::classify(structures, &mut roads)?;
+            let mut histogram = Histogram::new();
+            for road in roads
+                .into_iter()
+                .filter(|road| (1..=2).contains(&road.built_up))
+            {
+                *histogram
+                    .entry((road.country.0, road.class, road.built_up, road.speed_limit))
+                    .or_default() += 1;
             }
-            *histograms
-                .entry((road.country.0, road.class, road.built_up, road.speed_limit))
-                .or_default() += 1;
-        }
-        squares.push([square.x, square.y]);
-        if squares.len() % 4096 == 0 {
-            eprintln!("tagged-speed-fit: {} squares", squares.len());
-        }
+            let done = classified.fetch_add(1, Ordering::Relaxed) + 1;
+            if done.is_multiple_of(4096) {
+                eprintln!("tagged-speed-fit: {done} squares");
+            }
+            Ok(histogram)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut histograms = Histogram::new();
+    for (cell, count) in per_square.into_iter().flatten() {
+        *histograms.entry(cell).or_default() += count;
     }
+    let squares = squares
+        .iter()
+        .map(|(square, _)| [square.x, square.y])
+        .collect::<Vec<_>>();
     let rows = medians(&histograms).into_iter().map(|(country, value)|
         json!({"country": String::from_utf8_lossy(&country.to_le_bytes()), "value": value}))
         .collect::<Vec<_>>();

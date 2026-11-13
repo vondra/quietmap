@@ -15,6 +15,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow, ensure};
 use geos::{Geom, Geometry};
+use rayon::prelude::*;
 use std::{collections::HashMap, path::Path};
 
 type FootprintMatches = (Vec<Option<Geometry>>, HashMap<usize, usize>);
@@ -317,27 +318,35 @@ pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<(
             .required(Kind::StructureHeightModel)
             .map_err(anyhow::Error::msg)?,
     )?;
-    let rasters = inputs
+    let raster_paths = inputs
         .structure_height_rasters()
-        .map_err(anyhow::Error::msg)?
-        .iter()
-        .map(|p| HeightRaster::open(p))
-        .collect::<Result<Vec<_>>>()?;
+        .map_err(anyhow::Error::msg)?;
+    let open_rasters = || {
+        raster_paths
+            .iter()
+            .map(|p| HeightRaster::open(p))
+            .collect::<Result<Vec<_>>>()
+    };
     let mut squares = squares.to_vec();
     squares.sort_unstable();
     squares.dedup();
-    for selected in squares {
-        let rows = square(
-            source,
-            observations,
-            selected,
-            &model,
-            &rasters,
-            &inputs.manifest.year,
-        )?;
-        let name = format!("z9/{}/{}", selected.x, selected.y);
-        prepare_rows::write(&output.join(&name).join("structures.arrow"), &rows)?;
-        eprintln!("structures: {name}: {} rows", rows.len());
-    }
-    Ok(())
+    // Each worker opens its own rasters: a GDAL dataset serves one thread.
+    squares
+        .par_iter()
+        .map_init(open_rasters, |rasters, &selected| {
+            let rasters = rasters.as_ref().map_err(|e| anyhow!("{e:#}"))?;
+            let rows = square(
+                source,
+                observations,
+                selected,
+                &model,
+                rasters,
+                &inputs.manifest.year,
+            )?;
+            let name = format!("z9/{}/{}", selected.x, selected.y);
+            prepare_rows::write(&output.join(&name).join("structures.arrow"), &rows)?;
+            eprintln!("structures: {name}: {} rows", rows.len());
+            Ok(())
+        })
+        .collect()
 }

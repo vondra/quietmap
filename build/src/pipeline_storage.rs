@@ -227,6 +227,7 @@ impl Run {
         }
         fs::create_dir_all(&root)?;
         let started = Instant::now();
+        let cpu_before = children_cpu_seconds();
         let log = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -276,14 +277,30 @@ impl Run {
                 inventory(&sibling, &mut files)?;
             }
         }
+        let seconds = started.elapsed().as_secs_f64();
+        let cpu_seconds = children_cpu_seconds() - cpu_before;
         write_json(
             &marker,
-            &json!({"seconds": started.elapsed().as_secs_f64(), "files": files}),
+            &json!({"seconds": seconds, "cpu_seconds": cpu_seconds, "files": files}),
         )?;
+        // A step that sits on one core for long shows here already on a small selection, before a
+        // world run multiplies it.
         eprintln!(
-            "year: {name}: {:.3} seconds",
-            started.elapsed().as_secs_f64()
+            "year: {name}: {seconds:.3} seconds on {:.1} cores",
+            cpu_seconds / seconds
         );
         Ok(())
     }
+}
+
+/// User and system seconds of the finished children this process has waited for.
+fn children_cpu_seconds() -> f64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: getrusage fills the rusage it is given; RUSAGE_CHILDREN is always valid.
+    let usage = unsafe {
+        libc::getrusage(libc::RUSAGE_CHILDREN, usage.as_mut_ptr());
+        usage.assume_init()
+    };
+    let seconds = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1e6;
+    seconds(usage.ru_utime) + seconds(usage.ru_stime)
 }
