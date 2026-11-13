@@ -79,3 +79,58 @@ fn shared_survey_objects_are_read_once_in_original_order() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn neighbour_selection_equals_a_scan_of_every_square() {
+    let squares: Vec<Square> = (0..512)
+        .flat_map(|x| (0..512).map(move |y| Square { x, y }))
+        .collect();
+    let index = square_index(&squares);
+    // A checkerboard selection: half the points' owners are unselected while neighbours are.
+    let sparse: Vec<Square> = squares
+        .iter()
+        .copied()
+        .filter(|s| (s.x + s.y) % 2 == 0)
+        .collect();
+    let sparse_index = square_index(&sparse);
+    // Square corners and edges (the halo's reach), the antimeridian and both poles.
+    let mut points = vec![(179.9999, 0.0), (-180.0, 0.0), (0.0, 90.0), (12.3, -90.0)];
+    for (x, y) in [
+        (276, 174),
+        (0, 0),
+        (511, 511),
+        (511, 200),
+        (0, 300),
+        (100, 1),
+    ] {
+        let [west, south, east, north] = bounds(Square { x, y });
+        for (lon, lat) in [(west, south), (east, north), (west, (south + north) / 2.0)] {
+            for d in [-0.003, -0.0001, 0.0, 0.0001, 0.003] {
+                points.push((lon + d, (lat - d).clamp(-90.0, 90.0)));
+            }
+        }
+    }
+    for (lon, lat) in points {
+        for halo in [0.0, 31.0, SUPPORT_HALO_M] {
+            let scanned: Vec<(usize, bool)> = squares
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &s)| {
+                    let (keep, owned) = selected(lon, lat, s, halo);
+                    keep.then_some((i, owned))
+                })
+                .collect();
+            let mut chosen = selected_squares(lon, lat, halo, &index);
+            chosen.sort_unstable();
+            assert_eq!(chosen, scanned, "{lon},{lat} at {halo} m");
+            let mut expected: Vec<(usize, bool)> = scanned
+                .iter()
+                .filter_map(|&(i, owned)| sparse_index.get(&squares[i]).map(|&j| (j, owned)))
+                .collect();
+            expected.sort_unstable();
+            let mut chosen = selected_squares(lon, lat, halo, &sparse_index);
+            chosen.sort_unstable();
+            assert_eq!(chosen, expected, "sparse {lon},{lat} at {halo} m");
+        }
+    }
+}

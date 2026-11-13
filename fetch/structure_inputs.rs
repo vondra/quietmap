@@ -104,6 +104,42 @@ pub fn selected(longitude: f64, latitude: f64, square: Square, halo: f64) -> (bo
     ((dy * 111_320.0).hypot(dx * metres) <= halo, false)
 }
 
+/// Halos under this reach only a point's own square and its eight neighbours: half a column
+/// (360/512 degrees) at `selected`'s cosine floor of 0.01, the other half a margin for the
+/// rounding of a longitude on a column edge; a row spans at least 6.7 km.
+pub const NEIGHBOUR_HALO_LIMIT_M: f64 = 360.0 / 512.0 * 111_320.0 * 0.01 / 2.0;
+const _: () = assert!(SUPPORT_HALO_M < NEIGHBOUR_HALO_LIMIT_M);
+
+/// The indices in `index` of the squares `selected` admits a point to, each with whether it owns
+/// the point. Testing the owner and its neighbours instead of every square keeps a whole-world
+/// selection linear in its points.
+pub fn selected_squares(
+    longitude: f64,
+    latitude: f64,
+    halo: f64,
+    index: &std::collections::HashMap<Square, usize>,
+) -> Vec<(usize, bool)> {
+    debug_assert!(halo < NEIGHBOUR_HALO_LIMIT_M);
+    let home = owner(longitude, latitude);
+    let mut chosen: Vec<(usize, bool)> = index.get(&home).map(|&i| (i, true)).into_iter().collect();
+    if halo > 0.0 {
+        for square in home.with_neighbours() {
+            if square != home
+                && let Some(&i) = index.get(&square)
+                && selected(longitude, latitude, square, halo).0
+            {
+                chosen.push((i, false));
+            }
+        }
+    }
+    chosen
+}
+
+/// Each selected square's position in the sorted selection.
+pub fn square_index(squares: &[Square]) -> std::collections::HashMap<Square, usize> {
+    squares.iter().enumerate().map(|(i, &s)| (s, i)).collect()
+}
+
 pub fn touched_degrees(square: Square, halo: f64) -> Vec<[i16; 2]> {
     let [mut west, mut south, mut east, mut north] = bounds(square);
     let latitude_pad = halo / 111_320.0;

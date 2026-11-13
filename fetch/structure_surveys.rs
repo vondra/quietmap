@@ -1,6 +1,9 @@
 //! Retained measured-footprint and wall inventories normalize into the shared structure observations.
 
-use super::{Objects, Observation, SUPPORT_HALO_M, Square, batches, number, selected, text};
+use super::{
+    Objects, Observation, SUPPORT_HALO_M, Square, batches, number, selected_squares, square_index,
+    text,
+};
 use crate::structures::{
     observations::{HEIGHT, WALL},
     prepare_geometry::centroid,
@@ -22,9 +25,11 @@ pub fn convert(
     rows: &mut [Vec<Observation>],
     walls: bool,
 ) -> Result<()> {
+    let halo = if walls { SUPPORT_HALO_M } else { 0.0 };
+    let index = square_index(squares);
     let touched: std::collections::BTreeSet<_> = squares
         .iter()
-        .flat_map(|&s| super::touched_degrees(s, if walls { SUPPORT_HALO_M } else { 0.0 }))
+        .flat_map(|&s| super::touched_degrees(s, halo))
         .collect();
     let mut objects: Vec<SurveyObject> = Vec::new();
     for (source, root) in sources {
@@ -101,17 +106,8 @@ pub fn convert(
                     let height = number(&batch, "height_m", i)
                         .ok_or_else(|| anyhow::anyhow!("missing survey height"))?;
                     ensure!(height.is_finite(), "invalid measured height");
-                    for (square, rows) in squares.iter().zip(rows.iter_mut()) {
-                        let (keep, owned) = selected(
-                            longitude,
-                            latitude,
-                            *square,
-                            if walls { SUPPORT_HALO_M } else { 0.0 },
-                        );
-                        if !keep {
-                            continue;
-                        }
-                        rows.push(Observation {
+                    for (square, owned) in selected_squares(longitude, latitude, halo, &index) {
+                        rows[square].push(Observation {
                             kind: if walls { WALL } else { HEIGHT },
                             geometry: Some(bytes.to_vec()),
                             longitude,

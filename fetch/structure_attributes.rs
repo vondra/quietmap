@@ -1,6 +1,6 @@
 //! RÚIAN and Catastro publisher attributes become common dated building observations.
 
-use super::{Objects, Observation, Square, selected};
+use super::{Objects, Observation, Square, selected_squares, square_index};
 use crate::structures::observations::ATTRIBUTE;
 use anyhow::{Result, ensure};
 use serde::Deserialize;
@@ -55,6 +55,7 @@ pub fn convert(
     }) {
         return Ok(());
     }
+    let index = square_index(squares);
     let mut add = |point: Point| -> Result<()> {
         ensure!(
             point.lat.is_finite()
@@ -81,11 +82,8 @@ pub fn convert(
             );
             None
         };
-        for (square, rows) in squares.iter().zip(rows.iter_mut()) {
-            if !selected(point.lon, point.lat, *square, 31.0).0 {
-                continue;
-            }
-            rows.push(Observation {
+        for (square, _) in selected_squares(point.lon, point.lat, 31.0, &index) {
+            rows[square].push(Observation {
                 kind: ATTRIBUTE,
                 geometry: None,
                 longitude: point.lon,
