@@ -100,7 +100,7 @@ The map's target is to stay within 1 phon of the popup, about 7 % of loudness, a
 points where the popup gives at least 1 sone, and within 3 phon at 99.5 %. Buildings, individual
 noise layers and points quieter than the map's first colour can differ more.
 
-On 12 November 2026, newly calculated tiles were within 1 phon at 98.8 % of sampled points where
+On 13 November 2026, newly calculated tiles were within 1 phon at 98.2 % of sampled points where
 the popup gave at least 1 sone, and within 3 phon at 99.95 %, across 54 squares around the world.
 These checks compare computations; [Validation](/about/validation) compares the model with
 microphone measurements.
@@ -115,9 +115,9 @@ its own source selection, façade choice and finer loudness calculation. The sam
 continents except Antarctica, but its percentages are not a population-weighted global error rate.
 Existing tiles can predate the computation tested here.
 
-Of 16,200 sampled points, 6,372 have a stored popup total of at least 1 sone. At those points,
-550 differ by more than 0.5 phon, 78 by more than 1 phon, three by more than 3 phon and none by
-more than 6 phon. The mean signed difference is +0.21 phon. By layer:
+Of 16,200 sampled points, 5,965 have a stored popup total of at least 1 sone. At those points,
+641 differ by more than 0.5 phon, 109 by more than 1 phon, three by more than 3 phon and none by
+more than 6 phon. The mean signed difference is +0.25 phon. By layer:
 
 | Layer | Popup points ≥ 1 sone | More than 1 phon apart |
 |---|---:|---:|
@@ -126,13 +126,13 @@ more than 6 phon. The mean signed difference is +0.21 phon. By layer:
 | Industry | 904 | 2.10 % |
 | Buildings | 525 | 4.76 % |
 | Ships | 113 | 1.77 % |
-| Aircraft | 1,103 | 0.82 % |
-| Total | 6,372 | 1.22 % |
+| Aircraft | 372 | 0.81 % |
+| Total | 5,965 | 1.83 % |
 
-Across all points, including those below 1 sone, 1,526 differ by more than 1 phon; the largest
-quiet-total difference is 17 phon. There are 72 crossings of the 1-sone boundary beyond its
+Across all points, including those below 1 sone, 1,821 differ by more than 1 phon; the largest
+quiet-total difference is 18.5 phon. There are 79 crossings of the 1-sone boundary beyond its
 half-phon rounding band. No sampled point is missing from the map. Total Lden differs by more
-than 1 dB at 5 of the 5,916 points where the popup gives at least 35 dB, and at 292 of 14,290
+than 1 dB at 5 of the 5,916 points where the popup gives at least 35 dB, and at 291 of 14,290
 points with a nonnegative popup level; the largest difference between stored nonnegative values
 is 14.5 dB. Sixteen nonnegative popup values become below zero in the map, and 29 cross the
 other way.
@@ -148,7 +148,8 @@ A second check isolates the painting approximations in four squares in central B
 outdoor reference evaluates every retained loud ground source and the flights exactly at one
 pixel in each 4 × 4 cell, omitting buildings. It shares the map's background hum, flight spectra
 and loudness resolution, so it cannot reveal an error common to those parts of both computations.
-The independent popup check is needed alongside it. On 12 November, the outdoor total differed
+The independent popup check is needed alongside it. On 12 November, before the flights were
+heard as passes, the outdoor total differed
 by more than 1 phon at 196 of 257,377 reference pixels (0.08 %), with a mean difference of −0.01
 phon and a largest difference of 5.5 phon. Total Lden differed by more than 1 dB at 122 of those
 pixels, with a largest difference of 4 dB. A layer alone differed by more than 1 phon at 0.5 % of
@@ -248,9 +249,9 @@ and average flight lines stay at least 8 km away. Their energies are blended to 
 in the popup's classes of the level a flight has while it passes, 3 dB apart, each with the share
 of the time its flights are passing, and the runway rolls with them. At a corner, eight
 neighbouring classes then form one stream of passes that keeps their energy and, by the loudness
-curve of the square's typical flight spectrum, their loudness while they pass; a pixel hears the
-streams blended from its corners. Against every class as a stream of its own, as the popup takes
-them, the aircraft layer alone reads a quarter of a phon louder. The
+curve of a spectrum flat over the third octaves, their loudness while they pass; a pixel hears
+the streams blended from its corners. Against every class as a stream of its own, as the popup
+takes them, the aircraft layer alone reads 0.3 phon louder. The
 quiet sources may be omitted only when their summed bounds can change a layer's exact loud
 energy by at most 0.1 dB in every period. Otherwise the painter uses the popup's bound-proportional
 sampling and 0.05 dB confidence budget, batches the selected rays on the graphics card and

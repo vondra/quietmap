@@ -135,6 +135,28 @@ fn the_classes_rolling_one_path_pass_as_one_stream() {
     let one = lambda(&[turned(1.0)], [500.0, 0.0]);
     let both = lambda(&[turned(1.0), turned(-1.0)], [500.0, 0.0]);
     assert!((both / one - 2.0).abs() < 1e-9, "{both} vs {one}");
+    // One stream passes at one level: a jet's and a light aircraft's rolls, classes apart when
+    // each rolls alone, fill one class of passes beside the start both roll from.
+    let beside_start = [100.0, 300.0];
+    let classes = |rolls: &[Roll]| -> Vec<usize> {
+        let passing = heard(rolls, beside_start).passes.passing[0];
+        (0..passing.len())
+            .filter(|&class| passing[class] > 0.0)
+            .collect()
+    };
+    let (jet, light) = (
+        roll(a320, false, 100.0),
+        roll(class("CNA172"), false, 100.0),
+    );
+    let (jet_alone, light_alone) = (
+        classes(std::slice::from_ref(&jet)),
+        classes(std::slice::from_ref(&light)),
+    );
+    assert!(
+        jet_alone.len() == 1 && light_alone.len() == 1 && jet_alone != light_alone,
+        "{jet_alone:?} {light_alone:?}"
+    );
+    assert_eq!(classes(&[jet, light]).len(), 1);
 }
 
 /// A roll passes a receiver for as long as its own speeds take over the pass's distance around
