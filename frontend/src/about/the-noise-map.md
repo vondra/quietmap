@@ -146,15 +146,14 @@ The layers have no limit of their own. This sample meets the target.
 
 A second check isolates the painting approximations in four squares in central Bohemia. Its
 outdoor reference evaluates every retained loud ground source and the flights exactly at one
-pixel in each 4 × 4 cell, omitting buildings. It shares the map's background hum, flight spectra
-and loudness resolution, so it cannot reveal an error common to those parts of both computations.
-The independent popup check is needed alongside it. On 12 November, before the flights were
-heard as passes, the outdoor total differed
-by more than 1 phon at 196 of 257,377 reference pixels (0.08 %), with a mean difference of −0.01
-phon and a largest difference of 5.5 phon. Total Lden differed by more than 1 dB at 122 of those
-pixels, with a largest difference of 4 dB. A layer alone differed by more than 1 phon at 0.5 % of
-its pixels of at least 1 sone for roads, 0.7 % for railways, 1.6 % for industry and 3.7 % for
-buildings.
+pixel in each 4 × 4 cell, skipping pixels inside buildings. It shares the map's background hum,
+flight spectra and loudness resolution, so it cannot reveal an error common to those parts of
+both computations. The independent popup check is needed alongside it. On 13 November the
+outdoor total differed by more than 1 phon at 268 of the 227,890 reference pixels of at least
+1 sone (0.12 %), with a mean difference of +0.07 phon and a largest difference of 6.5 phon.
+Total Lden differed by more than 1 dB at 122 of 257,377 reference pixels, with a largest
+difference of 4 dB. A layer alone differed by more than 1 phon at 0.45 % of its pixels of at
+least 1 sone for roads, 0.68 % for railways, 1.56 % for industry and 3.74 % for buildings.
 
 </details>
 
