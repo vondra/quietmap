@@ -26,7 +26,8 @@ use crate::traffic::building_load;
 use physics::bands::WeekHours;
 use physics::emission::plant::{BUSINESS_HOURS, Running, cooling_plant, kitchen_extract};
 use physics::emission::settlement::{
-    COMMERCIAL, HOSPITALITY, building_sound_power, is_footprint_scaled, is_home, plant_sound_power,
+    COMMERCIAL, FOOD_RETAIL, HOSPITALITY, building_sound_power, is_footprint_scaled, is_home,
+    plant_sound_power,
 };
 use physics::emission::spectrum::SoundPower;
 use serde_json::{Value, json};
@@ -36,6 +37,12 @@ use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
 /// dev4's class of a residential block, and of every building tagged only building=yes.
 const RESIDENTIAL_MULTI: u8 = 0;
 const GROUND_ACTIVITY_SOURCE_HEIGHT_M: f64 = 1.5;
+/// The most floor a shop's, office's or restaurant's ground area without a building stands for: the
+/// 99th percentile footprint of the world's mapped commercial and hospitality buildings (5.78 million
+/// in dev4's 2026 structures; evidence 2026-11-12, data-1). Its whole ground counted as cooled or
+/// refrigerated floor: 50,744 such areas over a hectare, the largest 280 ha in Riyadh at 126 dB(A)
+/// while running. The area it spreads over stays its own.
+const GROUND_ACTIVITY_FLOOR_CAP_M2: f64 = 6_190.0;
 /// Storey height and the height of a building with neither a height nor a floor count (dev4).
 const FLOOR_HEIGHT_M: f64 = 3.0;
 const DEFAULT_HEIGHT_M: f64 = 8.0;
@@ -96,6 +103,13 @@ pub fn building_emission(
         (height_m, floors)
     };
     let area_m2 = resolve_area_m2(row.area_m2, &row.ring, DEFAULT_FOOTPRINT_M2);
+    let shop_ground =
+        row.ground_activity && matches!(row.class, COMMERCIAL | HOSPITALITY | FOOD_RETAIL);
+    let floor_m2 = if shop_ground {
+        area_m2.min(GROUND_ACTIVITY_FLOOR_CAP_M2)
+    } else {
+        area_m2
+    };
     let (lat, lon) = z30_corner_degrees(row.centroid.0, row.centroid.1);
     let emitted = match row.class {
         class if is_home(class) => {
@@ -106,7 +120,7 @@ pub fn building_emission(
         COMMERCIAL | HOSPITALITY => {
             // Unknown storeys count one: the 8 m height of an untagged building is no floor count.
             let floor_area_m2 = if is_footprint_scaled(row.class) || row.ground_activity {
-                area_m2
+                floor_m2
             } else {
                 area_m2 * f64::from(row.storeys.max(1))
             };
@@ -135,7 +149,7 @@ pub fn building_emission(
             }
             Emitted::InUse(plants)
         }
-        _ => Emitted::Steady(building_sound_power(row.class, area_m2, floors)?),
+        _ => Emitted::Steady(building_sound_power(row.class, floor_m2, floors)?),
     };
     if let Emitted::Steady(sound) = &emitted
         && sound.day_dba < AUDIBILITY_FLOOR_DBA
