@@ -148,6 +148,15 @@ pub fn read(
     } else {
         None
     };
+    let rail_squares = if groups
+        .values()
+        .flatten()
+        .any(super::local_match::observed_locally)
+    {
+        super::local_match::rail_squares(geography, squares)?
+    } else {
+        Vec::new()
+    };
     for ((source, country), movements) in groups {
         let scope = format!("{source}:{country}");
         let bounds = *model
@@ -255,7 +264,7 @@ pub fn read(
             model,
             geography,
             &movements,
-            squares,
+            &rail_squares,
             &mut result.claims,
             stops,
         )?;

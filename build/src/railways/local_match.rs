@@ -139,6 +139,43 @@ fn nearest(
     nearest
 }
 
+/// Whether `apply` stamps rows from this observation (a stop, a source line or a region).
+pub fn observed_locally(movement: &Movement) -> bool {
+    matches!(
+        movement.location,
+        Location::Station { .. } | Location::Line { .. } | Location::Region { .. }
+    )
+}
+
+/// The selected squares that hold railways, each with the countries of its main-line rows (the
+/// rows `apply` stamps).
+pub type RailSquares = Vec<([u16; 2], Vec<[u8; 2]>)>;
+
+/// The selected squares' railways read once for all groups: a group then reads only the squares
+/// holding a country it applies to, not every selected square once per group.
+pub fn rail_squares(geography: &Path, squares: &HashSet<[u16; 2]>) -> Result<RailSquares, String> {
+    let mut found = RailSquares::new();
+    for square in squares {
+        let directory = geography.join(format!("z9/{}/{}", square[0], square[1]));
+        let Some(rails) = crate::dev4::read_table(&directory.join("railways.arrow"))? else {
+            continue;
+        };
+        let mut countries = Vec::new();
+        for batch in &rails.batches {
+            let service = write::col_u8(batch, "service")?;
+            let country = write::col_u16(batch, "country_iso")?;
+            for row in 0..batch.num_rows() {
+                let iso = country.value(row).to_le_bytes();
+                if service.value(row) == 0 && !countries.contains(&iso) {
+                    countries.push(iso);
+                }
+            }
+        }
+        found.push((*square, countries));
+    }
+    Ok(found)
+}
+
 /// Stamps the squares' rows with their nearest observations; a stop's claims carry its identity,
 /// numbered from `stops` (one numbering over every source's groups), and the next free number is
 /// returned.
@@ -146,7 +183,7 @@ pub fn apply(
     model: &RailModel,
     geography: &Path,
     movements: &[Movement],
-    squares: &HashSet<[u16; 2]>,
+    rail_squares: &RailSquares,
     output: &mut Claims,
     stops: u32,
 ) -> Result<u32, String> {
@@ -163,7 +200,22 @@ pub fn apply(
             _ => None,
         })
         .fold(0.0, f64::max);
-    for square in squares {
+    let regions: Vec<(usize, [f64; 4])> = observations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, movement)| match movement.location {
+            Location::Region { bounds } => Some((index, bounds)),
+            _ => None,
+        })
+        .collect();
+    let (source, declared) = (observations[0].source_id, &observations[0].country);
+    for (square, countries) in rail_squares {
+        if !countries
+            .iter()
+            .any(|&country| model.local_source_applies(source, declared, country))
+        {
+            continue;
+        }
         let directory = geography.join(format!("z9/{}/{}", square[0], square[1]));
         let Some(rails) = crate::dev4::read_table(&directory.join("railways.arrow"))? else {
             continue;
@@ -178,11 +230,7 @@ pub fn apply(
                 let country = write::col_u16(batch, "country_iso")?
                     .value(row)
                     .to_le_bytes();
-                if !model.local_source_applies(
-                    observations[0].source_id,
-                    &observations[0].country,
-                    country,
-                ) {
+                if !model.local_source_applies(source, declared, country) {
                     continue;
                 }
                 let point = |side| -> Result<[f64; 2], String> {
@@ -195,16 +243,14 @@ pub fn apply(
                 let a = point("start")?;
                 let b = point("end")?;
                 let midpoint = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
-                let region = observations
+                let region = regions
                     .iter()
-                    .position(|movement| match movement.location {
-                        Location::Region { bounds } => {
-                            movement.rail_types.contains(&kind)
-                                && (bounds[0]..=bounds[2]).contains(&midpoint[0])
-                                && (bounds[1]..=bounds[3]).contains(&midpoint[1])
-                        }
-                        _ => false,
-                    });
+                    .find(|(index, bounds)| {
+                        observations[*index].rail_types.contains(&kind)
+                            && (bounds[0]..=bounds[2]).contains(&midpoint[0])
+                            && (bounds[1]..=bounds[3]).contains(&midpoint[1])
+                    })
+                    .map(|(index, _)| *index);
                 let Some(index) =
                     region.or_else(|| nearest(&observations, &grids, kind, a, b, radius))
                 else {
