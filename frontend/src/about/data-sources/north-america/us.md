@@ -1,6 +1,6 @@
 ---
 title: United States
-intro: FHWA HPMS 2022 traffic counts on federal-aid highways, estimated passenger rail traffic, FRA crossing horns, USGS wind turbine database. Local streets are estimated from their buildings; commuter rail and freight use class defaults.
+intro: FHWA HPMS 2022 traffic counts on federal-aid highways, the timetables of Amtrak and 53 commuter, metro and light-rail feeds, FRA crossing horns, USGS wind turbine database. Local streets are estimated from their buildings; freight uses class defaults.
 ---
 
 ## Roads
@@ -19,7 +19,7 @@ Unsigned roads: a primary road 64 km/h in towns, 89 outside (cars drive 75 on a 
 
 ## Railways
 
-The archived [Amtrak timetable](https://content.amtrak.com/content/gtfs/GTFS.zip) starts after the 2026 observation window, so that year uses estimated passenger train counts. Earlier maps integrate the calendar of their own archived feed. Commuter rail feeds (LIRR, NJ Transit, Metra, MBTA, Caltrain and others) are not loaded; those lines use the [world railway defaults](/about/data-preparation). Lines without a usage tag use the [unclassified railway default](/about/data-preparation). Surface metro sections are included; see the [railway method](/about/data-preparation).
+For 2026, passenger trains come from 54 timetables, Amtrak's and those of the commuter, metro, light-rail and streetcar systems from Metro-North, the Long Island Rail Road, the New York subway, NJ Transit and PATH to Metra, the CTA, Caltrain, BART, LA Metro, Metrolink and WMATA (the year's registry lists them all with their archives): each the version the [Mobility Database](https://mobilitydatabase.org/) archived last before 31 August 2026 that covers four weeks of the year, or what a shorter publishing horizon covers; SunRail's and Sacramento's archives were stored after that day but cover part of the year. San Diego's Coaster and Sprinter, Buffalo's Metro Rail, the Kansas City streetcar and the Alaska Railroad have no such timetable and use the [world railway defaults](/about/data-preparation). Earlier maps integrate the calendar of their own archived Amtrak feed. Lines without a usage tag use the [unclassified railway default](/about/data-preparation). Surface metro sections are included; see the [railway method](/about/data-preparation).
 
 Freight: BNSF, Union Pacific, CSX and Norfolk Southern publish no schedules; main lines take the class default of 20 freight trains a day, branches 5.
 

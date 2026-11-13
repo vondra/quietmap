@@ -236,3 +236,45 @@ fn unknown_counts_keep_their_spatial_model_observation() {
         assert_eq!((movement.passenger, movement.freight), (None, None));
     }
 }
+
+/// A stop's departures stamp every track near it; the line carries each stop's once. Three tracks
+/// beside one stop of 300 departures (both directions) take 100 each, where each used to take 300
+/// (Stockholm's station sums, New York's three-track lines); two tracks beside a stop for each
+/// direction (71 each, San Francisco's Bay Street) take 71 each. Routed trips claim only the
+/// track they run on and add up: 100 on each of two tracks is 100 a track.
+#[test]
+fn each_stop_counts_once_for_its_line_and_routed_trips_add_by_track() {
+    let model = model();
+    for (count, matching, stops, expected) in [
+        (300.0, 0, vec![1, 1, 1], 100.0),
+        (71.0, 0, vec![1, 2], 71.0),
+        (100.0, 2, vec![0, 0], 100.0),
+    ] {
+        let movement = observation(count, &[true; 4]);
+        let tracks: Vec<(RowTraffic, RowTraffic)> = stops
+            .iter()
+            .map(|&stop| {
+                let mut claim = interval(&movement, 1, 0, 0.0, 100.0, matching);
+                claim.stop = stop;
+                row_evidence(&model, &[claim], 0.0, 100.0, 0, *b"CZ")
+            })
+            .collect();
+        let members: Vec<usize> = (0..tracks.len()).collect();
+        let evidence = TrackEvidence {
+            model: &model,
+            domestic: &tracks.iter().map(|track| track.0).collect::<Vec<_>>(),
+            foreign: &tracks.iter().map(|track| track.1).collect::<Vec<_>>(),
+            priors: &vec![prior(40.0); tracks.len()],
+            modes: &vec![0; tracks.len()],
+        };
+        let result = track_share(
+            &evidence,
+            *b"CZ",
+            &members,
+            |row| row.passenger,
+            0,
+            |_| true,
+        );
+        assert_eq!(result.periods, [expected, 0.0, 0.0], "stops {stops:?}");
+    }
+}

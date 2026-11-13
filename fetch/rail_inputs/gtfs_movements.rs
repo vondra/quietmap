@@ -1,7 +1,7 @@
 //! Normalize each operator's GTFS patterns and stops without mixing observation calendars.
 use super::{
     gtfs::{OperatorCoverage, Options, Trip, operator_key},
-    gtfs_tables::{SourceStop, resolve_stop},
+    gtfs_tables::{SourceStop, resolve_stop, tram_stations},
 };
 use crate::railways::{
     coverage::Coverage,
@@ -124,8 +124,9 @@ pub(super) fn normalize(
             movements.push(observation);
         }
     }
+    let stations = tram_stations(tram_counts.iter().map(|(_, id, _)| id.as_str()), stops);
     for (operator, id, departures) in tram_counts {
-        let location = match resolve_stop(&id, stops) {
+        let location = match resolve_stop(&stations[&id], stops) {
             Ok(stop) => Location::Station { stop },
             Err(reason) => Location::Unlocated { reason },
         };

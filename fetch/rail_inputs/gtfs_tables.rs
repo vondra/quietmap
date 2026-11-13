@@ -29,6 +29,7 @@ pub(super) fn parse_sequence(value: &str) -> Result<u32, String> {
 
 pub(super) struct SourceStop {
     parent: String,
+    name: String,
     coordinates: Option<[f64; 2]>,
 }
 pub(super) fn read_stops(directory: &Path) -> Result<BTreeMap<String, SourceStop>, String> {
@@ -39,11 +40,14 @@ pub(super) fn read_stops(directory: &Path) -> Result<BTreeMap<String, SourceStop
             .ok()
             .zip(field(row, "stop_lon").parse::<f64>().ok())
             .filter(|(lat, lon)| (-90.0..=90.0).contains(lat) && (-180.0..=180.0).contains(lon))
+            // A publisher's 0,0 is a missing position, not the Gulf of Guinea.
+            .filter(|(lat, lon)| *lat != 0.0 || *lon != 0.0)
             .map(|(lat, lon)| [lat, lon]);
         stops.insert(
             field(row, "stop_id").to_string(),
             SourceStop {
                 parent: field(row, "parent_station").to_string(),
+                name: field(row, "stop_name").to_string(),
                 coordinates,
             },
         );
@@ -69,6 +73,78 @@ pub(super) fn resolve_stop(id: &str, stops: &BTreeMap<String, SourceStop>) -> Re
         current = &stop.parent;
     }
     Err(format!("cyclic GTFS parent stop {id}"))
+}
+
+/// Platforms of one station nearer than this, sharing a name, are one station.
+const STATION_RADIUS_M: f64 = 150.0;
+
+/// The station of every tram, light-rail and metro stop: its topmost parent with a position, else,
+/// for a stop that is neither a parent nor a child, the first (by id) of the stops of its name
+/// within `STATION_RADIUS_M` of it. A stop's departures then count both directions where a
+/// publisher files each direction's platform as its own stop (New York files a platform at its
+/// station's position, San Francisco's Muni each direction at its own corner); stations the
+/// publisher keeps apart by parent stay apart.
+pub(super) fn tram_stations<'a>(
+    ids: impl Iterator<Item = &'a str>,
+    stops: &'a BTreeMap<String, SourceStop>,
+) -> HashMap<String, String> {
+    // The topmost ancestor with a position (a parent without one, as GTFS allows, cannot place
+    // the station; a stop without any stays itself and is unlocated as before).
+    let root = |id: &'a str| -> &'a str {
+        let (mut current, mut placed) = (id, id);
+        let mut visited = HashSet::new();
+        while visited.insert(current) {
+            let Some(stop) = stops.get(current) else {
+                break;
+            };
+            if stop.coordinates.is_some() {
+                placed = current;
+            }
+            if !stops.contains_key(&stop.parent) {
+                break;
+            }
+            current = &stop.parent;
+        }
+        placed
+    };
+    let parents: HashSet<&str> = stops.values().map(|stop| stop.parent.as_str()).collect();
+    let alone = |id: &str| {
+        !parents.contains(id)
+            && stops
+                .get(id)
+                .is_some_and(|stop| !stops.contains_key(&stop.parent))
+    };
+    let mut roots: Vec<(&str, &str)> = ids.map(|id| (id, root(id))).collect();
+    roots.sort_unstable();
+    let mut stations = HashMap::new();
+    let mut named = HashMap::<&str, Vec<(&str, [f64; 2])>>::new();
+    for (id, root) in roots {
+        let name = stops.get(root).map_or("", |stop| stop.name.as_str());
+        let station = match resolve_stop(root, stops) {
+            Ok(place) if !name.is_empty() && alone(root) => {
+                let here = [place.latitude, place.longitude];
+                let clusters = named.entry(name).or_default();
+                match clusters
+                    .iter()
+                    .find(|(_, at)| ground_distance_m(*at, here) <= STATION_RADIUS_M)
+                {
+                    Some(&(station, _)) => station,
+                    None => {
+                        clusters.push((root, here));
+                        root
+                    }
+                }
+            }
+            _ => root,
+        };
+        stations.insert(id.to_string(), station.to_string());
+    }
+    stations
+}
+
+fn ground_distance_m(a: [f64; 2], b: [f64; 2]) -> f64 {
+    let cosine = ((a[0] + b[0]) / 2.0).to_radians().cos();
+    ((b[1] - a[1]) * 111_320.0 * cosine).hypot((b[0] - a[0]) * 110_540.0)
 }
 
 pub(super) type Shapes = HashMap<String, Vec<(u32, [f64; 2])>>;

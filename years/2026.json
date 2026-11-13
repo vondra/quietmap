@@ -5220,6 +5220,870 @@
       "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
     },
     {
+      "id": "us-timetable-amtrak-2026-08",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Amtrak",
+      "url": "https://files.mobilitydatabase.org/mdb-11/mdb-11-202608250016/mdb-11-202608250016.zip",
+      "observed": {
+        "start": "2026-08-25",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 7 covered days, within 2026-08-25 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-11-202608250016."
+    },
+    {
+      "id": "us-timetable-mta-metro-north",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metro-North Railroad",
+      "url": "https://files.mobilitydatabase.org/mdb-524/mdb-524-202608150129/mdb-524-202608150129.zip",
+      "observed": {
+        "start": "2026-08-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://web.mta.info/developers/developer-data-terms.html",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 31 covered days, within 2026-08-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-524-202608150129."
+    },
+    {
+      "id": "us-timetable-mta-long-island-rail-road",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metropolitan Transit Authority (MTA) (Long Island Rail Road)",
+      "url": "https://files.mobilitydatabase.org/mdb-507/mdb-507-202608010127/mdb-507-202608010127.zip",
+      "observed": {
+        "start": "2026-07-31",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://web.mta.info/developers/developer-data-terms.html",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 32 covered days, within 2026-07-31 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-507-202608010127."
+    },
+    {
+      "id": "us-timetable-mta-nyc-subway",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metropolitan Transit Authority (MTA) (NYC Subway)",
+      "url": "https://files.mobilitydatabase.org/mdb-516/mdb-516-202608280038/mdb-516-202608280038.zip",
+      "observed": {
+        "start": "2026-05-26",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 98 covered days, within 2026-05-26 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-516-202608280038."
+    },
+    {
+      "id": "us-timetable-nj-transit-rail",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "New Jersey Transit (NJ Transit) (Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-509/mdb-509-202608060121/mdb-509-202608060121.zip",
+      "observed": {
+        "start": "2026-08-04",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.njtransit.com/developer-tools",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 28 covered days, within 2026-08-04 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-509-202608060121."
+    },
+    {
+      "id": "us-timetable-panynj-path",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Port Authority Trans-Hudson (PATH)",
+      "url": "https://files.mobilitydatabase.org/mdb-517/mdb-517-202506070024/mdb-517-202506070024.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-06-01"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 274 covered days, within 2025-09-01 through 2026-06-01. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-517-202506070024."
+    },
+    {
+      "id": "us-timetable-septa-regional-rail",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Southeastern Pennsylvania Transportation Authority (SEPTA) (Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-503/mdb-503-202607240144/mdb-503-202607240144.zip",
+      "observed": {
+        "start": "2026-07-26",
+        "end": "2026-08-29"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www3.septa.org/developer/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 35 covered days, within 2026-07-26 through 2026-08-29. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-503-202607240144."
+    },
+    {
+      "id": "us-timetable-patco-speedline",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "PATCO Speedline",
+      "url": "https://files.mobilitydatabase.org/mdb-3035/mdb-3035-202607090020/mdb-3035-202607090020.zip",
+      "observed": {
+        "start": "2026-07-08",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 55 covered days, within 2026-07-08 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-3035-202607090020."
+    },
+    {
+      "id": "us-timetable-septa-metro",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Southeastern Pennsylvania Transportation Authority (SEPTA) (Bus)",
+      "url": "https://files.mobilitydatabase.org/mdb-502/mdb-502-202607030104/mdb-502-202607030104.zip",
+      "observed": {
+        "start": "2026-06-28",
+        "end": "2026-08-01"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www3.septa.org/developer/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 35 covered days, within 2026-06-28 through 2026-08-01. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-502-202607030104."
+    },
+    {
+      "id": "us-timetable-mbta",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Massachusetts Bay Transportation Authority (MBTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-437/mdb-437-202608110036/mdb-437-202608110036.zip",
+      "observed": {
+        "start": "2026-08-03",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.mass.gov/files/documents/2017/10/27/develop_license_agree_0.pdf",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 29 covered days, within 2026-08-03 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-437-202608110036."
+    },
+    {
+      "id": "us-timetable-metra",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metra",
+      "url": "https://files.mobilitydatabase.org/mdb-2854/mdb-2854-202608230137/mdb-2854-202608230137.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://metra.com/gtfs-realtime-api-key-request-license-agreement",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2854-202608230137."
+    },
+    {
+      "id": "us-timetable-cta",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Chicago Transit Authority (CTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-389/mdb-389-202607110020/mdb-389-202607110020.zip",
+      "observed": {
+        "start": "2026-07-07",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 56 covered days, within 2026-07-07 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-389-202607110020."
+    },
+    {
+      "id": "us-timetable-nictd-south-shore-line",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "South Shore Line",
+      "url": "https://files.mobilitydatabase.org/mdb-585/mdb-585-202604240015/mdb-585-202604240015.zip",
+      "observed": {
+        "start": "2026-03-31",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 154 covered days, within 2026-03-31 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-585-202604240015."
+    },
+    {
+      "id": "us-timetable-wmata-metrorail",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Washington Metropolitan Area Transit Authority (WMATA) (Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-1847/mdb-1847-202608190125/mdb-1847-202608190125.zip",
+      "observed": {
+        "start": "2026-08-18",
+        "end": "2026-08-28"
+      },
+      "published": null,
+      "licence": "Provider terms: https://developer.wmata.com/license",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 11 covered days, within 2026-08-18 through 2026-08-28. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-1847-202608190125."
+    },
+    {
+      "id": "us-timetable-mta-maryland-marc",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Maryland Transit Administration (MARC Train)",
+      "url": "https://files.mobilitydatabase.org/mdb-468/mdb-468-202607030106/mdb-468-202607030106.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-468-202607030106."
+    },
+    {
+      "id": "us-timetable-mta-maryland-light-rail",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Maryland Transit Administration (Light Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-469/mdb-469-202607100108/mdb-469-202607100108.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-469-202607100108."
+    },
+    {
+      "id": "us-timetable-mta-maryland-metro-subway",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Maryland Transit Administration Metro Subway (Metro SubwayLink)",
+      "url": "https://files.mobilitydatabase.org/mdb-470/mdb-470-202603050033/mdb-470-202603050033.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-470-202603050033."
+    },
+    {
+      "id": "us-timetable-virginia-railway-express",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Virginia Railway Express",
+      "url": "https://files.mobilitydatabase.org/tld-61/tld-61-202608310057/tld-61-202608310057.zip",
+      "observed": {
+        "start": "2026-05-04",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 120 covered days, within 2026-05-04 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset tld-61-202608310057."
+    },
+    {
+      "id": "us-timetable-caltrain",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Caltrain",
+      "url": "https://files.mobilitydatabase.org/mdb-54/mdb-54-202608290127/mdb-54-202608290127.zip",
+      "observed": {
+        "start": "2026-01-31",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 213 covered days, within 2026-01-31 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-54-202608290127."
+    },
+    {
+      "id": "us-timetable-bart",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Bay Area Rapid Transit (BART)",
+      "url": "https://files.mobilitydatabase.org/mdb-53/mdb-53-202608050057/mdb-53-202608050057.zip",
+      "observed": {
+        "start": "2026-01-12",
+        "end": "2026-08-30"
+      },
+      "published": null,
+      "licence": "Provider terms: http://www.bart.gov/schedules/developers/developer-license-agreement",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 231 covered days, within 2026-01-12 through 2026-08-30. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-53-202608050057."
+    },
+    {
+      "id": "us-timetable-sfmta-muni",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "San Francisco Municipal Transportation Agency (SFMTA - Muni)",
+      "url": "https://files.mobilitydatabase.org/mdb-2886/mdb-2886-202607250136/mdb-2886-202607250136.zip",
+      "observed": {
+        "start": "2026-07-23",
+        "end": "2026-08-28"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.sfmta.com/reports/gtfs-transit-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 37 covered days, within 2026-07-23 through 2026-08-28. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2886-202607250136."
+    },
+    {
+      "id": "us-timetable-vta",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Santa Clara Valley Transportation Authority (VTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-57/mdb-57-202607160107/mdb-57-202607160107.zip",
+      "observed": {
+        "start": "2026-04-27",
+        "end": "2026-08-09"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 105 covered days, within 2026-04-27 through 2026-08-09. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-57-202607160107."
+    },
+    {
+      "id": "us-timetable-altamont-corridor-express",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Altamont Corridor Express",
+      "url": "https://files.mobilitydatabase.org/mdb-2684/mdb-2684-202608110143/mdb-2684-202608110143.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://511.org/sites/default/files/pdfs/511_Data_Agreement_Final.pdf",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2684-202608110143."
+    },
+    {
+      "id": "us-timetable-smart-sonoma-marin",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Sonoma Marin Area Rail Transit (SMART)",
+      "url": "https://files.mobilitydatabase.org/mdb-3222/mdb-3222-202606300118/mdb-3222-202606300118.zip",
+      "observed": {
+        "start": "2026-04-12",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://511.org/sites/default/files/pdfs/511_Data_Agreement_Final.pdf",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 142 covered days, within 2026-04-12 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-3222-202606300118."
+    },
+    {
+      "id": "us-timetable-la-metro-rail",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Los Angeles County Metropolitan Transportation Authority (LA Metro) (Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-30/mdb-30-202608160127/mdb-30-202608160127.zip",
+      "observed": {
+        "start": "2026-08-15",
+        "end": "2026-08-29"
+      },
+      "published": null,
+      "licence": "Provider terms: https://developer.metro.net/terms-conditions/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 15 covered days, within 2026-08-15 through 2026-08-29. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-30-202608160127."
+    },
+    {
+      "id": "us-timetable-metrolink",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metrolink",
+      "url": "https://files.mobilitydatabase.org/mdb-96/mdb-96-202605230122/mdb-96-202605230122.zip",
+      "observed": {
+        "start": "2026-05-05",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 119 covered days, within 2026-05-05 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-96-202605230122."
+    },
+    {
+      "id": "us-timetable-san-diego-mts",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "San Diego International Airport, Metropolitan Transit System (MTS)",
+      "url": "https://files.mobilitydatabase.org/mdb-13/mdb-13-202608220023/mdb-13-202608220023.zip",
+      "observed": {
+        "start": "2026-06-07",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.sdmts.com/business-center-developers/terms-and-conditions",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 86 covered days, within 2026-06-07 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-13-202608220023."
+    },
+    {
+      "id": "us-timetable-sound-transit",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Sound Transit",
+      "url": "https://files.mobilitydatabase.org/mdb-268/mdb-268-202608080148/mdb-268-202608080148.zip",
+      "observed": {
+        "start": "2026-08-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 31 covered days, within 2026-08-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-268-202608080148."
+    },
+    {
+      "id": "us-timetable-trimet",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "TriMet, Portland Streetcar",
+      "url": "https://files.mobilitydatabase.org/mdb-247/mdb-247-202608250120/mdb-247-202608250120.zip",
+      "observed": {
+        "start": "2026-07-19",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 44 covered days, within 2026-07-19 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-247-202608250120."
+    },
+    {
+      "id": "us-timetable-marta",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metropolitan Atlanta Rapid Transit Authority (MARTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-368/mdb-368-202604190110/mdb-368-202604190110.zip",
+      "observed": {
+        "start": "2026-04-18",
+        "end": "2026-08-21"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 126 covered days, within 2026-04-18 through 2026-08-21. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-368-202604190110."
+    },
+    {
+      "id": "us-timetable-miami-dade-transit",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Miami-Dade Transit",
+      "url": "https://files.mobilitydatabase.org/mdb-331/mdb-331-202608010003/mdb-331-202608010003.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-331-202608010003."
+    },
+    {
+      "id": "us-timetable-tri-rail",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "South Florida Regional Transportation Authority",
+      "url": "https://files.mobilitydatabase.org/tld-492/tld-492-202510290055/tld-492-202510290055.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset tld-492-202510290055."
+    },
+    {
+      "id": "us-timetable-brightline",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Brightline Trains LLC",
+      "url": "https://files.mobilitydatabase.org/mdb-1126/mdb-1126-202608040149/mdb-1126-202608040149.zip",
+      "observed": {
+        "start": "2026-08-02",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 30 covered days, within 2026-08-02 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-1126-202608040149."
+    },
+    {
+      "id": "us-timetable-sunrail",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Florida Department of Transportation (SunRail)",
+      "url": "https://files.mobilitydatabase.org/mdb-626/mdb-626-202609290129/mdb-626-202609290129.zip",
+      "observed": {
+        "start": "2025-12-01",
+        "end": "2026-08-31"
+      },
+      "published": "2026-09-29",
+      "licence": "Provider terms: https://corporate.sunrail.com/about-sunrail/gtfs-data-download/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 274 covered days, within 2025-12-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-626-202609290129."
+    },
+    {
+      "id": "us-timetable-dart-dallas",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Dallas Area Rapid Transit (DART)",
+      "url": "https://files.mobilitydatabase.org/mdb-152/mdb-152-202607200103/mdb-152-202607200103.zip",
+      "observed": {
+        "start": "2026-07-20",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.dart.org/transitdata/legalnotices.asp",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 43 covered days, within 2026-07-20 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-152-202607200103."
+    },
+    {
+      "id": "us-timetable-trinity-metro",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Trinity Metro",
+      "url": "https://files.mobilitydatabase.org/mdb-2890/mdb-2890-202608290102/mdb-2890-202608290102.zip",
+      "observed": {
+        "start": "2026-05-24",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://ridetrinitymetro.org/gtfs-data/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 100 covered days, within 2026-05-24 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2890-202608290102."
+    },
+    {
+      "id": "us-timetable-houston-metro",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "METRO Houston",
+      "url": "https://files.mobilitydatabase.org/mdb-2060/mdb-2060-202607120126/mdb-2060-202607120126.zip",
+      "observed": {
+        "start": "2026-02-22",
+        "end": "2026-06-06"
+      },
+      "published": "2026-07-12",
+      "licence": "Provider terms: https://www.ridemetro.org/about/news-media/digital-assets",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 105 covered days, within 2026-02-22 through 2026-06-06. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2060-202607120126."
+    },
+    {
+      "id": "us-timetable-capmetro",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Capital Metro",
+      "url": "https://files.mobilitydatabase.org/mdb-150/mdb-150-202607260154/mdb-150-202607260154.zip",
+      "observed": {
+        "start": "2026-07-24",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.capmetro.org/metrolabs/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 39 covered days, within 2026-07-24 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-150-202607260154."
+    },
+    {
+      "id": "us-timetable-rtd-denver",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Regional Transportation District (RTD)",
+      "url": "https://files.mobilitydatabase.org/mdb-178/mdb-178-202608200126/mdb-178-202608200126.zip",
+      "observed": {
+        "start": "2026-06-07",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.rtd-denver.com/business-center/open-spatial-data/gtfs-license-agreement",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 86 covered days, within 2026-06-07 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-178-202608200126."
+    },
+    {
+      "id": "us-timetable-uta",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Utah Transit Authority (UTA)",
+      "url": "https://files.mobilitydatabase.org/mdb-170/mdb-170-202607280109/mdb-170-202607280109.zip",
+      "observed": {
+        "start": "2026-06-21",
+        "end": "2026-08-15"
+      },
+      "published": null,
+      "licence": "Provider terms: http://developer.rideuta.com/TermsOfUse.aspx",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 56 covered days, within 2026-06-21 through 2026-08-15. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-170-202607280109."
+    },
+    {
+      "id": "us-timetable-valley-metro-phoenix",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Valley Metro (VM)",
+      "url": "https://files.mobilitydatabase.org/mdb-147/mdb-147-202607280152/mdb-147-202607280152.zip",
+      "observed": {
+        "start": "2026-07-27",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://www.opendefinition.org/licenses/odc-by",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 36 covered days, within 2026-07-27 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-147-202607280152."
+    },
+    {
+      "id": "us-timetable-metro-transit-minneapolis",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metro Transit",
+      "url": "https://files.mobilitydatabase.org/mdb-205/mdb-205-202608020145/mdb-205-202608020145.zip",
+      "observed": {
+        "start": "2026-08-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 31 covered days, within 2026-08-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-205-202608020145."
+    },
+    {
+      "id": "us-timetable-metro-st-louis",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Metro St. Louis",
+      "url": "https://files.mobilitydatabase.org/mdb-190/mdb-190-202605150006/mdb-190-202605150006.zip",
+      "observed": {
+        "start": "2026-05-14",
+        "end": "2026-06-14"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 32 covered days, within 2026-05-14 through 2026-06-14. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-190-202605150006."
+    },
+    {
+      "id": "us-timetable-pittsburgh-regional-transit",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Port Authority of Allegheny County",
+      "url": "https://files.mobilitydatabase.org/mdb-409/mdb-409-202607080039/mdb-409-202607080039.zip",
+      "observed": {
+        "start": "2026-06-28",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.portauthority.org/business-center/developer-resources/developer-license-agreement/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 65 covered days, within 2026-06-28 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-409-202607080039."
+    },
+    {
+      "id": "us-timetable-greater-cleveland-rta",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Greater Cleveland Regional Transit Authority",
+      "url": "https://files.mobilitydatabase.org/mdb-406/mdb-406-202607290022/mdb-406-202607290022.zip",
+      "observed": {
+        "start": "2026-08-02",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: http://www.riderta.com/developers",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 30 covered days, within 2026-08-02 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-406-202607290022."
+    },
+    {
+      "id": "us-timetable-sacrt",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Sacramento Regional Transit (SacRT)",
+      "url": "https://files.mobilitydatabase.org/mdb-3621/mdb-3621-202611091544/mdb-3621-202611091544.zip",
+      "observed": {
+        "start": "2026-08-09",
+        "end": "2026-08-31"
+      },
+      "published": "2026-11-09",
+      "licence": "Provider terms: https://www.sacrt.com/transit-data-portal/",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 23 covered days, within 2026-08-09 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-3621-202611091544."
+    },
+    {
+      "id": "us-timetable-charlotte-cats",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Charlotte Area Transit System (CATS)",
+      "url": "https://files.mobilitydatabase.org/mdb-2265/mdb-2265-202608040036/mdb-2265-202608040036.zip",
+      "observed": {
+        "start": "2026-08-03",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 29 covered days, within 2026-08-03 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2265-202608040036."
+    },
+    {
+      "id": "us-timetable-ctrail-hartford-line",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Connecticut Transit (Hartford Line - Rail)",
+      "url": "https://files.mobilitydatabase.org/mdb-2840/mdb-2840-202607140121/mdb-2840-202607140121.zip",
+      "observed": {
+        "start": "2026-07-11",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms: https://www.cttransit.com/about/developers/terms-of-use",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 52 covered days, within 2026-07-11 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2840-202607140121."
+    },
+    {
+      "id": "us-timetable-hampton-roads-transit",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Hampton Roads Transit (HRT)",
+      "url": "https://files.mobilitydatabase.org/mdb-473/mdb-473-202605120002/mdb-473-202605120002.zip",
+      "observed": {
+        "start": "2026-05-10",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 114 covered days, within 2026-05-10 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-473-202605120002."
+    },
+    {
+      "id": "us-timetable-norta-new-orleans",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "New Orleans Regional Transit Authority (NORTA)",
+      "url": "https://files.mobilitydatabase.org/ntd-60032/ntd-60032-202605140120/ntd-60032-202605140120.zip",
+      "observed": {
+        "start": "2026-05-17",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 107 covered days, within 2026-05-17 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset ntd-60032-202605140120."
+    },
+    {
+      "id": "us-timetable-honolulu-thebus-skyline",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "TheBus",
+      "url": "https://files.mobilitydatabase.org/mdb-2350/mdb-2350-202607090002/mdb-2350-202607090002.zip",
+      "observed": {
+        "start": "2026-07-01",
+        "end": "2026-08-22"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 53 covered days, within 2026-07-01 through 2026-08-22. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2350-202607090002."
+    },
+    {
+      "id": "us-timetable-cincinnati-metro",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Cincinnati Metro",
+      "url": "https://files.mobilitydatabase.org/mdb-307/mdb-307-202607010002/mdb-307-202607010002.zip",
+      "observed": {
+        "start": "2026-05-31",
+        "end": "2026-08-15"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 77 covered days, within 2026-05-31 through 2026-08-15. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-307-202607010002."
+    },
+    {
+      "id": "us-timetable-detroit-people-mover",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "Detroit People Mover",
+      "url": "https://files.mobilitydatabase.org/mdb-2281/mdb-2281-202606270026/mdb-2281-202606270026.zip",
+      "observed": {
+        "start": "2025-09-01",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-2281-202606270026."
+    },
+    {
+      "id": "us-timetable-king-county-metro",
+      "kind": "prepare-timetable",
+      "region": "US",
+      "publisher": "King County Metro",
+      "url": "https://files.mobilitydatabase.org/mdb-1330/mdb-1330-202608290047/mdb-1330-202608290047.zip",
+      "observed": {
+        "start": "2026-07-20",
+        "end": "2026-08-31"
+      },
+      "published": null,
+      "licence": "Provider terms; no published open licence",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 43 covered days, within 2026-07-20 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Mobility Database dataset mdb-1330-202608290047."
+    },
+    {
       "id": "ca-timetable-ca-via-rail",
       "kind": "prepare-timetable",
       "region": "CA",
@@ -8655,6 +9519,60 @@
         "be-timetable-be-belgium-sncb",
         "in-timetable-in-indian-railways-unofficial",
         "us-timetable-us-amtrak",
+        "us-timetable-amtrak-2026-08",
+        "us-timetable-mta-metro-north",
+        "us-timetable-mta-long-island-rail-road",
+        "us-timetable-mta-nyc-subway",
+        "us-timetable-nj-transit-rail",
+        "us-timetable-panynj-path",
+        "us-timetable-septa-regional-rail",
+        "us-timetable-patco-speedline",
+        "us-timetable-septa-metro",
+        "us-timetable-mbta",
+        "us-timetable-metra",
+        "us-timetable-cta",
+        "us-timetable-nictd-south-shore-line",
+        "us-timetable-wmata-metrorail",
+        "us-timetable-mta-maryland-marc",
+        "us-timetable-mta-maryland-light-rail",
+        "us-timetable-mta-maryland-metro-subway",
+        "us-timetable-virginia-railway-express",
+        "us-timetable-caltrain",
+        "us-timetable-bart",
+        "us-timetable-sfmta-muni",
+        "us-timetable-vta",
+        "us-timetable-altamont-corridor-express",
+        "us-timetable-smart-sonoma-marin",
+        "us-timetable-la-metro-rail",
+        "us-timetable-metrolink",
+        "us-timetable-san-diego-mts",
+        "us-timetable-sound-transit",
+        "us-timetable-trimet",
+        "us-timetable-marta",
+        "us-timetable-miami-dade-transit",
+        "us-timetable-tri-rail",
+        "us-timetable-brightline",
+        "us-timetable-sunrail",
+        "us-timetable-dart-dallas",
+        "us-timetable-trinity-metro",
+        "us-timetable-houston-metro",
+        "us-timetable-capmetro",
+        "us-timetable-rtd-denver",
+        "us-timetable-uta",
+        "us-timetable-valley-metro-phoenix",
+        "us-timetable-metro-transit-minneapolis",
+        "us-timetable-metro-st-louis",
+        "us-timetable-pittsburgh-regional-transit",
+        "us-timetable-greater-cleveland-rta",
+        "us-timetable-sacrt",
+        "us-timetable-charlotte-cats",
+        "us-timetable-ctrail-hartford-line",
+        "us-timetable-hampton-roads-transit",
+        "us-timetable-norta-new-orleans",
+        "us-timetable-honolulu-thebus-skyline",
+        "us-timetable-cincinnati-metro",
+        "us-timetable-detroit-people-mover",
+        "us-timetable-king-county-metro",
         "ca-timetable-ca-via-rail",
         "fr-timetable-fr-sncf-national",
         "fr-timetable-fr-idf-sncf-transilien",
@@ -11833,6 +12751,2223 @@
         "input": "ca-timetable-edmonton-ets",
         "source_id": 2015,
         "country": "CA",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-amtrak-2026-08",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false,
+        "excluded_agency_names": [
+          "MARC"
+        ]
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-mta-metro-north",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-mta-long-island-rail-road",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-mta-nyc-subway",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-nj-transit-rail",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-panynj-path",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-septa-regional-rail",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-patco-speedline",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-septa-metro",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-mbta",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-metra",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-cta",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-nictd-south-shore-line",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-wmata-metrorail",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-mta-maryland-marc",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-mta-maryland-light-rail",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-mta-maryland-metro-subway",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-virginia-railway-express",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-caltrain",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-bart",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-sfmta-muni",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-vta",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-altamont-corridor-express",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-smart-sonoma-marin",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-la-metro-rail",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-metrolink",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-san-diego-mts",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-sound-transit",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-trimet",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-marta",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-miami-dade-transit",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-tri-rail",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-brightline",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-sunrail",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-dart-dallas",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-trinity-metro",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          0
+        ],
+        "tram_route_types": [
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-houston-metro",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-capmetro",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          0
+        ],
+        "tram_route_types": [
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-rtd-denver",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-uta",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-valley-metro-phoenix",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-metro-transit-minneapolis",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-metro-st-louis",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-pittsburgh-regional-transit",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405,
+          2
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-greater-cleveland-rta",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-sacrt",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-charlotte-cats",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-ctrail-hartford-line",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-hampton-roads-transit",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-norta-new-orleans",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-honolulu-thebus-skyline",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-cincinnati-metro",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-detroit-people-mover",
+        "source_id": 2079,
+        "country": "US",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "us-timetable-king-county-metro",
+        "source_id": 2079,
+        "country": "US",
         "directories": [
           "."
         ],

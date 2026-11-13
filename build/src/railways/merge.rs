@@ -16,6 +16,7 @@ struct Claim {
     trains: f64,
     status: u8,
     matching: u8,
+    stop: u32,
 }
 
 pub fn overlapping(
@@ -48,20 +49,29 @@ fn pick_winner(model: &RailModel, mut claims: Vec<Claim>, row_iso: [u8; 2]) -> O
     let mut missing_calendar_estimate = 0.0;
     let mut matching = 0u8;
     let mut status = STATUS_ESTIMATED;
+    let mut stops = Vec::new();
     for claim in claims.iter().filter(|claim| claim.source_id == winner_id) {
         trains += claim.trains;
         missing_calendar_estimate += claim.missing_calendar_estimate;
         matching |= claim.matching;
+        stops.push(claim.stop);
         if claim.status == STATUS_KNOWN {
             status = STATUS_KNOWN;
         }
     }
+    // A row stamped by one stop alone keeps it, so its line counts the stop once.
+    let stop = if stops.windows(2).all(|pair| pair[0] == pair[1]) {
+        stops[0]
+    } else {
+        0
+    };
     Some(Claim {
         missing_calendar_estimate,
         source_id: winner_id,
         trains,
         status,
         matching,
+        stop,
     })
 }
 
@@ -73,6 +83,7 @@ fn estimated_flow(daily: f64, shares: [f64; 3], source_id: u16, matching: u8) ->
     CategoryFlow {
         periods: to_periods(daily, shares),
         missing_calendar_estimate: [0.0; 3],
+        stop: 0,
         status: STATUS_ESTIMATED,
         source_id,
         matching,
@@ -102,6 +113,7 @@ pub fn row_evidence(
                     trains,
                     status,
                     matching: interval.matching,
+                    stop: interval.stop,
                 }
             })
             .collect()
@@ -127,6 +139,7 @@ pub fn row_evidence(
                 estimated_flow(winner.trains, shares.pax, winner.source_id, winner.matching);
             scope.passenger.missing_calendar_estimate =
                 to_periods(winner.missing_calendar_estimate, shares.pax);
+            scope.passenger.stop = winner.stop;
         }
         if let Some(winner) = pick_winner(
             model,
@@ -140,6 +153,7 @@ pub fn row_evidence(
                 estimated_flow(winner.trains, shares.frt, winner.source_id, winner.matching);
             scope.freight.missing_calendar_estimate =
                 to_periods(winner.missing_calendar_estimate, shares.frt);
+            scope.freight.stop = winner.stop;
         }
     }
     traffic

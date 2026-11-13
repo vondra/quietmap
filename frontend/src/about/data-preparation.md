@@ -278,8 +278,8 @@ run. Passenger trains come from public timetables. Freight, which almost no coun
 is estimated, and much of it runs at night.
 
 For the 2026 map, train counts come from <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
-feeds and national timetables, every trip routed along the track network and averaged over the
-year's observation window. Freight comes from
+feeds and national timetables, every train routed along the track network and every tram and
+metro counted at its stops, averaged over the year's observation window. Freight comes from
 defaults calibrated in 28 European countries and Turkey against official goods
 train-kilometres ([Eurostat](https://ec.europa.eu/eurostat/web/transport/database) 2024; the United
 Kingdom 2019). At public level crossings in the United States and Canada, locomotives sound their
@@ -324,8 +324,11 @@ is not forced to a national total.
 
 For 2026, the window is 1 September 2025 through 31 August 2026. The archived German DELFI
 calendar covers 17 of its 365 days; Switzerland and Austria cover 261. The archived SNCF,
-Transilien, Danish, Luxembourg and Amtrak feeds start after the window, so their scheduled
-services do not contribute to this year's mean. Their lines retain estimates.
+Transilien, Danish and Luxembourg feeds start after the window, so their scheduled services do
+not contribute to this year's mean. Their lines retain estimates. The United States' timetables,
+Amtrak's and 53 commuter, metro and light-rail feeds, are archives of the Mobility Database: the
+last stored before the window's end that covers four weeks of it, or the days a shorter publishing
+horizon covers, or for SunRail and Sacramento a later archive that still covers part of it.
 
 Calendar dates, additions and removals follow the
 [GTFS schedule specification](https://gtfs.org/documentation/schedule/reference/).
@@ -336,7 +339,12 @@ implement the same year-selected movement format for timetables and other rail o
 Passenger and freight evidence are selected separately. Domestic national sources take priority
 over general feeds; cross-border services do not replace another country's national counts.
 Counts are assigned to their original track intervals, then shared across parallel tracks once
-for the line. The annual sum retains repeated passages and changes of direction.
+for the line. The annual sum retains repeated passages and changes of direction. Trams, light
+rail and metros are not routed: each track within 500 m of a station takes the station's
+departures in both directions (a station is a stop's topmost parent in the timetable, else the
+stops of its name within 150 m), and the line carries each station once, shared by its tracks; a
+track farther from every station keeps its estimate. A route type a publisher files under the other kind of track than
+the one its trains run on is counted as that track's (St. Louis files MetroLink as rail).
 
 </details>
 

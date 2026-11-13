@@ -14,6 +14,8 @@ pub struct Interval {
     pub passenger_status: u8,
     pub freight_status: u8,
     pub matching: u8,
+    /// The stop observation that stamps this interval (`local_match`), 0 for any other claim.
+    pub stop: u32,
 }
 pub type Intervals = HashMap<(i64, i16), Vec<Interval>>;
 pub fn grouped(mut rows: Vec<(Interval, i64)>) -> Intervals {
