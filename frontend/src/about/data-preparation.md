@@ -189,8 +189,9 @@ junctions and the place's yearly air temperature.
   length carries (on Argentina's Ruta 40 in La Rioja consecutive pieces carried 17,400, 58,222 and
   200 vehicles a day from three stations). No lane carries more than the busiest counted lanes do,
   29,400 vehicles a day on a one-way carriageway and 14,000 on a two-way road (a road that tags no
-  lanes has two): a count or a national table above that takes the model of its class, bounded by
-  it. India's national table put 70,000 vehicles a day on two-lane trunk roads. A count under a
+  lanes has two): a count above that takes the model of its class, bounded by it, and a national
+  table's or a country's default value is cut to it (India's national table put 70,000 vehicles a
+  day on two-lane trunk roads). A count under a
   fortieth of what the major roads' model predicts for its class, lanes and surroundings is not the
   road's (Warsaw's Trasa Łazienkowska carried 32 vehicles a carriageway a day, another road's count
   joined by its route number), nor is a national table's value or a country's default under the

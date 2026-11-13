@@ -66,9 +66,12 @@ pub fn capacity(oneway: bool, lanes: u8) -> f64 {
     }
 }
 
-/// Whether a row's `vehicles` are not the road's: over its lanes' capacity, or, held against the
-/// major model's `predicted` traffic of a major row (asked only then; `None` where the buildings
-/// give none), a count under [`LEAST_COUNT_OF_MODEL`] of it or an estimate under its band's low edge.
+/// Whether a row's `vehicles` are not the road's and it takes its model: a count over its lanes'
+/// capacity (an estimate over it is only cut to it, [`HeldCounts::capped`]: India's national table
+/// put 35,000 on two-lane roads the model, untested there, puts at a seventh of it), or, held
+/// against the major model's `predicted` traffic of a major row (asked only then; `None` where the
+/// buildings give none), a count under [`LEAST_COUNT_OF_MODEL`] of it or an estimate under its
+/// band's low edge.
 pub fn implausible(
     traffic: Traffic,
     vehicles: f64,
@@ -79,7 +82,7 @@ pub fn implausible(
         return false;
     }
     if vehicles > capacity(oneway, lanes) {
-        return true;
+        return traffic == Traffic::Count;
     }
     let Some(group) = major_group(class) else {
         return false;
@@ -109,11 +112,13 @@ pub struct RowTraffic {
 }
 
 /// A square's counts as the rules hold them: per row the row whose traffic it carries (its run's
-/// median, else itself), every row's own traffic, and the rows whose traffic is not the road's.
+/// median, else itself), every row's own traffic, the rows whose traffic is not the road's (they
+/// take their model) and the estimates over their lanes' capacity (cut to it).
 pub struct HeldCounts {
     carried: Vec<usize>,
     rows: Vec<RowTraffic>,
     pub implausible: HashSet<usize>,
+    pub capped: HashSet<usize>,
 }
 
 impl HeldCounts {
@@ -253,7 +258,17 @@ pub fn held_counts(
         carried: run_medians(&runs),
         rows: traffics,
         implausible: HashSet::new(),
+        capped: HashSet::new(),
     };
+    held.capped = rows
+        .iter()
+        .enumerate()
+        .filter(|(index, row)| {
+            row.traffic == Traffic::Estimate
+                && held.rows[*index].flows.iter().sum::<f64>() > held.capacity(*index)
+        })
+        .map(|(index, _)| index)
+        .collect();
     held.implausible = rows
         .iter()
         .enumerate()
@@ -293,6 +308,13 @@ mod tests {
         assert!(!at(80_000.0, true, 3));
         // An untagged carriageway carries what the counted untagged ones do (72,900).
         assert!(!at(70_000.0, true, 0) && at(80_000.0, true, 0));
+        // An estimate over capacity keeps its own traffic, cut to the capacity (`capped`).
+        assert!(!implausible(
+            Traffic::Estimate,
+            70_000.0,
+            (1, false, 2, 1),
+            || Some(5_000.0)
+        ));
         assert!(
             !implausible(Traffic::Other, 287_789.0, (1, false, 1, 1), || None),
             "a prior"
@@ -363,6 +385,7 @@ mod tests {
                 row(30_000.0, 30_000.0, false),
             ],
             implausible: HashSet::new(),
+            capped: HashSet::new(),
         };
         assert_eq!(held.cross_section(0, 46_000.0, false), 95_999.0);
         assert_eq!(held.cross_section(0, 40_000.0, true), 0.0);

@@ -766,9 +766,10 @@ pub fn convert(
             if closed {
                 daily = [0.0; 4];
             }
-            // A copy's or a rejected row's replacement is bounded as a count is: no lane carries
-            // more than the busiest counted lanes (an HOV lane's model read 31,905 on one lane).
-            if copy || implausible {
+            // A copy's or a rejected row's replacement is bounded as a count is, and an estimate over
+            // its lanes cut to them: no lane carries more than the busiest counted lanes (an HOV
+            // lane's model read 31,905 on one lane).
+            if copy || implausible || held.capped.contains(&(batch_first_row + row)) {
                 let most = held.capacity(batch_first_row + row);
                 let total: f64 = daily.iter().sum();
                 if total > most {
