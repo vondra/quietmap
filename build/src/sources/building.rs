@@ -87,14 +87,15 @@ pub fn building_emission(
     let (height_m, floors) = if row.ground_activity {
         (0.0, 0)
     } else {
-        let height_m = if row.height_tag_m > 0.0 {
+        // A tag above the tallest building is a tag error, not a height, as in the screening ladder
+        // (`structures/height_model.rs`); 255 floors stay under it.
+        let height_m = if row.height_tag_m > 0.0 && row.height_tag_m <= BUILDING_HEIGHT_MAX_M {
             row.height_tag_m
         } else if row.floors > 0 {
             f64::from(row.floors) * FLOOR_HEIGHT_M
         } else {
             DEFAULT_HEIGHT_M
-        }
-        .min(BUILDING_HEIGHT_MAX_M);
+        };
         let floors = if row.floors > 0 {
             row.floors
         } else {

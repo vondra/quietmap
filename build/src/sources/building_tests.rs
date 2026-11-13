@@ -109,7 +109,8 @@ fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
     );
 }
 
-/// The ceiling applies after the whole ladder: tag errors stop at 828 m, 255 floors stay 765 m.
+/// A tag above the tallest building (828 m) is a tag error and the ladder goes on to the floors;
+/// 255 floors stay 765 m.
 #[test]
 fn source_height_is_half_the_laddered_height_under_the_tallest_building() {
     let climate = climate_around(50.0, 14.5);
@@ -122,7 +123,8 @@ fn source_height_is_half_the_laddered_height_under_the_tallest_building() {
         .unwrap()
         .source_height_m
     };
-    assert_eq!((source(31_231.0, 2), source(0.0, u8::MAX)), (414.0, 382.5));
+    assert_eq!((source(31_231.0, 2), source(0.0, u8::MAX)), (3.0, 382.5));
+    assert_eq!((source(320_000.0, 0), source(828.0, 0)), (4.0, 414.0));
     assert!((source(827.8, 0) - 413.9).abs() < 1e-9);
     assert_eq!((source(300.0, 0), source(12.0, 4)), (150.0, 6.0));
 }

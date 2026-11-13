@@ -257,10 +257,6 @@ pub fn apply(
                     continue;
                 };
                 let observation = &observations[index];
-                if !model.local_source_applies(observation.source_id, &observation.country, country)
-                {
-                    continue;
-                }
                 let mut movement = observation.clone();
                 if matches!(
                     movement.location,
