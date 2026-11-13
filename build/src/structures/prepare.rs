@@ -333,7 +333,7 @@ pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<(
     // Each worker opens its own rasters: a GDAL dataset serves one thread.
     squares
         .par_iter()
-        .map_init(open_rasters, |rasters, &selected| {
+        .try_for_each_init(open_rasters, |rasters, &selected| {
             let rasters = rasters.as_ref().map_err(|e| anyhow!("{e:#}"))?;
             let rows = square(
                 source,
@@ -348,5 +348,4 @@ pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<(
             eprintln!("structures: {name}: {} rows", rows.len());
             Ok(())
         })
-        .collect()
 }

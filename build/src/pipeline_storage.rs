@@ -258,6 +258,8 @@ impl Run {
             root.join("build.log").display()
         );
         let status = child.status()?;
+        // The child's own interval, the denominator of its cores: the checks after it are the runner's.
+        let child_seconds = started.elapsed().as_secs_f64();
         ensure!(
             status.success(),
             "{name}: {status}; see {}",
@@ -287,7 +289,7 @@ impl Run {
         // world run multiplies it.
         eprintln!(
             "year: {name}: {seconds:.3} seconds on {:.1} cores",
-            cpu_seconds / seconds
+            cpu_seconds / child_seconds
         );
         Ok(())
     }
