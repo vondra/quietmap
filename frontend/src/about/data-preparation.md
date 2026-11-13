@@ -153,7 +153,10 @@ run. Passenger trains come from public timetables. Freight, which almost no coun
 is estimated, and much of it runs at night.
 
 Train counts come from <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
-feeds and national timetables, every trip routed along the track network. Freight comes from
+feeds and national timetables, every train routed along the track network and every tram and
+metro counted at its stops: in most countries the trains of the timetable's busiest Wednesday, in
+the United States the mean of the days of the year to 31 August 2026 that its archived timetables
+cover, weekends included. Freight comes from
 defaults, scaled in 28 European countries and Turkey to the country's official goods
 train-kilometres ([Eurostat](https://ec.europa.eu/eurostat/web/transport/database) 2024; the United
 Kingdom 2019). At public level crossings in the United States and Canada, locomotives sound their

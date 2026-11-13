@@ -60,6 +60,7 @@ export const DATASETS: Record<number, readonly [name: string, year: string, meas
   2067: ["Portuguese rail GTFS (CP + Metro do Porto + MTS)", "2026", "", "https://publico.cp.pt/gtfs"],
   2073: ["GTFS Sverige 2 unified (Trafiklab/Samtrafiken)", "2026", "", "https://www.trafiklab.se/"],
   2075: ["Namtang GTFS (Thailand)", "2026", "", ""],
+  2079: ["US rail GTFS (Amtrak + 53 commuter, metro and light-rail feeds, Mobility Database archives)", "2026", "", "https://mobilitydatabase.org/"],
   9003: ["TSK Praha — Intenzity dopravy", "2025", "derived", "https://tsk-praha.cz/"],
   9004: ["Stadt Wien MA46 — Dauerzählstellen DTV", "2025", "counted", "https://www.data.gv.at/katalog/dataset/stadt-wien_verkehrszhlstellenzhlwertewien"],
   9005: ["Brno BKOM — pentlogram intenzity dopravy", "2023", "derived", "https://data.brno.cz/datasets/intenzita-dopravy-intenzita-vozidel-vehicle-traffic-intensity"],

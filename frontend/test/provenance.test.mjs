@@ -64,3 +64,8 @@ test('a level crossing names the dataset of its soundings, never passenger train
   assert.deepEqual(railDatasetLines(20, 0, false), ['Passenger trains: ŘSD Celostátní sčítání dopravy, 2020, counted'])
 })
 
+
+test('a US commuter or metro line names the US timetables its trains come from', () => {
+  assert.deepEqual(railDatasetLines(2079, 0, false),
+    ['Passenger trains: US rail GTFS (Amtrak + 53 commuter, metro and light-rail feeds, Mobility Database archives), 2026'])
+})
