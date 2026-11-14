@@ -413,7 +413,7 @@ legal noise map or a property certificate.
 <details>
 <summary>The popup's code: popup/, server/ and frontend/, and its targets</summary>
 
-`popup/` (`qm-popup`) answers a point:
+[`popup/`](https://github.com/vondra/quietmap/tree/main/popup) (`qm-popup`) answers a point:
 
 - `answer.rs`: the ring loop, until every kind's reach is covered (`candidates::GROUND_REACH_M`,
   `aircraft::boxes::AIRCRAFT_REACH_M`); an update after every ring.
@@ -434,8 +434,8 @@ legal noise map or a property certificate.
   `listing.rs`, `json.rs`: the rows, the levels over time, Nden, the shares, the lines on the map,
   the listed pieces and the update as one line of JSON.
 
-`server/` runs `qm-popup` once per point (two at once, two waiting per slot, 503 when full, stopped
-after 30 s or when the visitor leaves) and forwards its lines as they come; `frontend/` redraws the
+[`server/`](https://github.com/vondra/quietmap/tree/main/server) runs `qm-popup` once per point (two at once, two waiting per slot, 503 when full, stopped
+after 30 s or when the visitor leaves) and forwards its lines as they come; [`frontend/`](https://github.com/vondra/quietmap/tree/main/frontend) redraws the
 panel on every line.
 
 The latency targets, checked with `bench/cold.py` and `bench/report.py` from a cold disk, are

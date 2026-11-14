@@ -589,14 +589,14 @@ described under Aircraft, and the runways' rolls.
 <details>
 <summary>The builder's code: fetch/, build/, physics/ and tiles/</summary>
 
-- `fetch/` downloads the datasets added to OpenStreetMap's: noise barriers, bus routes, national
+- [`fetch/`](https://github.com/vondra/quietmap/tree/main/fetch) downloads the datasets added to OpenStreetMap's: noise barriers, bus routes, national
   terrain models, wind turbines, venues, WorldClim, places of worship and the
   <abbr title="Trans-European Transport Network">TEN-T</abbr> rail network.
-- `build/` turns the inputs into the tiles and every source's sound power. Its steps include
+- [`build/`](https://github.com/vondra/quietmap/tree/main/build) turns the inputs into the tiles and every source's sound power. Its steps include
   `weather`, `terrain-fine`, `traffic` (the trips buildings make), `airport-traffic`, `geoid`, the
   aircraft chain and `complete`, the marker written last.
-- `physics/` holds the emission models the builders run, with the standards' test cases.
-- `tiles/` holds each kind's tile format, writer and reader, and the square files that hold the
+- [`physics/`](https://github.com/vondra/quietmap/tree/main/physics) holds the emission models the builders run, with the standards' test cases.
+- [`tiles/`](https://github.com/vondra/quietmap/tree/main/tiles) holds each kind's tile format, writer and reader, and the square files that hold the
   tiles (`tiles/src/square.rs`): the only code that knows the bytes, but for the GPU painter's
   kernel, which reads the obstacles tiles as stored (`paint-gpu/kernels/scene.cuh`).
 
