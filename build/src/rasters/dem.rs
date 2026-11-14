@@ -12,6 +12,20 @@ pub fn expanded(window: Window, padding: u32) -> Window {
     }
 }
 
+/// The band's code: 0.2 m steps from 500 m below the sea, so a u16 holds -500 to 12,606.8 m.
+const CODE_FLOOR_M: f64 = -500.0;
+const CODES_PER_M: f64 = 5.0;
+const CODE_CEILING_M: f64 = CODE_FLOOR_M + 65534.0 / CODES_PER_M;
+
+/// A height the code cannot hold is no ground: its floor lies below the lowest shore, the Dead Sea's
+/// at 430 m below the sea, and its ceiling above the highest summit. CA-MRDEM-30 holds a row of -578
+/// to -912 m across Lake Nipigon (50.242 N, 88.37 W) and one of -618 to -695 m off Vancouver Island
+/// (50.647 N, 127.99 W), its tiles' seams. Such a node keeps the model beneath it but still counts as
+/// its model's coverage, so the feather keeps its weights.
+pub(super) fn is_ground(height: f64) -> bool {
+    (CODE_FLOOR_M..=CODE_CEILING_M).contains(&height)
+}
+
 /// A national model's heights read on another country's land are its mosaic's fill, not its survey
 /// (RGE ALTI holds zeros over Belgium and other heights over Switzerland and Spain): they go missing
 /// before the datum and the blend, so that country's models and the world model hold there and the
@@ -108,7 +122,7 @@ pub fn build(sources: &[Source], countries: &Countries, window: Window) -> Resul
             );
         } else {
             for (height, sampled) in heights.iter_mut().zip(sampled) {
-                if sampled.is_finite() {
+                if is_ground(sampled) {
                     *height = sampled;
                 }
             }
@@ -118,10 +132,10 @@ pub fn build(sources: &[Source], countries: &Countries, window: Window) -> Resul
     for row in 0..window.rows as usize {
         let begin = (row + padding as usize) * work.columns as usize + padding as usize;
         for height in &heights[begin..begin + window.columns as usize] {
-            let code = (*height + 500.0) * 5.0;
-            if !code.is_finite() || !(0.0..=65534.0).contains(&code) {
+            if !is_ground(*height) {
                 return Err("DEM outside native encoding range".into());
             }
+            let code = (*height - CODE_FLOOR_M) * CODES_PER_M;
             result.extend_from_slice(&((code + 0.5).floor() as u16).to_le_bytes());
         }
     }

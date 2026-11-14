@@ -281,6 +281,57 @@ fn a_national_model_holds_only_its_own_countrys_land_and_fades_in_from_the_borde
 }
 
 #[test]
+fn a_height_no_ground_has_keeps_the_model_beneath_and_its_coverage() {
+    // CA-MRDEM-30's tile seams hold rows of -578 to -912 m on Lake Nipigon; one such node failed its
+    // whole square. A feathered national model at 200 m over a world model of 100 m, with one
+    // impossible node inside its coverage: that node keeps the world model and opens no hole in the
+    // coverage, so every other node holds the model's full weight as without it.
+    let root = tempfile::tempdir().unwrap();
+    let step = 1.0 / NODES_PER_DEGREE as f64;
+    let grid = ([-20.5 * step, 20.5 * step], step, 61, 41);
+    let window = Window {
+        north_node: 0,
+        west_node: 0,
+        rows: 1,
+        columns: 24,
+    };
+    let heights = |name: &str, national_heights: Vec<f64>| -> Vec<f64> {
+        let world = raster_source_on_grid(
+            root.path(),
+            &format!("world-{name}"),
+            Band::GroundHeight,
+            grid,
+            vec![100.0; 61 * 41],
+        );
+        let mut national = raster_source_on_grid(
+            root.path(),
+            name,
+            Band::GroundHeight,
+            grid,
+            national_heights,
+        );
+        national.spec.feather_nodes = 4;
+        national.spec.priority = 1;
+        dem::build(&[world, national], &Countries::default(), window)
+            .unwrap()
+            .chunks_exact(2)
+            .map(|code| f64::from(u16::from_le_bytes([code[0], code[1]])) / 5.0 - 500.0)
+            .collect()
+    };
+    let mut seam = vec![200.0; 61 * 41];
+    seam[20 * 61 + 30] = -912.0; // the window's node 10; heights ignore the band's scale tag
+    let with_seam = heights("seam.tif", seam);
+    let without = heights("clean.tif", vec![200.0; 61 * 41]);
+    assert_eq!(with_seam[10], 100.0, "{with_seam:?}");
+    assert!(
+        (0..24)
+            .filter(|&node| node != 10)
+            .all(|node| with_seam[node] == without[node]),
+        "{with_seam:?} {without:?}"
+    );
+}
+
+#[test]
 fn canopy_mean_excludes_bare_ground_but_keeps_observed_zero() {
     let root = tempfile::tempdir().unwrap();
     let source = raster_source(

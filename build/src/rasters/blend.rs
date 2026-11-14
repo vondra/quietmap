@@ -58,7 +58,7 @@ pub fn apply(
     box_mean(&mut conformance, rows, columns, halo as usize);
     for index in 0..base.len() {
         let sampled = national[index];
-        if !sampled.is_finite() {
+        if !super::dem::is_ground(sampled) {
             continue;
         }
         let weight = ((distance[index] - 1.0) / halo as f64).clamp(0.0, 1.0);
