@@ -15,7 +15,7 @@ Unsigned roads: a primary road 60 km/h in towns, 80 outside.
 
 No timetable is loaded. Railways, including surface metro sections, use the
 [world defaults](/about/data-preparation). These are not tuned to Brazilian ore railways
-such as Carajás and Vitória a Minas.
+such as Carajás and Vitória a Minas, and city lines read 5 to 10 dB too quiet.
 
 ## Industry
 

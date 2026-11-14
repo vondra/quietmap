@@ -7,7 +7,7 @@ intro: Ministry of Transport station counts 2024 on a quarter of the main roads,
 
 Three sources, applied in this order.
 
-Numbered roads: [Ministry of Transport](https://mot.gov.sa/en/open-data) count stations, 24-hour totals for 2024. Every OpenStreetMap road with a given number gets the average of the stations on that road. The stations stand on open desert sections, so the single value per road is too low inside Riyadh and Jeddah.
+Numbered roads: [Ministry of Transport](https://mot.gov.sa/en/open-data) count stations, 24-hour totals for 2024. Every OpenStreetMap road with a given number gets the average of the stations on that road. The stations stand on open desert sections: where a road's value lies under what counted roads of its class and surroundings carry, the model of counted roads replaces it ([how](/about/data-preparation#roads)). Riyadh's King Fahd Road, at the stations' 7,346 vehicles a carriageway, and the city's other motorways read 6 to 9 dB louder with it.
 
 Riyadh: the city's pavement management map gives a street class (A to D) and a lane count, but no counts. Traffic is assigned from class and lanes:
 

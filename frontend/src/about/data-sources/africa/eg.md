@@ -18,6 +18,8 @@ Traffic volumes: no national counts. Egypt-specific estimates by OpenStreetMap c
 
 Vehicles per day, both directions. Slip roads take half the value of their road. The Residential row applies only where too few buildings are mapped; elsewhere residential and living streets, service and unclassified roads carry the trips their buildings make. Tracks keep the world default.
 
+A value above what the road's lanes carry, 14,000 vehicles a lane a day on a two-way road and 29,400 on a one-way carriageway, is cut to that ([how](/about/data-preparation#roads)).
+
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 13 % of a town street's traffic (WHO 2023).
 
 Unsigned roads: a primary road 60 km/h in towns, 90 outside (cars drive 76 on a two-way one).

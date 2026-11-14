@@ -16,6 +16,8 @@ No open traffic counts; the highway authority's census is PDF only. The official
 
 The 8 largest cities are Delhi, Mumbai, Bangalore, Hyderabad, Chennai, Kolkata, Ahmedabad and Pune.
 
+A value above what the road's lanes carry, 14,000 vehicles a lane a day on a two-way road and 29,400 on a one-way carriageway, is cut to that ([how](/about/data-preparation#roads)): a two-lane national highway carries at most 28,000 vehicles a day, not 35,000 to 70,000.
+
 Network roads take an assigned vehicle split: 55 % cars, 10 % medium, 15 % heavy vehicles and 20 % motorcycles in open country, 50, 9, 10 and 31 % in the 33 large cities, 45, 8, 7 and 40 % in the 8 largest.
 
 Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 63 % of a town street's traffic (WHO 2023); electric cars 0.5 % of cars, rolling noise only (IEA 2024).

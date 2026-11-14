@@ -18,12 +18,12 @@ same answer.
 
 The popup leads with how loud the place sounds, then lists the sources heard there, the largest
 share first. A row opens to the source's data and how its sound arrives, and highlights it on the
-map. An industrial site shows its mapped boundary where one is available. At Greenwich, October 2026:
+map. An industrial site shows its mapped boundary where one is available. At Greenwich, November 2026:
 
 | In the popup | What it tells |
 |---|---|
 | 19 sone Nden | How loud the place sounds over the day |
-| 66.5 dB Lden | The level in decibels, the year's average |
+| 66.6 dB Lden | The level in decibels, the year's average |
 | Greenwich Church Street | A source heard there: a road as one row, a factory, the aircraft |
 | 590 veh/h | How often it passes: vehicles an hour by day, trains a day, flights a day above 50 dB, how many times a day bells ring, a call sounds or a car parks or leaves; nothing for a steady source |
 | 28 m | How far it is |
@@ -36,8 +36,8 @@ map. An industrial site shows its mapped boundary where one is available. At Gre
 | Detailed calculation | The whole place: each period and layer, the weather, the façade the point is answered at, and the levels exceeded 5 to 90 % of the time |
 
 <p>
-<img src="click.jpg" width="1500" height="880" alt="The popup at Greenwich in London: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
-<img src="calculation.jpg" width="1500" height="1390" alt="The same point's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
+<img src="click.jpg" width="1740" height="1040" alt="The popup at Greenwich in London, under the search field's open place: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
+<img src="calculation.jpg" width="1740" height="1588" alt="The same point's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
 </p>
 
 <details>
@@ -335,7 +335,7 @@ every wall the ray crosses stands at its height. Over this cross-section the pop
 
 Every term is computed in eight octave bands from 63 Hz to 8 kHz. At 392 Polish road monitoring
 stations behind forest the model read a median 2.4 dB above the measurement without the crowns'
-term and 0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above.
+term and 0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above (October 2026).
 
 </details>
 

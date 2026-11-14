@@ -8,8 +8,9 @@ public traffic counts, timetables, flight tracks, ship positions, terrain models
 what they carry and how they stand. Where nobody counted, a documented model or default stands in; the region
 and country pages below say which is which.
 
-Each version of the map is built once for the whole world. The current one, built in October 2026,
-uses the OpenStreetMap planet of September 2026 and flights from September 2025 to August 2026.
+Each version of the map is built once for the whole world. The current one uses the OpenStreetMap
+planet of September 2026 and flights from September 2025 to August 2026, with corrections built in
+November 2026. The popup always computes from it; the painted map follows square by square.
 
 ## By region and country
 
@@ -135,6 +136,8 @@ the European Union and ESA; all rights reserved).
 - Satellite imagery: powered by [Esri](https://www.esri.com/); source: Esri, Vantor, Earthstar
   Geographics, and the GIS User Community
 - Rendering: [MapLibre GL JS](https://maplibre.org/) and [deck.gl](https://deck.gl/)
+- Search and reachable areas: [Photon](https://github.com/komoot/photon) and
+  [Valhalla](https://github.com/valhalla/valhalla), over OpenStreetMap data
 - Places to stay: [Stay22](https://www.stay22.com/)
 
 The measurements the model is checked against are listed on the [validation](/about/validation)

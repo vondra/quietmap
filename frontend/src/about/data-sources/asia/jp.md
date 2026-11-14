@@ -9,7 +9,7 @@ Traffic on main roads comes from the [MLIT road traffic census of 2021](https://
 
 The census has no open geometry; section numbers resolve to a location only through the paid Digital Road Map. Counts are therefore joined by identity: expressways by name, national highways by route number. Each matched road gets the median of all counted sections on its route, so one value applies along the whole route.
 
-Unmatched roads and prefectural roads get the census median for their road class.
+Unmatched roads and prefectural roads get the census median for their road class. Where that median lies under what counted roads of its class and surroundings carry, the model of counted roads replaces it ([how](/about/data-preparation#roads)): a Tokyo street at its class's 3,943 vehicles a day reads 6.3 dB louder with it, an Osaka expressway at 12,038 4.0 dB louder.
 
 On matched roads, large vehicles are split 25% medium and 75% heavy, as the census gives no axle split. Motorcycles are not counted in the census and are set to zero there. Local streets carry the trips their buildings make.
 
@@ -19,7 +19,7 @@ Unsigned roads: a primary road 40 km/h in towns, 50 outside, a motorway 100.
 
 ## Railways
 
-No Japanese timetable is loaded; the [ODPT](https://developer.odpt.org/) feeds for Tokyo need a registered key. All lines, the Shinkansen included, use the [world railway defaults](/about/data-preparation).
+No Japanese timetable is loaded; the [ODPT](https://developer.odpt.org/) feeds for Tokyo need a registered key. All lines, the Shinkansen included, use the [world railway defaults](/about/data-preparation). City lines therefore read 5 to 10 dB too quiet: at Shibuya the Yamanote line carries 28 + 8 + 4 trains a track by day, evening and night, where about 330 run.
 
 Surface metro sections are included; see the [railway method](/about/data-preparation).
 

@@ -13,6 +13,8 @@ No open traffic counts. The Department of Public Works and Highways publishes it
 | Secondary | 20,000 | 28,000 | 40,000 |
 | Tertiary | 8,000 | 11,200 | 16,000 |
 
+A value above what the road's lanes carry, 14,000 vehicles a lane a day on a two-way road and 29,400 on a one-way carriageway, is cut to that ([how](/about/data-preparation#roads)): a two-lane primary road in Metro Manila carries at most 28,000 vehicles a day, not 100,000.
+
 Network sections take an assigned vehicle split: 55 % cars, 10 % medium, 10 % heavy vehicles and 25 % motorcycles in open country, 45, 8, 7 and 40 % in the 19 cities, 35, 8, 7 and 50 % in Metro Manila.
 
 Vehicle mix on other roads: a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 48 % of a town street's traffic (WHO 2023); electric cars 0.1 % of cars, rolling noise only (IEA 2024).

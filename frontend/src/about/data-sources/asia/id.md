@@ -13,6 +13,8 @@ The highways directorate, Bina Marga, runs a public [GIS portal](https://gisport
 
 Assigned values are doubled in 8 metropolitan areas (Jakarta, Surabaya, Bandung, Medan, Semarang, Makassar, Palembang, Denpasar) and multiplied by 1.4 in 33 other cities. Published LHRT values are used unchanged.
 
+A value above what the road's lanes carry, 14,000 vehicles a lane a day on a two-way road and 29,400 on a one-way carriageway, is cut to that ([how](/about/data-preparation#roads)): a one-lane toll carriageway in Jakarta carries at most 29,400 vehicles a day, not 160,000.
+
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 64 % of a town street's traffic (WHO 2023); electric cars 0.6 % of cars, rolling noise only (IEA 2024).
 
 LHRT is a single total without vehicle classes; its roads take an assigned split: 35 % motorcycles, 8 % medium and 7 % heavy vehicles in open country, 50, 6 and 4 % in the 33 cities, 60, 5 and 5 % in the 8 metropolitan areas. Main roads none of the layers reach, 28 % of their length, use the world estimate per lane ([world defaults](/about/data-preparation)); secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make.

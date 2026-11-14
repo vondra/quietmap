@@ -12,16 +12,16 @@ place and what makes it, open the popup there.
 ## Colours
 
 One colour for each doubling of loudness: each sounds twice as loud as the one before it. The places
-are clicked in the popup, October 2026.
+are clicked in the popup, November 2026.
 
 | Colour | Sone | A place like it (sone, Lden) |
 |---|---|---|
-| clear | under 1, a quiet room | Haystacks in the Lake District, 1 km above the road (0.9, 34&nbsp;dB) |
-| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#ffeeae"></span> yellow</span> | 3 | Kenwood's lawn on Hampstead Heath, London (3.6, 47&nbsp;dB) |
-| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#ffac6a"></span> orange</span> | 6 | Hyde Park by the Serpentine, London (6.3, 50&nbsp;dB) |
+| clear | under 1, a quiet room | The summit of Scafell Pike in the Lake District (0.45, 36&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#ffeeae"></span> yellow</span> | 3 | Kenwood's lawn on Hampstead Heath, London (3.8, 47&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#ffac6a"></span> orange</span> | 6 | Hyde Park by the Serpentine, London (6.2, 50&nbsp;dB) |
 | <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#e85953"></span> red</span> | 12 | Soho Square, London (10.8, 60&nbsp;dB) |
-| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#9e57a3"></span> purple</span> | 24 | The end of Heathrow's runway 27L, London (26.7, 79&nbsp;dB) |
-| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#592d6b"></span> dark purple</span> | 48 and more | The Hanger Lane gyratory on the A40, London (62.9, 85&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#9e57a3"></span> purple</span> | 24 | The end of Heathrow's runway 27L, London (25.7, 79&nbsp;dB) |
+| <span style="white-space:nowrap"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#592d6b"></span> dark purple</span> | 48 and more | The Hanger Lane gyratory on the A40, London (63.0, 85&nbsp;dB) |
 
 The colours blend smoothly in between. A quiet place stays clear on every base map, satellite and
 terrain too; the loud ones grow dark and opaque. The swatches show them over a white map. What a sone is, and how it
@@ -104,6 +104,10 @@ On 13 November 2026, newly calculated tiles were within 1 phon at 98.2 % of samp
 the popup gave at least 1 sone, and within 3 phon at 99.95 %, across 54 squares around the world.
 These checks compare computations; [Validation](/about/validation) compares the model with
 microphone measurements.
+
+Until the whole map is painted again, squares painted before 13 November 2026 hear the flights
+the old way: under loud flight paths such a square reads up to about 5 phon louder than a newer
+neighbour, and the map steps at their shared edge.
 
 <details>
 <summary>The limits and the last check</summary>

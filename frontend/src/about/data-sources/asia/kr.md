@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 60 outside, an expressway 100 (
 
 ## Railways
 
-No open timetable is published for KORAIL or any metro. All lines use the [world railway defaults](/about/data-preparation).
+No open timetable is published for KORAIL or any metro. All lines use the [world railway defaults](/about/data-preparation). City lines therefore read 5 to 10 dB too quiet: in Seoul the Gyeongbu line carries 9 + 3 + 1 trains a track by day, evening and night.
 
 Surface metro sections are included; see the [railway method](/about/data-preparation).
 

@@ -3,61 +3,153 @@ title: What's new
 intro: What changed in the data and the model, and what comes next.
 ---
 
+## November 2026
+
+- **Flights as they pass.** How loud the flights sound at a place now follows the real flights: held
+  second by second against every flight of 34 days at 14 places, it reads 9 % quieter to 30 % louder
+  than they do, where it read up to 2.6 times as loud. Away from cities places read quieter, by more
+  than a quarter at 39 % of 2,800 random points; Lden does not change.
+- **Road counts checked against their roads.** A count no longer changes along a road that no other
+  road joins, and no lane carries more than the busiest counted lanes, 29,400 vehicles a day on a
+  one-way carriageway: Warsaw's Trasa Łazienkowska, which carried another road's count of 32 vehicles
+  a day, reads up to 13 dB louder. At the 28 Polish road monitors that moved by 3 dB or more, the
+  model now stands 3.4 dB from the measurement on average instead of 6.4.
+- **Railways in American cities.** 54 open timetables, Amtrak's and 53 commuter, metro, light-rail and
+  streetcar services', now give the trains of 10,600 km of US track that took a default: beside New
+  York's elevated subway the railway reads 4.7 to 7.1 dB louder.
+- **High-speed lines.** A high-speed line carries no guessed freight, and one without a posted speed
+  runs at its line's, else at 250 km/h: the Tōkaidō Shinkansen reads 2.7 dB quieter.
+- **Terrain.** The ground of 1,112 squares is corrected: 627,296 false holes in Poland's laser survey,
+  a median 31 m deep, are filled from its own sheets, and masked mines and valleys are restored. Where
+  the ground moved most, Lden moved by −5.2 to +3.8 dB.
+- **Oversized areas.** A court, playground, pool or terrace counts at most as large as the largest
+  of its kind mapped, a shop's ground as a large store: Berlin's 46 ha "playground" reads 2.1 dB
+  quieter.
+- **The map's weather.** The painted map takes the popup's ten weather states, so a place where the
+  wind bends sound down only now and then no longer reads louder on the map: points more than 1 phon
+  from the popup fell from 6.6 % to 1.0 % of a world sample.
+- **A faster painter.** The map paints a square in about half the time and stays as close to the
+  popup, within 1 phon at 98 % of sampled points painted from the same data. Until the whole map is
+  painted again, it mixes squares painted from older data and with the flights heard the old way.
+- **Share this place.** At an open place, Share this place sends a link. Any copied address reopens
+  the same view, layers, unit, quiet threshold and selected stay; your saved names stay private.
+- **Quiet zones under the data.** The quiet zones' green lies under the data layers and the map's
+  labels, which keep their own colours.
+- **Airports.** Official monthly counts of 790 airports add the take-offs and landings volunteer
+  receivers missed, and each runway belongs to the airport whose grounds cover it: Shanghai Pudong's
+  year went from 5,774 to 564,280 movements (officially 564,248). Of the 102 busiest airports, 10
+  are still under half their official traffic, down from 26.
+- **Places to stay.** Stays filter by a price per night in euros, by the quiet zones' limit and by a
+  reachable area; stays beyond the area stay visible.
+
 ## October 2026
 
-- **Take-off and landing rolls.** A plane's run along the runway is now computed the way Doc 29, Europe's standard for airport noise, computes it: in short stretches as the plane speeds up or slows down, each at its own speed and thrust, with a jet's roar thrown behind and to the sides of the spot where its take-off begins, and reverse thrust after it lands. Before, a runway was a steady line read on its centre: too loud in the middle and too quiet beside the start of the take-off, where official maps are loudest. Against Prague's official 2022 noise map, 36 of 63 points along and across the main runway now fall in the map's 5 dB band instead of 20: 100 m beside the start of runway 24 the level rose from 70 to 80 dB (the official map: 80-85), and in the runway's middle it fell from 88 to 84 (75-80). The airport's noise monitor at Kněževes, 1 km beside that start, now reads 4.1 dB below its measurement by day instead of 7.1.
-- **Residential streets with a bus line.** In a town, a residential street that a bus, trolleybus or coach line runs along now carries at least what an unclassified street there carries among the same trips within 2 km, not only the trips of the buildings behind it: a line mostly runs along a through street that the map's data classes as residential. In Great Britain's random sample of counted minor roads, 592 such streets carry 1,820 vehicles a day in the median; the trips routed down them read 8.2 dB low, the new rule 0.5 dB. In Jasło, Poland, ul. Jana Pawła II, a monitored main street mapped as residential, now carries 2,160 vehicles a day instead of 190, and the monitor's day level reads 61.0 dB instead of 56.5 (it measures 66.8). At 200 such streets in eight cities the level rose by 3.1 dB in the median. Residential streets without a line keep their buildings' trips, and outside towns nothing changes.
-- **Buses by the timetables.** A street nobody counted carries the buses of the lines mapped on it at a rate fitted on the timetables of 35 cities and rural areas in 14 countries, a line at most twice however many of its variants are mapped, on the timetables' day, evening and night shares. Before, every mapped route and direction carried a city line's 60 buses a day, fewer in villages, 3.4 dB more than the timetables in the median place. On Lisbon's Estrada da Azeiteira the buses fell from 231 to 89 a day (the timetable runs 84); at 280 bus streets in seven European cities the level fell by 0.45 dB in the median and by 1 dB or more at 78 of them.
-- **A main road's count off its ramps, and parking once.** A ramp or a street to which a dataset gave the count of the main road beside it now takes its own estimate, and where no model gives one only its mapped buses: in Brno 65 ramps carried the counts of the city's main roads, up to 64,000 vehicles a day, and at the most loaded of them the place fell from 85 to 51 sone; at the 76 such ramps of the squares checked, the level by 2.7 dB in the median. Where the buildings are mapped, street parking and car parks no longer count the same cars twice: the cars of flats and of visitors park on the street or in a lot, a house's (up to four dwellings) on its plot but for 15 % on the street, so a car park takes only the trips of the cars that park off the street, 45 % of the flats' and the visitors', not all of them again. By a mountain hotel the place fell from 4.39 to 4.32 sone.
-- **Shops' and restaurants' plant in its hours.** The cooling of offices and of shops other than food shops is sized by their floor and their climate and runs in business hours for the hours its climate asks, heard while it runs and silent at night; a restaurant's kitchen extract runs while its kitchen does, an hour either side of its hours. Before, every such shop and office gave 70 dB(A) and every restaurant 68, steady and all night. A food shop's refrigeration runs day and night, as before. Of 1,076 mountain huts 114 are quieter and the loudest tenth fell from 4.4 to 3.8 sone; by a mountain hotel whose neighbouring shop hummed all night 21 m away, the place fell from 4.8 to 4.4.
-- **Guests in their hours.** The guests on the terraces of bars, cafés and restaurants and at the doors of bars are heard while they are there, the seats only in the terrace season and the opening hours, a bar's last hour again 5 dB down in the night hour after it closes, no longer as a murmur all year at their mean; their decibels stay. At a hut's restaurant in the Bavarian Alps the place fell from 3.1 to 0.9 sone; in a Madrid street of bars from 19.2 to 17.9.
-- **Play and parking in use.** Courts, pitches, playgrounds, pools and terraces are heard while they are in use, at their active level for about an eighth of the day (a grass pitch 4 hours a week), no longer as a steady hum at their mean; their decibels stay. Where the buildings are mapped, a car park carries no more cars than the trip ends of the buildings around it: a mountain hotel's 127-space lot took 865 cars in and out a day at the parking study's rate, where the two roads to it carry 303 and 353 vehicles, and now takes 98. A Prague park's playground 46 m away fell from 2.3 to 0.5 sone alone; at the hotel the place fell from 5.7 to 4.8 sone.
-- **Parking in its moments.** A car park or a street's parking is heard in its cars' arrivals and departures, four seconds each (longer in a lot where cars look for a space), no longer as a steady hum; its decibels stay. In a Prague villa street the street parking's 69 cars in and out a day fell from 1.96 to 0.04 sone alone and from 10 % to 1 % of what is heard there, under the flights over it. A shooting range is heard in its shots.
-- **Industrial sites.** A site's sound no longer starts behind the walls of its own buildings: a point inside one of them emits from that building, and a building on a site that the data knows only as a building or a block of flats is the site's, not a home. Behind the Clacton sewage works in England a sharp shadow 600 m long is gone; 250 m away the works rose from 36-38 to 43-44 dB.
-- **A tunnel's count.** A street over a tunnel no longer carries the tunnel's traffic: in Brno, Kohoutova over the Husovice tunnel carried its 44,000 vehicles a day; in Madrid the avenues over the buried M-30 carried the motorway's 43,000 to 47,000; 117 streets in all.
-- **A count beside its road.** A main road's count that a dataset put on the service road, side lane or ramp beside it now stays the road's: at London's Baker Street the service road beside Marylebone Road carried the road's 43,031 vehicles a day a second time, and the place read 2.3 dB too loud; in Brno hundreds of streets carried the counts of the roads beside them.
-- **The popup's list.** The sources are ranked by their share of what is heard there, the number each row shows; a source's loudness alone shows when its row opens. Ranked by loudness alone, a steady road under louder ones came before flights twice its share.
-- **Layers together.** Any of the noise layers show together. Two to five layers are estimated from each layer's own loudness, within 1 phon of the painted total at 90 % of places and within 2 phon at 98 %; all six show the total, one alone its own.
-- **Legends and quiet zones.** Each Advanced layer shows its legend when switched on; the quiet zones' threshold moves in 18 steps from 0.25 to 4 sone.
-- **The map in sone.** The painter computes each pixel's loudness with the popup's own model, per layer and in total: clear under 1 sone, then a colour for each doubling up to 32.
-- **Rows.** A road or railway is one row in the popup, by its name or else its number, and a road reads as its vehicles an hour by day; the list shows three sources and every other one of 1 % or more, ten at most, the rest folded.
-- **Flights a day.** The popup lists the flights of an average day whose loudest moment there reaches 50, 60 and 70 dB, with those at night, their height and the type flying most of them.
-- **Nden.** The popup leads with Nden, how loud the place sounds on average over the day, in sone (twice the number sounds twice as loud), with Lden under it. A sound counts by how loud it is and how long it lasts: a car every few hours by a hut adds little, a city's constant hum all of its loudness.
-- **Every point computed on the spot.** The popup no longer reads a painted map: it computes its point from every source within 12 km (aircraft 16 km) with the EU method CNOSSOS-EU and ECAC Doc 29, and shows Lden, the day, evening and night levels, how often the level is exceeded and how loud it sounds.
-- **The data under every point.** A new Advanced group in the layer panel shows elevation, forest, hard ground, buildings by height and noise barriers, the vehicles a day on every road, the trains a day on every track, and every other source — wind turbines, church bells, terraces, car parks, airports.
-- **Where the counts come from.** A road's traffic and a railway's trains name the dataset behind them in the popup: its name, year and whether it was counted, modelled or derived (London's Marylebone Road: the Department for Transport's count, counted).
-- **Bridges.** A road or railway on a bridge emits from its deck, straight between the ground at the bridge's two ends, no longer from the valley floor under it: under a motorway bridge 67 m above its valley, the model went from 82.3 to 75.3 dB, 150 m beside it from 59.6 to 68.7 dB.
-- **Forest.** Tree crowns reduce noise again, by ISO 9613-2's foliage term over their cover and measured height: at 392 Polish road monitoring stations behind forest the model went from 2.4 to 0.3 dB above the measurement.
-- **Roads.** Uncounted streets carry the trips their buildings make, Overture's footprints included; uncounted main roads in Europe, the United States, Mexico, Chile, Colombia, Japan and New Zealand follow one model fitted on counted roads. Motorcycles run 3.8 dB louder than cars; US roads carry their state's mix of lorries; day, evening and night shares come from counts in seven countries.
-- **Speeds.** Where no national limit is known for a class of main road, as in the United States and Canada, an unsigned road of that class drives at the class's median signed speed instead of 50 km/h (a rural US primary road 89 km/h); at 200 points there the road layer rose by up to 3.5 dB.
-- **Poland's noise screens.** The 10,876 screens of the national topographic database (BDOT10k) now screen the roads: along motorways and expressways the model went from 4.1 to 3.2 dB above the monitoring points.
-- **Wind turbines.** 472,924 standing turbines from OpenStreetMap and eight national registers: 4,364 added that were missing, 680 the registers call dismantled removed.
-- **Railways.** A stretch of track between two switches carries one train count, so bridges no longer keep counts of their own; in 29 European countries the guessed freight on lines without a count is scaled down to the country's freight train-kilometres (Eurostat), in 13 the guessed passenger trains too.
-- **Homes, bells, calls and terraces.** Homes emit the heat pumps and air conditioners their country's households own; Europe's churches ring their bells, mosques call at their own prayer times, and the people on terraces and at the doors of 3.4 million bars and restaurants are heard by their opening hours.
-- **Terrain.** National laser surveys of Poland, Ireland and Spain added: 17 countries in all.
-- **Terrain near the ends.** Within 100 m of either end a ray reads the ground on a grid six times finer where a national model that fine exists (Czechia, Germany, Switzerland, the Netherlands, Belgium, part of Portugal): 70 m from a motorway, behind its 7 m berm, it reads 3.5 dB quieter.
-- **A faster painter.** The painter is 1.39 times as fast, its map as close to the exact reference as before.
-- **Smaller data.** The world's prepared data shrank from 1,902 to 1,076 GB, every value within its stated step, and is kept in 377,082 files, one for each square of the map and kind of data, instead of 17.6 million.
+- **Sone or Lden.** Noise in, under Advanced, switches the whole map to Lden in decibels: the colours,
+  the hover, the quiet zones (20 to 55 dB), the popup and your places. The Lden map holds the squares
+  painted since 30 October.
+- **Industrial sites.** A site's sound starts at its own buildings, not behind their walls, and
+  opening its row draws its mapped boundary. Behind the Clacton sewage works in England a 600 m
+  shadow is gone.
+- **Take-off and landing rolls.** A plane's run along the runway is computed as Doc 29 computes it,
+  loudest beside the start of the take-off: against Prague airport's official 2022 noise map, 36 of
+  63 points along the main runway fall in its 5 dB band, up from 20.
+- **Buses.** An uncounted street carries its bus lines at a rate fitted on the timetables of 35
+  places in 14 countries: Lisbon's Estrada da Azeiteira 89 buses a day, where the timetable runs 84
+  (it carried 231). In a town, a residential street with a bus line carries at least what the town's
+  unclassified streets carry; in Great Britain's counted sample such streets read 8.2 dB low before,
+  0.5 dB now.
+- **Your places.** Give a place a name and find it again in the search field's history. An optional
+  sign-in by a mailed link, no password, keeps your names and recent places on every device.
+- **Recordings and photos.** Signed in on a phone, you can keep a recording and a photo at a place;
+  only you can open them.
+- **On a phone.** The map installs on the home screen, its controls sit in one row, and the locate
+  button opens the popup where you stand. The panels follow the device's dark scheme.
+- **The colours.** A colour for each doubling of loudness, in the air-quality index's order: clear
+  under 1 sone, yellow from 3, orange 6, red 12, purple 24 and dark purple from 48, which marks
+  0.3 % of London. Each pixel's loudness is computed with the popup's own model.
+- **Ships.** A vessel-density cell's ships sail only on its water, never on the houses beside a
+  marina, and each cell fades into its neighbours instead of showing as a square on the sea.
+- **Guests at bars and restaurants.** They are heard while they are there, by opening hours and
+  terrace season, in front of their building's nearest outside wall, not behind a party wall in the
+  neighbour: at Barcelona's monitor on Carrer de Ferlandina the model rose from 56.3 to 62.1 dB
+  (measured 70.3).
+- **Shops' and restaurants' plant.** Cooling runs in business hours as its climate needs and a
+  kitchen's extract while it cooks; before, every shop and office gave a steady 70 dB(A) all night.
+  A food shop's refrigeration runs day and night.
+- **Parking and play in use.** A car park sounds in its cars' arrivals and departures, four seconds
+  each, and carries no more cars than the buildings around it make trips, where every space took 0.4
+  movements an hour by day. Courts, pitches, playgrounds and pools sound while in use, a shooting
+  range in its shots.
+- **Counts on the wrong road.** A ramp, service road or street over a tunnel no longer carries the
+  count of the main road beside or under it: 65 ramps in Brno carried up to 64,000 vehicles a day,
+  and the avenues over Madrid's buried M-30 its 43,000 to 47,000.
+- **The popup's list.** A road or railway is one row, and the rows are ranked by their share of what
+  is heard there: three and every other row of 1 % or more, ten at most.
+- **Layers together.** Any of the six noise layers show together, two to five within 1 phon of the
+  painted total at 90 % of places. Each Advanced layer shows its legend, and the quiet zones'
+  threshold moves in 18 steps from 0.25 to 4 sone.
+- **Flights a day.** The popup lists the flights of an average day whose loudest moment reaches 50,
+  60 and 70 dB, with those at night, their height and the type flying most of them.
+- **Every point computed on the spot.** The popup computes its point from every source within 12 km
+  (flights 16 km) and leads with Nden, how loud the place sounds over the day in sone, with Lden
+  under it.
+- **The data under every point.** Advanced shows elevation, forest, hard ground, buildings by height,
+  noise barriers, vehicles a day, trains a day and the other sources; a road's count names its
+  dataset (London's Marylebone Road: the Department for Transport's, counted).
+- **Bridges.** A road or railway on a bridge emits from its deck: under a motorway bridge 67 m above
+  its valley the model went from 82.3 to 75.3 dB.
+- **Forest.** Tree crowns reduce noise by ISO 9613-2's foliage term: at 392 Polish road monitors
+  behind forest the model went from 2.4 to 0.3 dB above the measurement.
+- **Roads.** Uncounted streets carry the trips their buildings make; uncounted main roads in Europe,
+  the United States, Mexico, Chile, Colombia, Japan and New Zealand follow one model fitted on
+  counted roads. Motorcycles run 3.8 dB louder than cars, and an unsigned US road drives at its
+  class's median signed speed (a rural primary road 89 km/h, up to 3.5 dB louder).
+- **Poland's noise screens.** The 10,876 screens of the national topographic database screen the
+  roads: along motorways the model went from 4.1 to 3.2 dB above the monitors.
+- **Wind turbines.** 472,924 standing turbines from OpenStreetMap and eight national registers.
+- **Railways.** A stretch between two switches carries one count; guessed freight is scaled to each
+  country's freight train-kilometres in 29 European countries.
+- **Homes, bells, calls and terraces.** Homes emit the heat pumps and air conditioners their country
+  owns; churches ring, mosques call at their prayer times, and the guests of 3.4 million bars and
+  restaurants are heard.
+- **Terrain.** National laser surveys of Poland, Ireland and Spain added, 17 countries in all; near
+  each end of a ray a 5 m model where one exists (70 m from a motorway behind its 7 m berm, 3.5 dB
+  quieter).
+- **Faster and smaller.** The painter is 1.39 times as fast, and the world's prepared data shrank from
+  1,902 to 1,076 GB, in 377,082 files instead of 17.6 million.
 
 ## September 2026
 
-- **Ships.** New worldwide layer for ship noise at sea, in ports and on inland waterways, derived from AIS vessel-density data (EMODnet 2024, Global Fishing Watch). Examples, ships only: Singapore Marina 62.5 dB, Rotterdam Waalhaven 58.0 dB, Rhine at Duisburg 48.5 dB.
-- **Railways.** Train counts recomputed worldwide from current timetables. Unmatched daily departures fell from 1,417 to 89 of 14,925 in France and from 8,419 to 194 of 43,572 in Germany. Paris Transilien added.
-- **Road estimates.** Uncounted main roads use defaults by lane count and direction; generic country multipliers are removed.
-- **Metro and parking.** Surface metro sections are included. Open car parks emit noise without screening it; underground building footprints do not create above-ground walls.
-- **New world build.** All layers rebuilt from a current OpenStreetMap planet extract; flight data covers September 2025 to August 2026.
+- **Ships.** A worldwide layer for ships at sea, in ports and on rivers, from AIS vessel density
+  (EMODnet 2024, Global Fishing Watch): Rotterdam's Waalhaven 58 dB from ships alone.
+- **Railways.** Train counts recomputed from current timetables: unmatched daily departures fell from
+  8,419 to 194 of 43,572 in Germany. Paris Transilien added.
+- **Road estimates.** Uncounted main roads take defaults by lane count and direction, without country
+  multipliers.
+- **Metro and parking.** Surface metro is included; open car parks emit without screening, and
+  underground footprints no longer stand as walls.
+- **New world build.** Every layer rebuilt from a current OpenStreetMap planet, with flights from
+  September 2025 to August 2026.
 
 ## Summer 2026
 
-- **quietmap.org.** New name and address.
-- **Buildings.** Real footprints and heights replace the coarse grid. Prague uses 174,000 building heights measured from aerial survey.
-- **Screening.** Road cuttings and noise walls are modelled.
-- **Ground effect.** Computed per frequency band according to CNOSSOS-EU and verified against the standard's test cases.
-- **Forest.** Continuous canopy density replaces the forest/no-forest flag.
-- **Traffic data.** National counts added for Thailand, Mexico and Japan.
+- **quietmap.org.** A new name and address.
+- **Buildings.** Real footprints and heights replace the coarse grid; Prague uses 174,000 heights
+  measured from the air.
+- **Screening.** Road cuttings and noise walls screen the sound.
+- **Ground and forest.** The ground effect per frequency band, as CNOSSOS-EU computes it, and forest
+  as a continuous canopy density.
+- **Traffic data.** National counts for Thailand, Mexico and Japan.
 
-## In progress
+## What comes next
 
-- The world painted anew from the popup's own computation, region by region.
+- **The whole world, then again from the newest data.** Every square of the world painted, then every
+  square painted from older data painted again, those whose data changed first. That brings the
+  flights as they pass, November's corrections and Lden to the whole map.
+- **Earlier years.** A noise map of 2024, from that year's roads, traffic, trains, flights and ships,
+  is being built; 2019 or earlier follows. The years will switch and play one after another, so a
+  place can be compared over time.
+- **City railways.** Timetables for the railways of Japan, Korea, Great Britain and Brazil, where busy
+  city lines take a default and read 5 to 10 dB low.
 
-*Last updated 17 October 2026.*
+*Last updated 14 November 2026.*

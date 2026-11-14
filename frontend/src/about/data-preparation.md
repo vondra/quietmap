@@ -6,9 +6,9 @@ intro: How loud each road, railway, flight, ship, factory and building is, and w
 <!-- SECTIONS -->
 
 Every source of noise on the map has a sound power: how much noise it gives off by day, evening and
-night. Where somebody counted, the count is used. London's Marylebone Road carries the Department for
-Transport's count of 42,783 vehicles a day. Where nobody counted, an estimate stands in, and the
-[country pages](/about/data-sources) say which is which.
+night. Where somebody counted, the count is used. At Baker Street, London's Marylebone Road carries
+the Department for Transport's count of 47,531 vehicles a day (2024). Where nobody counted, an
+estimate stands in, and the [country pages](/about/data-sources) say which is which.
 
 ## Roads
 
@@ -150,7 +150,9 @@ carriageways, and a divided main road whose other carriageway is missing takes h
 
 A railway is as loud as its trains: how many pass, how long and heavy they are and how fast they
 run. Passenger trains come from public timetables. Freight, which almost no country publishes,
-is estimated, and much of it runs at night.
+is estimated, and much of it runs at night. Where no timetable is published, as for the railways of
+Japan, Korea, Great Britain and Brazil, a line takes its class's default: in their cities, where
+trains run every few minutes, the railway reads 5 to 10 dB too quiet.
 
 Train counts come from <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
 feeds and national timetables, every train routed along the track network and every tram and
@@ -227,8 +229,9 @@ flies on its noise tables from the
 [<abbr title="Aircraft Noise and Performance">ANP</abbr> database](https://www.aircraftnoisemodel.org)
 by <abbr title="the European Civil Aviation Conference's method for noise around airports">ECAC</abbr>
 [Doc 29](https://www.ecac-ceac.org/activities/environment/doc-29), 4th edition. Near nine of 59 large
-airports the map reads 5 to 23 dB too quiet. They are Beijing, Shanghai Pudong, Cairo, Casablanca,
-Riyadh, Tehran, Accra, Moscow Sheremetyevo and Lagos.
+airports the low flights read 5 to 23 dB too quiet: Beijing, Shanghai Pudong, Cairo, Casablanca,
+Riyadh, Tehran, Accra, Moscow Sheremetyevo and Lagos. At Pudong, official monthly counts now supply
+the take-offs and landings on its runways, but not the flights above them.
 
 <details>
 <summary>How a flight's noise is computed</summary>
@@ -313,14 +316,17 @@ hold water, by their share of it (the open sea where it maps no land), never ove
 a cell's activity can move onto neighbouring water outside its original footprint. South of 60° S
 and north of 82.75° N it maps no land at all, so there the land reads as water. Speed is not modelled, so ships under way may be a
 few decibels louder. Activity is constant over the day, which overstates leisure boats at night.
+Outside European seas every vessel that is not a work boat counts as a large ship, moored yachts too:
+a marina can read as loud as a port, up to 75 dB Lden at Marina del Rey.
 
 ## Industry
 
 A factory, a quarry or a power plant is as loud as its sector and its size. Its sound power is
 spread over the site, a point every 75 m. A point inside one of the site's buildings emits from
 that building, which does not screen it. A building on the site known to the data only as a building
-or a block of flats is the site's, not a home. Wind turbines, solar farms and substations each
-have a model of their own.
+or a block of flats is the site's, not a home. A registered plant's sector covers the whole mapped
+site it lies in, which can be an industrial estate: such estates read 66 to 70 dB Lden inside. Wind
+turbines, solar farms and substations each have a model of their own.
 
 Sites and their kind are [OpenStreetMap](https://www.openstreetmap.org)'s. Four sources add the
 sector:
@@ -461,7 +467,7 @@ The datasets are credited on [Data sources](/about/data-sources).
 
 ## The files
 
-Everything the popup and the painter read is one tree of files: 1.07 TB for the world, in 377,082
+Everything the popup and the painter read is one tree of files: 1.09 TB for the world, in 381,625
 files.
 
 <details>
@@ -515,14 +521,14 @@ a smooth field's information is the residual of a planar prediction of its heigh
 
 | Kind | A tile holds | The world |
 |---|---|---|
-| `terrain` | the ground's height every arc-second (31 m north to south), how much of it is sealed, its tree cover and how tall the trees stand | 202 GB, 7.0 million tiles in 117,367 files |
-| `terrain-fine` | where a 5 m national model exists, what the arc-second grid misses, every sixth of an arc-second | 6.2 GB, 15,289 tiles in 301 files |
+| `terrain` | the ground's height every arc-second (31 m north to south), how much of it is sealed, its tree cover and how tall the trees stand | 202 GB, 7.1 million tiles in 117,491 files |
+| `terrain-fine` | where a 5 m national model exists, what the arc-second grid misses, every sixth of an arc-second | 6.2 GB, 15,299 tiles in 301 files |
 | `obstacles` | the outlines and heights of buildings and walls, listed by cells 48 m wide in London | 130 GB, 1.4 million tiles in 37,434 files |
-| `sources` | every ground source, as points and straight pieces | 169 GB, 2.2 million tiles in 70,810 files |
+| `sources` | every ground source, as points and straight pieces | 184 GB, 2.3 million tiles in 70,797 files |
 | `aircraft` | a year of flights, summed into boxes of airspace | 466 GB, 2.6 million tiles in 57,670 files |
 | `aircraft-far` | the same in boxes four times larger, read beyond 3 km | 64 GB, 2.6 million tiles in 57,670 files |
 | `aircraft-events` | per cell 380 m wide in London, the flights of a day whose loudest moment reaches 50, 60 and 70 dB | 9.6 GB, 1.6 million tiles in 35,830 files |
-| `aircraft-rolls` | the take-off and landing rolls that start in the tile, one for each runway direction, operation and aircraft class | 26 bytes a roll |
+| `aircraft-rolls` | the take-off and landing rolls that start in the tile, one for each runway direction, operation and aircraft class | 26 bytes a roll, 13,102 tiles in 4,173 files |
 
 Beside the squares lie the year's flight tracks, 28 GB in 256 files, read only to draw a listed
 flight, and its weather table, 16.6 MB for every half degree: a 30-year climatology, the same in

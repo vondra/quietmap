@@ -13,7 +13,7 @@ What gets measured gets managed. Mapping noise is the first step toward a quiete
 
 1. **Find quiet places** — search any address, explore the map, discover where to live, work, or relax without noise
 2. **Understand noise** — see which sources contribute (roads, railways, aircraft, ships, industry, buildings) and how terrain, buildings, and noise barriers reduce it
-3. **Build a comparable record** — each published dataset generation is frozen, so later generations can be compared honestly
+3. **Build a comparable record** — a map of each year from that year's data, 2024 next, so a place's noise can be compared over time
 
 Human-made noise is not the same as natural sound. A forest at 50 dB with birdsong feels quiet. A road at 50 dB with traffic feels loud. quietmap.org models environmental noise from human sources — transport, industry, and urban activity — not nature.
 
@@ -24,12 +24,12 @@ Human-made noise is not the same as natural sound. A forest at 50 dB with birdso
 Three steps:
 
 1. **Sources emit noise.** Roads, trains, planes, ships, factories, wind turbines and buildings — each modelled from real data: traffic counts, timetables, a year of flight tracks, ship positions, registries.
-2. **Sound travels and fades.** Hills and buildings block it, noise barriers screen it, soft ground, trees and the air absorb it — computed with the EU method CNOSSOS-EU (trees with ISO 9613-2), and for aircraft with ECAC Doc 29.
-3. **You see the result.** Click any point and the level there is computed on the spot from every source around it; the map shows how loud each place sounds, in colour: clear under 1 sone (a quiet room), then [a colour for each doubling of loudness](/about/the-noise-map), dark purple from 48 sone.
+2. **Sound travels and fades.** Hills and buildings block it, noise barriers screen it, soft ground, trees and the air absorb it — computed with the EU method <abbr title="Common Noise Assessment Methods in Europe, the EU's method for road, railway and industrial noise">CNOSSOS-EU</abbr> (trees with <abbr title="the international standard for sound outdoors; its Annex A for trees">ISO 9613-2</abbr>), and for aircraft with <abbr title="the European Civil Aviation Conference's method for noise around airports">ECAC Doc 29</abbr>.
+3. **You see the result.** Click any point and the level there is computed on the spot from every source around it; the map shows how loud each place sounds, in colour, in sone (2 sone sound twice as loud as 1): clear under 1 sone (a quiet room), then [a colour for each doubling of loudness](/about/the-noise-map), dark purple from 48 sone. Under Advanced the map switches to Lden, in decibels.
 
 Each source layer — roads, railways, aircraft, ships, industrial, buildings — is modelled independently; the map shows any of them together.
 
-![Prague on the map, coloured by how loud each place sounds](map-overview.jpg)
+![London on the map, coloured by how loud each place sounds](map-overview.jpg)
 
 ## In depth
 
@@ -47,33 +47,34 @@ Five pages, each from the simple to the exact, down to the code:
 ## FAQ
 
 **Is this measured or computed?**
-Computed — a physics model (CNOSSOS-EU for ground sources, ECAC Doc 29 for aircraft) over public data. The model is continuously checked against real monitoring stations; see [Validation](/about/validation).
+Computed — a physics model (CNOSSOS-EU for ground sources, ECAC Doc 29 for aircraft) over public data. Every version is checked against real monitoring stations before it goes live; see [Validation](/about/validation).
 
 **How accurate is it?**
-It's an engineering estimate, not a measurement, a legal noise map or a certificate. Near three of the four airports, along Poland's roads and Germany's railways, half the microphones are within about 1 to 3 dB of the map. In the streets of Paris, Barcelona, Madrid and Dublin, half are within 3 to 6 dB. The [validation](/about/validation#map-against-microphone) page shows each network. For a single address, open the popup there to see exactly what the number is built from.
+It's an engineering estimate, not a measurement, a legal noise map or a certificate. Near three of the four airports, along Poland's roads and Germany's railways, half the microphones are within about 1 to 3 dB of the map. In the streets of Paris, Barcelona, Madrid and Dublin, half are within 2 to 6 dB. The [validation](/about/validation#map-against-microphone) page shows each network. For a single address, open the popup there to see exactly what the number is built from.
 
 **Why is my quiet street orange?**
 Open the popup there: it lists what makes the noise, the largest share first. Most surprises have a visible cause: a road nobody counted carries the trips the buildings around it make or its class's average, a nearby factory is as loud as its sector, or the loudest source is one you no longer notice. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
+
+**How do I find quiet places?**
+Turn on **Quiet zones** in the layers: every place at or below the loudness you choose, from 0.25 to 4 sone, turns green, and places to stay can be kept within it. Open the popup anywhere to see what breaks the quiet there.
+
+**Why sone and not decibels?**
+Sone follow how loud a place sounds: 2 sone sound twice as loud as 1, about 10 dB more. Over the day a sound counts by how loud it is and how long it lasts: a car every few hours adds little, a constant hum all of its loudness. Lden, the EU's decibel average, lets a few loud events weigh far more; the popup gives both, and [the map switches to Lden](/about/the-noise-map#lden) under Advanced.
 
 **Does the weather count?**
 As an average of 30 years. Wind towards you and the cold air of clear nights and mornings bend a road's sound down over hills; the popup counts how often. One particular morning cannot be shown. [How the weather enters a level](/about/noise-at-a-point#the-weather).
 
 **Why are there no low-flying aircraft where I live?**
-The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, flights aren't received and the layer reads too quiet or empty: near Lagos and Cairo airports 5–20 dB low, over parts of Siberia and the Amazon with no aircraft at all — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
+The aircraft layer sees what volunteer <abbr title="Automatic Dependent Surveillance–Broadcast, the position signal aircraft send">ADS-B</abbr> receivers see. Where no feeder is nearby, flights aren't received and the layer reads too quiet or empty: near Lagos and Cairo airports 5–20 dB low, over parts of Siberia and the Amazon with no aircraft at all — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
 
 **Why is the map clear in places?**
-By design: under 1 sone, about as loud as a quiet room, the map has no colour. A blank area can also mean missing source data, or a place the map has not painted yet. The popup still gives the level there, however low.
+By design: under 1 sone, about as loud as a quiet room, the map has no colour. A blank area can also mean missing source data, or a square the map has not painted yet: in Lden, any painted before 30 October 2026. The popup still gives the level there, however low.
 
 **Can I use screenshots or embed the map?**
 Yes, free, with visible "quietmap.org" attribution — details in the [terms of use](/about/terms).
 
 **How can I share or cite a place?**
-Copy the browser address, or choose **Share this place** at an open place. The link keeps the map
-view, open panels and their scroll positions, source details, layers, unit, quiet threshold, reachable area, and the selected
-stay with its dates, guests and filters. Saved names, history, recordings and account details remain
-private. Offers and noise values are loaded again when the link is opened; a missing offer or
-past dates are explained. To cite a result, include quietmap.org, that link, the value and unit,
-and the date you read it; the link shows the latest calculation when opened.
+Choose **Share this place** at an open place, or copy the browser address: the link opens the same view and settings, never your saved names or recordings. To cite a result, give quietmap.org, the link, the value with its unit and the date you read it, as the link shows the latest calculation.
 
 ## Help us make it better
 
@@ -84,7 +85,7 @@ and the date you read it; the link shows the latest calculation when opened.
 1. **Road traffic from navigation apps** — per-street average counts of cars / trucks / motorcycles by time of day, at Waze / Google Maps / TomTom scale. This is the single biggest accuracy lever the map has.
 2. **Commercial flight tracking** — denser coverage than the open feeds we use today (e.g. Flightradar24-grade data).
 3. **Railway traffic** — timetables and train counts per line, freight above all: almost no country publishes it, and freight runs at night.
-4. **Real noise measurements** — station exports, long-term campaigns, monitoring-network data anywhere in the world, quiet places above all. These feed the validation loop directly: every honest measurement makes the model demonstrably better.
+4. **Real noise measurements** — station exports, long-term campaigns, monitoring-network data anywhere in the world, quiet places above all. These feed the validation loop directly: every measurement makes the model demonstrably better.
 5. **Better national data for any country** — traffic censuses, facility registries, turbine inventories.
 6. **Shipping** — vessel positions inside ports and on rivers, where the open AIS products are thinnest.
 
@@ -98,7 +99,7 @@ Some of it was built while hiking the forests of La Palma — changes discussed 
 
 quietmap.org is an internal project of [Miton](https://www.miton.cz/en/).
 
-The [product code is open source](https://github.com/vondra/quietmap/tree/main) under the Apache License 2.0, and the computations are transparent and reproducible from public data.
+The [product code is open source](https://github.com/vondra/quietmap/tree/main) under the Apache License 2.0, and every dataset it computes from is named, with its licence, on [Data sources](/about/data-sources).
 
 ## Credits & terms
 
