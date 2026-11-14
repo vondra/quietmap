@@ -349,7 +349,8 @@ kept for each quantity (`12_34.region`, `12_34.lden.region`), and the pack reuse
 region's bundles are unchanged.
 `pack.rs` copies these streams into one immutable PMTiles archive per layer and quantity (`road`,
 `lden-road`), zooms down to 2,
-ordered by zoom and Hilbert tile id. Identical streams share an archive range; gzip compresses its
+ordered by zoom and Hilbert tile id. It copies a square's finest tiles into every layer's archive
+while that square is open. Identical streams share an archive range; gzip compresses its
 index. An archive is read by byte range, so a tile needs no scan or server decompression, and the
 same files support object storage. The manifest appears only after every archive is complete; the
 server sends the stored stream with `Content-Encoding: br`. The manifest URL belongs to the tile
