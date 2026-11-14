@@ -3,6 +3,17 @@ title: What's new
 intro: What changed in the data and the model, and what comes next.
 ---
 
+## What comes next
+
+- **The whole world, then again from the newest data.** Every square of the world painted, then every
+  square painted from older data painted again, those whose data changed first. That brings the
+  flights as they pass, November's corrections and Lden to the whole map.
+- **Earlier years.** A noise map of 2024, from that year's roads, traffic, trains, flights and ships,
+  is being built; 2019 or earlier follows. The years will switch and play one after another, so a
+  place can be compared over time.
+- **City railways.** Timetables for the railways of Japan, Korea, Great Britain and Brazil, where busy
+  city lines take a default and read 5 to 10 dB low.
+
 ## November 2026
 
 - **Flights as they pass.** How loud the flights sound at a place now follows the real flights: held
@@ -140,16 +151,5 @@ intro: What changed in the data and the model, and what comes next.
 - **Ground and forest.** The ground effect per frequency band, as CNOSSOS-EU computes it, and forest
   as a continuous canopy density.
 - **Traffic data.** National counts for Thailand, Mexico and Japan.
-
-## What comes next
-
-- **The whole world, then again from the newest data.** Every square of the world painted, then every
-  square painted from older data painted again, those whose data changed first. That brings the
-  flights as they pass, November's corrections and Lden to the whole map.
-- **Earlier years.** A noise map of 2024, from that year's roads, traffic, trains, flights and ships,
-  is being built; 2019 or earlier follows. The years will switch and play one after another, so a
-  place can be compared over time.
-- **City railways.** Timetables for the railways of Japan, Korea, Great Britain and Brazil, where busy
-  city lines take a default and read 5 to 10 dB low.
 
 *Last updated 14 November 2026.*
