@@ -288,7 +288,7 @@ the mean loudness of the pixels under it.
 <details>
 <summary>The painter's code: paint/ and paint-gpu/, the tiles it writes and its checks</summary>
 
-`paint/` is the method and `paint-gpu/` (`qm-paint`) runs it by squares of zoom 12 in three stages:
+[`paint/`](https://github.com/vondra/quietmap/tree/main/paint) is the method and [`paint-gpu/`](https://github.com/vondra/quietmap/tree/main/paint-gpu) (`qm-paint`) runs it by squares of zoom 12 in three stages:
 the cores read the next square's tiles once, to the reach of its farthest pixel, give the card the
 fine terrain of every land tile among them, and take its corners, hum and aircraft lattices; two
 squares paint their pixels at once (a square of many sources alone); two writers publish the squares
