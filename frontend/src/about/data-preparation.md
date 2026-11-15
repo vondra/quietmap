@@ -686,7 +686,7 @@ The map's Advanced layers show the terrain, the trees and the hard ground.
   national model, such as São Paulo, keep that bias. A national model counts only in its own
   country and at sea: France's mosaic reaches over Belgium, Switzerland and Spain with fill, up to
   400 m off, and there the neighbour's model or GEDTM30 holds; each model fades in from the border
-  over about 8 km, as from any edge of its survey.
+  over about 8 km, as from any edge of its survey on land; at the shore it holds to its last node.
 - **Near a ray's two ends**, a national model of 5 m or finer adds what the one-arc-second grid
   misses: in Czechia, Germany, Switzerland, the Netherlands, Belgium and part of Portugal.
 - **Weather** is the 1991–2020 climatology of
@@ -825,8 +825,8 @@ Year admission and paths: `build/src/year.rs`; dated tables: `build/src/source_t
 Raster preparation: `build/src/rasters/` reads the year's named GDAL rasters. The manifest gives
 each band's projection, vertical datum, missing-data value and overlap priority. A national
 terrain model holds no height on another country's land in the year's country polygons
-(`osm-regions`); terrain is averaged before conversion to EGM2008; coverage edges, borders among
-them, blend continuously. Tree density is
+(`osm-regions`); terrain is averaged before conversion to EGM2008; coverage edges on land, borders among
+them, blend continuously, and a model holds to its last node at the shore. Tree density is
 area-averaged; a newer survey takes precedence over the older baseline where available. Each
 survey loses only forest cleared after its observation year and before the map's cutoff.
 A missing loss observation leaves that survey unchanged; it does not establish that no loss occurred. Crown height averages only

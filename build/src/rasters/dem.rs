@@ -26,6 +26,52 @@ pub(super) fn is_ground(height: f64) -> bool {
     (CODE_FLOOR_M..=CODE_CEILING_M).contains(&height)
 }
 
+/// How far from open water a national model's missing node still belongs to the shore, in Euclidean
+/// nodes: on six measured coasts the share of the model's nodes the ramp reaches stops falling here
+/// (Etretat and Skagen 0 %, La Gomera 0.6 %, Liguria 2.3 %, Brittany's tidal flats 21.9 %; at 16
+/// nodes the same but Liguria's 2.2 %; quietmap-private evidence/2026-11-15/coastal-ramp/).
+const SHORE_NODES: u32 = 8;
+
+/// The world models (feather 0, beneath every national model) leave open water at sea level. A
+/// national model ends at the shore without ramping toward them, as no other land model meets it
+/// there, and the ramp would pull a cliff coast down to the world model's 30 m average (La Gomera's
+/// MDT05 holds 245 m where the ramp left 106 m). So a missing node within SHORE_NODES of open water
+/// is the model's own coverage for the ramp, unless it is another country's land, whose border
+/// ramps as any land edge. The world models are read SHORE_NODES beyond the work window, so two
+/// squares see the same shore at their shared nodes. GEDTM30 holds 0.0 on the sea, so land at
+/// exactly 0.0 m, or a gap of every world model, counts as open water too.
+fn shore(sources: &[Source], countries: &Countries, work: Window) -> Result<Vec<bool>, String> {
+    let around = expanded(work, SHORE_NODES);
+    let mut land = vec![false; around.node_count()];
+    for source in sources
+        .iter()
+        .filter(|s| s.spec.band == Band::GroundHeight && s.spec.feather_nodes == 0)
+        .filter(|s| s.intersects(around))
+    {
+        for (land, sampled) in land
+            .iter_mut()
+            .zip(read(source, around, countries, &mut None)?)
+        {
+            if is_ground(sampled) {
+                *land = sampled != 0.0;
+            }
+        }
+    }
+    if land.iter().all(|&land| land) {
+        return Ok(vec![false; work.node_count()]);
+    }
+    let distance =
+        distance::to_missing_inside(&land, around.rows as usize, around.columns as usize);
+    let (margin, columns) = (SHORE_NODES as usize, around.columns as usize);
+    Ok((0..work.rows as usize)
+        .flat_map(|row| {
+            let begin = (row + margin) * columns + margin;
+            distance[begin..begin + work.columns as usize].iter()
+        })
+        .map(|&distance| distance <= f64::from(SHORE_NODES))
+        .collect())
+}
+
 /// A national model's heights read on another country's land are its mosaic's fill, not its survey
 /// (RGE ALTI holds zeros over Belgium and other heights over Switzerland and Spain): they go missing
 /// before the datum and the blend, so that country's models and the world model hold there and the
@@ -91,6 +137,11 @@ pub fn build(sources: &[Source], countries: &Countries, window: Window) -> Resul
     // changes GDAL's floating-point averaging grid even though no fine model contributes.
     let padding = if fine.is_empty() { 0 } else { padding };
     work = expanded(window, padding);
+    let shore = if fine.is_empty() {
+        Vec::new()
+    } else {
+        shore(sources, countries, work)?
+    };
     // The global producer fills open water left by the world models at sea level.
     let mut heights = vec![0.0; work.node_count()];
     for source in sources.iter().filter(|s| s.spec.band == Band::GroundHeight) {
@@ -107,11 +158,18 @@ pub fn build(sources: &[Source], countries: &Countries, window: Window) -> Resul
         };
         let halo = source.spec.feather_nodes;
         if halo > 0 {
-            let distance = distance::to_missing(
-                &sampled.iter().map(|h| h.is_finite()).collect::<Vec<_>>(),
-                work.rows as usize,
-                work.columns as usize,
-            );
+            // The country labels of this window, read with the model in the first pass.
+            let foreign = |index: usize| match (source.country, &labels) {
+                (Some(own), Some((window, labels))) if *window == work => {
+                    labels[index] != 0 && labels[index] != own
+                }
+                _ => false,
+            };
+            let coverage: Vec<_> = (0..sampled.len())
+                .map(|index| sampled[index].is_finite() || (shore[index] && !foreign(index)))
+                .collect();
+            let distance =
+                distance::to_missing(&coverage, work.rows as usize, work.columns as usize);
             blend::apply(
                 &mut heights,
                 &sampled,

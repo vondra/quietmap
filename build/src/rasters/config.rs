@@ -63,6 +63,21 @@ pub struct RasterPlan {
 impl RasterPlan {
     pub fn validate(&self, manifest: &Manifest) -> Result<(), String> {
         let mut priorities = BTreeSet::new();
+        // The shore is where the world models leave open water, read before the first national one.
+        let ground = || self.sources.iter().filter(|s| s.band == Band::GroundHeight);
+        let lowest_national = ground()
+            .filter(|s| s.feather_nodes > 0)
+            .map(|s| s.priority)
+            .min();
+        if let Some(world) = ground()
+            .filter(|s| s.feather_nodes == 0)
+            .find(|s| lowest_national.is_some_and(|national| s.priority > national))
+        {
+            return Err(format!(
+                "world terrain model {} ranks above a national one",
+                world.input
+            ));
+        }
         for source in &self.sources {
             if !manifest.inputs.iter().any(|i| i.id == source.input) {
                 return Err(format!("raster source {} is not an input", source.input));

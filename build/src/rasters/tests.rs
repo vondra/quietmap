@@ -238,46 +238,58 @@ fn a_national_model_holds_only_its_own_countrys_land_and_fades_in_from_the_borde
         ("B".to_string(), land(11.5, 19.5)),
     ]));
     let grid = ([-20.5 * step, 20.5 * step], step, 61, 41);
-    let world = raster_source_on_grid(
-        root.path(),
-        "world.tif",
-        Band::GroundHeight,
-        grid,
-        vec![100.0; 61 * 41],
-    );
-    let mut national = raster_source_on_grid(
-        root.path(),
-        "a.tif",
-        Band::GroundHeight,
-        grid,
-        vec![200.0; 61 * 41],
-    );
-    national.spec.feather_nodes = 4;
-    national.spec.priority = 1;
-    national.country = countries.label("A");
     let window = Window {
         north_node: 0,
         west_node: 0,
         rows: 1,
         columns: 24,
     };
-    let heights: Vec<f64> = dem::build(&[world, national], &countries, window)
-        .unwrap()
-        .chunks_exact(2)
-        .map(|code| f64::from(u16::from_le_bytes([code[0], code[1]])) / 5.0 - 500.0)
-        .collect();
-    // B's land keeps the world model; A's model fades in over four nodes from the border on both
-    // its sides, its own land and the sea, and holds fully beyond.
-    assert!(heights[11..21].iter().all(|h| *h == 100.0), "{heights:?}");
-    assert!(heights[..8].iter().all(|h| *h == 200.0), "{heights:?}");
-    assert!(
-        heights[7..12].windows(2).all(|pair| pair[0] > pair[1]),
-        "{heights:?}"
-    );
-    assert!(
-        heights[20..].windows(2).all(|pair| pair[0] < pair[1]),
-        "{heights:?}"
-    );
+    // The world model holds land everywhere, or leaves open water east of B: B's land lies within
+    // the shore's reach but is another country's, so A's border ramps either way.
+    for (name, world_east_of_b) in [("land", 100.0), ("water", 0.0)] {
+        let world = raster_source_on_grid(
+            root.path(),
+            &format!("world-{name}.tif"),
+            Band::GroundHeight,
+            grid,
+            (0..61 * 41)
+                .map(|index| {
+                    if index % 61 < 40 {
+                        100.0
+                    } else {
+                        world_east_of_b
+                    }
+                })
+                .collect(),
+        );
+        let mut national = raster_source_on_grid(
+            root.path(),
+            &format!("a-{name}.tif"),
+            Band::GroundHeight,
+            grid,
+            vec![200.0; 61 * 41],
+        );
+        national.spec.feather_nodes = 4;
+        national.spec.priority = 1;
+        national.country = countries.label("A");
+        let heights: Vec<f64> = dem::build(&[world, national], &countries, window)
+            .unwrap()
+            .chunks_exact(2)
+            .map(|code| f64::from(u16::from_le_bytes([code[0], code[1]])) / 5.0 - 500.0)
+            .collect();
+        // B's land keeps the world model; A's model fades in over four nodes from the border on both
+        // its sides, its own land and the sea, and holds fully beyond.
+        assert!(heights[11..20].iter().all(|h| *h == 100.0), "{heights:?}");
+        assert!(heights[..8].iter().all(|h| *h == 200.0), "{heights:?}");
+        assert!(
+            heights[7..12].windows(2).all(|pair| pair[0] > pair[1]),
+            "{heights:?}"
+        );
+        assert!(
+            heights[20..].windows(2).all(|pair| pair[0] < pair[1]),
+            "{heights:?}"
+        );
+    }
 }
 
 #[test]
@@ -329,6 +341,107 @@ fn a_height_no_ground_has_keeps_the_model_beneath_and_its_coverage() {
             .all(|node| with_seam[node] == without[node]),
         "{with_seam:?} {without:?}"
     );
+}
+
+#[test]
+fn a_national_model_ends_at_the_shore_without_ramping_but_still_ramps_where_it_ends_on_land() {
+    // La Gomera's MDT05 holds no sea; ramped in from the coastline toward GEDTM30 its 245 m cliff
+    // read 106 m. A national model at 200 m over a world model of 100 m on land: where the world
+    // model leaves open water (0.0) east of the coast, the national model holds to its last node;
+    // where the world model's land goes on, its edge ramps as before.
+    let root = tempfile::tempdir().unwrap();
+    let step = 1.0 / NODES_PER_DEGREE as f64;
+    let grid = ([-20.5 * step, 20.5 * step], step, 61, 41);
+    let window = Window {
+        north_node: 0,
+        west_node: 0,
+        rows: 1,
+        columns: 24,
+    };
+    let west_of = |coast: usize, value: f64, beyond: f64| -> Vec<f64> {
+        (0..61 * 41)
+            .map(|index| if index % 61 < coast { value } else { beyond })
+            .collect()
+    };
+    let heights = |name: &str, world_beyond: f64| -> Vec<f64> {
+        let world = raster_source_on_grid(
+            root.path(),
+            &format!("world-{name}"),
+            Band::GroundHeight,
+            grid,
+            west_of(32, 100.0, world_beyond),
+        );
+        let mut national = raster_source_on_grid(
+            root.path(),
+            name,
+            Band::GroundHeight,
+            grid,
+            west_of(30, 200.0, f64::NAN),
+        );
+        national.spec.feather_nodes = 4;
+        national.spec.priority = 1;
+        dem::build(&[world, national], &Countries::default(), window)
+            .unwrap()
+            .chunks_exact(2)
+            .map(|code| f64::from(u16::from_le_bytes([code[0], code[1]])) / 5.0 - 500.0)
+            .collect()
+    };
+    // Nodes 0-9 lie west of the national model's coast (the grid's column 30 is the window's
+    // node 10); the world model's shore lies two nodes further east, as theirs differ by a few.
+    let coast = heights("coast.tif", 0.0);
+    assert!(coast[..10].iter().all(|&h| h == 200.0), "{coast:?}");
+    assert_eq!(coast[10..12], [100.0, 100.0], "{coast:?}");
+    assert!(coast[12..].iter().all(|&h| h == 0.0), "{coast:?}");
+    let border = heights("border.tif", 100.0);
+    assert_eq!(border[9], 100.0, "{border:?}");
+    assert!(
+        border[6..9].iter().all(|&h| h > 100.0 && h < 200.0),
+        "{border:?}"
+    );
+    assert!(border[10..].iter().all(|&h| h == 100.0), "{border:?}");
+}
+
+#[test]
+fn two_squares_see_the_same_shore_at_a_shared_node() {
+    // A square's shore can lie beyond its work window: a national model ending at node 0 over
+    // world land with open water from node 8. A one-node window's work window (feather 4, padding
+    // 6) ends before the water; a five-node window's holds it. Both read the world models eight
+    // nodes further, so node 0 keeps the national model in both.
+    let root = tempfile::tempdir().unwrap();
+    let step = 1.0 / NODES_PER_DEGREE as f64;
+    let grid = ([-20.5 * step, 20.5 * step], step, 61, 41);
+    let world = raster_source_on_grid(
+        root.path(),
+        "world.tif",
+        Band::GroundHeight,
+        grid,
+        (0..61 * 41)
+            .map(|index| if index % 61 < 28 { 100.0 } else { 0.0 })
+            .collect(),
+    );
+    let mut national = raster_source_on_grid(
+        root.path(),
+        "national.tif",
+        Band::GroundHeight,
+        grid,
+        (0..61 * 41)
+            .map(|index| if index % 61 < 21 { 200.0 } else { f64::NAN })
+            .collect(),
+    );
+    national.spec.feather_nodes = 4;
+    national.spec.priority = 1;
+    let sources = [world, national];
+    let node_0 = |columns: u32| -> f64 {
+        let window = Window {
+            north_node: 0,
+            west_node: 0,
+            rows: 1,
+            columns,
+        };
+        let codes = dem::build(&sources, &Countries::default(), window).unwrap();
+        f64::from(u16::from_le_bytes([codes[0], codes[1]])) / 5.0 - 500.0
+    };
+    assert_eq!((node_0(1), node_0(5)), (200.0, 200.0));
 }
 
 #[test]

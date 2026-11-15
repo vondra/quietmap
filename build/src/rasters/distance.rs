@@ -31,10 +31,21 @@ fn squared_distance_line(values: &mut [f64]) {
 }
 
 pub fn to_missing(valid: &[bool], rows: usize, columns: usize) -> Vec<f64> {
+    distances(valid, rows, columns, true)
+}
+
+/// The same with the outside border unknown, not missing: the distance to the shore inside a work
+/// window, where the window's edge is no shore. Without a missing node every distance exceeds the
+/// window's width and height together.
+pub fn to_missing_inside(valid: &[bool], rows: usize, columns: usize) -> Vec<f64> {
+    distances(valid, rows, columns, false)
+}
+
+fn distances(valid: &[bool], rows: usize, columns: usize, outside_missing: bool) -> Vec<f64> {
     let width = columns + 2;
     let height = rows + 2;
     let infinity = ((width + height) * (width + height)) as f64;
-    let mut data = vec![0.0; width * height];
+    let mut data = vec![if outside_missing { 0.0 } else { infinity }; width * height];
     for row in 0..rows {
         for column in 0..columns {
             data[(row + 1) * width + column + 1] = if valid[row * columns + column] {
@@ -76,5 +87,8 @@ mod tests {
         assert_eq!(distances[3 * 7 + 3], 2.0_f64.sqrt());
         assert_eq!(distances[0], 1.0);
         assert_eq!(distances[2 * 7 + 2], 0.0);
+        let inside = super::to_missing_inside(&valid, 7, 7);
+        assert_eq!(inside[0], 8.0_f64.sqrt());
+        assert!(super::to_missing_inside(&[true; 49], 7, 7)[24] >= 14.0);
     }
 }
