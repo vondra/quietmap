@@ -15,6 +15,9 @@ use physics::bound::receiver_bound;
 use physics::weather::PlaceWeather;
 use rayon::prelude::*;
 
+#[path = "facade_sources.rs"]
+mod sources;
+
 /// Sources evaluated at every façade to choose the loudest: at 76 buildings near measured stations
 /// dev4's 11 chose a façade 0.5 to 3.2 dB below the loudest at five, 100 the loudest at each but
 /// one where the flights decide, which the rule leaves out (measured 2026-10-11).
@@ -78,7 +81,6 @@ pub fn loudest_facade(
         .collect::<Result<Vec<_>, String>>()?;
     // Rank by the greatest bound at any façade: the bound falls with distance, so it is the
     // bound at the nearest receiver, with the largest reflection bonus of any.
-    let positions: Vec<[f64; 2]> = facades.iter().map(|facade| facade.position).collect();
     let largest_reflection = facades
         .iter()
         .map(|facade| facade.reflection_db)
@@ -88,24 +90,7 @@ pub fn loudest_facade(
         largest_reflection,
         weather.alpha_db_per_km,
     );
-    let mut ranked: Vec<(f64, usize)> = candidates
-        .par_iter()
-        .enumerate()
-        .map(|(index, candidate)| {
-            let nearest = positions
-                .iter()
-                .map(|&position| candidate.distance_from(position))
-                .fold(f64::INFINITY, f64::min);
-            let source = &attributes[candidate.attribute];
-            let bound = candidate.bound_at_distance(nearest, source, &ranking_gain);
-            (lden_energy(&bound), index)
-        })
-        .collect();
-    if ranked.len() > FACADE_SOURCE_LIMIT {
-        ranked.select_nth_unstable_by(FACADE_SOURCE_LIMIT, |a, b| b.0.total_cmp(&a.0));
-        ranked.truncate(FACADE_SOURCE_LIMIT);
-    }
-    ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let ranked = sources::facade_sources(&facades, candidates, attributes, &ranking_gain);
     let levels = facades
         .par_iter()
         .map_init(Scratch::default, |scratch, facade| {
@@ -122,7 +107,8 @@ pub fn loudest_facade(
             for &(_, index) in &ranked {
                 let mut candidate = Candidate::clone(candidates[index]);
                 let source = &attributes[candidate.attribute];
-                candidate.bound_at(facade.position, source, &ranking_gain);
+                // Ray evaluation reads the distance, never the candidate's ranking bound or order.
+                candidate.distance_m = candidate.distance_from(facade.position);
                 let received = received_energy(&receiver, &candidate, source, scratch)?;
                 for (sum, value) in total.iter_mut().zip(received) {
                     *sum += value;
