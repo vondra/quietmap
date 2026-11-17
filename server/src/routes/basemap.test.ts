@@ -8,8 +8,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import Fastify from 'fastify'
+import compress from '@fastify/compress'
 import { zxyToTileId } from 'pmtiles'
 import { basemapRoutes } from './basemap.ts'
+import { readConfig } from '../config.ts'
 
 const TILE = gzipSync(Buffer.from('a vector tile'))
 
@@ -38,13 +40,15 @@ const dir = mkdtempSync(join(tmpdir(), 'basemap-route-test-'))
 after(() => rmSync(dir, { recursive: true, force: true }))
 writeFileSync(join(dir, 'planet.pmtiles'), archiveOfOneTile())
 mkdirSync(join(dir, 'fonts', 'Noto Sans Regular'), { recursive: true })
-writeFileSync(join(dir, 'fonts', 'Noto Sans Regular', '0-255.pbf'), 'glyphs')
+const GLYPHS = 'glyphs'.repeat(400)
+writeFileSync(join(dir, 'fonts', 'Noto Sans Regular', '0-255.pbf'), GLYPHS)
 mkdirSync(join(dir, 'sprites'))
 writeFileSync(join(dir, 'sprites', 'light@2x.json'), '{}')
 writeFileSync(join(dir, 'secret.json'), '{"outside": "sprites"}')
 
 async function app(t: test.TestContext, basemapDir: string | null = dir) {
   const built = Fastify()
+  await built.register(compress)
   await built.register(basemapRoutes, { basemapDir })
   t.after(() => built.close())
   return built
@@ -77,7 +81,13 @@ test('fonts and sprites are served by name; a name that leaves their directories
   const glyphs = await server.inject('/api/basemap/fonts/Noto%20Sans%20Regular/0-255.pbf')
   assert.equal(glyphs.statusCode, 200)
   assert.equal(glyphs.headers['content-type'], 'application/x-protobuf')
-  assert.equal(glyphs.body, 'glyphs')
+  assert.equal(glyphs.body, GLYPHS)
+  const compressed = await server.inject({ url: '/api/basemap/fonts/Noto%20Sans%20Regular/0-255.pbf', headers: { 'accept-encoding': 'gzip' } })
+  assert.equal(compressed.headers['content-encoding'], 'gzip')
+  assert.equal(gunzipSync(compressed.rawPayload).toString(), GLYPHS)
+  // A tile is stored compressed and must not be compressed again.
+  const tile = await server.inject({ url: '/api/basemap/2/1/1.mvt', headers: { 'accept-encoding': 'gzip' } })
+  assert.deepEqual(tile.rawPayload, TILE)
   const sprite = await server.inject('/api/basemap/sprites/light@2x.json')
   assert.equal(sprite.statusCode, 200)
   assert.match(String(sprite.headers['content-type']), /^application\/json/)
@@ -113,4 +123,15 @@ test('without a base map directory the routes do not exist', async (t) => {
   for (const path of ['2/1/1.mvt', 'fonts/Noto%20Sans%20Regular/0-255.pbf', 'sprites/light@2x.json']) {
     assert.equal((await server.inject(`/api/basemap/${path}`)).statusCode, 404, path)
   }
+})
+
+test('a base map directory named without its planet stops the start', () => {
+  const env = {
+    PORT: '1', QM_POPUP_BIN: process.execPath, QM_RASTER_BIN: process.execPath, QM_PREPARED_DIR: dir, QM_YEARS: '2026',
+    QM_TILES_DIR: dir,
+  }
+  mkdirSync(join(dir, '2026'), { recursive: true })
+  assert.equal(readConfig(env).basemapDir, null)
+  assert.equal(readConfig({ ...env, QM_BASEMAP_DIR: dir }).basemapDir, dir)
+  assert.throws(() => readConfig({ ...env, QM_BASEMAP_DIR: join(dir, 'sprites') }), /planet\.pmtiles/)
 })

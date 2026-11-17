@@ -83,6 +83,8 @@ export async function basemapRoutes(app: FastifyInstance, { basemapDir }: { base
 
   app.get<{ Params: { fontstack: string; range: string } }>(
     '/api/basemap/fonts/:fontstack/:range.pbf',
+    // A range of glyphs is 76 kB of bitmaps and 36 kB compressed; protobuf is not compressed by default.
+    { compress: { customTypes: /^application\/x-protobuf$/ } },
     async (req, reply) => {
       const { fontstack, range } = req.params
       if (!FONTSTACK.test(fontstack) || !GLYPH_RANGE.test(range)) return reply.code(404).send('no such file')

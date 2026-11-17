@@ -30,9 +30,10 @@ import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 // Arabic and Hebrew names need MapLibre's text-shaping plugin: without it the base map's style falls
-// back to a name in English and shows none where OpenStreetMap has no English one. Fetched from the
-// map's own origin, and only once such a name comes into view.
-void setRTLTextPlugin(new URL(rtlTextPlugin, location.href).href, true)
+// back to a name in English and shows none where OpenStreetMap has no English one. Loaded with the
+// map from its own origin: left for the first such name, it never comes while every name in view
+// has an English one to fall back to (Cairo stayed without its Arabic name).
+void setRTLTextPlugin(new URL(rtlTextPlugin, location.href).href, false)
 
 // A geolocate move ends with the position at the map's centre (its accuracy's box is centred in
 // Mercator, a fraction of a pixel off); a move cut short leaves it farther.
