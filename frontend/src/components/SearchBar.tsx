@@ -48,6 +48,8 @@ interface SearchBarProps {
   openAction?: ReactNode
   /** The open place's action at the field's end, where Google's directions stand (the reachable area). */
   fieldAction?: ReactNode
+  /** The phone's account, at the field's end whatever is open (Google Maps' place for it). */
+  accountAction?: ReactNode
   /** Under the open place's row: what its actions opened. */
   children?: ReactNode
 }
@@ -56,7 +58,7 @@ interface SearchBarProps {
 const folded = (text: string) => text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 const keyOf = (at: Point) => `${at.lat},${at.lng}`
 
-export default function SearchBar({ onSelect, getMapView, history, titles, metric, open, notSaved, onOpenPlace, onRename, onForget, onSignIn, openAction, fieldAction, children }: SearchBarProps) {
+export default function SearchBar({ onSelect, getMapView, history, titles, metric, open, notSaved, onOpenPlace, onRename, onForget, onSignIn, openAction, fieldAction, accountAction, children }: SearchBarProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   // The visitor is at the field (it took the focus or the keys): the list shows what it has.
@@ -219,13 +221,14 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
             }}
             onKeyDown={handleKeyDown}
             placeholder={open ? 'Search another place…' : 'Search address…'}
-            className="w-full rounded-lg bg-background px-4 py-2.5 pr-10 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 pointer-fine:text-sm"
+            className={`w-full rounded-lg bg-background px-4 py-2.5 pr-10 ${open ? 'max-md:pr-[4.75rem]' : ''} text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 pointer-fine:text-sm`}
           />
           <span id="search-keys" hidden>Up and down choose a place, Enter opens it, Shift+Delete forgets it.</span>
-          {loading && (
-            <div className="absolute right-10 top-3 text-muted-foreground text-sm">...</div>
-          )}
-          {open && !listed && <div className="absolute right-1.5 top-1/2 -translate-y-1/2">{fieldAction}</div>}
+          <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+            {loading && <span className="px-1 text-sm text-muted-foreground">...</span>}
+            {!listed && open && fieldAction}
+            {!listed && accountAction}
+          </div>
         </div>
         {listed ? (
           <div
@@ -316,7 +319,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
               {/* Scrolled within what is left above a phone's sheet (MobileDetailSheet's sheetTop) under a
                   notch too, and never shut on a short screen; a desktop has no
                   sheet. */}
-              <div className="max-h-[max(6rem,calc(50dvh-11rem-env(safe-area-inset-top,0px)))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
+              <div className="max-h-[max(6rem,calc(60dvh-11rem-env(safe-area-inset-top,0px)))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
             </div>
           </>
         )}

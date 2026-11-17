@@ -1,4 +1,4 @@
-// One public state for controls and address; event handlers publish it before a link can be copied.
+// One public state for controls and address, written at once: the address is the place's link.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { buildHash, parseHash, sameDetailPosition, type UrlState } from '../lib/url-state'
 export type UrlUpdate = Partial<UrlState> | ((state: UrlState) => Partial<UrlState>)
@@ -29,6 +29,5 @@ export function useUrlState() {
     window.history.replaceState(null, '', buildHash(latest.current))
     return () => { window.removeEventListener('hashchange', read); window.removeEventListener('popstate', read) }
   }, [])
-  const getShareUrl = useCallback(() => `${window.location.origin}/${buildHash(latest.current)}`, [])
-  return { state, updateUrl, getShareUrl }
+  return { state, updateUrl }
 }

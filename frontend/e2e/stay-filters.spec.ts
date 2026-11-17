@@ -1,7 +1,7 @@
 // A visitor narrows stays by quote and mapped total, opens one beyond reach and clears the area.
 import { expect, test, type Page } from '@playwright/test'
 import { HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
-import { PHONE, POINT, TILE_Z, afterPaint, canvasCenter, hm3PixelCenter, installHermeticMap, mapUrl, popupRequests } from './support'
+import { PHONE, POINT, TILE_Z, afterPaint, canvasCenter, hm3PixelCenter, installHermeticMap, mapUrl, popupRequests, swipeDown } from './support'
 
 const spots = [
   { name: 'Quiet affordable stay', dx: -0.004, dy: 0, total: 200, byte: 60, lden: 70 },
@@ -120,7 +120,7 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
     const fitted = page.waitForResponse(response => new URL(response.url()).pathname === '/api/stay')
     await panel.getByRole('button', { name: 'Show area', exact: true }).click()
     await fitted
-    // The shared URL is debounced; preserve the chosen filters before navigating through it.
+    // The chosen filters are in the address before the visitor navigates through it.
     await expect(page).toHaveURL(url => new URLSearchParams(url.hash.slice(1)).get('qc') === '1')
     await page.getByRole('button', { name: 'Reachable area', exact: true }).click()
     // Explore beyond the fitted area, as a visitor panning along the countryside would.
@@ -135,7 +135,8 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
     await expect(page.locator('[data-testid="stay-header"]:visible')).toContainText(spots[4].name)
     expect((await popupRequests(page)).at(-1)).toEqual({ lat: spots[4].lat, lng: spots[4].lng })
     await page.screenshot({ path: test.info().outputPath(`${phone ? 'phone' : 'desktop'}-opened-stay.png`) })
-    await page.locator('button[aria-label="Close"]:visible').click()
+    if (phone) await swipeDown(page.getByTestId('mobile-detail-sheet').getByRole('button', { name: /^(Collapse|Expand)$/ }))
+    else await page.locator('button[aria-label="Close"]:visible').click()
     await expect.poll(() => visiblePins(page)).toEqual([true, false, false, false, true, false])
     await layers(page, phone)
     const reach = page.getByTestId('stay-reach').filter({ visible: true })

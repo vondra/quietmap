@@ -37,7 +37,7 @@ import { useSelectedStay } from './hooks/useSelectedStay'
 import type { MapCamera, Position, ReachRequest } from './lib/url-state'
 
 export default function App() {
-  const { state, updateUrl, getShareUrl } = useUrlState()
+  const { state, updateUrl } = useUrlState()
   const { detailPosition, metric, quietThreshold, basemap, heatmapLayers, dataLayers,
     stays: staysOn, quietClusters: quietClustersEnabled, staySearch, stayMaxPrice,
     controls: cardTab, calculation: calculationOpen, isochronOpen } = state
@@ -307,14 +307,11 @@ export default function App() {
         // key once left a name field behind.
         openAction={<MediaButtons media={media} />}
         fieldAction={isochronButton}
+        accountAction={<AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={cardTab === 'account' && !desktop} onOpenChange={setAccountOpen} />}
       >
         {isochronPanel}
         {detailPosition && <PlaceMedia key={`${isSignedIn(account) ? account.email : ''}@${detailPosition.lat},${detailPosition.lng}`} media={media} />}
       </SearchBar>
-      {/* The phone's account beside the search field (a desktop has it as the corner card's tab). */}
-      <div className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] right-(--map-gutter) z-[2004] md:hidden">
-        <AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={cardTab === 'account' && !desktop} onOpenChange={setAccountOpen} />
-      </div>
 
       {/* UI overlays */}
       <div className="absolute inset-0 z-[1002] pointer-events-none">
@@ -346,7 +343,6 @@ export default function App() {
             position={detailPosition}
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
-            getShareUrl={getShareUrl}
             onHighlight={setHighlighted}
             calculationOpen={calculationOpen && desktop}
             onCalculationToggle={toggleCalculation}
@@ -436,7 +432,6 @@ export default function App() {
         position={detailPosition}
         error={noiseDetailError}
         onClose={handleNoiseClose}
-        getShareUrl={getShareUrl}
         onHighlight={setHighlighted}
         calculationOpen={calculationOpen && !desktop}
         onCalculationToggle={toggleCalculation}

@@ -28,7 +28,8 @@ function keepInSight(map: MaplibreMap, at: { lat: number; lng: number }, revealO
   const coveredByCard = !phone && column && x >= right - 8 && y >= column.top - 8 && y <= column.bottom + 8
   const top = search?.bottom ?? 0
   const bottom = phone ? sheetTop(height) : height
-  const coveredBySearch = search && (phone || (x >= search.left - 8 && x <= search.right + 8)) && y <= top + 8
+  // The marker's ring and the search card's shadow reach as far below its edge as the target keeps clear.
+  const coveredBySearch = search && (phone || (x >= search.left - 8 && x <= search.right + 8)) && y < top + 24
   if (outside || coveredByCard || coveredBySearch || (phone && y >= bottom - 24)) {
     const targetX = outside || x >= right - 8 ? right / 2 : x
     const targetY = outside || y < top + 24 || y >= bottom - 24 ? (top + bottom) / 2 : y

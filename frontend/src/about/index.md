@@ -74,7 +74,7 @@ By design: under 1 sone, about as loud as a quiet room, the map has no colour. A
 Yes, free, with visible "quietmap.org" attribution — details in the [terms of use](/about/terms).
 
 **How can I share or cite a place?**
-Choose **Share this place** at an open place, or copy the browser address: the link opens the same view and settings, never your saved names or recordings. To cite a result, give quietmap.org, the link, the value with its unit and the date you read it, as the link shows the latest calculation.
+Copy the browser address at an open place: the link opens the same view and settings, never your saved names or recordings. To cite a result, give quietmap.org, the link, the value with its unit and the date you read it, as the link shows the latest calculation.
 
 ## Help us make it better
 

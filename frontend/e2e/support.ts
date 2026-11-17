@@ -1,5 +1,5 @@
 // Hermetic browser fixtures for heatmap cells, the basemap and streamed popup answers.
-import { devices, expect, type Page } from '@playwright/test'
+import { devices, expect, type Locator, type Page } from '@playwright/test'
 import { HM3_MANIFEST_URL, HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
 
 export const FIXTURE_DB = 63
@@ -299,4 +299,18 @@ export async function mapPixels(
   }))
   await afterPaint(page)
   return pngPixels(page, await canvas.screenshot({ scale: 'css' }), at)
+}
+
+/** A finger dragging a phone sheet's handle down by `distance` px, as a visitor closes the sheet:
+ *  Playwright's touchscreen only taps, so the touches are dispatched on the handle. */
+export async function swipeDown(handle: Locator, distance = 160): Promise<void> {
+  const box = (await handle.boundingBox())!
+  const x = box.x + box.width / 2, top = box.y + box.height / 2
+  const touch = (y: number) => [{ identifier: 0, clientX: x, clientY: y }]
+  await handle.dispatchEvent('touchstart', { touches: touch(top), changedTouches: touch(top), targetTouches: touch(top) })
+  for (const step of [1, 2, 3, 4]) {
+    const y = top + distance * step / 4
+    await handle.dispatchEvent('touchmove', { touches: touch(y), changedTouches: touch(y), targetTouches: touch(y) })
+  }
+  await handle.dispatchEvent('touchend', { touches: [], changedTouches: touch(top + distance), targetTouches: [] })
 }

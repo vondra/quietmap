@@ -5,9 +5,9 @@ intro: What changed in the data and the model, and what comes next.
 
 ## What comes next
 
-- **The whole world, then again from the newest data.** Every square of the world painted, then every
-  square painted from older data painted again, those whose data changed first. That brings the
-  flights as they pass, November's corrections and Lden to the whole map.
+- **The whole world again from the newest data.** Every square of the world is painted (16 November);
+  the squares painted from older data are being painted again, those whose data changed first. That
+  brings the flights as they pass, November's corrections and Lden to the whole map.
 - **Earlier years.** A noise map of 2024, from that year's roads, traffic, trains, flights and ships,
   is being built; 2019 or earlier follows. The years will switch and play one after another, so a
   place can be compared over time.
@@ -42,8 +42,8 @@ intro: What changed in the data and the model, and what comes next.
 - **A faster painter.** The map paints a square in about half the time and stays as close to the
   popup, within 1 phon at 98 % of sampled points painted from the same data. Until the whole map is
   painted again, it mixes squares painted from older data and with the flights heard the old way.
-- **Share this place.** At an open place, Share this place sends a link. Any copied address reopens
-  the same view, layers, unit, quiet threshold and selected stay; your saved names stay private.
+- **A place's link.** The browser address at an open place reopens the same view, layers, unit,
+  quiet threshold and selected stay; your saved names stay private.
 - **Quiet zones under the data.** The quiet zones' green lies under the data layers and the map's
   labels, which keep their own colours.
 - **Airports.** Official monthly counts of 790 airports add the take-offs and landings volunteer

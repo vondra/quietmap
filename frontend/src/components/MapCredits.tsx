@@ -1,4 +1,4 @@
-// Keep the basemap's required credit at the bottom, reserving its actual height below phone sheets.
+// The basemap's required credit in the map's corner; on a phone the control row stands on its measured height.
 import { AttributionControl } from 'maplibre-gl'
 import { useControl } from 'react-map-gl/maplibre'
 import { OSM_CREDIT } from '../utils/basemaps'

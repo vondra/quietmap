@@ -98,8 +98,8 @@ html, body {
   }
   /* The ⓘ is a button of the control row, left of the layers button (10 + 44 + 10 px from the edge),
      in the row's look (tucked under the row in maplibre's black disc it looked stray, owner
-     2026-10-16). The control row and sheets leave the attribution footer clear. */
-  :root { --map-footer-height: 16px; }
+     2026-10-16). The control row stands over the credit; a sheet covers it with the map's bottom. */
+  :root { --map-footer-height: 14px; }
   .maplibregl-ctrl-bottom-right {
     bottom: calc(16px + var(--map-footer-height)) !important;
     right: 64px !important;
@@ -110,25 +110,29 @@ html, body {
     height: 44px;
     border-radius: 0.5rem;
   }
+  /* CARTO's credit must stay on the map, legible, not behind a click (carto.com/attribution, read
+     2026-11-17): one small line in the map's corner, above an open sheet (--sheet-height,
+     lib/sheet-height.ts), with no strip under the sheets (owner 2026-11-17: "pod tím nemůže být ten pruh").
+     A light plate keeps it legible on loud colours and the satellite map. */
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
     position: fixed;
-    bottom: 0;
-    left: 0;
+    bottom: var(--sheet-height, 0px);
     right: 0;
     box-sizing: border-box;
-    display: grid;
-    place-items: center;
-    width: 100%;
-    min-height: 16px;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-    border-radius: 0;
-    line-height: 16px;
-    text-align: center;
+    padding: 0 4px;
+    border-radius: 4px 0 0 0;
+    background-color: rgb(255 255 255 / 0.75);
+    font-size: 10px;
+    line-height: 14px;
+    color: #404040;
+  }
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib a {
+    color: #404040 !important;
   }
 }
 
 /* Search bar: one horizontal placement for the field and every row beneath it.
-   Below md the whole bar leaves the account's 44 px button its room.
+   Below md the bar spans the width, the account at the field's end (owner 2026-11-17, as Google Maps).
    From md up the bar stays centered while that leaves the card
    column untouched, otherwise slides left to sit one gutter before the column,
    and narrows once even that no longer fits (clamp with min > max resolves to
@@ -137,7 +141,7 @@ html, body {
 .map-top-bar {
   position: fixed;
   left: var(--map-gutter);
-  width: calc(100% - 3 * var(--map-gutter) - 2.75rem);
+  width: calc(100% - 2 * var(--map-gutter));
 }
 @media (width >= theme(--breakpoint-md)) {
   .map-top-bar {

@@ -4,6 +4,7 @@ import { useViewScroll } from '../hooks/useViewScroll'
 import { useIsDesktop } from '../hooks/useIsDesktop'
 import LayerControlsBody, { type LayerControlsBodyProps } from './LayerControlsBody'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
+import { sheetHeightRef } from '../lib/sheet-height'
 
 interface LayersPanelProps extends LayerControlsBodyProps {
   open: boolean
@@ -37,7 +38,7 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!dragRef.current.isDragging) return
-    const { cancelClick, dismiss } = resolveSheetTouchEnd(e.changedTouches[0].clientY - dragRef.current.startY)
+    const { cancelClick, dismiss } = resolveSheetTouchEnd(e.changedTouches[0].clientY - dragRef.current.startY, e.currentTarget.parentElement!.offsetHeight)
     dragRef.current.isDragging = false
     if (cancelClick) {
       e.preventDefault()
@@ -65,7 +66,8 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
   // handle stays pinned above the scroller, like ControlCard's header.
   return (
     <div
-      className="fixed z-[1002] bg-background shadow-xl border border-border bottom-(--map-footer-height) left-0 right-0 rounded-t-xl"
+      ref={sheetHeightRef}
+      className="fixed z-[1002] bg-background shadow-xl border border-border bottom-0 left-0 right-0 rounded-t-xl"
       style={{ transform, transition }}
     >
       <div
