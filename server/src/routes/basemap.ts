@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance, FastifyReply } from 'fastify'
-import { Compression, type PMTiles, type RangeResponse } from 'pmtiles'
+import { Compression, TileType, type PMTiles, type RangeResponse } from 'pmtiles'
 import { openArchiveServedAsStored } from './pmtiles-file.ts'
 
 /** The archive is replaced by a newer planet under the same name, so nothing is kept longer. */
@@ -19,7 +19,7 @@ const MAX_ZOOM = 22
 
 const FONTSTACK = /^[A-Za-z0-9 ]+$/
 const GLYPH_RANGE = /^\d{1,5}-\d{1,5}$/
-const SPRITE_FILE = /^[a-z]+(?:@2x)?\.(json|png)$/
+const SPRITE_FILE = /^light(?:@2x)?\.(json|png)$/
 
 async function sendFile(reply: FastifyReply, path: string, contentType: string): Promise<FastifyReply> {
   let body: Buffer
@@ -42,6 +42,12 @@ export async function basemapRoutes(app: FastifyInstance, { basemapDir }: { base
 
   async function readTile(z: number, x: number, y: number): Promise<RangeResponse | undefined> {
     const opened = archive ??= openArchiveServedAsStored(join(basemapDir!, 'planet.pmtiles'), Compression.Gzip, PLANET_DIRECTORIES_MAX)
+      .then(async planet => {
+        // The route names the tiles vector tiles to the browser: an archive of anything else is not the base map.
+        const { tileType } = await planet.getHeader()
+        if (tileType !== TileType.Mvt) throw new Error(`planet.pmtiles holds tiles of type ${tileType}, not vector tiles`)
+        return planet
+      })
     try {
       return await (await opened).getZxy(z, x, y)
     } catch (error) {

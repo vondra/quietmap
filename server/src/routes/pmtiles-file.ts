@@ -34,8 +34,9 @@ class FileRangeSource implements Source {
     )
     try {
       if (!(await handle.stat()).isFile()) throw new Error(`${this.path} is not a regular file`)
-      // Positional reads may be short; only EOF ends the range early. The initial
-      // header probe asks for 16 KiB even when an empty archive is smaller.
+      // Positional reads may be short; only EOF ends the range early. The header probe at the
+      // file's start asks for 16 KiB even of a smaller archive; anywhere else a range that ends
+      // early is a truncated archive, and part of a tile must never be served as the tile.
       const data = new ArrayBuffer(length)
       const view = new Uint8Array(data)
       let filled = 0
@@ -44,7 +45,9 @@ class FileRangeSource implements Source {
         if (bytesRead === 0) break
         filled += bytesRead
       }
-      return filled === length ? { data } : { data: data.slice(0, filled) }
+      if (filled === length) return { data }
+      if (offset !== 0) throw new Error(`${this.path} ends inside the range ${offset}+${length}`)
+      return { data: data.slice(0, filled) }
     } finally {
       await handle.close()
     }

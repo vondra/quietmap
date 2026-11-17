@@ -1,5 +1,5 @@
 // The three basemaps (standard, terrain, satellite) and their MapLibre styles.
-import { layers, namedFlavor, type Flavor } from '@protomaps/basemaps'
+import { LIGHT, layers, type Flavor } from '@protomaps/basemaps'
 import type { LayerSpecification, SourceSpecification, StyleSpecification } from 'maplibre-gl'
 
 export type BasemapId = 'standard' | 'terrain' | 'satellite'
@@ -48,7 +48,7 @@ const INK = '#1a1a1a'
  *  on paper, water, greens and used ground pale, borders and railways faint, no land cover and no
  *  icons of shops and sights. */
 const QUIET_LIGHT: Flavor = {
-  ...namedFlavor('light'),
+  ...LIGHT,
   background: PAPER, earth: PAPER, water: WATER,
   park_a: GREEN_FAR, wood_a: GREEN_FAR, scrub_a: GREEN_FAR,
   park_b: GREEN_NEAR, wood_b: GREEN_NEAR, scrub_b: GREEN_NEAR, zoo: GREEN_NEAR,

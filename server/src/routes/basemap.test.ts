@@ -93,6 +93,21 @@ test('fonts and sprites are served by name; a name that leaves their directories
   }
 })
 
+test('an archive cut short or of another tile type answers 500, never part of a tile', async (t) => {
+  for (const [name, damage] of [
+    ['cut inside its tile', (archive: Buffer) => archive.subarray(0, archive.length - 3)],
+    ['raster tiles', (archive: Buffer) => { archive.writeUInt8(2, 99); return archive }],
+  ] as const) {
+    const damaged = mkdtempSync(join(tmpdir(), 'basemap-route-test-'))
+    t.after(() => rmSync(damaged, { recursive: true, force: true }))
+    writeFileSync(join(damaged, 'planet.pmtiles'), damage(archiveOfOneTile()))
+    const response = await (await app(t, damaged)).inject('/api/basemap/2/1/1.mvt')
+    assert.equal(response.statusCode, 500, name)
+    assert.equal(response.headers['content-encoding'], undefined, name)
+    assert.equal(response.headers['cache-control'], undefined, name)
+  }
+})
+
 test('without a base map directory the routes do not exist', async (t) => {
   const server = await app(t, null)
   for (const path of ['2/1/1.mvt', 'fonts/Noto%20Sans%20Regular/0-255.pbf', 'sprites/light@2x.json']) {

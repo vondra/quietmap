@@ -25,7 +25,8 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
     await page.mouse.down()
     await page.mouse.move(x, y - 80, { steps: 4 })
     await page.mouse.up()
-    await expect(credits).toBeHidden()
+    // At once, well before the five seconds that would fold it anyway.
+    await expect(credits).toBeHidden({ timeout: 1500 })
     // Folded, the credit is found through the ⓘ; a phone's control row drops to the bottom edge.
     const info = page.getByRole('link', { name: 'About quietmap.org' })
     await expect(info).toBeVisible()

@@ -2,7 +2,9 @@
 // click popup and the track of the loudest flight highlighted in it.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import Map, { NavigationControl, GeolocateControl, type MapRef, type ViewStateChangeEvent } from 'react-map-gl/maplibre'
-import type { GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
+import { setRTLTextPlugin, type GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
+// The package's exports name its ES module only; MapLibre's workers load this script file.
+import rtlTextPlugin from '../../node_modules/@mapbox/mapbox-gl-rtl-text/dist/mapbox-gl-rtl-text.js?url'
 import FlyToLocation from './FlyToLocation'
 import DetailPopup from './DetailPopup'
 import FlightTrackLayer from './FlightTrackLayer'
@@ -26,6 +28,11 @@ import { pixelPadding, type MapCamera } from '../lib/url-state'
 import type { Metric } from '../lib/hm3-decoder'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
+
+// Arabic and Hebrew names need MapLibre's text-shaping plugin: without it the base map's style falls
+// back to a name in English and shows none where OpenStreetMap has no English one. Fetched from the
+// map's own origin, and only once such a name comes into view.
+void setRTLTextPlugin(new URL(rtlTextPlugin, location.href).href, true)
 
 // A geolocate move ends with the position at the map's centre (its accuracy's box is centred in
 // Mercator, a fraction of a pixel off); a move cut short leaves it farther.
