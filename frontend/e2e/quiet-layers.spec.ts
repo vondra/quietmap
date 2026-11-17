@@ -118,9 +118,15 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
         geometry: { type: 'Polygon', coordinates: [[[x - 0.004, y - 0.004], [x + 0.004, y - 0.004], [x + 0.004, y + 0.004], [x - 0.004, y + 0.004], [x - 0.004, y - 0.004]]] } }] } })
     })
     await page.goto(`${mapUrl(POINT, 'road', 14)}&stay=1&reach=${POINT.lat},${POINT.lng},12,walk&panel=none`)
-    const pin = async () => (await mapPixels(page, POINT, [stayPoint], 14))[0]
+    // Opening the point may move it clear of the phone's sheet. Sample each geographic place
+    // against the settled camera, not the screen pixel it occupied before the selection.
+    const camera = () => {
+      const state = new URLSearchParams(new URL(page.url()).hash.slice(1))
+      return { ...POINT, lat: Number(state.get('lat')), lng: Number(state.get('lng')) }
+    }
+    const pin = async () => (await mapPixels(page, camera(), [stayPoint], 14))[0]
     const areaBlue = async () => {
-      const [inside, outside] = await mapPixels(page, POINT, [[POINT.lat, POINT.lng - 0.002], [POINT.lat, POINT.lng - 0.006]], 14)
+      const [inside, outside] = await mapPixels(page, camera(), [[POINT.lat, POINT.lng - 0.002], [POINT.lat, POINT.lng - 0.006]], 14)
       return inside[2] - outside[2]
     }
     await expect.poll(pin).toEqual([51, 65, 85, 255])
@@ -135,7 +141,7 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
       await expect.poll(areaBlue).toBeGreaterThan(20)
       await expect.poll(pin).toEqual([51, 65, 85, 255])
     }
-    const selectionPixels = () => mapPixels(page, POINT,
+    const selectionPixels = () => mapPixels(page, camera(),
       [[stayPoint[0], stayPoint[1] - 0.0001], [stayPoint[0], stayPoint[1] + 0.00015]], 14)
     await page.evaluate(point => { location.hash += `&d=${point.join(',')}` }, [stayPoint[0], stayPoint[1] + 0.0003])
     await expect.poll(selectionPixels).toEqual([[51, 65, 85, 255], [59, 130, 246, 255]])

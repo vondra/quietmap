@@ -321,7 +321,7 @@ export default function App() {
         {/* The layers card and the detail card are shrinkable flex items (min-h-0)
             that scroll their own content, so on a short viewport both stay reachable. The column ends
             over the map's corner, whose credits and ⓘ stay in sight with every card open. */}
-        <div className="hidden md:flex absolute top-3 right-(--map-gutter) bottom-11 flex-col gap-2 w-(--map-card-column) overflow-hidden">
+        <div className="map-card-column hidden md:flex absolute top-3 right-(--map-gutter) bottom-11 flex-col gap-2 w-(--map-card-column) overflow-hidden">
           <ControlCard
             tab={desktop ? cardTab : null}
             onTabChange={setCardTab}
