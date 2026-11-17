@@ -130,7 +130,11 @@ the European Union and ESA; all rights reserved).
 
 ### The map you look at
 
-- Base map: © [CARTO](https://carto.com/about-carto/), © OpenStreetMap contributors
+- Base map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL), with
+  [Natural Earth](https://www.naturalearthdata.com/) when zoomed far out, as
+  [Protomaps](https://protomaps.com/) vector tiles drawn in its style
+  ([BSD-3-Clause](https://github.com/protomaps/basemaps)) and served by us; labels in Noto Sans
+  ([SIL Open Font License](https://openfontlicense.org/))
 - Terrain base map: © [OpenTopoMap](https://opentopomap.org/)
   ([CC-BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/)), SRTM
 - Satellite imagery: powered by [Esri](https://www.esri.com/); source: Esri, Vantor, Earthstar

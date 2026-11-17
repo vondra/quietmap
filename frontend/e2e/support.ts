@@ -98,6 +98,17 @@ export async function mockTerrainBasemap(page: Page): Promise<void> {
   }))
 }
 
+/** The map's own base map without a server: no tile anywhere, an empty sprite sheet, no glyph. */
+async function mockOwnBasemap(page: Page): Promise<void> {
+  await page.route('**/api/basemap/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('.mvt')) return route.fulfill({ status: 204 })
+    if (path.endsWith('.json')) return route.fulfill({ json: {} })
+    if (path.endsWith('.png')) return route.fulfill({ contentType: 'image/png', body: BLACK_PNG })
+    return route.fulfill({ contentType: 'application/x-protobuf', body: '' })
+  })
+}
+
 type PopupSeam = {
   requests: string[]
   /** Requests aborted while their stream was still open. */
@@ -176,6 +187,7 @@ export async function endPopup(page: Page, index = -1): Promise<void> {
  *  their Lden. */
 export async function installHermeticMap(page: Page, point: PixelCenter): Promise<void> {
   await mockTerrainBasemap(page)
+  await mockOwnBasemap(page)
   await installPopupSeam(page)
   await page.route(`**${HM3_MANIFEST_URL}`, route => route.fulfill({
     status: 200,

@@ -21,6 +21,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     years: ['2026', '2025'],
     popupConcurrency: 2,
     tilesDir: scratch,
+    basemapDir: null,
     noIndex: false,
     photonUrl: 'http://127.0.0.1:9',
     valhallaUrl: 'http://127.0.0.1:9',

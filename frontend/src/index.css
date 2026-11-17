@@ -98,7 +98,8 @@ html, body {
   }
   /* The ⓘ is a button of the control row, left of the layers button (10 + 44 + 10 px from the edge),
      in the row's look (tucked under the row in maplibre's black disc it looked stray, owner
-     2026-10-16). The control row stands over the credit; a sheet covers it with the map's bottom. */
+     2026-10-16). The control row stands over the credit, at the bottom edge once the credit has folded
+     away; a sheet covers it with the map's bottom. */
   :root { --map-footer-height: 14px; }
   .maplibregl-ctrl-bottom-right {
     bottom: calc(16px + var(--map-footer-height)) !important;
@@ -110,10 +111,10 @@ html, body {
     height: 44px;
     border-radius: 0.5rem;
   }
-  /* CARTO's credit must stay on the map, legible, not behind a click (carto.com/attribution, read
-     2026-11-17): one small line in the map's corner, above an open sheet (--sheet-height,
-     lib/sheet-height.ts), with no strip under the sheets (owner 2026-11-17: "pod tím nemůže být ten pruh").
-     A light plate keeps it legible on loud colours and the satellite map. */
+  /* Esri's and OpenTopoMap's credits must stay on the map, legible, not behind a click; OpenStreetMap's
+     alone, on the standard map, folds away (MapCredits). One small line in the map's corner, above an
+     open sheet (--sheet-height, lib/sheet-height.ts), with no strip under the sheets (owner 2026-11-17:
+     "pod tím nemůže být ten pruh"). A light plate keeps it legible on loud colours and the satellite map. */
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl.maplibregl-ctrl-attrib {
     position: fixed;
     bottom: var(--sheet-height, 0px);

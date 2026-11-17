@@ -1,6 +1,7 @@
-// The HTTP API: the streamed popup, the geocoder proxies, the heatmap tiles, the data layers, the
-// places to stay and the optional sign-in with a signed-in visitor's recordings and photos, behind
-// per-client rate limits on the expensive routes. The static frontend is added by server.ts (web.ts).
+// The HTTP API: the streamed popup, the geocoder proxies, the heatmap tiles, the base map, the data
+// layers, the places to stay and the optional sign-in with a signed-in visitor's recordings and
+// photos, behind per-client rate limits on the expensive routes. The static frontend is added by
+// server.ts (web.ts).
 import Fastify from 'fastify'
 import type { FastifyError, FastifyInstance } from 'fastify'
 import compress from '@fastify/compress'
@@ -13,6 +14,7 @@ import { searchRoutes } from './routes/search.ts'
 import { isochronRoutes } from './routes/isochron.ts'
 import { heatmapPmtilesRoutes } from './routes/heatmap-pmtiles.ts'
 import { heatmapManifestRoutes } from './routes/heatmap-manifest.ts'
+import { basemapRoutes } from './routes/basemap.ts'
 import { rasterRoutes } from './routes/raster.ts'
 import { sourceOutlineRoutes } from './routes/source-outline.ts'
 import { stayRoutes } from './routes/stay.ts'
@@ -26,7 +28,7 @@ const POPUP_QUEUE_PER_SLOT = 2
 /** A click still computing after this is killed and answered with an error. */
 const POPUP_TIMEOUT_MS = 30_000
 
-export type AppConfig = Pick<Config, 'popupBin' | 'rasterBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex' | 'photonUrl' | 'valhallaUrl' | 'stay22' | 'accounts'>
+export type AppConfig = Pick<Config, 'popupBin' | 'rasterBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'basemapDir' | 'noIndex' | 'photonUrl' | 'valhallaUrl' | 'stay22' | 'accounts'>
 
 export async function buildApp(
   config: AppConfig,
@@ -90,6 +92,7 @@ export async function buildApp(
   await app.register(isochronRoutes, { valhallaUrl: config.valhallaUrl })
   await app.register(heatmapPmtilesRoutes, { tilesDir: config.tilesDir })
   await app.register(heatmapManifestRoutes, { tilesDir: config.tilesDir })
+  await app.register(basemapRoutes, { basemapDir: config.basemapDir })
   await app.register(rasterRoutes, { rasterBin: config.rasterBin, preparedDir: config.preparedDir, year: config.years[0] })
   await app.register(stayRoutes, { stay22: config.stay22 })
   const accounts = config.accounts && {

@@ -18,10 +18,10 @@ test('on the terrain basemap, whose labels are in its raster tiles, the heatmap 
 
 test('on a basemap with labels the heatmap goes beneath the first label, below the app\'s layers too', () => {
   const style = {
-    sources: { carto: { type: 'vector', url: '' }, 'clicked-point': geojson },
-    layers: [{ id: 'water', type: 'fill', source: 'carto' }, { id: '_label-place', type: 'symbol', source: 'carto' }, clickedPoint],
+    sources: { protomaps: { type: 'vector', url: '' }, 'clicked-point': geojson },
+    layers: [{ id: 'water', type: 'fill', source: 'protomaps' }, { id: 'places_locality', type: 'symbol', source: 'protomaps' }, clickedPoint],
   }
-  assert.equal(overlayAnchorId(style), '_label-place')
+  assert.equal(overlayAnchorId(style), 'places_locality')
 })
 
 test('with neither labels nor the app\'s layers the heatmap goes on top', () => {

@@ -9,6 +9,7 @@ import { useStayNoise } from '../hooks/useStayNoise'
 import type { Metric } from '../lib/hm3-decoder'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
 import type { Map as MapLibreMap } from 'maplibre-gl'
+import { LABEL_FONT } from '../utils/basemaps'
 import {
   firstCheckin, STAY_DOT_LAYER as DOTS, STAY_MIN_ZOOM, stayFeatures, stayOfFeature, stayRequests, viewFootprint, withStays,
   type Stay, type StaySearch, type ViewBox,
@@ -171,8 +172,7 @@ export default function StayLayer({ search, maxPrice, metric, quietThreshold }: 
             filter={['!=', ['get', 'price'], '']}
             layout={{
               'text-field': ['get', 'price'],
-              // Digits, the comma and € are all in it (its glyphs, 2026-10-08).
-              'text-font': ['Montserrat Medium'],
+              'text-font': [LABEL_FONT],
               'text-size': 12,
               'text-anchor': 'bottom',
               'text-offset': [0, -0.55],

@@ -16,6 +16,7 @@ const CONFIG: AppConfig = {
   years: ['2026'],
   popupConcurrency: 1,
   tilesDir: tmpdir(),
+  basemapDir: null,
   noIndex: false,
   photonUrl: 'http://127.0.0.1:9',
   valhallaUrl: 'http://127.0.0.1:9',
