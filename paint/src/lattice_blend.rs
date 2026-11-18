@@ -1,8 +1,17 @@
-//! Lattice points' paint blended in the logarithm, and a pixel's loudness carried from them along the block's slope of loudness against energy.
+//! A pixel's paint blended between a block's exact points: its own sources by their free field, the rest in the logarithm, its loudness carried along the block's slope of loudness against energy.
 
 use crate::exact::LAYERS;
 use crate::levels::Painted;
-use crate::paint::bilinear;
+
+/// An exact point a block's pixels are blended from: its paint and, of its layers' energies, what
+/// the block's own sources (crossing it or the eight around) deliver there, with their free field
+/// there ([`crate::free_field`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Anchor {
+    pub paint: Painted,
+    pub own: [f64; LAYERS],
+    pub free: [f64; LAYERS],
+}
 
 /// The floors added to an energy and a loudness before their logarithm (0 dB, a sixteenth of a sone:
 /// the stored silence): silence then blends too, and values far under a floor nearly linearly.
@@ -10,9 +19,41 @@ pub(crate) const ENERGY_FLOOR: f64 = 1.0;
 pub(crate) const SONE_FLOOR: f64 = 1.0 / 16.0;
 
 /// A layer's energies and the total's, each in the logarithm.
-fn log_energies(energies: &[f64; LAYERS]) -> [f64; LAYERS + 1] {
+pub(crate) fn log_energies(energies: &[f64; LAYERS]) -> [f64; LAYERS + 1] {
     let total: f64 = energies.iter().sum();
     std::array::from_fn(|at| (energies.get(at).copied().unwrap_or(total) + ENERGY_FLOOR).ln())
+}
+
+/// An exact point as the pixels blended from it read it, each logarithm taken once for all of
+/// them (taken again at every blended pixel they were a tenth of a light square's work on the
+/// cores): its layers' energies and their total, its loudness, each layer's energy without the
+/// block's own sources' and theirs, and their free field, plain too.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Heard {
+    pub paint: Painted,
+    energies: [f64; LAYERS + 1],
+    ndens: [f64; LAYERS + 1],
+    rest: [f64; LAYERS],
+    own: [f64; LAYERS],
+    free_ln: [f64; LAYERS],
+    free: [f64; LAYERS],
+}
+
+impl Heard {
+    pub fn of(anchor: &Anchor) -> Self {
+        let (energies, ndens) = &anchor.paint;
+        Heard {
+            paint: anchor.paint,
+            free: anchor.free,
+            energies: log_energies(energies),
+            ndens: ndens.map(|sone| (sone + SONE_FLOOR).ln()),
+            rest: std::array::from_fn(|layer| {
+                ((energies[layer] - anchor.own[layer]).max(0.0) + ENERGY_FLOOR).ln()
+            }),
+            own: anchor.own.map(|energy| (energy + ENERGY_FLOOR).ln()),
+            free_ln: anchor.free.map(f64::ln),
+        }
+    }
 }
 
 /// Per layer and for the total how a block's loudness follows its energy from one lattice point
@@ -22,22 +63,20 @@ fn log_energies(energies: &[f64; LAYERS]) -> [f64; LAYERS + 1] {
 /// of two rural squares (153,000 of 1 sone) that was 0.21-0.24 phon rms from their own loudness
 /// where the patch's probe confirmed it (88-95 % of the patches), 0.5-1.0 % of them over 1 phon.
 /// Where the energy hardly varies the slope is Stevens' 0.3 (a doubling of loudness every 10 dB).
-pub(crate) fn loudness_slopes(lattice: &[Option<Painted>]) -> [f64; LAYERS + 1] {
+pub(crate) fn loudness_slopes(lattice: &[Option<Heard>]) -> [f64; LAYERS + 1] {
     const STEVENS: f64 = 0.3;
-    let heard: Vec<([f64; LAYERS + 1], &[f64; LAYERS + 1])> = (lattice.iter().flatten())
-        .map(|(energies, ndens)| (log_energies(energies), ndens))
-        .collect();
+    let heard: Vec<&Heard> = lattice.iter().flatten().collect();
     let count = heard.len() as f64;
     std::array::from_fn(|at| {
-        let x = |k: usize| heard[k].0[at];
-        let y = |k: usize| (heard[k].1[at] + SONE_FLOOR).ln();
+        let x = |k: usize| heard[k].energies[at];
+        let y = |k: usize| heard[k].ndens[at];
         let mean_x = (0..heard.len()).map(x).sum::<f64>() / count;
         let mean_y = (0..heard.len()).map(y).sum::<f64>() / count;
         let spread: f64 = (0..heard.len()).map(|k| (x(k) - mean_x).powi(2)).sum();
         let together: f64 = (0..heard.len())
             .map(|k| (x(k) - mean_x) * (y(k) - mean_y))
             .sum();
-        // Under a spread of 1 dB a point over the lattice the slope is its noise.
+        // Under a spread of 0.2 dB rms over the lattice the slope is its noise.
         if heard.len() < 4 || spread < 0.05 * count / 25.0 {
             STEVENS
         } else {
@@ -59,35 +98,29 @@ const CARRIED_BEYOND: f64 = 0.115_129_254_649_702_28;
 /// in the world sample's 56 million cells).
 const HEARD_FROM: f64 = 100.0;
 
-/// Whether a pixel's `energies` lie within the range of its patch's outdoor lattice points'
-/// (`around`), widened by [`CARRIED_BEYOND`], in the total and in every layer heard there.
-pub(crate) fn within_lattice_range(
-    around: &[Option<Painted>; 4],
-    energies: &[f64; LAYERS],
-) -> bool {
-    let here = log_energies(energies);
-    let there: Vec<[f64; LAYERS + 1]> = (around.iter().flatten())
-        .map(|(energies, _)| log_energies(energies))
-        .collect();
+/// Whether a pixel's energies (`here`, [`log_energies`]) lie within the range of the outdoor
+/// points' `around` it, widened by [`CARRIED_BEYOND`], in the total and in every layer heard there.
+pub(crate) fn within_lattice_range(around: [Option<&Heard>; 4], here: &[f64; LAYERS + 1]) -> bool {
     let heard_from = (HEARD_FROM + ENERGY_FLOOR).ln();
     (0..=LAYERS).all(|at| {
-        let (low, high) = (there.iter())
+        let (low, high) = (around.iter().flatten())
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), point| {
-                (low.min(point[at]), high.max(point[at]))
+                (low.min(point.energies[at]), high.max(point.energies[at]))
             });
         (at < LAYERS && here[at].max(high) < heard_from)
             || (here[at] >= low - CARRIED_BEYOND && here[at] <= high + CARRIED_BEYOND)
     })
 }
 
-/// The loudness among four lattice points (`weights` theirs there, bilinear) from `energies` there:
-/// each outdoor point's loudness moved along `slopes` to the energy there, blended in the logarithm
-/// by the outdoor points' weights; `None` where none of them counts. A town's patches mostly have
-/// a lattice point in a building, and the others carry as well.
+/// The loudness among four lattice points (`weights` theirs there, bilinear) of a pixel of the
+/// energies `here` ([`log_energies`]): each outdoor point's loudness moved along `slopes` to the
+/// energy there, blended in the logarithm by the outdoor points' weights; `None` where none of
+/// them counts. A town's patches mostly have a lattice point in a building, and the others carry
+/// as well.
 pub(crate) fn carried_loudness(
-    around: [Option<Painted>; 4],
+    around: [Option<&Heard>; 4],
     weights: [f64; 4],
-    energies: &[f64; LAYERS],
+    here: &[f64; LAYERS + 1],
     slopes: &[f64; LAYERS + 1],
 ) -> Option<[f64; LAYERS + 1]> {
     let outdoor: f64 = (around.iter().zip(weights))
@@ -97,32 +130,71 @@ pub(crate) fn carried_loudness(
     if outdoor <= 0.0 {
         return None;
     }
-    let here = log_energies(energies);
     let mut moved = [0.0; LAYERS + 1];
     for (point, weight) in around.iter().zip(weights) {
-        let Some((there, ndens)) = point else {
+        let Some(point) = point else {
             continue;
         };
-        let there = log_energies(there);
         for at in 0..=LAYERS {
-            moved[at] += weight / outdoor
-                * ((ndens[at] + SONE_FLOOR).ln() + slopes[at] * (here[at] - there[at]));
+            moved[at] +=
+                weight / outdoor * (point.ndens[at] + slopes[at] * (here[at] - point.energies[at]));
         }
     }
     Some(moved.map(|level| (level.exp() - SONE_FLOOR).max(0.0)))
 }
 
-/// Four lattice points' paint blended in the logarithm of each energy and loudness, with a floor
-/// that lets silence blend (0 dB, a sixteenth of a sone: the stored silence): a road's field
-/// between lattice points falls as 1/r, and the middle of a patch 12 to 36 m from a road reads
-/// 1.25 dB loud blended in energy, 0.6 dB in the logarithm.
-pub(crate) fn blend(around: [Painted; 4], fx: f64, fy: f64) -> Painted {
-    let of = |value: &dyn Fn(&Painted) -> f64, floor: f64| {
-        let level = bilinear(around.map(|paint| (value(&paint) + floor).ln()), fx, fy);
-        (level.exp() - floor).max(0.0)
-    };
-    (
-        std::array::from_fn(|layer| of(&|paint| paint.0[layer], ENERGY_FLOOR)),
-        std::array::from_fn(|layer| of(&|paint| paint.1[layer], SONE_FLOOR)),
-    )
+/// The paint among four exact points (`weights` theirs there, bilinear) of a pixel whose block's
+/// own sources have the free field `free` there; `None` where its energies lie beyond the points'
+/// ([`within_lattice_range`]) or it stands nearer own sources than every point (their free field
+/// over [`CARRIED_BEYOND`] beyond the points') where they could be heard (they or their free field
+/// alone reach [`HEARD_FROM`]: no point may have heard them): a pass paints it.
+/// Their excess nearer than any point is unknown. Per layer the own sources' energy blended
+/// between the points in the logarithm over the energy's floor, as the rest of the layer is,
+/// times their free field at the pixel over the points' free field blended so: one rule for every
+/// cell, so two cells agree along the edge they share, and a source no point hears adds nothing
+/// however near the pixel stands (its free field's ratio alone once made 35 dB of silence). A
+/// road's field falls as 1/r from its axis, and the middle of a patch 12 to 36 m from a road read
+/// 1.25 dB loud blended in energy and 0.6 dB in the logarithm, where its free field is exact and
+/// its excess changes slowly. On 64 blocks of each of 18 squares, every loud source traced at
+/// every pixel, a block then computes 9.9 points instead of 28.3 in the lightest class of ground
+/// squares and 29.5 instead of 49.1 in the next, the blended pixels as near the exact sum (0.18
+/// against 0.21 and 0.15 against 0.15 dB rms; private evidence 2026-11-18/fable-speed-2). The
+/// loudness is the points' moved to the pixel's energies ([`carried_loudness`]): between points
+/// of equal energies their blend in the logarithm.
+pub(crate) fn blend(
+    around: [&Heard; 4],
+    weights: [f64; 4],
+    free: &[f64; LAYERS],
+    slopes: &[f64; LAYERS + 1],
+) -> Option<Painted> {
+    let between =
+        |values: [f64; 4]| -> f64 { values.iter().zip(weights).map(|(v, w)| v * w).sum() };
+    let mut energies = [0.0; LAYERS];
+    for layer in 0..LAYERS {
+        energies[layer] =
+            (between(around.map(|point| point.rest[layer])).exp() - ENERGY_FLOOR).max(0.0);
+        if free[layer] == 0.0 {
+            continue;
+        }
+        let heard = between(around.map(|point| point.own[layer])).exp() - ENERGY_FLOOR;
+        let own = heard * free[layer] / between(around.map(|point| point.free_ln[layer])).exp();
+        let nearest = (around.iter()).fold(0.0f64, |most, point| most.max(point.free[layer]));
+        // Not finite: a point end-on to the block's only piece of the layer has no free field.
+        if !own.is_finite()
+            || (own.max(free[layer]) >= HEARD_FROM && free[layer] > nearest * CARRIED_BEYOND.exp())
+        {
+            return None;
+        }
+        energies[layer] += own;
+    }
+    let here = log_energies(&energies);
+    let around = around.map(Some);
+    if !within_lattice_range(around, &here) {
+        return None;
+    }
+    carried_loudness(around, weights, &here, slopes).map(|ndens| (energies, ndens))
 }
+
+#[cfg(test)]
+#[path = "lattice_blend_tests.rs"]
+mod tests;

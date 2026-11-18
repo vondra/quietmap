@@ -1,19 +1,21 @@
 //! Source blocks sampled: a block's corners, coarse lattice or fine lattice checked against pixel probes, and the patches that blend.
 //!
 //! These samples use the ordinary painter's source admission, propagation and sound model. A block
-//! no source or screening edge crosses paints one probe a quadrant first: where all four agree with
-//! the blend of the block's corners, the corners paint the block; else with its coarse lattice (its
+//! no screening edge crosses paints one probe a quadrant first: where all four agree with the
+//! blend of the block's corners, the corners paint the block; else with its coarse lattice (its
 //! edges and middle), that does. Elsewhere the fine lattice and its sixteen patch probes follow,
-//! the coarse samples among them, and each patch blends where its probe agrees.
+//! the coarse samples among them, and each patch blends where its probe agrees. A blend takes the
+//! block's own sources by their free field at the pixel ([`crate::lattice_blend::blend`]): a road
+//! across a block is no reason to compute its pixels, only what the blend cannot tell of it.
 
-use crate::blocks::{Block, meets};
+use crate::blocks::Block;
 use crate::exact::{LAYERS, Point};
-use crate::lattice_blend::{blend, loudness_slopes};
+use crate::free_field::OwnSources;
+use crate::lattice_blend::Anchor;
 use crate::levels::Painted;
 use crate::paint::{PASS_BLOCKS, metres_at, rectangle_at, runs_within, shortest_pixel_side_metres};
 use crate::points::PointPainter;
-use crate::quiet_samples::{QuietSamples, sample_positions};
-use crate::visible::visibly_agrees;
+use crate::quiet_samples::{Lattice, QuietSamples, sample_positions};
 use rayon::prelude::*;
 
 /// Each block's exact samples and checked patches; rejected patches retain their other pixels.
@@ -35,10 +37,26 @@ pub(crate) fn sample_block_pixels(
         + popup::obstacles::FACADE_RECEIVER_OFFSET_M
             / shortest_pixel_side_metres(square, grid.pixels);
     let (axis, positions) = sample_positions(b);
+    let corner_lines = [-0.5, b as f64 - 0.5];
+    let coarse_lines = [axis[0], axis[2], axis[4]].map(|at| at as f64);
     let passes = (0..block_ids.len())
         .step_by(PASS_BLOCKS)
         .map(|start| start..(start + PASS_BLOCKS).min(block_ids.len()))
         .collect();
+    // Whether no screening edge crosses a rectangle of block `at`'s pixels (with the margin
+    // protecting the pixels used to rank façades).
+    let edge_free = |at: usize, low: [usize; 2], high: [usize; 2]| {
+        let (base_x, base_y) = ((at % side) * b, (at / side) * b);
+        let (low, high) = rectangle_at(
+            square,
+            grid.pixels,
+            (base_x + low[0]) as f64 + 0.5 - receiver_protection_pixels,
+            (base_y + low[1]) as f64 + 0.5 - receiver_protection_pixels,
+            (base_x + high[0]) as f64 + 0.5 + receiver_protection_pixels,
+            (base_y + high[1]) as f64 + 0.5 + receiver_protection_pixels,
+        );
+        square.obstacles.has_no_screening_edges(low, high)
+    };
     // The existing scheduler overlaps sample assembly and card work, retaining its bounded chunks.
     let sampled = painter.in_passes(passes, |range| {
         let chunk = &block_ids[range];
@@ -52,78 +70,67 @@ pub(crate) fn sample_block_pixels(
             .iter()
             .map(|block| positions.len() * block.most)
             .collect();
-        let rectangle_of = |at: usize, low: [usize; 2], high: [usize; 2]| {
-            let (base_x, base_y) = ((at % side) * b, (at / side) * b);
-            rectangle_at(
-                square,
-                grid.pixels,
-                (base_x + low[0]) as f64 + 0.5 - receiver_protection_pixels,
-                (base_y + low[1]) as f64 + 0.5 - receiver_protection_pixels,
-                (base_x + high[0]) as f64 + 0.5 + receiver_protection_pixels,
-                (base_y + high[1]) as f64 + 0.5 + receiver_protection_pixels,
-            )
-        };
-        // Whether block `slot` of the chunk has no exact source and no screening edge across a
-        // rectangle of its pixels (with the façade margin).
-        let clear = |slot: usize, at: usize, low: [usize; 2], high: [usize; 2]| {
-            let (low, high) = rectangle_of(at, low, high);
-            let near = blocks[slot].exact.iter().any(|&source| {
-                let [a, b] = square.candidates[source as usize].ends_m;
-                meets(a, b, low, high)
-            });
-            !near && square.obstacles.has_no_screening_edges(low, high)
-        };
-        // A block's four corners' paint, where all four stand outdoors.
-        let corners_of = |at: usize| -> Option<[Painted; 4]> {
-            let first = (at / side) * (side + 1) + at % side;
-            let around = [first, first + 1, first + side + 1, first + side + 2];
-            (around.iter())
-                .all(|&corner| painter.corners.corner_points[corner].own_footprint == 0)
-                .then(|| around.map(|corner| corner_paint[corner]))
-        };
+        let own: Vec<OwnSources> = (blocks.par_iter())
+            .map(|block| OwnSources::of(square, &block.own))
+            .collect::<Result<_, String>>()?;
         for run in runs_within(&bounds, PASS_BLOCKS) {
             let ids = &chunk[run.clone()];
-            let mut values: Vec<Vec<Option<Painted>>> =
+            let block_of = |slot: usize| &blocks[run.start + slot];
+            let own_of = |slot: usize| &own[run.start + slot];
+            let mut samples: Vec<Vec<Option<Anchor>>> =
                 vec![vec![None; positions.len()]; ids.len()];
-            // A block no source or screening edge crosses may blend where each quadrant's probe
-            // agrees: first from its corners, then from the coarse lattice (its edges and middle);
-            // then the rest where they disagree.
-            let open: Vec<usize> = (0..ids.len())
-                .filter(|&slot| clear(run.start + slot, ids[slot], [0, 0], [axis[4], axis[4]]))
-                .collect();
-            let subset = |slots: &[usize]| -> (Vec<&Block>, Vec<usize>) {
-                (slots.iter())
-                    .map(|&slot| (&blocks[run.start + slot], ids[slot]))
-                    .unzip()
+            // Paints the `wanted` samples of the blocks in `slots`.
+            let sample = |samples: &mut [Vec<Option<Anchor>>],
+                          slots: &[usize],
+                          wanted: &[usize]|
+             -> Result<(), String> {
+                let (blocks, ids): (Vec<&Block>, Vec<usize>) =
+                    (slots.iter().map(|&slot| (block_of(slot), ids[slot]))).unzip();
+                let own: Vec<&OwnSources> = slots.iter().map(|&slot| own_of(slot)).collect();
+                let painted =
+                    paint_positions(painter, (&blocks, &own), &ids, (wanted, &positions))?;
+                for (&slot, heard) in slots.iter().zip(painted) {
+                    for (&k, anchor) in wanted.iter().zip(heard) {
+                        samples[slot][k] = anchor;
+                    }
+                }
+                Ok(())
             };
-            let (open_blocks, open_ids) = subset(&open);
-            let probes = paint_positions(painter, &open_blocks, &open_ids, &QUADRANT_PROBES)?;
-            let mut coarser = Vec::new();
-            for (&slot, heard) in open.iter().zip(probes) {
-                for (&k, value) in QUADRANT_PROBES.iter().zip(&heard) {
-                    values[slot][k] = *value;
-                }
-                let blended =
-                    (corners_of(ids[slot])).and_then(|corners| corner_lattice(b, corners, &heard));
-                match blended {
-                    Some(lattice) => values[slot] = lattice,
-                    None => coarser.push(slot),
-                }
-            }
+            // A block no screening edge crosses may blend whole where each quadrant's probe agrees:
+            // first from its corners, then from the coarse lattice (its edges and middle).
+            let open: Vec<usize> = (0..ids.len())
+                .filter(|&slot| edge_free(ids[slot], [0, 0], [axis[4], axis[4]]))
+                .collect();
+            sample(&mut samples, &open, &QUADRANT_PROBES)?;
+            let corners: Vec<[Option<Anchor>; 4]> = (open.par_iter())
+                .map(|&slot| {
+                    let own = (block_of(slot), own_of(slot));
+                    corner_anchors(painter, corner_paint, own, ids[slot])
+                })
+                .collect();
+            let corners_of =
+                |slot: usize| &corners[open.binary_search(&slot).expect("an open block")];
             let coarse_rest = &COARSE_FIRST[..9];
-            let (coarser_blocks, coarser_ids) = subset(&coarser);
-            let coarse = paint_positions(painter, &coarser_blocks, &coarser_ids, coarse_rest)?;
+            let coarser: Vec<usize> = (open.iter().copied())
+                .filter(|&slot| {
+                    let lattice = Lattice::new(&corner_lines, corners_of(slot));
+                    !probes_agree(&lattice, &samples[slot], &positions)
+                })
+                .collect();
+            sample(&mut samples, &coarser, coarse_rest)?;
+            let coarse_of = |samples: &[Option<Anchor>]| -> Vec<Option<Anchor>> {
+                coarse_rest.iter().map(|&k| samples[k]).collect()
+            };
             let mut finer: Vec<usize> =
                 (0..ids.len()).filter(|slot| !open.contains(slot)).collect();
-            for (&slot, heard) in coarser.iter().zip(coarse) {
-                for (&k, value) in coarse_rest.iter().zip(heard) {
-                    values[slot][k] = value;
-                }
-                match coarse_lattice(axis, &values[slot]) {
-                    Some(lattice) => values[slot] = lattice,
-                    None => finer.push(slot),
-                }
-            }
+            finer.extend((coarser.iter().copied()).filter(|&slot| {
+                let coarse = coarse_of(&samples[slot]);
+                !probes_agree(
+                    &Lattice::new(&coarse_lines, &coarse),
+                    &samples[slot],
+                    &positions,
+                )
+            }));
             finer.sort_unstable();
             // What a finer block has not painted yet: all of a block not open, else the fine
             // lattice beside the coarse one.
@@ -133,48 +140,35 @@ pub(crate) fn sample_block_pixels(
             let rest: Vec<usize> = (all.iter().copied())
                 .filter(|k| !COARSE_FIRST.contains(k))
                 .collect();
-            for (slots, missing) in [(&whole, &all), (&fine, &rest)] {
-                let (finer_blocks, finer_ids) = subset(slots);
-                let painted = paint_positions(painter, &finer_blocks, &finer_ids, missing)?;
-                for (&slot, heard) in slots.iter().zip(painted) {
-                    for (&k, value) in missing.iter().zip(heard) {
-                        values[slot][k] = value;
-                    }
-                }
-            }
-            for (slot, &at) in ids.iter().enumerate() {
-                let complete_coarse = !finer.contains(&slot);
-                let mut sampled = QuietSamples {
-                    axis,
-                    values: std::mem::take(&mut values[slot]),
-                    accepted: [complete_coarse; 16],
-                    carried: [false; 16],
-                    slopes: [0.0; LAYERS + 1],
-                };
-                if complete_coarse {
-                    retain[run.start + slot] = false;
-                    accepted.push((at, sampled));
-                    continue;
-                }
-                sampled.slopes = loudness_slopes(&sampled.values[..25]);
-                for (cell, &(x, y)) in positions[25..].iter().enumerate() {
-                    let Some(heard) = sampled.values[25 + cell] else {
-                        continue;
+            sample(&mut samples, &whole, &all)?;
+            sample(&mut samples, &fine, &rest)?;
+            let settled: Vec<QuietSamples> = (0..ids.len())
+                .into_par_iter()
+                .map(|slot| {
+                    let at = ids[slot];
+                    let (base_x, base_y) = ((at % side) * b, (at / side) * b);
+                    let free = |x: usize, y: usize| {
+                        let pixel = (base_y + y) * grid.pixels + base_x + x;
+                        own_of(slot).free_field_at_pixel(square, grid.pixels, pixel)
                     };
-                    let (i, j) = (cell % 4, cell / 4);
-                    sampled.carried[cell] = sampled.carries_probe([i, j], (x, y), &heard);
-                    if !sampled.agrees_with_probe([i, j], (x, y), &heard) {
-                        continue;
+                    if finer.binary_search(&slot).is_ok() {
+                        let patch_edge_free = |cell: usize| {
+                            let (i, j) = (cell % 4, cell / 4);
+                            edge_free(at, [axis[i], axis[j]], [axis[i + 1], axis[j + 1]])
+                        };
+                        QuietSamples::patched(b, &samples[slot], &patch_edge_free, &free)
+                    } else if coarser.binary_search(&slot).is_ok() {
+                        let coarse = coarse_of(&samples[slot]);
+                        QuietSamples::blended_whole(b, &Lattice::new(&coarse_lines, &coarse), &free)
+                    } else {
+                        let lattice = Lattice::new(&corner_lines, corners_of(slot));
+                        QuietSamples::blended_whole(b, &lattice, &free)
                     }
-                    sampled.accepted[cell] = clear(
-                        run.start + slot,
-                        at,
-                        [axis[i], axis[j]],
-                        [axis[i + 1], axis[j + 1]],
-                    );
-                }
+                })
+                .collect();
+            for ((slot, &at), sampled) in ids.iter().enumerate().zip(settled) {
                 retain[run.start + slot] = !sampled.complete();
-                if sampled.values.iter().any(Option::is_some) {
+                if sampled.paints_a_pixel() {
                     accepted.push((at, sampled));
                 }
             }
@@ -204,78 +198,70 @@ const COARSE_FIRST: [usize; 13] = [0, 2, 4, 10, 12, 14, 20, 22, 24, 6, 8, 16, 18
 /// The quadrants' probes among them, painted before all: the probes of the corners' blend too.
 const QUADRANT_PROBES: [usize; 4] = [6, 8, 16, 18];
 
-/// A block of `b` pixels' 41 samples blended from its four `corners`' paint (north-west, north-east,
-/// south-west, south-east) when its quadrants' `probes` agree with the blend there, as a patch's
-/// probe must; `None` otherwise. Every sample, the probes too, takes the blend, which the lattice
-/// then interpolates exactly. The corners hear every loud source, and neighbouring blocks share
-/// them. (One probe in the middle let a road beside the block bend its field unseen: of 554 popup
-/// clicks of three squares 16 instead of 8 were over 1 phon.)
-fn corner_lattice(
-    b: usize,
-    corners: [Painted; 4],
-    probes: &[Option<Painted>],
-) -> Option<Vec<Option<Painted>>> {
-    let within = |at: usize| (at as f64 + 0.5) / b as f64;
-    let (_, positions) = sample_positions(b);
-    let blended = |k: usize| blend(corners, within(positions[k].0), within(positions[k].1));
-    (QUADRANT_PROBES.iter().zip(probes))
-        .all(|(&k, probe)| probe.is_some_and(|probe| visibly_agrees(&probe, &blended(k))))
-        .then(|| (0..positions.len()).map(|k| Some(blended(k))).collect())
+/// Whether a block's four quadrant probes among its `samples` (at `positions`) agree with `lattice`'s
+/// blend there, as a patch's probe must: the lattice then paints the block. The corners hear every
+/// loud source, and neighbouring blocks share them. (One probe in the middle let a road beside the
+/// block bend its field unseen: of 554 popup clicks of three squares 16 instead of 8 were over
+/// 1 phon.)
+fn probes_agree(
+    lattice: &Lattice,
+    samples: &[Option<Anchor>],
+    positions: &[(usize, usize)],
+) -> bool {
+    QUADRANT_PROBES.iter().all(|&k| {
+        let (x, y) = positions[k];
+        samples[k].is_some_and(|probe| lattice.agrees_with(x, y, &probe))
+    })
 }
 
-/// A block's 41 samples blended from its coarse lattice (`values` at [`COARSE_FIRST`], the rest
-/// unknown) when each quadrant's probe agrees with the blend there, as a patch's probe must; `None`
-/// otherwise. The coarse lattice keeps its exact values; every other sample, the probes too, takes
-/// the blend, so that the fine lattice interpolates the coarse one exactly.
-fn coarse_lattice(axis: [usize; 5], values: &[Option<Painted>]) -> Option<Vec<Option<Painted>>> {
-    let coarse = |i: usize, j: usize| values[j * 5 + i];
-    let blended = |x: usize, y: usize| -> Option<Painted> {
-        let i = if x < axis[2] { 0 } else { 2 };
-        let j = if y < axis[2] { 0 } else { 2 };
-        let fraction =
-            |at: usize, low: usize| (at - axis[low]) as f64 / (axis[low + 2] - axis[low]) as f64;
-        let around = [
-            coarse(i, j)?,
-            coarse(i + 2, j)?,
-            coarse(i, j + 2)?,
-            coarse(i + 2, j + 2)?,
-        ];
-        Some(blend(around, fraction(x, i), fraction(y, j)))
-    };
-    for (i, j) in [(1, 1), (3, 1), (1, 3), (3, 3)] {
-        if !visibly_agrees(&values[j * 5 + i]?, &blended(axis[i], axis[j])?) {
-            return None;
-        }
-    }
-    let (_, positions) = sample_positions(axis[4] + 1);
-    positions
-        .iter()
-        .enumerate()
-        .map(|(k, &(x, y))| match COARSE_FIRST[..9].contains(&k) {
-            true => values[k].map(Some),
-            false => blended(x, y).map(Some),
+/// Block `at`'s four corners (north-west, north-east, south-west, south-east) as the exact points
+/// its pixels may blend from, `None` for one standing in a building: its paint, and of it what
+/// `block`'s own sources deliver there, as the corner heard them.
+fn corner_anchors(
+    painter: &PointPainter,
+    corner_paint: &[Painted],
+    (block, own_sources): (&Block, &OwnSources),
+    at: usize,
+) -> [Option<Anchor>; 4] {
+    let side = painter.grid.pixels / painter.grid.block;
+    let first = (at / side) * (side + 1) + at % side;
+    [first, first + 1, first + side + 1, first + side + 2].map(|corner| {
+        let point = &painter.corners.corner_points[corner];
+        (point.own_footprint == 0).then(|| {
+            let ranked = &painter.corners.corners[corner].ranked;
+            let own: [f64; LAYERS] = std::array::from_fn(|layer| {
+                let heard: f64 = (ranked[layer].iter())
+                    .filter(|source| block.own.binary_search(&source.index).is_ok())
+                    .map(|source| source.lden)
+                    .sum();
+                heard * point.reflection()
+            });
+            Anchor {
+                paint: corner_paint[corner],
+                own,
+                free: own_sources.free_field(painter.square, point.position, point.altitude_m),
+            }
         })
-        .collect()
+    })
 }
 
-/// Each block's paint at `positions` (indices of `sample_positions`), `ids` the blocks' places.
+/// Each block's samples `wanted` (indices of `positions`, a block's `sample_positions`), `ids`
+/// the blocks' places.
 fn paint_positions(
     painter: &PointPainter,
-    blocks: &[impl std::borrow::Borrow<Block> + Sync],
+    blocks: (&[&Block], &[&OwnSources]),
     ids: &[usize],
-    positions: &[usize],
-) -> Result<Vec<Vec<Option<Painted>>>, String> {
+    (wanted, positions): (&[usize], &[(usize, usize)]),
+) -> Result<Vec<Vec<Option<Anchor>>>, String> {
     let (square, grid) = (painter.square, painter.grid);
     let (side, b) = (grid.pixels / grid.block, grid.block);
-    let (_, all) = sample_positions(b);
     let places: Vec<_> = ids
         .iter()
         .enumerate()
         .flat_map(|(slot, &at)| {
             let (x, y) = ((at % side) * b, (at / side) * b);
-            let all = &all;
-            positions.iter().map(move |&k| {
-                let (dx, dy) = all[k];
+            wanted.iter().map(move |&k| {
+                let (dx, dy) = positions[k];
                 (slot, (y + dy) * grid.pixels + x + dx)
             })
         })
@@ -297,8 +283,8 @@ fn paint_positions(
             )
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let painted = painter.paint(blocks, &points, &places)?;
-    Ok(painted.chunks(positions.len()).map(<[_]>::to_vec).collect())
+    let painted = painter.paint_anchors(blocks, &points, &places)?;
+    Ok(painted.chunks(wanted.len()).map(<[_]>::to_vec).collect())
 }
 
 #[cfg(test)]

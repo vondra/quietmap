@@ -24,9 +24,19 @@ pub struct SampleRound {
 
 impl BoundSample {
     pub fn new(seed: u64) -> Self {
+        Self::starting_at(seed, 512)
+    }
+
+    /// A sample whose first round draws `size` pieces: a click's 512 make one round of most
+    /// answers; the map's hum, sampled at 289 points a square, starts with fewer where few suffice.
+    pub fn starting_at(seed: u64, size: usize) -> Self {
+        assert!(
+            size >= 2,
+            "a sample's variance takes two draws, and none never grows"
+        );
         Self {
             first: 0,
-            size: 512,
+            size,
             seed,
         }
     }
@@ -160,5 +170,16 @@ mod tests {
             .map(|weight| weight * 2.0)
             .sum();
         assert_eq!(weighted_energy, estimated[0]);
+    }
+
+    /// A sample starts with the draws its caller gives it: a click's 512, the map's hum fewer.
+    #[test]
+    fn a_sample_starts_with_its_callers_draws() {
+        let orders = vec![1.0; 1_025];
+        assert_eq!(
+            BoundSample::starting_at(3, 64).round(&orders).draws.len(),
+            64
+        );
+        assert_eq!(BoundSample::new(3).round(&orders).draws.len(), 512);
     }
 }

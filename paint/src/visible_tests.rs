@@ -14,30 +14,39 @@ fn a_probe_agrees_in_loudness_as_far_as_a_visitor_sees() {
         blended[layer] = value;
         blended
     };
-    assert!(loudness_visibly_agrees(
-        &heard,
-        &with(LAYERS, phon(2.0, 0.4))
-    ));
-    assert!(!loudness_visibly_agrees(
-        &heard,
-        &with(LAYERS, phon(2.0, 0.6))
-    ));
-    assert!(loudness_visibly_agrees(&heard, &with(0, phon(2.0, 0.9))));
-    assert!(!loudness_visibly_agrees(&heard, &with(0, phon(2.0, 1.1))));
+    let silent = [0.0; LAYERS + 1];
+    let agrees = |heard: &[f64; LAYERS + 1], blended: &[f64; LAYERS + 1]| {
+        loudness_visibly_agrees(heard, blended, &silent)
+    };
+    assert!(agrees(&heard, &with(LAYERS, phon(2.0, 0.4))));
+    assert!(!agrees(&heard, &with(LAYERS, phon(2.0, 0.6))));
+    assert!(agrees(&heard, &with(0, phon(2.0, 0.9))));
+    assert!(!agrees(&heard, &with(0, phon(2.0, 1.1))));
     let quiet = [0.3; LAYERS + 1];
     let with = |layer: usize, value: f64| {
         let mut blended = quiet;
         blended[layer] = value;
         blended
     };
-    assert!(loudness_visibly_agrees(&quiet, &with(LAYERS, 0.38)));
-    assert!(!loudness_visibly_agrees(&quiet, &with(LAYERS, 0.45)));
-    assert!(loudness_visibly_agrees(&quiet, &with(1, 0.45)));
-    assert!(!loudness_visibly_agrees(&quiet, &with(1, 0.55)));
+    assert!(agrees(&quiet, &with(LAYERS, 0.38)));
+    assert!(!agrees(&quiet, &with(LAYERS, 0.45)));
+    assert!(agrees(&quiet, &with(1, 0.45)));
+    assert!(!agrees(&quiet, &with(1, 0.55)));
+    assert!(!agrees(&[f64::NAN; LAYERS + 1], &silent));
+    // Where an exact point the blend is made from shows, a quiet probe agrees as a visible one.
+    let mut beside_a_road = silent;
+    beside_a_road[LAYERS] = 2.0;
     assert!(!loudness_visibly_agrees(
-        &[f64::NAN; LAYERS + 1],
-        &[0.0; LAYERS + 1]
+        &quiet,
+        &with(LAYERS, 0.38),
+        &beside_a_road
     ));
+    assert!(loudness_visibly_agrees(
+        &quiet,
+        &with(LAYERS, phon(0.3, 0.4)),
+        &beside_a_road
+    ));
+    assert!(loudness_visibly_agrees(&silent, &silent, &beside_a_road));
 }
 
 /// The total's Lden agrees within half a decibel from 32 dB and two under it; a layer's within
@@ -49,7 +58,11 @@ fn a_probe_agrees_in_decibels_as_far_as_a_visitor_sees() {
     let total_db = |layer_db: f64| layer_db + 10.0 * (LAYERS as f64).log10();
     let loudness = [0.01; LAYERS + 1];
     let agrees = |heard: [f64; LAYERS], blended: [f64; LAYERS]| {
-        visibly_agrees(&(heard, loudness), &(blended, loudness))
+        visibly_agrees(
+            &(heard, loudness),
+            &(blended, loudness),
+            &Loudest::default(),
+        )
     };
     // Six equal layers: the total 7.8 dB over each.
     assert!(total_db(30.0) > 32.0 && total_db(22.0) < 32.0);
@@ -69,4 +82,18 @@ fn a_probe_agrees_in_decibels_as_far_as_a_visitor_sees() {
     assert!(agrees(one(5.0), one(15.0)));
     assert!(!agrees(one(40.0), one(f64::NAN)));
     assert!(agrees([0.0; LAYERS], [0.0; LAYERS]));
+    // A total of 30 dB two decibels off its blend passes as quiet, but not where the blend is
+    // made from a point of 37 dB: it paints visible pixels too.
+    let beside = Loudest::of([(energies(29.2), loudness)].iter());
+    assert!(agrees(energies(22.0), energies(23.5)));
+    assert!(!visibly_agrees(
+        &(energies(22.0), loudness),
+        &(energies(23.5), loudness),
+        &beside
+    ));
+    assert!(visibly_agrees(
+        &(energies(22.0), loudness),
+        &(energies(22.4), loudness),
+        &beside
+    ));
 }

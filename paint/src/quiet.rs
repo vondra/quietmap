@@ -3,7 +3,7 @@
 //! The obstacle proof precedes pixel receivers, as dev1's quiet-region shortcut precedes rasters.
 //! Background blocks blend loudness at corners and evaluate their original energy fields. Source
 //! blocks check actual pixel receivers against their corners' paint, then against sampled
-//! lattices; only blocks and patches away from sources and walls that agree omit work.
+//! lattices; only blocks and patches that agree, away from walls, omit work.
 //! Source blocks retain their admissions; sampled pixel fields are evaluated in bounded chunks.
 
 use crate::block_samples::sample_block_pixels;
@@ -76,15 +76,16 @@ impl QuietBlocks {
         for (at, samples) in sampled.blocks {
             let patches = samples.patches();
             whole += usize::from(samples.complete());
-            blended += patches.0;
-            carried += patches.1;
+            if !samples.complete() {
+                blended += patches.0;
+                carried += patches.1;
+            }
             quiet.known_blocks[at] = samples.complete();
             quiet.samples[at] = Some(samples);
         }
         let patches = 16 * (candidate_count - whole);
         eprintln!(
-            "qm-paint: {background} open background blocks, {whole} of {candidate_count} source blocks blended whole; of the others' {patches} patches {} blended, {carried} with carried loudness",
-            blended - 16 * whole
+            "qm-paint: {background} open background blocks, {whole} of {candidate_count} source blocks blended whole; of the others' {patches} patches {blended} blended, {carried} with carried loudness"
         );
         Ok(quiet)
     }
@@ -106,9 +107,8 @@ impl QuietBlocks {
         let (x, y) = (at % grid.pixels, at / grid.pixels);
         let block = (y / grid.block) * (grid.pixels / grid.block) + x / grid.block;
         self.known_blocks[block]
-            || self.samples[block]
-                .as_ref()
-                .is_some_and(|samples| samples.has_paint(x % grid.block, y % grid.block))
+            || (self.samples[block].as_ref())
+                .is_some_and(|samples| (samples.known_at(x % grid.block, y % grid.block)).is_some())
     }
 
     /// The loudness the pixel `at` takes from its block's lattice and its own `energies`, where its

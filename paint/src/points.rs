@@ -11,6 +11,8 @@ use crate::blocks::{Block, admission_counts, admit, meets};
 use crate::corner_sources::Corner;
 use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Point};
 use crate::flights::{blend_flight_energy, blend_flights};
+use crate::free_field::OwnSources;
+use crate::lattice_blend::Anchor;
 use crate::levels::Painted;
 use crate::paint::{Corners, Grid, corner_weights, rectangle_at};
 use crate::passes::paint_passes;
@@ -18,7 +20,7 @@ use crate::sone::{LeftOut, PixelSoundScratch, SoundBesideExactPairs, pixel_sound
 use crate::square::Square;
 use crate::traced::{Traced, heard_among};
 use crate::transfers::Reaching;
-use physics::bands::{BANDS, PERIODS};
+use physics::bands::{BANDS, PERIODS, lden_energy};
 use popup::percentiles::Resolution;
 use rayon::prelude::*;
 use std::ops::Range;
@@ -114,6 +116,18 @@ impl PointPainter<'_> {
         self.paint_beside(blocks, points, places, &|_, _| None)
     }
 
+    /// [`PointPainter::paint`] with what each point's block's own sources (`own`, a block's as
+    /// `blocks`) deliver there and their free field there: the exact points a block's pixels are
+    /// blended from.
+    pub fn paint_anchors(
+        &self,
+        (blocks, own): (&[impl std::borrow::Borrow<Block> + Sync], &[&OwnSources]),
+        points: &[Point],
+        places: &[(usize, usize)],
+    ) -> Result<Vec<Option<Anchor>>, String> {
+        self.paint_points(blocks, points, places, &|_, _| None, Some(own))
+    }
+
     /// The pixel `at` (row-major): its coordinates, its block's corners (row-major among the
     /// square's) and where it stands between them.
     pub fn place_of(&self, at: usize) -> ((usize, usize), [usize; 4], (f64, f64)) {
@@ -139,6 +153,22 @@ impl PointPainter<'_> {
         places: &[(usize, usize)],
         known: &KnownLoudness,
     ) -> Result<Vec<Option<Painted>>, String> {
+        let painted = self.paint_points(blocks, points, places, known, None)?;
+        Ok((painted.into_iter())
+            .map(|anchor| anchor.map(|anchor| anchor.paint))
+            .collect())
+    }
+
+    /// The points painted ([`PointPainter::paint_beside`]), each with its block's own sources'
+    /// energy and free field there where `own` gives the blocks' (else none).
+    fn paint_points(
+        &self,
+        blocks: &[impl std::borrow::Borrow<Block> + Sync],
+        points: &[Point],
+        places: &[(usize, usize)],
+        known: &KnownLoudness,
+        own_sources: Option<&[&OwnSources]>,
+    ) -> Result<Vec<Option<Anchor>>, String> {
         let (square, grid) = (self.square, self.grid);
         let corners = &self.corners;
         let traced = Traced::trace(self, blocks, points, places)?;
@@ -146,7 +176,7 @@ impl PointPainter<'_> {
         let paint_point = |k: usize,
                            scratch: &mut PixelSoundScratch,
                            input: &mut Vec<f32>|
-         -> Result<(usize, [f64; LAYERS], Loudness), String> {
+         -> Result<(usize, [[f64; LAYERS]; 3], Loudness), String> {
             let (at, point) = (places[k].1, &points[k]);
             let ((x, y), around, (fx, fy)) = self.place_of(at);
             let (block, list, energies, heard_bands) = traced.at(k);
@@ -175,7 +205,22 @@ impl PointPainter<'_> {
                 list,
                 energies,
             );
-            if let Some(ndens) = known(at, &layers) {
+            // Of the layers' energies the block's own sources', and their free field here.
+            let (mut own, mut free) = ([0.0; LAYERS], [0.0; LAYERS]);
+            if let Some(sources) = own_sources
+                .map(|own| own[places[k].0])
+                .filter(|own| !own.is_empty())
+            {
+                for (index, energy) in list.iter().zip(energies) {
+                    if block.own.binary_search(index).is_ok() {
+                        let layer = square.candidates[*index as usize].layer as usize;
+                        own[layer] += reflection * lden_energy(&energy.mixed);
+                    }
+                }
+                free = sources.free_field(square, point.position, point.altitude_m);
+            }
+            let layers = [layers, own, free];
+            if let Some(ndens) = known(at, &layers[0]) {
                 return Ok((k, layers, Loudness::Known(ndens)));
             }
             // The left-out's bands: each corner's in the shape of all it hears in that layer.
@@ -286,7 +331,12 @@ impl PointPainter<'_> {
                             .ok_or("a packed pixel has no card loudness")?
                             .map(f64::from),
                     };
-                    painted[k] = Some((layers, ndens));
+                    let [layers, own, free] = layers;
+                    painted[k] = Some(Anchor {
+                        paint: (layers, ndens),
+                        own,
+                        free,
+                    });
                 }
                 if card.next().is_some() {
                     return Err("a card loudness has no packed pixel".into());
