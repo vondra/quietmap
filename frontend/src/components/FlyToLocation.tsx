@@ -2,6 +2,7 @@
 // flight has arrived.
 import { useEffect } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
+import { LngLat } from 'maplibre-gl'
 import { searchFlightArrived } from '../lib/search-flight'
 
 export interface SelectedLocation {
@@ -22,11 +23,12 @@ export default function FlyToLocation({ location, onArrived }: FlyToLocationProp
     if (!location || !map) return
 
     const isMobile = window.innerWidth < 768
-    // A zoom past the map's last (a history place opened from a link's z=17) would never be arrived at.
-    const target = { ...location, zoom: Math.min(location.zoom, map.getMaxZoom()) }
+    // A place in the history can have a zoom above this map's limit.
+    const zoom = Math.min(location.zoom, map.getMaxZoom())
+    const point = new LngLat(location.lon, location.lat)
     map.flyTo({
-      center: [target.lon, target.lat],
-      zoom: target.zoom,
+      center: point,
+      zoom,
       duration: 1500,
       padding: { top: 120, bottom: isMobile ? 350 : 0, left: 0, right: 0 },
     })
@@ -35,7 +37,11 @@ export default function FlyToLocation({ location, onArrived }: FlyToLocationProp
     // only a real arrival opens the popup — see searchFlightArrived.
     const arrive = () => {
       const c = map.getCenter()
-      if (searchFlightArrived({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }, target)) {
+      // At the Mercator edge the camera stops short to keep the screen inside the world.
+      // Compare with the centre flyTo can reach, then open the visitor's original point.
+      const landing = map.getMap().transform.applyConstrain(point, zoom)
+      if (searchFlightArrived({ lat: c.lat, lng: c.lng, zoom: map.getZoom() },
+        { lat: landing.center.lat, lon: landing.center.lng, zoom: landing.zoom })) {
         onArrived?.({ lat: location.lat, lng: location.lon })
       }
     }

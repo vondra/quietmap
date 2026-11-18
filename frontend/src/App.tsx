@@ -270,12 +270,9 @@ export default function App() {
     <div className="fixed inset-0 overflow-hidden">
       <SearchBar
         metric={metric}
-        onSelect={result => {
-          searchedName.current = {
-            at: { lat: result.lat, lng: result.lon },
-            name: result.secondary ? `${result.display_name}, ${result.secondary}` : result.display_name,
-          }
-          setSelectedLocation({ lat: result.lat, lon: result.lon, zoom: SEARCH_FLIGHT_ZOOM })
+        onSelect={(at, name) => {
+          searchedName.current = name ? { at, name } : null
+          setSelectedLocation({ lat: at.lat, lon: at.lng, zoom: SEARCH_FLIGHT_ZOOM })
         }}
         getMapView={getMapView}
         history={recentPlaces}

@@ -5,7 +5,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { EXPENSIVE_ROUTE_RATE_LIMIT, rateLimitClientKey } from '../rate-limit.ts'
 import { CURRENCY, Stay22Busy, Stay22Refusal, searchStays, type Box, type Budget, type Listing, type StaySearch } from '../stay22.ts'
-import { coordinate } from './popup.ts'
+import { coordinate } from '../../../frontend/src/lib/coordinates.ts'
 
 /** The widest box searched: zoom 7, where the layer starts, on a screen 2,900 pixels wide. A wider
  *  view is answered for its middle. */

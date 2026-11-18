@@ -4,7 +4,7 @@
 // others kept. Only the point and the minutes leave.
 import type { FastifyInstance } from 'fastify'
 import { EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.ts'
-import { coordinate, wrappedLongitude } from './popup.ts'
+import { coordinate, wrappedLongitude } from '../../../frontend/src/lib/coordinates.ts'
 
 /** Valhalla's costing of each mode, in the order the polygons are drawn. */
 const COSTING = { car: 'auto', walk: 'pedestrian' } as const
