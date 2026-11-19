@@ -288,6 +288,49 @@ fn major_models(rows: &[&CountedRow]) -> Result<(RoadModels, Value)> {
     ))
 }
 
+/// Error when a main class has no country whose counts represent it: names the class and each
+/// country's counted rows, coverage and design for that class.
+fn missing_main_class_error(class: u8, rows: &[&CountedRow]) -> anyhow::Error {
+    let mut by_country: BTreeMap<[u8; 2], (usize, f64, BTreeMap<String, usize>)> = BTreeMap::new();
+    for r in rows {
+        let design = serde_json::to_value(r.design)
+            .expect("a design name")
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let entry = by_country
+            .entry(r.country)
+            .or_insert_with(|| (0, r.class_coverage, BTreeMap::new()));
+        entry.0 += 1;
+        entry.1 = entry.1.max(r.class_coverage);
+        *entry.2.entry(design).or_insert(0) += 1;
+    }
+    let countries = if by_country.is_empty() {
+        "none".to_string()
+    } else {
+        by_country
+            .into_iter()
+            .map(|(country, (count, coverage, designs))| {
+                let designs = designs
+                    .into_iter()
+                    .map(|(name, n)| format!("{name}={n}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(
+                    "{} ({count} rows, coverage {:.1}%, {designs})",
+                    String::from_utf8_lossy(&country),
+                    coverage * 100.0
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    anyhow!(
+        "no main-class fit for class {class} (need representative rows: random-sample or whole-network coverage > {:.0}%); countries: {countries}",
+        REPRESENTATIVE_COVERAGE * 100.0
+    )
+}
+
 /// Every model of the table from the counted rows: the major roads', each main class's on rows
 /// off any rural road network, and a country's network's own where it has the support.
 pub(crate) fn fit_models(rows: &[CountedRow]) -> Result<(RoadModels, Value)> {
@@ -302,10 +345,10 @@ pub(crate) fn fit_models(rows: &[CountedRow]) -> Result<(RoadModels, Value)> {
             .iter()
             .filter(|r| r.class == class && !r.rural_network)
             .collect();
-        if let Some((model, support)) = main_model(class, &pooled) {
-            models.main.push(model);
-            main_support.push(support);
-        }
+        let (model, support) =
+            main_model(class, &pooled).ok_or_else(|| missing_main_class_error(class, &pooled))?;
+        models.main.push(model);
+        main_support.push(support);
     }
     let mut networks: BTreeMap<[u8; 2], Vec<&CountedRow>> = BTreeMap::new();
     for r in rows.iter().filter(|r| r.rural_network) {
@@ -332,10 +375,6 @@ pub(crate) fn fit_models(rows: &[CountedRow]) -> Result<(RoadModels, Value)> {
             });
         }
     }
-    ensure!(
-        !models.main.is_empty(),
-        "no main-class fit has a country of enough counted rows"
-    );
     Ok((
         models,
         json!({"major": major_support, "main": main_support, "regional_main": regional_support}),

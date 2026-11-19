@@ -211,10 +211,22 @@ fn the_major_law_is_recovered_and_replaces_the_priors_only_where_it_predicts_hel
     assert!(thailand["held_out_model_db"].as_f64() > thailand["held_out_constants_db"].as_f64());
 }
 
+fn other_main_classes(country: &[u8; 2]) -> Vec<CountedRow> {
+    [3u8, 9u8]
+        .into_iter()
+        .flat_map(|class| {
+            tertiary_rows(country, 0.0)
+                .into_iter()
+                .map(move |row| CountedRow { class, ..row })
+        })
+        .collect()
+}
+
 /// A rural road network's counted rows fit their own law and stay out of the pooled one.
 #[test]
 fn a_rural_road_network_fits_its_own_law_apart_from_the_pooled_one() {
     let mut rows = tertiary_rows(b"CZ", 0.0);
+    rows.extend(other_main_classes(b"CZ"));
     rows.extend(tertiary_rows(b"TH", 2.0).into_iter().map(|row| CountedRow {
         rural_network: true,
         ..row
@@ -222,8 +234,9 @@ fn a_rural_road_network_fits_its_own_law_apart_from_the_pooled_one() {
     rows.extend(major_rows(b"CZ", 1, false));
     rows.extend(major_rows(b"US", 2, false));
     let (models, _) = fit_models(&rows).unwrap();
-    assert_eq!(models.main.len(), 1);
-    assert_eq!(models.main[0].intercept, [1.0, 2.0]);
+    assert_eq!(models.main.len(), MAIN_CLASSES.len());
+    let tertiary = models.main.iter().find(|m| m.class == 4).unwrap();
+    assert_eq!(tertiary.intercept, [1.0, 2.0]);
     assert_eq!(models.regional_main.len(), 1);
     assert_eq!(models.regional_main[0].country, *b"TH");
     assert_eq!(models.regional_main[0].models[0].intercept, [3.0, 4.0]);
@@ -236,6 +249,7 @@ fn a_rural_road_network_fits_its_own_law_apart_from_the_pooled_one() {
 #[test]
 fn selected_sites_stay_out_of_the_main_class_laws_but_not_the_major_law() {
     let mut rows = tertiary_rows(b"CZ", 0.0);
+    rows.extend(other_main_classes(b"CZ"));
     rows.extend(tertiary_rows(b"GB", 0.0).into_iter().map(|row| CountedRow {
         design: SamplingDesign::RandomSample,
         ..row
@@ -258,8 +272,15 @@ fn selected_sites_stay_out_of_the_main_class_laws_but_not_the_major_law() {
         .collect();
     rows.extend(italian_major);
     let (models, support) = fit_models(&rows).unwrap();
-    assert_eq!(models.main[0].intercept, [1.0, 2.0]);
-    let italy = &support["main"][0]["countries"]["IT selected-sites"];
+    let tertiary = models.main.iter().find(|m| m.class == 4).unwrap();
+    assert_eq!(tertiary.intercept, [1.0, 2.0]);
+    let tertiary_support = support["main"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["class"] == 4)
+        .unwrap();
+    let italy = &tertiary_support["countries"]["IT selected-sites"];
     assert!(
         (italy["bias_db"].as_f64().unwrap() - 6.0).abs() < 0.05,
         "{italy}"
@@ -298,10 +319,18 @@ fn a_whole_network_stands_for_its_class_only_where_it_covers_most_of_it() {
             0.03,
         ))
         .collect();
+    rows.extend(other_main_classes(b"SE"));
     rows.extend(major_rows(b"SE", 1, false));
     let (models, support) = fit_models(&rows).unwrap();
-    assert_eq!(models.main[0].intercept, [1.0, 2.0]);
-    let poland = &support["main"][0]["countries"]["PL whole-network"];
+    let tertiary = models.main.iter().find(|m| m.class == 4).unwrap();
+    assert_eq!(tertiary.intercept, [1.0, 2.0]);
+    let tertiary_support = support["main"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["class"] == 4)
+        .unwrap();
+    let poland = &tertiary_support["countries"]["PL whole-network"];
     assert!(
         (poland["bias_db"].as_f64().unwrap() - 6.0).abs() < 0.05,
         "{poland}"
@@ -316,4 +345,46 @@ fn a_whole_network_stands_for_its_class_only_where_it_covers_most_of_it() {
     assert!(at(SamplingDesign::WholeNetwork, 0.51) && !at(SamplingDesign::WholeNetwork, 0.5));
     assert!(at(SamplingDesign::RandomSample, 0.0));
     assert!(!at(SamplingDesign::SelectedSites, 1.0) && !at(SamplingDesign::Undeclared, 1.0));
+}
+
+/// Every class in `MAIN_CLASSES` must fit a law; if one has no representative rows, the fit fails
+/// naming the class and each country's coverage. One country's random sample suffices (GB for
+/// unclassified roads).
+#[test]
+fn a_missing_main_class_law_fails_the_fit_naming_the_class_and_coverages() {
+    let mut base = tertiary_rows(b"SE", 0.0);
+    base.extend(
+        tertiary_rows(b"SE", 0.0)
+            .into_iter()
+            .map(|row| CountedRow { class: 3, ..row }),
+    );
+    base.extend(major_rows(b"SE", 1, false));
+
+    let mut missing = base.clone();
+    missing.extend(tertiary_rows(b"GB", 0.0).into_iter().map(|row| CountedRow {
+        class: 9,
+        design: SamplingDesign::WholeNetwork,
+        class_coverage: 0.03,
+        ..row
+    }));
+    missing.extend(tertiary_rows(b"SE", 0.0).into_iter().map(|row| CountedRow {
+        class: 9,
+        design: SamplingDesign::WholeNetwork,
+        class_coverage: 0.12,
+        ..row
+    }));
+    let error = fit_models(&missing).unwrap_err().to_string();
+    assert!(error.contains("class 9"), "{error}");
+    assert!(error.contains("GB") && error.contains("3.0%"), "{error}");
+    assert!(error.contains("SE") && error.contains("12.0%"), "{error}");
+
+    let mut single_random_sample = base;
+    single_random_sample.extend(tertiary_rows(b"GB", 0.0).into_iter().map(|row| CountedRow {
+        class: 9,
+        design: SamplingDesign::RandomSample,
+        class_coverage: 0.03,
+        ..row
+    }));
+    let (models, _) = fit_models(&single_random_sample).unwrap();
+    assert_eq!(models.main.len(), MAIN_CLASSES.len());
 }
