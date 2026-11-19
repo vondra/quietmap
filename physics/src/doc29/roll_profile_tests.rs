@@ -38,6 +38,8 @@ fn a_take_off_roll_is_segmented_as_doc_29_does() {
     }
     // The first segment flies at half a speed step: 12 dB of slowness against 160 kt.
     assert!((tasks[0].emission.speed_correction_db - 12.53).abs() < 0.05);
+    let total_s: f64 = example.iter().map(|step| step.duration_s).sum();
+    assert!((total_s - 2.0 * 1_600.0 / 75.0).abs() < 1e-9, "{total_s}");
 }
 
 /// A landing decelerates to 15 m/s in the German test tasks' A320 geometry: their 6 segments and
@@ -69,6 +71,11 @@ fn a_landing_roll_runs_on_reverse_thrust() {
     assert!((reverse_increment_db(0.1) - 5.0).abs() < 1e-12);
     assert_eq!(reverse_increment_db(1.0), 0.0);
     assert!(steps.windows(2).all(|pair| pair[1].from_m == pair[0].to_m));
+    let landing_s: f64 = steps.iter().map(|step| step.duration_s).sum();
+    assert!(
+        (landing_s - 2.0 * 948.24 / (68.26 + LANDING_EXIT_SPEED_MS)).abs() < 1e-9,
+        "{landing_s}"
+    );
     let cessna = landing(class("C172"), 250.0, 55.0 * 1_852.0 / 3_600.0);
     let model = &crate::doc29::thrust_generated::THRUST[class("C172")];
     let top_row_lb = model.app_power[usize::from(model.app_rows) - 1];

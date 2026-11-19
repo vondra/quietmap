@@ -1,14 +1,17 @@
 //! The runways' rolls at receivers over flat open ground: where a take-off is loudest beside its
 //! runway, how the start of roll's directivity spreads its sound behind it, how far the rolls are
-//! heard, and how often and how long they pass a receiver (Kurze's lambda, the loudness's).
+//! heard, and how each Doc 29 segment enters the passes' classes for the seconds it is rolled.
 
-use physics::bands::lden_energy;
+use physics::bands::{PERIODS, lden_energy};
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::npd::Family;
 use physics::doc29::profiles_generated::{CLASS_FAMILY, CLASS_NAMES, NUM_CLASSES};
+use physics::doc29::roll_profile::{LANDING_EXIT_SPEED_MS, RollStep};
 use physics::doc29::screening::Unscreened;
 use popup::aircraft::boxes::AircraftReceiver;
-use popup::aircraft::rolls::{ROLL_REACH_M, RollSums, prepare, roll_sums};
+use popup::aircraft::rolls::{HeardPath, HeardRoll, ROLL_REACH_M, RollSums, prepare, roll_sums};
+use popup::loudness::{Curve, FlightSound, curves, loudness};
+use popup::percentiles::{Line, Resolution, layered_distributions};
 use tiles::aircraft_rolls::Roll;
 use tiles::geo::{LocalFrame, TileId};
 
@@ -39,12 +42,16 @@ fn roll(class: u8, landing: bool, per_day: f64) -> Roll {
 /// What `rolls` leave at `receiver` (metres east and north of their start, 4 m up).
 fn heard(rolls: &[Roll], receiver: [f64; 2]) -> RollSums {
     let rolls = prepare(TILE, rolls, &PlaceAtmosphere::model());
+    heard_paths(&rolls, receiver)
+}
+
+fn heard_paths(paths: &[HeardPath], receiver: [f64; 2]) -> RollSums {
     let frame = LocalFrame::at(TILE.centre());
     let receiver = AircraftReceiver {
         position: receiver,
         altitude_m: 4.0,
     };
-    roll_sums(&rolls, &frame, receiver, &Unscreened)
+    roll_sums(paths, &frame, receiver, &Unscreened)
 }
 
 /// The Lden (dB) of [`roll`] at `receiver`.
@@ -53,11 +60,16 @@ fn lden_db(class: u8, landing: bool, per_day: f64, receiver: [f64; 2]) -> f64 {
     10.0 * lden_energy(&sums.energy).log10()
 }
 
-/// The rolls' Kurze lambda by day at `receiver`, how many pass it at a time: their passes in
-/// progress over pi, every stream's together.
-fn lambda(rolls: &[Roll], receiver: [f64; 2]) -> f64 {
-    let sums = heard(rolls, receiver);
-    sums.passes.passing[0].iter().sum::<f64>() / std::f64::consts::PI
+/// The rolls' Nden (sone) alone over silence at `receiver`.
+fn roll_nden(sums: &RollSums) -> f64 {
+    let lines = Line::flight_passes(&sums.passes);
+    let (_, whole) = layered_distributions(&[(&lines, [0.0; PERIODS])], Resolution::CLICK);
+    let flight_sound = FlightSound {
+        energy: sums.energy,
+        spectrum_db: Some([0.0; 24]),
+    };
+    let place_curves: [Curve; PERIODS] = curves(&[], &flight_sound);
+    loudness(&whole, &place_curves).nden_sone
 }
 
 /// A hundred A320 take-offs a day, 300 m beside the runway: loudest beside the start of roll
@@ -109,109 +121,139 @@ fn the_rolls_are_heard_to_eight_kilometres() {
     );
 }
 
-/// The classes rolling one path pass the receiver in one stream: a hundred A320 take-offs a day
-/// heard as one roll or as two of fifty pass it as often, and an A320's and a 737's as often as
-/// both apart (each roll's own rate had heard a runway's forty classes as rare as one of them, and
-/// its loudness fell where its level rose); two runway directions leaving one point at 57 deg left
-/// and right of east, their cosines equal, stay two streams, whose passes add.
+/// Each segment enters its own level class, so splitting one roll's movements, combining two
+/// runway directions, or mixing an airliner with a light aircraft on the same runway are all
+/// strictly additive across pass classes (never merging a quiet aircraft into a loud jet's stream).
 #[test]
-fn the_classes_rolling_one_path_pass_as_one_stream() {
-    let a320 = class("A320-232");
-    let b738 = class("737800");
-    let at = [900.0, 300.0];
-    let whole = lambda(&[roll(a320, false, 100.0)], at);
-    let halves = lambda(&[roll(a320, false, 50.0), roll(a320, false, 50.0)], at);
-    assert!((halves / whole - 1.0).abs() < 1e-9, "{halves} vs {whole}");
-    let together = lambda(&[roll(a320, false, 100.0), roll(b738, false, 60.0)], at);
-    let apart = whole + lambda(&[roll(b738, false, 60.0)], at);
-    assert!(
-        (together / apart - 1.0).abs() < 1e-9,
-        "{together} vs {apart}"
-    );
-    let turned = |heading_rad| Roll {
-        heading_rad,
-        ..roll(a320, false, 100.0)
-    };
-    let one = lambda(&[turned(1.0)], [500.0, 0.0]);
-    let both = lambda(&[turned(1.0), turned(-1.0)], [500.0, 0.0]);
-    assert!((both / one - 2.0).abs() < 1e-9, "{both} vs {one}");
-    // One stream passes at one level: a jet's and a light aircraft's rolls, classes apart when
-    // each rolls alone, fill one class of passes beside the start both roll from.
-    let beside_start = [100.0, 300.0];
-    let classes = |rolls: &[Roll]| -> Vec<usize> {
-        let passing = heard(rolls, beside_start).passes.passing[0];
-        (0..passing.len())
-            .filter(|&class| passing[class] > 0.0)
-            .collect()
-    };
-    let (jet, light) = (
-        roll(a320, false, 100.0),
-        roll(class("CNA172"), false, 100.0),
-    );
-    let (jet_alone, light_alone) = (
-        classes(std::slice::from_ref(&jet)),
-        classes(std::slice::from_ref(&light)),
-    );
-    assert!(
-        jet_alone.len() == 1 && light_alone.len() == 1 && jet_alone != light_alone,
-        "{jet_alone:?} {light_alone:?}"
-    );
-    assert_eq!(classes(&[jet, light]).len(), 1);
-}
-
-/// A roll passes a receiver for as long as its own speeds take over the pass's distance around
-/// the receiver's nearest point: on the runway as at the NPD curves' nearest 30.5 m, where its
-/// sound exposure is read (the axis had made a pass last a twentieth of a second), and 100 m beside
-/// its start, where the stretch lies on the roll's first 100 m, the 11 s an A320 takes over them
-/// from rest (half of it had been taken there).
-#[test]
-fn a_roll_passes_for_as_long_as_its_speeds_take() {
-    let a320 = class("A320-232");
-    let rolls = [roll(a320, false, 100.0)];
-    let on_runway = lambda(&rolls, [900.0, 0.0]);
-    let beside = lambda(&rolls, [900.0, 20.0]);
-    assert!(
-        (on_runway / beside - 1.0).abs() < 1e-9,
-        "{on_runway} vs {beside}"
-    );
-    let acceleration = 77.2f64.powi(2) / (2.0 * 1_800.0);
-    let from_rest = (2.0 * 100.0 / acceleration).sqrt();
-    let expected = 100.0 / (12.0 * 3_600.0) * from_rest;
-    let at_start = lambda(&rolls, [0.0, 100.0]);
-    assert!(
-        (at_start / expected - 1.0).abs() < 0.01,
-        "{at_start} vs {expected}"
-    );
-}
-
-/// Beside the middle of an A320's roll a Cessna's 300 m roll on the same path, over 600 m back,
-/// passes nearest at its own end: a stream of its own beside the A320's, each in the class of its
-/// own level (its passes counted into the A320's had tripled their lambda), as two paths are.
-#[test]
-fn a_short_roll_passes_in_its_own_stream_beside_a_longer_ones_middle() {
-    let a320 = roll(class("A320-232"), false, 90.0);
+fn rolls_add_passes_independently_by_segment_level_class() {
+    let a320 = roll(class("A320-232"), false, 100.0);
     let cessna = Roll {
         length_m: 300.0,
         speed_ms: 28.3,
-        ..roll(class("CNA172"), false, 10.0)
+        ..roll(class("CNA172"), false, 100.0)
     };
-    let at = [900.0, 20.0];
-    let (jet, piston) = (
-        heard(std::slice::from_ref(&a320), at),
-        heard(std::slice::from_ref(&cessna), at),
+    let assert_passes_eq = |left: &RollSums, right: &RollSums| {
+        for class in 0..popup::aircraft::PASS_CLASSES {
+            for (a, b) in [
+                (left.passes.energy[0][class], right.passes.energy[0][class]),
+                (
+                    left.passes.passing[0][class],
+                    right.passes.passing[0][class],
+                ),
+            ] {
+                assert!(
+                    (a - b).abs() <= 1e-12 * b.max(1.0),
+                    "class {class}: {a} vs {b}"
+                );
+            }
+        }
+    };
+    let at = [100.0, 300.0];
+    let whole = heard(std::slice::from_ref(&a320), at);
+    let halves = heard(
+        &[
+            roll(class("A320-232"), false, 50.0),
+            roll(class("A320-232"), false, 50.0),
+        ],
+        at,
     );
+    assert_passes_eq(&halves, &whole);
+
+    let jet = heard(std::slice::from_ref(&a320), at);
+    let piston = heard(std::slice::from_ref(&cessna), at);
     let together = heard(&[a320, cessna], at);
-    let mut apart = jet.passes;
-    apart.add(&piston.passes);
-    for class in 0..popup::aircraft::PASS_CLASSES {
-        for (both, each) in [
-            (together.passes.energy[0][class], apart.energy[0][class]),
-            (together.passes.passing[0][class], apart.passing[0][class]),
-        ] {
+    let mut apart = jet;
+    apart.passes.add(&piston.passes);
+    assert_passes_eq(&together, &apart);
+    let jet_max_class = (0..popup::aircraft::PASS_CLASSES)
+        .rfind(|&c| jet.passes.passing[0][c] > 0.0)
+        .unwrap();
+    let piston_max_class = (0..popup::aircraft::PASS_CLASSES)
+        .rfind(|&c| piston.passes.passing[0][c] > 0.0)
+        .unwrap();
+    assert!(
+        piston_max_class < jet_max_class,
+        "light aircraft ({piston_max_class}) stays quieter than airliner ({jet_max_class})"
+    );
+}
+
+/// Every roll's total passing share equals its movements per second times the roll's exact
+/// kinematic duration (independent of receiver distance, with no pi factor or 30.5 m clamp), and
+/// cutting the roll ten times finer leaves Nden within 8 % across off-runway take-off and landing
+/// points.
+#[test]
+fn roll_passes_match_roll_duration_and_stay_stable_when_cut_ten_times_finer() {
+    let place = PlaceAtmosphere::model();
+    for (landing, points) in [
+        (false, vec![[0.0, 100.0], [900.0, 300.0], [-300.0, 0.0]]),
+        (true, vec![[100.0, 100.0], [700.0, 300.0]]),
+    ] {
+        let spec = roll(class("A320-232"), landing, 100.0);
+        let coarse = prepare(TILE, std::slice::from_ref(&spec), &place);
+        let fine: Vec<HeardPath> = coarse
+            .iter()
+            .map(|path| HeardPath {
+                rolls: path
+                    .rolls
+                    .iter()
+                    .map(|r| HeardRoll {
+                        steps: r
+                            .profile
+                            .steps_by(1.0)
+                            .into_iter()
+                            .map(|step| RollStep {
+                                emission: step.emission.in_atmosphere(&place),
+                                ..step
+                            })
+                            .collect(),
+                        ..r.clone()
+                    })
+                    .collect(),
+                ..path.clone()
+            })
+            .collect();
+        let end_speed = if landing {
+            LANDING_EXIT_SPEED_MS.min(spec.speed_ms)
+        } else {
+            spec.speed_ms
+        };
+        let start_speed = if landing { spec.speed_ms } else { 0.0 };
+        let expected_passing =
+            100.0 / (12.0 * 3_600.0) * (2.0 * spec.length_m / (start_speed + end_speed));
+
+        for point in points {
+            let c = heard_paths(&coarse, point);
+            let f = heard_paths(&fine, point);
+            let passing_c: f64 = c.passes.passing[0].iter().sum();
+            let passing_f: f64 = f.passes.passing[0].iter().sum();
             assert!(
-                (both - each).abs() <= 1e-9 * each,
-                "class {class}: {both} vs {each}"
+                (passing_c / expected_passing - 1.0).abs() < 1e-9,
+                "landing={landing} at {point:?}: {passing_c} vs {expected_passing}"
+            );
+            assert!(
+                (passing_f / expected_passing - 1.0).abs() < 1e-9,
+                "landing={landing} at {point:?}: {passing_f} vs {expected_passing}"
+            );
+            let lden_c = 10.0 * lden_energy(&c.energy).log10();
+            let lden_f = 10.0 * lden_energy(&f.energy).log10();
+            assert!(
+                (lden_c - lden_f).abs() < 0.6,
+                "landing={landing} at {point:?}: Lden {lden_c:.3} vs {lden_f:.3}"
+            );
+            let nden_c = roll_nden(&c);
+            let nden_f = roll_nden(&f);
+            let ratio = nden_c / nden_f;
+            assert!(
+                (ratio - 1.0).abs() < 0.08,
+                "landing={landing} at {point:?}: Nden {nden_c:.4} vs {nden_f:.4} (ratio {ratio:.3})"
             );
         }
+        // On the runway axis too, total passing stays the exact roll duration (no 30.5 m clamp).
+        let on_runway = heard_paths(&coarse, [900.0, 0.0]);
+        let passing_axis: f64 = on_runway.passes.passing[0].iter().sum();
+        assert!(
+            (passing_axis / expected_passing - 1.0).abs() < 1e-9,
+            "landing={landing} on runway: {passing_axis} vs {expected_passing}"
+        );
     }
 }

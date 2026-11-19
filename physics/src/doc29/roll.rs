@@ -172,12 +172,12 @@ pub fn roll_segment_sel(
     }
 }
 
-/// One movement of `steps` of a `kind` roll at the receiver, its SEL energy (linear, all its
-/// segments): the roll from `start_m` along the unit `direction` (receiver frame, metres; height
-/// above the receiver in `start_m[2]`), `ground_m` the runway below the receiver's height.
-pub fn roll_sel_energy(
+/// One segment `step` of a `kind` roll at the receiver, its SEL energy (linear): the roll from
+/// `start_m` along the unit `direction` (receiver frame, metres; height above the receiver in
+/// `start_m[2]`), `ground_m` the runway below the receiver's height.
+pub fn roll_step_sel_energy(
     kind: RollKind,
-    steps: &[RollStep],
+    step: &RollStep,
     (start_m, direction): ([f64; 3], [f64; 2]),
     ground_m: f64,
     horizons: &impl ReceiverHorizons,
@@ -189,23 +189,19 @@ pub fn roll_sel_energy(
             start_m[2],
         ]
     };
-    (steps.iter())
-        .map(|step| {
-            let segment = RollSegment {
-                geometry: SegmentGeometry {
-                    start_m: at(step.from_m),
-                    end_m: at(step.to_m),
-                    ground_under_start_m: ground_m,
-                    ground_under_end_m: ground_m,
-                },
-                emission: step.emission,
-                thrust_lb: step.thrust_lb,
-                bracket: bracket_of,
-                increment_db: step.increment_db,
-            };
-            10f64.powf(roll_segment_sel(kind, &segment, horizons).sel_db / 10.0)
-        })
-        .sum()
+    let segment = RollSegment {
+        geometry: SegmentGeometry {
+            start_m: at(step.from_m),
+            end_m: at(step.to_m),
+            ground_under_start_m: ground_m,
+            ground_under_end_m: ground_m,
+        },
+        emission: step.emission,
+        thrust_lb: step.thrust_lb,
+        bracket: bracket_of,
+        increment_db: step.increment_db,
+    };
+    10f64.powf(roll_segment_sel(kind, &segment, horizons).sel_db / 10.0)
 }
 
 #[cfg(test)]

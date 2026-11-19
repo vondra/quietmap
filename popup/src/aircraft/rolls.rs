@@ -1,14 +1,13 @@
 //! The runways' take-off and landing rolls at the receiver (`tiles::aircraft_rolls`), by path (a
 //! runway direction's take-offs or landings): each roll's Doc 29 segments (`physics::doc29::roll`)
 //! times its movements, heard in the aircraft layer beside the boxes, in the boxes' atmosphere (its
-//! square's) with their impedance, a path's classes passing the receiver in one stream for as long
-//! as their own speeds take.
+//! square's) with their impedance, each segment heard for the seconds the aircraft rolls it.
 
 use super::boxes::{AircraftReceiver, FLIGHT_KINDS};
 use physics::bands::{PERIOD_HOURS, PERIODS, energy, lden_energy};
 use physics::doc29::atmosphere::{PlaceAtmosphere, receiver_impedance_db};
-use physics::doc29::npd::{Installation, NPD_NEAREST_SLANT_M, class_anchor};
-use physics::doc29::roll::{ENGINE_HEIGHT_M, RollKind, roll_sel_energy};
+use physics::doc29::npd::{Installation, class_anchor};
+use physics::doc29::roll::{ENGINE_HEIGHT_M, RollKind, roll_step_sel_energy};
 use physics::doc29::roll_profile::{RollProfile, RollStep};
 use physics::doc29::screening::ReceiverHorizons;
 use std::collections::BTreeMap;
@@ -31,8 +30,7 @@ pub struct HeardRoll {
 
 /// A runway direction's take-offs or landings: their start (the start of roll, the touchdown
 /// point), their direction of travel (a unit vector, east and north), one for every class as the
-/// builder writes it (`build/src/airport/roll_tiles.rs`), and the classes rolling it, whose passes
-/// make one stream.
+/// builder writes it (`build/src/airport/roll_tiles.rs`), and the classes rolling it.
 #[derive(Debug, Clone)]
 pub struct HeardPath {
     pub start: Mercator,
@@ -89,10 +87,9 @@ pub fn prepare(tile: TileId, rolls: &[Roll], place: &PlaceAtmosphere) -> Vec<Hea
     paths.into_values().collect()
 }
 
-/// The rolls heard at a receiver: per period their energy (Leq, linear) and their passes (a
-/// stream's passes in progress pi times its Kurze lambda of the time: a point's pass at its
-/// loudest for as long as its exposure holds); their Lden energy per flight kind, and how many
-/// were within reach.
+/// The rolls heard at a receiver: per period their energy (Leq, linear) and their passes (each
+/// Doc 29 segment at its received level for the seconds the aircraft spends rolling it); their
+/// Lden energy per flight kind, and how many were within reach.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RollSums {
     pub energy: [f64; PERIODS],
@@ -102,14 +99,10 @@ pub struct RollSums {
 }
 
 /// Every path of `paths` whose start lies within [`ROLL_REACH_M`] of the receiver, its rolls at
-/// the NPD curves of the receiver's elevation (Doc 29 4.2.1) as the boxes take them. A class's
-/// passes take the time its roll needs over the pass's distance (at least the NPD curves' nearest,
-/// where the sound exposure is read) around its point nearest the receiver, the stretch shifted to
-/// lie on the roll. The classes of a path passing the receiver nearest at one point make one stream,
-/// whose lambda is theirs summed, as a box's flights do: those whose rolls reach past the
-/// receiver's nearest point on the path, and those ending at one point before it; each stream is
-/// a pass in progress pi times its lambda of the time, at its own level, so a short roll over long
-/// before a long one passes adds its sound at its own rate, not to the long one's.
+/// the NPD curves of the receiver's elevation (Doc 29 4.2.1) as the boxes take them. Each Doc 29
+/// segment enters [`FlightPasses::add_pass`] with its own received energy and the period share the
+/// aircraft spends rolling it, just as a flight box does, so each class and segment stays in its
+/// own level class without slant-based streams or a point-source pi factor.
 pub fn roll_sums(
     paths: &[HeardPath],
     frame: &LocalFrame,
@@ -124,52 +117,36 @@ pub fn roll_sums(
         if start[0].hypot(start[1]) > ROLL_REACH_M {
             continue;
         }
-        // The receiver's nearest point on the path's line from its start.
-        let along_m = (-(start[0] * path.direction[0] + start[1] * path.direction[1])).max(0.0);
-        // Per stream: where its classes pass nearest, their energy and their lambda per period.
-        let mut streams: Vec<(f64, [f64; PERIODS], [f64; PERIODS])> = Vec::new();
         for roll in &path.rolls {
-            let (field_m, roll_m) = (roll.profile.field_altitude_m, roll.profile.length_m);
-            let up_m = field_m + ENGINE_HEIGHT_M - receiver.altitude_m;
-            let sel_energy = roll_sel_energy(
-                roll.profile.kind,
-                &roll.steps,
-                ([start[0], start[1], up_m], path.direction),
-                field_m - receiver.altitude_m,
-                horizons,
-            );
-            let nearest_m = along_m.min(roll_m);
-            let nearest = [0, 1].map(|k| start[k] + path.direction[k] * nearest_m);
-            let reach_m = (nearest[0].hypot(nearest[1]).hypot(up_m)).max(NPD_NEAREST_SLANT_M);
-            let from_m = (nearest_m - 0.5 * reach_m).clamp(0.0, (roll_m - reach_m).max(0.0));
-            let passing_s = roll.profile.seconds_between(from_m, from_m + reach_m);
-            let at = match streams.iter().position(|stream| stream.0 == nearest_m) {
-                Some(at) => at,
-                None => {
-                    streams.push((nearest_m, [0.0; PERIODS], [0.0; PERIODS]));
-                    streams.len() - 1
-                }
-            };
-            let stream = &mut streams[at];
-            let mut alone = [0.0; PERIODS];
-            for (period, value) in alone.iter_mut().enumerate() {
-                let per_second = roll.movements_per_day[period] / (PERIOD_HOURS[period] * 3_600.0);
-                *value = per_second * sel_energy * impedance_gain;
-                stream.1[period] += *value;
-                stream.2[period] += per_second * passing_s;
-            }
-            sums.kinds[roll.flight_kind] += lden_energy(&alone);
-            sums.heard += 1;
-        }
-        for (_, energy, lambda) in streams {
-            for period in 0..PERIODS {
-                sums.energy[period] += energy[period];
-                sums.passes.add_pass(
-                    period,
-                    energy[period],
-                    std::f64::consts::PI * lambda[period],
+            let field_m = roll.profile.field_altitude_m;
+            let origin = [
+                start[0],
+                start[1],
+                field_m + ENGINE_HEIGHT_M - receiver.altitude_m,
+            ];
+            let ground_m = field_m - receiver.altitude_m;
+            let rates: [f64; PERIODS] = std::array::from_fn(|period| {
+                roll.movements_per_day[period] / (PERIOD_HOURS[period] * 3_600.0)
+            });
+            let mut roll_energy = [0.0; PERIODS];
+            for step in &roll.steps {
+                let sel_energy = roll_step_sel_energy(
+                    roll.profile.kind,
+                    step,
+                    (origin, path.direction),
+                    ground_m,
+                    horizons,
                 );
+                for period in 0..PERIODS {
+                    let step_energy = rates[period] * sel_energy * impedance_gain;
+                    roll_energy[period] += step_energy;
+                    sums.energy[period] += step_energy;
+                    sums.passes
+                        .add_pass(period, step_energy, rates[period] * step.duration_s);
+                }
             }
+            sums.kinds[roll.flight_kind] += lden_energy(&roll_energy);
+            sums.heard += 1;
         }
     }
     sums
