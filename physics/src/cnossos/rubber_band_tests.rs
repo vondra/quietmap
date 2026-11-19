@@ -197,3 +197,28 @@ fn the_band_is_the_upper_envelope_of_the_states_rays() {
         }
     }
 }
+
+/// Crossings at the same distance keep only the highest instead of dividing 0/0 in chord_altitude.
+#[test]
+fn equal_distance_crossings_keep_only_the_highest() {
+    let (source, receiver) = ((0.0, 0.0), (100.0, 0.0));
+    let candidates = [(50.0, 20.0), (50.0, 15.0), (50.0, 25.0)];
+    let (mut blocking, mut hull, mut path) = (Vec::new(), Vec::new(), DiffractionPath::default());
+    for state in [
+        MeteorologicalState::Homogeneous,
+        MeteorologicalState::Favourable,
+    ] {
+        let ray = StateRay::between(state, source, receiver);
+        diffraction_path(
+            &ray,
+            source,
+            receiver,
+            &candidates,
+            &mut blocking,
+            &mut hull,
+            &mut path,
+        );
+        assert!(path.blocked);
+        assert_eq!(path.points, vec![(50.0, 25.0)], "{state:?}");
+    }
+}

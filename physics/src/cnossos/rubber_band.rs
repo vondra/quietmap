@@ -231,6 +231,12 @@ pub fn diffraction_path(
             .chain(blocking.iter().copied())
             .chain(std::iter::once(ends[1]))
         {
+            if hull.len() > 1 && hull[hull.len() - 1].0 == point.0 {
+                if point.1 <= hull[hull.len() - 1].1 {
+                    continue;
+                }
+                hull.pop();
+            }
             while hull.len() >= 2 {
                 let (a, b) = (hull[hull.len() - 2], hull[hull.len() - 1]);
                 let (from, to) = ((a.0, a.1), (point.0, point.1));

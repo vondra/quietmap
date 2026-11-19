@@ -160,6 +160,10 @@ __device__ __forceinline__ u32 stream_candidate(RayStream& s, BandState* bands, 
         float lowered = c.z - frame_height_above_chord(f, state, c.x);
         if (lowered > chord) {
             band.blocked = true;
+            if (band.depth > 1 && st.hull[band.depth - 1].x == c.x) {
+                if (c.z <= st.hull[band.depth - 1].z) continue;
+                band.depth--;
+            }
             while (band.depth >= 2 && under_state_ray(ray, st.hull[band.depth - 2], c.x, c.z, st.hull[band.depth - 1])) band.depth--;
             if (band.depth >= HULL_CAPACITY) return FAILED_CAPACITY;
             st.hull[band.depth] = entry;
