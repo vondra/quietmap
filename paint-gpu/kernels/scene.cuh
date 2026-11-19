@@ -318,6 +318,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                 while (more) {
                     more = false;
                     int count = 0;
+                    double next_t = 2.0;
                     // The cell's runs and their edges in one loop through the f32 filter, then the edges
                     // it kept, KEPT_EDGES at a time, through the exact test, the ordered insertion and the
                     // roof check on every lane that kept one: taken where each lane met its edge, these ran
@@ -374,7 +375,11 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                             int at = count;
                             if (count == CELL_CROSSINGS) {
                                 more = true;
-                                if (!crossing_before(crossing, found[count - 1])) continue;
+                                if (!crossing_before(crossing, found[count - 1])) {
+                                    if (crossing.t < next_t) next_t = crossing.t;
+                                    continue;
+                                }
+                                if (found[count - 1].t < next_t) next_t = found[count - 1].t;
                                 at = --count;
                             }
                             // The roof check, which the order does not read, for the crossings kept.
@@ -389,7 +394,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                         }
                     }
                     for (int k = 0; k < count; k++) {
-                        found[k].tie = k + 1 < count && found[k + 1].t == found[k].t;
+                        found[k].tie = (k + 1 < count ? found[k + 1].t : next_t) == found[k].t;
                         u32 failed = take(found[k]);
                         if (failed) return failed;
                     }
