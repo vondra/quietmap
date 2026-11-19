@@ -26,7 +26,7 @@ Numbers are parsed with `serde_json/float_roundtrip`: the expected pub seats
 | road-class-priors | Country; `[secondary,tertiary][unknown,rural,urban]`, vehicles/day | Length-weighted medians of counted roads in Czechia, Britain and Sweden; unknown surroundings use √(rural × urban), and Czech tertiary values use the Swedish/British tertiary-to-secondary ratios |
 | road-class-shares | Country; `[secondary,tertiary][rural,urban][medium,heavy]`, percent | Counted vehicle-class medians in the same countries |
 | counted-class-shares | Five road classes motorway through tertiary; `[rural,urban][medium,heavy]`, percent | Counted road medians; local streets retain the documented world mix |
-| rural-free-flow | One ratio | DfT SPE0102, free-flow car speed / rural single-carriageway limit; applied only at a known rural limit of at least 80 km/h |
+| rural-free-flow | `[light, heavy]` ratios | DfT SPE0102 (2024), free-flow car (50.67 mph, 0.845) and HGV (47.93 mph, 0.799) speeds / 60 mph rural single-carriageway limit; applied only at a known rural limit of at least 80 km/h |
 | train-scales | Country; `scales` [freight, passenger] on default trains, `tier_weights` [off, other TEN-T line, core corridor] | Fitted by the year run (`train-scale-table`, below): national train-kilometres / train-kilometres of the default trains on the prepared heavy-rail network; the tier weights distribute freight inside the national total where the TEN-T maps cover the country |
 | rail-fleet-regions | Country; boolean | Networks represented by the European freight fleet observations |
 | freight-period-shares | One day/evening/night triple, fractions | German EBA monitor freight counts |

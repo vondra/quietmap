@@ -326,15 +326,28 @@ fn electric_share(tables: &SourceTables, country_iso: u16) -> f64 {
 /// Global truck/bus limit where the admitted table has no country row (km/h).
 const HEAVY_SPEED_CAP_KMH: f64 = 80.0;
 
-/// The speed of lorries and buses (medium and heavy) on a road of `speed_kmh` in a country.
-fn heavy_speed(tables: &SourceTables, speed_kmh: f64, country_iso: u16) -> f64 {
+/// The speed of lorries and buses (medium and heavy) on a road of `base_speed` in a country:
+/// on a rural single carriageway at its national limit (`rural_free_flow`) they run at their own
+/// measured free-flow share of that limit (DfT SPE0102, 2024: 47.93 of 60 mph = 0.799), still
+/// under their national speed cap.
+fn heavy_speed(
+    tables: &SourceTables,
+    base_speed: f64,
+    rural_free_flow: bool,
+    country_iso: u16,
+) -> f64 {
     let iso = country_iso.to_le_bytes();
     let cap = tables
         .heavy_speeds
         .get(iso)
         .copied()
         .unwrap_or(HEAVY_SPEED_CAP_KMH);
-    speed_kmh.min(cap)
+    let speed = if rural_free_flow {
+        base_speed * tables.rural_free_flow[1]
+    } else {
+        base_speed
+    };
+    speed.min(cap)
 }
 
 /// A road's day, evening and night shares of its daily vehicles, all categories together (the
@@ -831,14 +844,15 @@ pub fn convert(
             // pulling away (2.2.5), where dev4 capped them at 30 km/h (-4.1 dB at 50). The law
             // wants the mean speed: on a rural single carriageway at a national limit free-flowing
             // cars drive below it.
-            let (speed, speed_source) = if free_flows_below_limit(
+            let rural_free_flow = free_flows_below_limit(
                 class_index,
                 built_up.value(row),
                 oneway.value(row) != 0,
                 base_speed,
                 f64::from(legal_speed(tables, class_index, country.value(row), 1)),
-            ) {
-                (base_speed * tables.rural_free_flow, "rural_free_flow")
+            );
+            let (speed, speed_source) = if rural_free_flow {
+                (base_speed * tables.rural_free_flow[0], "rural_free_flow")
             } else {
                 (base_speed, base_source)
             };
@@ -881,9 +895,7 @@ pub fn convert(
                 _ => &[(1.0, 1.0)],
             };
             let electric = electric_share(tables, country.value(row));
-            // The free-flow share is the cars' (DfT's counters); lorries and buses keep their own
-            // limit on the road's.
-            let heavy_speed = heavy_speed(tables, base_speed, country.value(row));
+            let heavy_speed = heavy_speed(tables, base_speed, rural_free_flow, country.value(row));
             let emission: [[f64; BANDS]; PERIODS] = std::array::from_fn(|period| {
                 let flows: Vec<CategoryFlow> = directions
                     .iter()
@@ -1085,10 +1097,10 @@ mod tests {
     fn heavy_vehicles_keep_their_countrys_limit() {
         let tables = SourceTables::test_fixture();
         let code = |iso: &[u8; 2]| u16::from_le_bytes(*iso);
-        assert_eq!(heavy_speed(tables, 130.0, code(b"DE")), 80.0);
-        assert_eq!(heavy_speed(tables, 113.0, code(b"US")), 105.0);
-        assert_eq!(heavy_speed(tables, 60.0, code(b"US")), 60.0);
-        assert_eq!(heavy_speed(tables, 130.0, code(b"FR")), 90.0);
+        assert_eq!(heavy_speed(tables, 130.0, false, code(b"DE")), 80.0);
+        assert_eq!(heavy_speed(tables, 113.0, false, code(b"US")), 105.0);
+        assert_eq!(heavy_speed(tables, 60.0, false, code(b"US")), 60.0);
+        assert_eq!(heavy_speed(tables, 130.0, false, code(b"FR")), 90.0);
     }
 
     #[test]
@@ -1191,6 +1203,14 @@ mod tests {
             !free_flows_below_limit(5, 1, false, 50.0, 30.0),
             "a village lane"
         );
-        assert!((90.0 * SourceTables::test_fixture().rural_free_flow - 76.05).abs() < 1e-9);
+        assert!((90.0 * tables.rural_free_flow[0] - 76.05).abs() < 1e-9);
+        assert!((80.0 * tables.rural_free_flow[1] - 63.92).abs() < 1e-9);
+        let fr = u16::from_le_bytes(*b"FR");
+        // On an 80 km/h rural single carriageway lorries take their own 0.799 share (63.92 km/h,
+        // below cars' 67.60 km/h), while on a 110 km/h motorway they keep their national cap.
+        assert!((heavy_speed(tables, 80.0, true, fr) - 63.92).abs() < 1e-9);
+        assert!((heavy_speed(tables, 110.0, false, fr) - 90.0).abs() < 1e-9);
+        let de = u16::from_le_bytes(*b"DE");
+        assert!((heavy_speed(tables, 100.0, true, de) - 79.9).abs() < 1e-9);
     }
 }

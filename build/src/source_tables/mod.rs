@@ -124,7 +124,7 @@ pub struct SourceTables {
     pub road_preparation_priors: [[f64; 3]; 2],
     pub class_shares: CountryTable<ClassShares>,
     pub counted_class_shares: Vec<[[f64; 2]; 2]>,
-    pub rural_free_flow: f64,
+    pub rural_free_flow: [f64; 2],
     pub freight_period_shares: [f64; 3],
     pub plants: CountryTable<Plant>,
     pub service_cooling: CountryTable<f64>,
@@ -170,6 +170,13 @@ impl SourceTables {
         };
         if tables.counted_class_shares.len() != 5 {
             return Err("counted-class-shares needs five road classes".into());
+        }
+        if tables
+            .rural_free_flow
+            .iter()
+            .any(|v| !v.is_finite() || *v <= 0.0 || *v > 1.0)
+        {
+            return Err("rural-free-flow: ratios must lie in (0, 1]".into());
         }
         for groups in tables.period_shares.values() {
             for shares in groups.iter().flatten() {
