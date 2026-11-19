@@ -4604,8 +4604,18 @@
         "gb-dft-aadf-by-count-point"
       ],
       "design": "whole-network",
+      "exceptions": [
+        {
+          "road_class_mask": 28,
+          "design": "random-sample"
+        },
+        {
+          "road_class_mask": 1008,
+          "design": "random-sample"
+        }
+      ],
       "citation": "https://roadtraffic.dft.gov.uk/about",
-      "statement": "Estimated for each link of the major road network (motorways and A roads) and for a sample of locations on the minor road network.",
+      "statement": "Estimated for each link of the major road network (motorways and A roads); \"a representative sample of minor road sites are counted each year\".",
       "stated": true
     },
     {

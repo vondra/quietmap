@@ -160,4 +160,37 @@ mod tests {
             }
         }
     }
+
+    /// Great Britain's major roads (motorways and A roads: masks 3, 7, 14) are whole-network
+    /// estimates, while its minor roads (B roads mask 28 and C/unclassified mask 1008) are a
+    /// random sample so the model fit admits them regardless of class coverage.
+    #[test]
+    fn great_britains_minor_roads_are_declared_a_random_sample() {
+        for year in ["2024", "2026"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../years/tables/{year}/road-conversion.json"));
+            let recipe: super::super::Recipe =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let mut rows = vec![
+                row("gb-dft-aadf-by-count-point", 3),
+                row("gb-dft-aadf-by-count-point", 7),
+                row("gb-dft-aadf-by-count-point", 14),
+                row("gb-dft-aadf-by-count-point", 28),
+                row("gb-dft-aadf-by-count-point", 1008),
+            ];
+            apply(&recipe.sampling, &mut rows).unwrap();
+            let designs: Vec<SamplingDesign> = rows.iter().map(|r| r.sample.design).collect();
+            assert_eq!(
+                designs,
+                [
+                    SamplingDesign::WholeNetwork,
+                    SamplingDesign::WholeNetwork,
+                    SamplingDesign::WholeNetwork,
+                    SamplingDesign::RandomSample,
+                    SamplingDesign::RandomSample,
+                ],
+                "{year}: GB DfT major vs minor sampling design"
+            );
+        }
+    }
 }
