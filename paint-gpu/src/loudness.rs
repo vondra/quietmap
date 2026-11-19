@@ -3,7 +3,7 @@
 //! groups of hours, ISO 532-1), the pixels' packed sounds in (`paint::sone::PixelSound::pack`),
 //! their Nden out.
 
-use crate::device::{Gpu, driver, read_back};
+use crate::device::{Gpu, driver};
 use crate::weather_runs::mixture_blocks;
 use cudarc::driver::{LaunchAsync, LaunchConfig};
 use paint::exact::LAYERS;
@@ -229,20 +229,32 @@ impl Gpu {
             offsets.iter().map(|&at| &input[at as usize..]),
             &period_groups(),
         );
-        let input = driver(device.htod_sync_copy(input))?;
-        let offsets = driver(device.htod_sync_copy(offsets))?;
-        let tasks = driver(device.htod_sync_copy(&tasks))?;
-        let runs = driver(device.htod_sync_copy(&runs))?;
-        let mixtures = driver(device.alloc_zeros::<f32>(mixture_floats() * count))?;
-        let ndens = driver(device.alloc_zeros::<f32>(LOUDNESS_FLOATS * count))?;
+        // SAFETY: each buffer is written whole on the stream below before a kernel reads it, the
+        // inputs copied and the answers zeroed.
+        let mut device_input = driver(unsafe { device.alloc::<f32>(input.len()) })?;
+        let mut device_offsets = driver(unsafe { device.alloc::<u64>(count) })?;
+        let mut device_tasks = driver(unsafe { device.alloc(tasks.len()) })?;
+        let mut device_runs = driver(unsafe { device.alloc(runs.len()) })?;
+        let mut mixtures = driver(unsafe { device.alloc::<f32>(mixture_floats() * count) })?;
+        let mut ndens = driver(unsafe { device.alloc::<f32>(LOUDNESS_FLOATS * count) })?;
         let kernel = |name: &str| {
             device
                 .get_func("loudness", name)
                 .ok_or(format!("kernel {name} missing"))
         };
-        // On a stream of their own (once the buffers above are zeroed): the pairs' kernels of
-        // another pass run beside them on the card.
+        // On a stream of their own, forked once their buffers are allocated: the pairs' kernels
+        // of another pass run beside them on the card.
         let stream = self.fork()?;
+        // SAFETY: the caller's arrays and the tasks and runs stay as they are until the read-back
+        // below synchronizes the stream.
+        unsafe {
+            stream.copy(input, &mut device_input)?;
+            stream.copy(offsets, &mut device_offsets)?;
+            stream.copy(&tasks, &mut device_tasks)?;
+            stream.copy(&runs, &mut device_runs)?;
+        }
+        stream.zero(&mut mixtures)?;
+        stream.zero(&mut ndens)?;
         let pixels_config = LaunchConfig {
             grid_dim: (count as u32, 1, 1),
             block_dim: (32, 1, 1),
@@ -262,7 +274,14 @@ impl Gpu {
                 kernel("pixel_mixtures")?.launch_on_stream(
                     &stream,
                     config,
-                    (&input, &offsets, &tasks, &runs, first as u32, &mixtures),
+                    (
+                        &device_input,
+                        &device_offsets,
+                        &device_tasks,
+                        &device_runs,
+                        first as u32,
+                        &mixtures,
+                    ),
                 )
             })?;
         }
@@ -270,10 +289,16 @@ impl Gpu {
             kernel("pixel_ndens")?.launch_on_stream(
                 &stream,
                 pixels_config,
-                (&input, &offsets, &mixtures, count as u32, &ndens),
+                (
+                    &device_input,
+                    &device_offsets,
+                    &mixtures,
+                    count as u32,
+                    &ndens,
+                ),
             )
         })?;
-        let flat = read_back(&stream, &ndens)?;
+        let flat = stream.read_back(&ndens)?;
         Ok(flat
             .chunks_exact(LOUDNESS_FLOATS)
             .map(|pixel| std::array::from_fn(|k| pixel[k]))

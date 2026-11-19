@@ -306,7 +306,8 @@ the mean loudness of the pixels under it.
 [`paint/`](https://github.com/vondra/quietmap/tree/main/paint) is the method and [`paint-gpu/`](https://github.com/vondra/quietmap/tree/main/paint-gpu) (`qm-paint`) runs it by squares of zoom 12 in three stages:
 the cores read the next square's tiles once, to the reach of its farthest pixel, give the card the
 fine terrain of every land tile among them, and take its corners, hum and aircraft lattices; two
-squares paint their pixels at once (a square of many sources alone); two writers publish the squares
+squares paint their pixels at once, three while they are small (a square of many sources
+alone); two writers publish the squares
 before. The exact pairs, the hum's sampled pairs, the aircraft boxes' sums at the block corners'
 lattices and every pixel's loudness run on the first CUDA card (`paint-gpu/kernels/`, the popup's
 physics in single precision, with fast math except the loudness; a ray's crossing of a building's
@@ -315,7 +316,7 @@ on the cores. The runway rolls, the flight spectra and a building across the squ
 the cores. A square's samples, then its pixels, then its
 façades run in passes, four at once, at most two launching their pairs on the card while the
 others list and sound their pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
-one before.
+one before. A launch copies its inputs and clears its buffers in its own queue on the card.
 The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
 while the card computes the current chunk's loudness.
 The passes return in spatial order, so equal façade energies keep the same first candidate.
@@ -351,8 +352,8 @@ once. Container version 8 holds both quantities; already painted version-7 bundl
 Nden and remain complete. The Nden tile streams keep HM3 version 7; Lden streams use HMD version 1,
 so decibels cannot be mistaken for loudness. Verification decodes both quantities, checks their
 assessment masks and Lden totals, and refuses any cell of 120 phon or 120 dB and more. Two
-writers compress and publish the bundles while the next squares are painted; at most six squares' cell buffers are resident (two written,
-two waiting, two painted), and a square is complete only after its bundle is durable
+writers compress and publish the bundles while the next squares are painted; at most seven squares' cell buffers are resident (two written,
+two waiting, three painted), and a square is complete only after its bundle is durable
 (`paint-gpu/src/square_writer.rs`). `qm-paint merge` copies
 independent painters' bundles into one tree atomically, without decoding or replacing completed
 squares. Identical completed copies are skipped on retry; conflicting squares stop the merge.

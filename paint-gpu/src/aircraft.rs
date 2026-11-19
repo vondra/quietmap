@@ -3,7 +3,7 @@
 //! A square's boxes, decoded once (`DeviceFlightBoxes`), and per request its point's horizons and
 //! its segments: one tile's boxes of one file and band, a block each (kernels/aircraft.cuh).
 
-use crate::device::{Gpu, driver, read_back};
+use crate::device::{Gpu, driver};
 use cudarc::driver::{CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig};
 use paint::flight_boxes::{FlightBoxes, FlightRequest, FlightWeight};
 use paint::flights::{FlightSums, tiles_heard};
@@ -313,7 +313,7 @@ impl Gpu {
                 (&device_boxes.boxes, &points, &horizons, &segments, &totals),
             )
         })?;
-        let totals = read_back(&stream, &totals)?;
+        let totals = stream.read_back(&totals)?;
         for (slot, request_sums) in sums.iter_mut().enumerate() {
             for (band, band_sums) in request_sums.iter_mut().enumerate() {
                 let at = (2 * slot + band) * SUMS;

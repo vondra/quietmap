@@ -1,7 +1,7 @@
 //! Paint squares, merge their compressed bundles and publish immutable heatmap archives.
 //! `qm-paint --prepared DIR --year YYYY --zoom 12|13 --out DIR (--squares X,Y[;X,Y...] | --bbox
 //! SOUTH,WEST,NORTH,EAST)`: paints the z12 squares into heatmap tiles at `--zoom`, skipping squares
-//! already painted, the next one prepared on the cores while two paint their pixels (the exact
+//! already painted, the next one prepared on the cores while up to three paint their pixels (the exact
 //! evaluations on the first CUDA card when there is one) and two writers publish those before; one
 //! line per square on stdout.
 //! `qm-paint pack --out DIR --zoom Z --tiles DIR --build bNNN [--regions DIR]`: the map's archives
@@ -15,8 +15,11 @@ use paint::hm3::painted;
 use paint::levels::PaintedCells;
 use paint::paint::{Corners, Grid, corners_of, paint_pixels};
 use paint::square::Files;
+#[path = "painter/card.rs"]
+mod card;
 #[path = "painter/prepared.rs"]
 mod prepared;
+use card::{Card, SQUARES_ON_THE_CARD, paints_alone};
 use paint_gpu::batch::GpuBatch;
 use paint_gpu::device::{DeviceSquare, Gpu};
 use paint_gpu::square_writer::{PaintedSquareCells, write_beside_painting};
@@ -26,7 +29,7 @@ use prepared::PreparedSquare;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::mpsc::sync_channel;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tiles::geo::{Mercator, TileId};
 
@@ -159,12 +162,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
     };
     let preparing_pool = &preparing_pool;
     // Three stages: the preparer reads the next square, uploads it and takes its corners (on its
-    // own cores), the painters paint [`SQUARES_ON_THE_CARD`] squares' pixels at once (the card),
-    // two writers encode and publish the squares before. The preparer hands a square to the
-    // first free painter; preparing two ahead slowed Dobris's busiest squares by 3 % (2026-10-14).
-    // A heavy square paints alone: two of those do not fit in memory.
+    // own cores), the painters paint up to [`SQUARES_ON_THE_CARD`] squares' pixels at once (the
+    // card), two writers encode and publish the squares before. The preparer hands a square over
+    // once the card has room for it ([`Card::admitted`]); preparing two ahead slowed Dobris's busiest
+    // squares by 3 % (2026-10-14). A heavy square paints alone: two of those do not fit in memory.
     write_beside_painting(&out, zoom, |sender| {
-        let (prepared_sender, prepared_receiver) = sync_channel::<Result<Prepared, String>>(0);
+        // A square goes to its painter with the candidates the card counts for it.
+        let (prepared_sender, prepared_receiver) =
+            sync_channel::<(usize, Result<Prepared, String>)>(0);
         // The painters own the receiver: when the last one ends, the preparer's next hand-over fails.
         let prepared_receiver = Arc::new(Mutex::new(prepared_receiver));
         let card = Card::default();
@@ -182,13 +187,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
                         true => prepare(square),
                         false => preparing_pool.install(|| prepare(square)),
                     };
-                    let heavy = (prepared.as_ref())
-                        .is_ok_and(|prepared| prepared.candidates > PIPELINE_CANDIDATES_MAX);
-                    if heavy && !card.emptied() {
-                        return;
-                    }
-                    card.change(|state| state.squares += 1);
-                    if prepared_sender.send(prepared).is_err() || heavy && !card.emptied() {
+                    let candidates = (prepared.as_ref()).map_or(0, |square| square.candidates);
+                    let heavy = paints_alone(candidates);
+                    if !card.admitted(candidates)
+                        || prepared_sender.send((candidates, prepared)).is_err()
+                        || heavy && !card.emptied()
+                    {
                         return;
                     }
                     card_idle = heavy;
@@ -202,11 +206,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             let received = (prepared_receiver.lock())
                                 .map_err(|_| "a painter panicked".to_string())?
                                 .recv();
-                            let Ok(prepared) = received else {
+                            let Ok((candidates, prepared)) = received else {
                                 return Ok(());
                             };
                             if card.stopped() {
-                                card.change(|state| state.squares -= 1);
+                                card.change(|state| state.leave(candidates));
                                 return Ok(());
                             }
                             // A panic is this square's error: the preparer may wait for the card.
@@ -219,7 +223,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             // A failed square stops the run as it leaves the card: the preparer
                             // waiting for an empty card must not hand the next square over.
                             card.change(|state| {
-                                state.squares -= 1;
+                                state.leave(candidates);
                                 state.stopped |= cells.is_err();
                             });
                             let sent = cells.and_then(|cells| {
@@ -243,50 +247,6 @@ fn run(arguments: &[String]) -> Result<(), String> {
         })
     })
 }
-
-/// The squares handed to the painters and not yet painted, and whether a painter stopped on an
-/// error: the preparer waits for an empty card before and after a heavy square.
-#[derive(Default)]
-struct Card {
-    state: Mutex<CardState>,
-    changed: Condvar,
-}
-
-#[derive(Default)]
-struct CardState {
-    squares: usize,
-    stopped: bool,
-}
-
-impl Card {
-    fn change(&self, change: impl FnOnce(&mut CardState)) {
-        change(&mut self.state.lock().unwrap_or_else(PoisonError::into_inner));
-        self.changed.notify_all();
-    }
-
-    fn stopped(&self) -> bool {
-        (self.state.lock().unwrap_or_else(PoisonError::into_inner)).stopped
-    }
-
-    /// Waits until no square is on the card: false when a painter stopped first.
-    fn emptied(&self) -> bool {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let state = (self
-            .changed
-            .wait_while(state, |state| state.squares > 0 && !state.stopped))
-        .unwrap_or_else(PoisonError::into_inner);
-        !state.stopped
-    }
-}
-
-/// Squares whose pixels are painted at once: one square's passes leave the card idle between them
-/// (two painter processes on one card: light squares 1.4x, 30-300 KB 1.17x, Dobris 1.12x,
-/// 2026-10-14); two processes also kept two copies of the kernels' card memory.
-const SQUARES_ON_THE_CARD: usize = 2;
-
-/// A square's sources at most this many candidates paint while the next one is prepared (Dobris's
-/// about 130,000 do; Prague's centre, 470,000 and 30-45 GB, paints alone).
-const PIPELINE_CANDIDATES_MAX: usize = 250_000;
 
 /// Threads that prepare the next square while the pixels are painted.
 const PREPARING_THREADS: usize = 12;

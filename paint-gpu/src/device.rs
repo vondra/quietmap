@@ -5,10 +5,7 @@
 // scene.cuh, evaluate.cuh and paint.cu field by field.
 
 use cudarc::driver::sys::CUdevice_attribute;
-use cudarc::driver::{
-    CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync,
-    LaunchConfig, result,
-};
+use cudarc::driver::{CudaDevice, CudaSlice, DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig};
 use cudarc::nvrtc::{CompileOptions, compile_ptx_with_opts};
 use paint::exact::LAYERS;
 use paint::square::{Files, Square};
@@ -433,25 +430,27 @@ impl Gpu {
         }
         let xy: Vec<f32> = receivers.iter().flatten().map(|&v| v as f32).collect();
         let device = &self.device;
-        let xy = driver(device.htod_sync_copy(&xy))?;
-        let own = driver(device.htod_sync_copy(own_footprint))?;
         let receiver_count = receivers.len();
-        // SAFETY (the next two): `point_receivers` writes every receiver's failure and every
-        // receiver that does not fail, which alone are read.
+        // SAFETY (the buffers): each is written whole on the pairs' stream below before a kernel
+        // reads it: the inputs copied, the pairs' counts, failures, bands and sums zeroed;
+        // `point_receivers` writes every receiver's failure and every receiver that does not
+        // fail, which alone are read.
+        let mut device_xy = driver(unsafe { device.alloc::<f32>(xy.len()) })?;
+        let mut device_own = driver(unsafe { device.alloc::<u64>(receiver_count) })?;
         let point_receivers =
             driver(unsafe { device.alloc::<u8>(RECEIVER_BYTES * receiver_count) })?;
         let receiver_failed = driver(unsafe { device.alloc::<u32>(receiver_count) })?;
-        let receiver_of_pair = driver(device.htod_sync_copy(receiver_of_pair))?;
-        let index = driver(device.htod_sync_copy(candidates))?;
-        let point_index = driver(device.htod_sync_copy(points))?;
-        let band_weights = driver(device.htod_sync_copy(band_weights))?;
-        let ray_counts = driver(device.alloc_zeros::<u32>(count))?;
-        let failed = driver(device.alloc_zeros::<u32>(count))?;
+        let mut device_receiver_of_pair = driver(unsafe { device.alloc::<u32>(count) })?;
+        let mut device_candidates = driver(unsafe { device.alloc::<u32>(count) })?;
+        let mut device_points = driver(unsafe { device.alloc::<u32>(count) })?;
+        let mut device_band_weights = driver(unsafe { device.alloc::<f32>(count) })?;
+        let mut ray_counts = driver(unsafe { device.alloc::<u32>(count) })?;
+        let mut failed = driver(unsafe { device.alloc::<u32>(count) })?;
         // The pairs' bands, which keep each pair's first rays from its counting to its writing
         // (kernels/paint.cu PAIR_RAY_SLOTS), zeroed again before the rays fill them.
-        let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
-        // Zeroed before the pairs' stream forks: a launch without rays reads them back unwritten.
-        let sums = driver(device.alloc_zeros::<f32>(PAIR_SUMS * count))?;
+        let mut pair_bands = driver(unsafe { device.alloc::<f32>(PERIODS * BANDS * count) })?;
+        // Zeroed: a launch without rays reads them back unwritten.
+        let mut sums = driver(unsafe { device.alloc::<f32>(PAIR_SUMS * count) })?;
         let kernel = |name: &str| {
             device
                 .get_func("paint", name)
@@ -464,9 +463,28 @@ impl Gpu {
         };
         // A null pointer: the listing kernel counts the rays instead of writing them.
         let none = 0u64;
-        // The pairs' kernels on a stream of their own (once the buffers above are zeroed): another
-        // pass's or square's kernels run beside them on the card.
+        // The rays and their offsets, allocated once the rays are counted, are declared before
+        // the stream as every buffer is: it joins the default stream before they are freed,
+        // should a launch fail.
+        let (mut device_offsets, mut rays): (CudaSlice<u32>, CudaSlice<u8>);
+        // The pairs' kernels on a stream of their own, forked once their buffers are allocated:
+        // another pass's or square's kernels run beside them on the card
+        // ([`crate::stream::ForkedStream::copy`] on why its inputs go there too).
         let stream = self.fork()?;
+        // SAFETY: `xy` and the caller's arrays stay as they are until the read-backs below
+        // synchronize the stream.
+        unsafe {
+            stream.copy(&xy, &mut device_xy)?;
+            stream.copy(own_footprint, &mut device_own)?;
+            stream.copy(receiver_of_pair, &mut device_receiver_of_pair)?;
+            stream.copy(candidates, &mut device_candidates)?;
+            stream.copy(points, &mut device_points)?;
+            stream.copy(band_weights, &mut device_band_weights)?;
+        }
+        stream.zero(&mut ray_counts)?;
+        stream.zero(&mut failed)?;
+        stream.zero(&mut pair_bands)?;
+        stream.zero(&mut sums)?;
         // SAFETY (each launch): every buffer holds what the kernel indexes: 2 coordinates, an owner,
         // a receiver (RECEIVER_BYTES) and a failure per receiver; a receiver (within the receivers,
         // checked), a candidate and a point (within `bands`, checked) per pair; a count, an offset,
@@ -477,8 +495,8 @@ impl Gpu {
                 threads(receiver_count),
                 (
                     &square.scene,
-                    &xy,
-                    &own,
+                    &device_xy,
+                    &device_own,
                     receiver_count as u32,
                     &point_receivers,
                     &receiver_failed,
@@ -493,8 +511,8 @@ impl Gpu {
                     &square.scene,
                     &point_receivers,
                     &receiver_failed,
-                    &receiver_of_pair,
-                    &index,
+                    &device_receiver_of_pair,
+                    &device_candidates,
                     count as u32,
                     none,
                     none,
@@ -504,15 +522,21 @@ impl Gpu {
                 ),
             )
         })?;
-        let mut offsets = read_back(&stream, &ray_counts)?;
+        let mut offsets = stream.read_back(&ray_counts)?;
         let mut total = 0u32;
         for offset in &mut offsets {
             (*offset, total) = (total, total + *offset);
         }
         if total > 0 {
-            let offsets = driver(device.htod_sync_copy(&offsets))?;
-            let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
+            // SAFETY: copied and zeroed whole on the stream before the kernels below read them.
+            device_offsets = driver(unsafe { device.alloc::<u32>(count) })?;
+            rays = driver(unsafe { device.alloc::<u8>(PAIR_RAY_BYTES * total as usize) })?;
+            // The stream may use them only after their allocation: the pool may give them memory
+            // another launch freed after it joined.
             stream.wait_for_default()?;
+            // SAFETY: `offsets` stay as they are until the read-backs below synchronize the stream.
+            unsafe { stream.copy(&offsets, &mut device_offsets) }?;
+            stream.zero(&mut rays)?;
             driver(unsafe {
                 kernel("pair_rays")?.launch_on_stream(
                     &stream,
@@ -521,10 +545,10 @@ impl Gpu {
                         &square.scene,
                         &point_receivers,
                         &receiver_failed,
-                        &receiver_of_pair,
-                        &index,
+                        &device_receiver_of_pair,
+                        &device_candidates,
                         count as u32,
-                        &offsets,
+                        &device_offsets,
                         &rays,
                         &ray_counts,
                         &failed,
@@ -532,15 +556,7 @@ impl Gpu {
                     ),
                 )
             })?;
-            // SAFETY: the bands' buffer, on the stream the listing just wrote it on.
-            driver(unsafe {
-                result::memset_d8_async(
-                    *pair_bands.device_ptr(),
-                    0,
-                    pair_bands.num_bytes(),
-                    stream.stream,
-                )
-            })?;
+            stream.zero(&mut pair_bands)?;
             driver(unsafe {
                 kernel("ray_transfers")?.launch_on_stream(
                     &stream,
@@ -548,8 +564,8 @@ impl Gpu {
                     (
                         &square.scene,
                         &point_receivers,
-                        &receiver_of_pair,
-                        &index,
+                        &device_receiver_of_pair,
+                        &device_candidates,
                         &rays,
                         total,
                         &sums,
@@ -565,9 +581,9 @@ impl Gpu {
                         threads(count),
                         (
                             &square.scene,
-                            &index,
-                            &point_index,
-                            &band_weights,
+                            &device_candidates,
+                            &device_points,
+                            &device_band_weights,
                             count as u32,
                             &pair_bands,
                             &failed,
@@ -576,15 +592,12 @@ impl Gpu {
                     )
                 })?;
             }
-            // The rays' buffers are freed on the default stream as this block ends: their kernels
-            // finish first.
-            // SAFETY: a stream this function created and still holds.
-            driver(unsafe { result::stream::synchronize(stream.stream) })?;
+            stream.synchronize()?;
         }
-        let sums = read_back(&stream, &sums)?;
-        let failed = read_back(&stream, &failed)?;
+        let sums = stream.read_back(&sums)?;
+        let failed = stream.read_back(&failed)?;
         if let Some(spectra) = pair_spectra {
-            *spectra = read_back(&stream, &pair_bands)?;
+            *spectra = stream.read_back(&pair_bands)?;
         }
         Ok((
             sums.chunks_exact(PAIR_SUMS)
@@ -593,24 +606,6 @@ impl Gpu {
             failed,
         ))
     }
-}
-
-/// `source` read back once `stream`'s work so far is done.
-pub(crate) fn read_back<T: DeviceRepr + Default + Clone>(
-    stream: &CudaStream,
-    source: &CudaSlice<T>,
-) -> Result<Vec<T>, String> {
-    let mut values = vec![T::default(); source.len()];
-    // SAFETY: `values` holds `source.len()` values, read once the stream is synchronized.
-    unsafe {
-        driver(result::memcpy_dtoh_async(
-            &mut values,
-            *source.device_ptr(),
-            stream.stream,
-        ))?;
-        driver(result::stream::synchronize(stream.stream))?;
-    }
-    Ok(values)
 }
 
 /// A square's buffers on the card; `scene` is the descriptor the kernels read.
