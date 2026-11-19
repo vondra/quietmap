@@ -79,7 +79,8 @@ fn row(class: u8, height_tag_m: f64, floors: u8, ground_activity: bool) -> Build
 }
 
 /// A ground activity has no floors and no invented facade: it emits its footprint at 1.5 m
-/// whatever its tags; an untagged building stands 8 m (3 floors) with its source at 4 m.
+/// whatever its tags; an untagged building stands 8 m (source at 4 m) and counts one storey,
+/// while a mapped height tag still estimates storeys at 3 m a floor.
 #[test]
 fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
     // The rows stand at sea, beyond the climate's cells.
@@ -98,7 +99,12 @@ fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
         let expected = area_law_lw_dba(profile.lw_fixed_dba, profile.lw_per_m2_dba, 1_000.0);
         assert!((steady(&ground).day_dba - expected).abs() < 1e-9);
         let building = emission(&row(class, 0.0, 0, false)).unwrap();
-        assert_eq!((building.floors, building.source_height_m), (3, 4.0));
+        assert_eq!((building.floors, building.source_height_m), (1, 4.0));
+        assert!((steady(&building).day_dba - expected).abs() < 1e-9);
+        let tall = emission(&row(class, 12.0, 0, false)).unwrap();
+        assert_eq!((tall.floors, tall.source_height_m), (4, 6.0));
+        let expected_tall = area_law_lw_dba(profile.lw_fixed_dba, profile.lw_per_m2_dba, 4_000.0);
+        assert!((steady(&tall).day_dba - expected_tall).abs() < 1e-9);
     }
     let shop = emission(&row(COMMERCIAL, 0.0, 0, true)).unwrap();
     assert_eq!(shop, emission(&row(COMMERCIAL, 24.0, 8, true)).unwrap());

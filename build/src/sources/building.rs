@@ -89,17 +89,22 @@ pub fn building_emission(
     } else {
         // A tag above the tallest building is a tag error, not a height, as in the screening ladder
         // (`structures/height_model.rs`); 255 floors stay under it.
-        let height_m = if row.height_tag_m > 0.0 && row.height_tag_m <= BUILDING_HEIGHT_MAX_M {
-            row.height_tag_m
-        } else if row.floors > 0 {
-            f64::from(row.floors) * FLOOR_HEIGHT_M
-        } else {
-            DEFAULT_HEIGHT_M
-        };
+        let height_tag_m = (row.height_tag_m > 0.0 && row.height_tag_m <= BUILDING_HEIGHT_MAX_M)
+            .then_some(row.height_tag_m);
+        let height_m = height_tag_m.unwrap_or_else(|| {
+            if row.floors > 0 {
+                f64::from(row.floors) * FLOOR_HEIGHT_M
+            } else {
+                DEFAULT_HEIGHT_M
+            }
+        });
+        // Unknown storeys count one: the 8 m height of an untagged building is no floor count.
         let floors = if row.floors > 0 {
             row.floors
+        } else if let Some(height) = height_tag_m {
+            (height / FLOOR_HEIGHT_M).ceil() as u8
         } else {
-            (height_m / FLOOR_HEIGHT_M).ceil() as u8
+            1
         };
         (height_m, floors)
     };
