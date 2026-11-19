@@ -26,8 +26,7 @@ pub fn turbine_maximum_lw_dba(rated_power_kw: Option<f64>) -> f64 {
         return 105.0;
     };
     match kw as u32 {
-        0 => 105.0,
-        1..=999 => 98.0,
+        0..=999 => 98.0,
         1_000..=2_000 => 104.0,
         2_001..=2_999 => 105.0,
         3_000..=4_999 => 106.0,
@@ -52,7 +51,7 @@ mod tests {
     #[test]
     fn the_lookup_table_holds_the_published_band() {
         let table = |kw: f64| turbine_maximum_lw_dba(Some(kw));
-        assert_eq!((table(500.0), table(999.0)), (98.0, 98.0));
+        assert_eq!((table(0.5), table(500.0), table(999.0)), (98.0, 98.0, 98.0));
         assert_eq!(
             (table(1_000.0), table(1_999.0), table(2_000.0)),
             (104.0, 104.0, 104.0)
@@ -62,6 +61,7 @@ mod tests {
         assert_eq!((table(5_000.0), table(6_600.0)), (106.5, 106.5));
         assert_eq!(turbine_maximum_lw_dba(None), 105.0);
         assert_eq!(table(0.0), 105.0, "zero is unknown");
+        assert_eq!(table(-1.0), 105.0, "negative is unknown");
     }
 
     #[test]
