@@ -8,6 +8,7 @@ use super::{
     Flight, FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEAD_REACHING, HEADER_BYTES,
     INSTALLATIONS, KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM,
     MIX_BYTES, NPD_DISTANCES, PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
+    WIDE_MIX_PERIOD_BYTES, WIDE_MIX_THRESHOLD, period_bytes,
 };
 use crate::FormatError;
 use crate::little_endian::{u16_at, u32_at};
@@ -25,6 +26,7 @@ pub struct Aircraft<'a> {
     flights: &'a [u8],
     pieces: &'a [u8],
     wide: &'a [u8],
+    wide_mix: bool,
 }
 
 fn i16_at(record: &[u8], at: usize) -> i16 {
@@ -58,13 +60,14 @@ impl<'a> Aircraft<'a> {
             count(28),
             count(32),
         );
+        let wide_mix = mixes > WIDE_MIX_THRESHOLD;
         let lengths = [
             BAND_BYTES * bands,
-            MIX_BYTES * mixes,
+            MIX_BYTES.saturating_mul(mixes),
             BLOCK_BYTES * boxes.div_ceil(BOXES_PER_BLOCK),
             boxes,
             BOX_BYTES * boxes,
-            PERIOD_BYTES * periods,
+            period_bytes(mixes).saturating_mul(periods),
             FLIGHT_BYTES * flights,
             PIECE_BYTES * pieces,
             WIDE_BYTES.saturating_mul(wide),
@@ -99,6 +102,7 @@ impl<'a> Aircraft<'a> {
             flights: &bytes[flights_at],
             pieces: &bytes[pieces_at],
             wide: &bytes[wide_at],
+            wide_mix,
         };
         for band in 0..bands {
             if !(12..=MAXIMUM_ZOOM).contains(&parsed.bands[BAND_BYTES * band]) {
@@ -133,7 +137,7 @@ impl<'a> Aircraft<'a> {
             ));
         }
         for index in 0..periods {
-            if usize::from(u16_at(parsed.period_record(index), 16)) >= mixes {
+            if parsed.period_mix(parsed.period_record(index)) >= mixes {
                 return Err(FormatError("aircraft: a period names a missing mix"));
             }
         }
@@ -171,7 +175,20 @@ impl<'a> Aircraft<'a> {
     }
 
     fn period_record(&self, index: usize) -> &'a [u8] {
-        &self.periods[index * PERIOD_BYTES..(index + 1) * PERIOD_BYTES]
+        let width = if self.wide_mix {
+            WIDE_MIX_PERIOD_BYTES
+        } else {
+            PERIOD_BYTES
+        };
+        &self.periods[index * width..(index + 1) * width]
+    }
+
+    fn period_mix(&self, record: &[u8]) -> usize {
+        if self.wide_mix {
+            u32_at(record, 16) as usize
+        } else {
+            usize::from(u16_at(record, 16))
+        }
     }
 
     fn piece_record(&self, index: usize) -> &'a [u8] {
@@ -281,7 +298,7 @@ impl<'a> Aircraft<'a> {
             tail_energy_db[period] = tail_db(end, record[11]);
             flights_per_period[period] = rate(u16_at(record, 12));
             piece_length_m[period] = f64::from(u16_at(record, 14));
-            let mix = &self.mixes[MIX_BYTES * usize::from(u16_at(record, 16))..];
+            let mix = &self.mixes[MIX_BYTES * self.period_mix(record)..];
             installation_shares[period] = [0, 2].map(|at| {
                 let (wing, fuselage) = (f64::from(mix[at]) / 255.0, f64::from(mix[at + 1]) / 255.0);
                 let mut shares = [wing, fuselage, 0.0];
@@ -342,4 +359,8 @@ impl<'a> Aircraft<'a> {
 }
 
 const _: () = assert!(15 + 2 + NPD_DISTANCES - 1 + 1 == BOX_BYTES);
-const _: () = assert!(2 + NPD_DISTANCES - 1 + 1 + 2 + 2 + 2 == PERIOD_BYTES && PERIODS == 3);
+const _: () = assert!(
+    2 + NPD_DISTANCES - 1 + 1 + 2 + 2 + 2 == PERIOD_BYTES
+        && 2 + NPD_DISTANCES - 1 + 1 + 2 + 2 + 4 == WIDE_MIX_PERIOD_BYTES
+        && PERIODS == 3
+);

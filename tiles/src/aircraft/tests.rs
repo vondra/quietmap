@@ -313,3 +313,95 @@ fn a_wide_piece_keeps_its_ends_exact() {
         "a wide piece without its ends"
     );
 }
+
+/// A tile with more than 65,536 distinct installation mixes encodes with 32-bit mix indices and
+/// round-trips every mix; a tile at or below 65,536 mixes keeps the exact 18-byte period layout.
+#[test]
+fn more_than_65536_distinct_mixes_round_trip_and_smaller_tiles_stay_byte_identical() {
+    let share_at = |k: usize| -> [[f64; INSTALLATIONS]; 2] {
+        // 128 * 128 = 16,384 valid (wing, fuselage) pairs per slant with wing + fuselage <= 255,
+        // giving > 2.6e8 distinct four-byte mixes across the two slants.
+        let near = k % 16_384;
+        let far = k / 16_384;
+        let pair = |code: usize| {
+            let wing = (code % 128) as f64 / 255.0;
+            let fuselage = (code / 128) as f64 / 255.0;
+            [wing, fuselage, (1.0 - wing - fuselage).max(0.0)]
+        };
+        [pair(near), pair(far)]
+    };
+
+    // Today's size: byte-for-byte identical header, 18-byte period records and mix indices.
+    let small = encode(&[a_box(0, 1)], &[a_flight(1)], &[a_piece(0)]);
+    let small_period_offset = 36 + 5 + 3 * 4 + 8 + 1 + 27;
+    assert_eq!(small.len(), small_period_offset + 3 * 18 + 19 + 17);
+    assert_eq!(
+        u16::from_le_bytes([
+            small[small_period_offset + 16],
+            small[small_period_offset + 17]
+        ]),
+        0
+    );
+
+    // Boundary: 65,536 distinct mixes still fits u16 (18 B per heard period).
+    let at_bound: Vec<AircraftBox> = (0..21_846usize)
+        .map(|box_index| {
+            let mut record = a_box(0, 0);
+            for period in 0..PERIODS {
+                let mix_index = (box_index * PERIODS + period).min(65_535);
+                record.installation_shares[period] = share_at(mix_index);
+            }
+            record
+        })
+        .collect();
+    let at_bound_bytes = encode(&at_bound, &[], &[]);
+    let at_bound_periods = at_bound.len() * PERIODS;
+    let at_bound_blocks = at_bound.len().div_ceil(BOXES_PER_BLOCK);
+    assert_eq!(
+        at_bound_bytes.len(),
+        36 + 5
+            + 65_536 * 4
+            + at_bound_blocks * 8
+            + at_bound.len() * (1 + 27)
+            + at_bound_periods * 18
+    );
+    let parsed_bound = Aircraft::parse(&at_bound_bytes).unwrap();
+    assert_eq!(parsed_bound.box_count(), at_bound.len());
+
+    // Overflow: 70,000 distinct mixes switches to u32 mix indices (20 B per heard period) and
+    // preserves every mix within 1/255.
+    let wide: Vec<AircraftBox> = (0..23_334usize)
+        .map(|box_index| {
+            let mut record = a_box(0, 0);
+            for period in 0..PERIODS {
+                let mix_index = (box_index * PERIODS + period).min(69_999);
+                record.installation_shares[period] = share_at(mix_index);
+            }
+            record
+        })
+        .collect();
+    let mut wide_bytes = encode(&wide, &[], &[]);
+    let wide_periods = wide.len() * PERIODS;
+    let wide_blocks = wide.len().div_ceil(BOXES_PER_BLOCK);
+    let wide_period_offset = 36 + 5 + 70_000 * 4 + wide_blocks * 8 + wide.len() * (1 + 27);
+    assert_eq!(wide_bytes.len(), wide_period_offset + wide_periods * 20);
+    let parsed_wide = Aircraft::parse(&wide_bytes).unwrap();
+    assert_eq!(parsed_wide.box_count(), wide.len());
+    for index in [0, 1, 21_845, 21_846, wide.len() - 1] {
+        let read = parsed_wide.aircraft_box(index);
+        for (read_slant, written_slant) in read
+            .installation_shares
+            .iter()
+            .flatten()
+            .zip(wide[index].installation_shares.iter().flatten())
+        {
+            for (r, w) in read_slant.iter().zip(written_slant) {
+                assert!(close(*r, *w, 1e-12), "{index}: {r} vs {w}");
+            }
+        }
+    }
+    // A wide period naming a mix past the table is refused.
+    wide_bytes[wide_period_offset + 16..wide_period_offset + 20]
+        .copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(Aircraft::parse(&wide_bytes).is_err());
+}
