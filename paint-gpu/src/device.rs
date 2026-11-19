@@ -592,7 +592,6 @@ impl Gpu {
                     )
                 })?;
             }
-            stream.synchronize()?;
         }
         let sums = stream.read_back(&sums)?;
         let failed = stream.read_back(&failed)?;

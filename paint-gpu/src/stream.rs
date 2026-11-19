@@ -67,23 +67,20 @@ impl ForkedStream<'_> {
         })
     }
 
-    /// Waits until the stream's work so far is done, holding a core meanwhile: a launch's results
-    /// are waited for so, as they always were. Left to the read-back's own wait for the stream,
-    /// which answers later, the painter took less of the cores and longer for its squares on a
-    /// host with cores to spare (2026-11-19).
-    pub(crate) fn synchronize(&self) -> Result<(), String> {
-        // SAFETY: a stream this card created, alive in `self`.
-        driver(unsafe { result::stream::synchronize(self.stream.stream) })
-    }
-
-    /// `source` read back once the stream's work so far is done.
+    /// `source` read back once the stream's work so far is done. That work is waited for as a
+    /// synchronize, which holds a core and answers at once; the copy's own wait for its stream
+    /// answers later: with every read-back waited for so, where only a launch's results had
+    /// been, the painter took more of the cores and less time for its squares on two kinds of
+    /// card (2026-11-19).
     pub(crate) fn read_back<T: DeviceRepr + Default + Clone>(
         &self,
         source: &CudaSlice<T>,
     ) -> Result<Vec<T>, String> {
         let mut values = vec![T::default(); source.len()];
-        // SAFETY: `values` holds `source.len()` values, read once the stream is synchronized.
+        // SAFETY: a stream this card created; `values` holds `source.len()` values, read once
+        // the stream is synchronized.
         unsafe {
+            driver(result::stream::synchronize(self.stream.stream))?;
             driver(result::memcpy_dtoh_async(
                 &mut values,
                 *source.device_ptr(),
