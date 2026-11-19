@@ -7151,17 +7151,17 @@
       "id": "practice-history-heavy-speeds",
       "kind": "model-observations",
       "region": "world",
-      "publisher": "National Police Agency Japan and New Zealand Police",
-      "url": "https://www.npa.go.jp/bureau/traffic/highway/index.html",
+      "publisher": "National road authorities",
+      "url": "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32002L0085",
       "observed": {
-        "start": "2004-05-03",
+        "start": "1975-12-01",
         "end": "2024-04-01"
       },
       "published": null,
       "licence": "Published aggregate observations and model parameters",
       "public_ok": true,
       "depends_on": [],
-      "description": "Dated police notices of Japanese and New Zealand heavy-vehicle caps. Other countries retain the documented global model cap."
+      "description": "Dated national statutory limits and speed-limiter caps for heavy vehicles valid at the 2024 map-state cutoff (13 countries). Other countries retain the documented global 80 km/h cap."
     },
     {
       "id": "legal-speeds-osm",

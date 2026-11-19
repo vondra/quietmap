@@ -1,6 +1,78 @@
 {
   "rows": [
     {
+      "country": "AU",
+      "value": 100,
+      "valid_from": "1990-07-01",
+      "valid_until": null,
+      "source_url": "https://www.nhvr.gov.au/safety-accreditation-compliance/speed-compliance",
+      "scope": "Heavy vehicles over 4.5 t GVM restricted to 100 km/h under Australian Design Rule 65/00 speed-limiter rules, state road rules and the Heavy Vehicle National Law."
+    },
+    {
+      "country": "BE",
+      "value": 90,
+      "valid_from": "1975-12-01",
+      "valid_until": null,
+      "source_url": "https://www.ejustice.just.fgov.be/",
+      "scope": "Royal Decree of 1 December 1975 (Highway Code Art. 11.2): vehicles and combinations over 3.5 t MAM limited to 90 km/h on motorways, aligned with EU Directive 2002/85/EC speed limiters."
+    },
+    {
+      "country": "BR",
+      "value": 90,
+      "valid_from": "1998-01-22",
+      "valid_until": null,
+      "source_url": "https://www.planalto.gov.br/ccivil_03/leis/l9503compilado.htm",
+      "scope": "Brazilian Traffic Code (Lei 9.503/1997, Art. 61 para. 1 II a/b, unchanged for heavy vehicles by Lei 14.440/2022): 90 km/h default highway limit for trucks and buses ('demais veiculos')."
+    },
+    {
+      "country": "CA",
+      "value": 105,
+      "valid_from": "2009-01-01",
+      "valid_until": null,
+      "source_url": "https://www.ontario.ca/laws/statute/90h08",
+      "scope": "Ontario Highway Traffic Act s. 68.1 and Quebec Highway Safety Code s. 519.15.1 mandatory electronic speed limiters capped at 105 km/h for heavy commercial vehicles >= 11,794 kg GVWR."
+    },
+    {
+      "country": "CN",
+      "value": 100,
+      "valid_from": "2004-05-01",
+      "valid_until": null,
+      "source_url": "https://www.gov.cn/zhengce/2020-12/27/content_5573638.htm",
+      "scope": "State Council Decree No. 405 (Regulation on the Implementation of the Road Traffic Safety Law of the PRC, Art. 78): 100 km/h maximum speed on expressways for motor vehicles other than small passenger cars."
+    },
+    {
+      "country": "ES",
+      "value": 90,
+      "valid_from": "2004-01-23",
+      "valid_until": null,
+      "source_url": "https://www.boe.es/buscar/act.php?id=BOE-A-2003-23514",
+      "scope": "Real Decreto 1428/2003 (Reglamento General de Circulacion, Art. 48.1.a): 90 km/h on autopistas and autovias for trucks over 3,500 kg MMA and articulated vehicles."
+    },
+    {
+      "country": "FR",
+      "value": 90,
+      "valid_from": "2001-06-01",
+      "valid_until": null,
+      "source_url": "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000006842202",
+      "scope": "Code de la route Art. R413-8: 90 km/h on motorways for goods vehicles and combinations over 3.5 t PTAC/PTRA, aligned with EU Directive 2002/85/EC speed limiters."
+    },
+    {
+      "country": "GB",
+      "value": 90,
+      "valid_from": "2005-01-01",
+      "valid_until": null,
+      "source_url": "https://www.legislation.gov.uk/uksi/1986/1078/regulation/36B",
+      "scope": "Road Vehicles (Construction and Use) Regulations 1986 Reg. 36B implementing Directive 2002/85/EC: mandatory speed limiter set to 90 km/h (56 mph) for goods vehicles over 3.5 t."
+    },
+    {
+      "country": "IE",
+      "value": 90,
+      "valid_from": "2008-12-18",
+      "valid_until": null,
+      "source_url": "https://www.irishstatutebook.ie/eli/2008/si/546/made/en/print",
+      "scope": "Road Traffic (Ordinary Speed Limits - Buses, Heavy Goods Vehicles, Etc.) Regulations 2008 (S.I. No. 546/2008): 90 km/h ordinary motorway speed limit for HGVs over 3,500 kg."
+    },
+    {
       "country": "JP",
       "value": 80,
       "valid_from": "2024-04-01",
@@ -15,6 +87,22 @@
       "valid_until": null,
       "source_url": "https://www.police.govt.nz/news/release/1358",
       "scope": "Vehicles over 3500 kg on the open road; school buses retain 80 km/h."
+    },
+    {
+      "country": "RU",
+      "value": 90,
+      "valid_from": "1994-07-01",
+      "valid_until": null,
+      "source_url": "https://pravo.gov.ru/",
+      "scope": "Government Decree No. 1090 of 23 October 1993 (Traffic Rules of the Russian Federation, s. 10.3): 90 km/h on motorways for goods vehicles over 3.5 t."
+    },
+    {
+      "country": "US",
+      "value": 105,
+      "valid_from": "2016-09-07",
+      "valid_until": null,
+      "source_url": "https://www.federalregister.gov/documents/2016/09/07/2016-20944/federal-motor-vehicle-safety-standards-federal-motor-carrier-safety-regulations-parts-and",
+      "scope": "FMCSA/NHTSA joint NPRM (81 FR 61942) documenting interstate heavy-truck fleet speed-limiter practice around 65 mph (105 km/h) alongside state differential truck speed limits."
     }
   ]
 }

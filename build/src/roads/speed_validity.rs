@@ -145,4 +145,35 @@ mod tests {
             90.0
         );
     }
+
+    #[test]
+    fn committed_2024_heavy_speeds_match_dated_history_and_cover_2026_countries() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years/tables");
+        let history: History = serde_json::from_slice(
+            &std::fs::read(root.join("2024/road-heavy-history.json")).unwrap(),
+        )
+        .unwrap();
+        let derived = selected(
+            history.rows,
+            "2024-12-31".parse().unwrap(),
+            Kind::HeavySpeeds,
+        )
+        .unwrap();
+        let committed_2024: Value =
+            serde_json::from_slice(&std::fs::read(root.join("2024/heavy-speeds.json")).unwrap())
+                .unwrap();
+        assert_eq!(derived, committed_2024);
+        let countries = |table: &Value| -> std::collections::BTreeSet<String> {
+            table["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["country"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let committed_2026: Value =
+            serde_json::from_slice(&std::fs::read(root.join("2026/heavy-speeds.json")).unwrap())
+                .unwrap();
+        assert_eq!(countries(&committed_2024), countries(&committed_2026));
+    }
 }

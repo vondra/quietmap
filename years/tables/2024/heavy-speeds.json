@@ -1,12 +1,56 @@
 {
   "rows": [
     {
+      "country": "AU",
+      "value": 100
+    },
+    {
+      "country": "BE",
+      "value": 90
+    },
+    {
+      "country": "BR",
+      "value": 90
+    },
+    {
+      "country": "CA",
+      "value": 105
+    },
+    {
+      "country": "CN",
+      "value": 100
+    },
+    {
+      "country": "ES",
+      "value": 90
+    },
+    {
+      "country": "FR",
+      "value": 90
+    },
+    {
+      "country": "GB",
+      "value": 90
+    },
+    {
+      "country": "IE",
+      "value": 90
+    },
+    {
       "country": "JP",
       "value": 80
     },
     {
       "country": "NZ",
       "value": 90
+    },
+    {
+      "country": "RU",
+      "value": 90
+    },
+    {
+      "country": "US",
+      "value": 105
     }
   ]
 }
