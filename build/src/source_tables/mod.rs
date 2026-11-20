@@ -221,4 +221,30 @@ mod coverage_tests {
         assert!(tables.church_bells.get(*b"CZ").is_some());
         assert!(tables.worship_calls.get(*b"CN").unwrap().silent);
     }
+
+    /// `rural-free-flow` accepts finite positive ratios above one (such as 1.01) while still
+    /// rejecting non-positive ratios.
+    #[test]
+    fn rural_free_flow_accepts_ratios_above_one_and_rejects_non_positive() {
+        use std::path::Path;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-data");
+        let dir = tempfile::tempdir().unwrap();
+        let year_dir = dir.path().join("2000");
+        std::fs::create_dir_all(&year_dir).unwrap();
+        for entry in std::fs::read_dir(root.join("2000")).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), year_dir.join(entry.file_name())).unwrap();
+        }
+        let load = |json: &str| {
+            std::fs::write(year_dir.join("rural-free-flow"), json).unwrap();
+            let inputs = YearInputs::read(&root.join("model-year.json"), dir.path()).unwrap();
+            SourceTables::read(&inputs)
+        };
+
+        let above_one = load(r#"{"rows": [[0.845, 1.01]]}"#).unwrap();
+        assert_eq!(above_one.rural_free_flow, [0.845, 1.01]);
+
+        let zero = load(r#"{"rows": [[0.845, 0.0]]}"#).err().unwrap();
+        assert!(zero.contains("finite and positive"), "{zero}");
+    }
 }

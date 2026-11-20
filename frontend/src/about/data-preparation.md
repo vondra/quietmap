@@ -216,9 +216,10 @@ junctions and the place's yearly air temperature.
   Maragall was signed 4. On a two-way road outside towns, other than a motorway, at or above its
   country's open-road limit of 80 km/h or more (or at 80 km/h or more where no national rural limit
   is listed), cars drive at 0.845 of it and medium and heavy vehicles (lorries and buses) at 0.799
-  of it (still under their cap): Great Britain's measured free-flow shares on 60 mph single
-  carriageways for cars and for heavy goods vehicles (where HGVs over 7.5 t have a 50 mph limit),
-  applied to medium and heavy vehicles including buses as a proxy. Lorries and buses drive at most
+  of it (still under their cap): DfT's measured free-flow shares on 60 mph national-limit single
+  carriageways for cars (Great Britain) and for heavy goods vehicles (England and Wales only, where
+  HGVs over 7.5 t have a 50 mph limit; Scotland did not raise that limit), applied to medium and
+  heavy vehicles including buses as a proxy. Lorries and buses drive at most
   80 km/h, 90 to 105 in thirteen countries.
 - **Buses and bridges.** Uncounted roads also carry the buses of the lines mapped on them, a line at
   most twice, for its two directions, however many of its variants are mapped. One line direction
