@@ -19,7 +19,8 @@ use tiles::geo::TileId;
 use tiles::sources::{Attribute, Piece, encode as encode_sources};
 use tiles::square::write_tiles;
 
-/// A building takes its loudest ground-source candidate; aircraft do not choose its façade.
+/// A building takes its loudest ground-source candidate; aircraft do not choose its façade. Each
+/// part of one input record fills only its own pixels, and a part without a candidate keeps none.
 #[test]
 fn a_building_reads_its_loudest_facade() {
     let aircraft = Layer::Aircraft as usize;
@@ -29,14 +30,27 @@ fn a_building_reads_its_loudest_facade() {
     overflown[aircraft] = 1e9;
     let levels = loudest_by_ground(
         [
-            (7, Some((overflown, [1.0; LAYERS + 1]))),
-            (7, Some((loud, [8.0; LAYERS + 1]))),
-            (9, None),
+            (0, Some((overflown, [1.0; LAYERS + 1]))),
+            (0, Some((loud, [8.0; LAYERS + 1]))),
+            (1, None),
         ]
         .into_iter(),
     );
-    assert_eq!(levels[&7], (loud, [8.0; LAYERS + 1]));
-    assert!(!levels.contains_key(&9));
+    let level = (loud, [8.0; LAYERS + 1]);
+    assert_eq!(levels[&0], level);
+    assert!(!levels.contains_key(&1));
+    let part = |pixels| BuildingPixels {
+        footprint: Footprint {
+            id: 7,
+            height_m: 10.0,
+            envelope: tiles::obstacles::EnvelopeClass::Residential,
+            rings: Vec::new(),
+        },
+        pixels,
+    };
+    let mut pixels: Vec<Option<Painted>> = vec![None; 6];
+    fill_buildings(&mut pixels, vec![part(vec![1, 2]), part(vec![4])], &levels);
+    assert_eq!(pixels, [None, Some(level), Some(level), None, None, None]);
 }
 
 /// The receivers a pass does not sound are those no building reads: every building reads the

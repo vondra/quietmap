@@ -104,7 +104,7 @@ pub(crate) struct FacadeCandidate {
     exact: bool,
 }
 
-/// Each building's façade receivers to paint (`indoor`: its pixels' places and footprints).
+/// Each building part's façade receivers to paint (`buildings`: each part's footprint and indoor pixels).
 /// A split footprint ranks its complete façade with the popup; the others keep the [`FACADE_CANDIDATES`]
 /// whose painted pixel half a pixel in front (outward) is loudest from the ground sources; a pixel
 /// around would rank a receiver by a street it does not face (a south façade's corner by the road
@@ -201,11 +201,11 @@ pub(crate) fn building_levels(
     let bounds: Vec<usize> = (blocks.iter())
         .map(|(at, range)| range.len() * quiet.most_source_counts[*at])
         .collect();
-    let mut footprints = Vec::with_capacity(candidates.len());
+    let mut building_indices = Vec::with_capacity(candidates.len());
     let mut pixels = Vec::with_capacity(candidates.len());
     let points: Vec<Point> = (candidates.into_iter())
         .map(|c| {
-            footprints.push(c.building);
+            building_indices.push(c.building);
             pixels.push(c.pixel);
             c.point
         })
@@ -225,20 +225,21 @@ pub(crate) fn building_levels(
         // Only a building's loudest receiver of the pass can be the one its pixels read.
         let paint =
             painter.paint_chosen(&pass, &points[points_run.clone()], &places, &|ground| {
-                loudest_receivers(&footprints[points_run.clone()], ground)
+                loudest_receivers(&building_indices[points_run.clone()], ground)
             })?;
         Ok((points_run, paint))
     })?;
-    let painted = (painted.into_iter())
-        .flat_map(|(_, (points_run, paint))| footprints[points_run].iter().copied().zip(paint));
+    let painted = (painted.into_iter()).flat_map(|(_, (points_run, paint))| {
+        building_indices[points_run].iter().copied().zip(paint)
+    });
     let mut levels = loudest_by_ground(painted);
-    let (footprints, points, pixels) = boundary.into_iter().fold(
+    let (building_indices, points, pixels) = boundary.into_iter().fold(
         (Vec::new(), Vec::new(), Vec::new()),
-        |(mut footprints, mut points, mut pixels), candidate| {
-            footprints.push(candidate.building);
+        |(mut building_indices, mut points, mut pixels), candidate| {
+            building_indices.push(candidate.building);
             points.push(candidate.point);
             pixels.push(candidate.pixel);
-            (footprints, points, pixels)
+            (building_indices, points, pixels)
         },
     );
     let paint = crate::etalon::paint_points(
@@ -253,7 +254,7 @@ pub(crate) fn building_levels(
         ),
         painter.batch,
     )?;
-    levels.extend(footprints.into_iter().zip(paint));
+    levels.extend(building_indices.into_iter().zip(paint));
     Ok(levels)
 }
 
@@ -263,11 +264,11 @@ fn loudest_by_ground(
     painted: impl Iterator<Item = (usize, Option<Painted>)>,
 ) -> HashMap<usize, Painted> {
     let mut levels: HashMap<usize, Painted> = HashMap::new();
-    for (footprint, paint) in painted {
+    for (building, paint) in painted {
         let Some(paint) = paint else {
             continue;
         };
-        let level = levels.entry(footprint).or_insert(paint);
+        let level = levels.entry(building).or_insert(paint);
         if ground_energy(&paint.0) > ground_energy(&level.0) {
             *level = paint;
         }
