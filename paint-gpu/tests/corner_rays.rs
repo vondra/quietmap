@@ -368,62 +368,80 @@ fn tied_walls_fixture(walls: &[(i16, f64)]) -> (tempfile::TempDir, WeatherTable,
     (root, weather, tile, receiver)
 }
 
-/// Verifies on the CPU that the P1 tied-wall fixtures encode cleanly and give identical energies
-/// regardless of tied-wall order (both Astra's favourable-state hull-pop case and the 3-way tie).
+/// Wall fixtures shared by the CPU and CUDA P1 regressions:
+/// - `preceding_*`: `(200, 80), (203, 81)` followed by tied walls `(205, 6)` and `(205, 15)` in
+///   both orders; the old in-hull replacement lets the low wall pop `(203, 81)` in the favourable
+///   state, shifting favourable energy by ~0.0013 dB (well above the 1e-4 dB order tolerance).
+/// - `triple_*`: three walls at the same distance in two orders.
+const TIED_WALL_CASES: [(&str, &[(i16, f64)]); 4] = [
+    (
+        "preceding_low_first",
+        &[(200, 80.0), (203, 81.0), (205, 6.0), (205, 15.0)],
+    ),
+    (
+        "preceding_high_first",
+        &[(200, 80.0), (203, 81.0), (205, 15.0), (205, 6.0)],
+    ),
+    ("triple_low_mid", &[(261, 20.0), (261, 15.0), (261, 25.0)]),
+    (
+        "triple_high_first",
+        &[(261, 25.0), (261, 15.0), (261, 20.0)],
+    ),
+];
+
+const TIED_WALL_ORDER_TOLERANCE_DB: f64 = 1e-4;
+
+/// Verifies on the CPU that the shared P1 tied-wall fixtures encode cleanly, give identical
+/// energies in either order, and that the popped one-wall hull (`[(200, 80)]`) differs from the
+/// coalesced two-wall hull by well over `TIED_WALL_ORDER_TOLERANCE_DB`.
 #[test]
 fn tied_walls_fixture_encodes_and_agrees_in_either_order_on_cpu() {
-    let cases: [&[(i16, f64)]; 4] = [
-        &[(470, 104.0), (473, 103.0), (475, 14.0), (475, 64.0)],
-        &[(470, 104.0), (473, 103.0), (475, 64.0), (475, 14.0)],
-        &[(261, 20.0), (261, 15.0), (261, 25.0)],
-        &[(261, 25.0), (261, 15.0), (261, 20.0)],
-    ];
-    let energies: Vec<_> = cases
+    let eval = |walls: &[(i16, f64)]| {
+        let (root, weather, tile, receiver) = tied_walls_fixture(walls);
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+        let (energy, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
+        for value in energy
+            .mixed
+            .into_iter()
+            .chain(energy.states.into_iter().flatten())
+        {
+            assert!(value.is_finite() && value > 0.0, "non-positive {value}");
+        }
+        energy
+    };
+    let energies: Vec<_> = TIED_WALL_CASES
         .iter()
-        .map(|walls| {
-            let (root, weather, tile, receiver) = tied_walls_fixture(walls);
-            let release = Release::open(root.path(), "2026").unwrap();
-            let files = Files::read(&release, tile).unwrap();
-            let square = Square::new(&weather, tile, &files).unwrap();
-            let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
-            let (energy, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
-            for value in energy
-                .mixed
-                .into_iter()
-                .chain(energy.states.into_iter().flatten())
-            {
-                assert!(value.is_finite() && value > 0.0, "non-positive {value}");
-            }
-            energy
-        })
+        .map(|(_, walls)| eval(walls))
         .collect();
-    assert_eq!(energies[0], energies[1], "Astra tied-wall orders differ");
+    assert_eq!(
+        energies[0], energies[1],
+        "preceding tied-wall orders differ"
+    );
     assert_eq!(energies[2], energies[3], "three-way tied orders differ");
+
+    // The old buggy favourable hull popped `(203, 81)` when `(205, 6)` arrived before `(205, 15)`,
+    // collapsing the favourable hull to the single wall `(200, 80)`. Verify that hull shifts the
+    // favourable-state energy observably beyond the card test's order tolerance.
+    let popped = eval(&[(200, 80.0)]);
+    let favourable_gap_db = (10.0 * (energies[0].states[1][0] / popped.states[1][0]).log10()).abs();
+    assert!(
+        favourable_gap_db > 5.0 * TIED_WALL_ORDER_TOLERANCE_DB,
+        "popped one-wall hull differs by only {favourable_gap_db:.6} dB (tolerance {TIED_WALL_ORDER_TOLERANCE_DB})"
+    );
 }
 
-/// Equal-distance walls in either order (Astra's preceding tall walls + tied walls, and a 3-way
-/// high-low-high tie) must match the CPU within 0.05 dB on the card without fallback.
+/// Equal-distance walls in either order (preceding tall walls + tied walls, and a 3-way
+/// high-low-high tie) must match the CPU within 0.05 dB on the card without fallback and agree
+/// across wall orders within `TIED_WALL_ORDER_TOLERANCE_DB`.
 #[test]
 #[ignore = "requires a CUDA card and NVRTC; run explicitly in the painter release gate"]
 fn tied_walls_in_either_order_match_cpu() {
     let gpu = Gpu::new(0).unwrap();
-    let cases: [(&str, &[(i16, f64)]); 4] = [
-        (
-            "preceding_low_first",
-            &[(470, 104.0), (473, 103.0), (475, 14.0), (475, 64.0)],
-        ),
-        (
-            "preceding_high_first",
-            &[(470, 104.0), (473, 103.0), (475, 64.0), (475, 14.0)],
-        ),
-        ("triple_low_mid", &[(261, 20.0), (261, 15.0), (261, 25.0)]),
-        (
-            "triple_high_first",
-            &[(261, 25.0), (261, 15.0), (261, 20.0)],
-        ),
-    ];
     let mut card_results = Vec::new();
-    for (name, walls) in cases {
+    for (name, walls) in TIED_WALL_CASES {
         let (root, weather, tile, receiver) = tied_walls_fixture(walls);
         let release = Release::open(root.path(), "2026").unwrap();
         let files = Files::read(&release, tile).unwrap();
@@ -470,6 +488,9 @@ fn tied_walls_in_either_order_match_cpu() {
             .zip(card_results[pair.1])
             .map(|(a, b)| (10.0 * (f64::from(a) / f64::from(b)).log10()).abs())
             .fold(0.0_f64, f64::max);
-        assert!(diff < 1e-4, "{label}: card order diff {diff} dB");
+        assert!(
+            diff < TIED_WALL_ORDER_TOLERANCE_DB,
+            "{label}: card order diff {diff} dB"
+        );
     }
 }
