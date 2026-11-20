@@ -333,8 +333,8 @@ fn finished_terrain_can_feed_an_unfinished_year_but_missing_context_cannot() {
 /// A manifest edited where the terrain reads nothing (its flight days) refuses the old receipt and
 /// the old receipt's stamp in the terrain step's completion record. One `terrain-receipt` command
 /// admits both again and the runner reuses the step; a migration stopped between its two writes is
-/// completed by a retry; a wrong source manifest, a receipt edited since the step, and a changed
-/// square refuse.
+/// completed by a retry; a wrong source manifest, a receipt edited since the step (before or after a
+/// first migration) and a changed square refuse.
 #[test]
 fn finished_terrain_migrates_to_an_edited_manifest_and_its_step_is_reused() {
     let temporary = tempfile::tempdir().unwrap();
@@ -365,6 +365,11 @@ fn finished_terrain_migrates_to_an_edited_manifest_and_its_step_is_reused() {
     value["flows"]["excluded_days"] = json!(["2000-02-11"]);
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(crate::terrain_completion::check(&inputs(), &terrain, &surrounding).is_err());
+    let selection = surrounding
+        .iter()
+        .map(|square| format!("{}:{}", square.x, square.y))
+        .collect::<Vec<_>>()
+        .join(",");
     let command = |from: &str| {
         let arguments: Vec<String> = [
             "terrain-receipt",
@@ -374,6 +379,8 @@ fn finished_terrain_migrates_to_an_edited_manifest_and_its_step_is_reused() {
             temporary.path().join("sources").to_str().unwrap(),
             "--out",
             terrain.to_str().unwrap(),
+            "--squares",
+            &selection,
             "--from-manifest-sha256",
             from,
             "--completion",
@@ -394,15 +401,31 @@ fn finished_terrain_migrates_to_an_edited_manifest_and_its_step_is_reused() {
     assert!(run.execute("terrain", &terrain, &[], None).is_err());
     command(&old).unwrap();
     run.execute("terrain", &terrain, &[], None).unwrap();
+    // A migrated receipt that lost a square is no receipt to complete a migration with.
+    let migrated = fs::read(&receipt).unwrap();
+    let mut shortened: serde_json::Value = serde_json::from_slice(&migrated).unwrap();
+    shortened["squares"].as_array_mut().unwrap().pop();
+    fs::write(&receipt, serde_json::to_vec(&shortened).unwrap()).unwrap();
+    assert!(command(&old).is_err());
     // A receipt edited since the step recorded it is no receipt to migrate.
-    fs::write(&receipt, &original).unwrap();
-    fs::write(&completion, &recorded).unwrap();
+    let restore = || {
+        fs::write(&receipt, &original).unwrap();
+        let mut record: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
+        record["files"][1] = crate::pipeline_files::stamp(&receipt).unwrap();
+        crate::pipeline_files::write_json(&completion, &record).unwrap();
+    };
+    restore();
     let mut edited: serde_json::Value = serde_json::from_slice(&original).unwrap();
     edited["squares"] = json!([]);
     fs::write(&receipt, serde_json::to_vec(&edited).unwrap()).unwrap();
     assert!(command(&old).is_err());
-    fs::write(&receipt, &original).unwrap();
+    // From a valid old receipt and record, a changed square alone refuses.
+    restore();
     fs::write(&data, b"other height nodes").unwrap();
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&completion).unwrap()).unwrap();
+    record["files"][0] = crate::pipeline_files::stamp(&data).unwrap();
+    crate::pipeline_files::write_json(&completion, &record).unwrap();
     assert!(command(&old).is_err());
 }
 

@@ -97,12 +97,14 @@ fn unchanged_squares(
 
 /// A stopped run's migration of finished terrain to an edited manifest, reviewed to change nothing
 /// the terrain reads (`flows`, a description): the receipt must name `from_sha256` or already the
-/// selected manifest (a retry), every square it lists must still hold the bytes it recorded, and it
-/// keeps its squares. The terrain step's completion record `completion` then takes the receipt's new
-/// stamp, its other files unchanged, so the runner reuses the step instead of building it again.
+/// selected manifest (a retry), list exactly the terrain step's `squares`, each still holding the bytes
+/// it recorded, and it keeps them. The terrain step's completion record `completion` then takes the
+/// receipt's new stamp, its other files unchanged, so the runner reuses the step instead of building it
+/// again.
 pub fn rebind(
     inputs: &YearInputs,
     root: &Path,
+    squares: &[Square],
     from_sha256: &str,
     completion: &Path,
 ) -> Result<(), String> {
@@ -121,7 +123,10 @@ pub fn rebind(
             receipt.manifest_sha256
         ));
     }
-    unchanged_squares(root, receipt.squares.clone())?;
+    let covered = unchanged_squares(root, receipt.squares.clone())?;
+    if covered != squares.iter().copied().collect::<BTreeSet<_>>() {
+        return Err("terrain completion does not list exactly the terrain step's squares".into());
+    }
     let error = |e: anyhow::Error| format!("{e:#}");
     let mut record: serde_json::Value = serde_json::from_slice(
         &fs::read(completion).map_err(|e| format!("{}: {e}", completion.display()))?,

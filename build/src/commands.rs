@@ -60,6 +60,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
         return crate::terrain_completion::rebind(
             &inputs,
             &out,
+            &parse_squares(options.get("squares")?)?,
             options.get("from-manifest-sha256")?,
             Path::new(options.get("completion")?),
         );
