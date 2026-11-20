@@ -1,10 +1,11 @@
 //! Fit the building-road models on the year's counted roads and the trip ends its buildings make.
 
 use super::road_model_regression::{
-    NormalEquations, country_weights, log_error_db, rounded, weighted_quantile,
+    MINIMUM_COUNTRY_ROWS, NormalEquations, country_weights, log_error_db, rounded,
+    weighted_quantile,
 };
 use super::road_model_rows::{
-    CountedRow, MAIN_CANDIDATE_RADII, MAIN_CLASSES, MAJOR_RADII, RADII_M,
+    CountedRow, Coverage, MAIN_CANDIDATE_RADII, MAIN_CLASSES, MAJOR_RADII, RADII_M,
 };
 use super::road_traffic::{MAJOR_TRIP_END_OFFSET, major_group};
 use crate::roads::observation_sample::SamplingDesign;
@@ -38,12 +39,45 @@ pub(crate) fn represents_its_class(r: &CountedRow) -> bool {
     }
 }
 
+/// Why a main-class fit produced no law across its candidate radii, ordered from earliest stage to
+/// deepest so the diagnostic reports the furthest reason reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum MainFitFailure {
+    NoRepresentativeRows,
+    TooFewCountryRows,
+    MissingRuralRows,
+    MissingUrbanRows,
+    SingularDesign,
+}
+
+impl MainFitFailure {
+    fn describe(self) -> String {
+        match self {
+            Self::NoRepresentativeRows => format!(
+                "no representative rows (random-sample or whole-network coverage > {:.0}%)",
+                REPRESENTATIVE_COVERAGE * 100.0
+            ),
+            Self::TooFewCountryRows => {
+                format!("no country has at least {MINIMUM_COUNTRY_ROWS} representative rows")
+            }
+            Self::MissingRuralRows => {
+                "no rural representative rows in any qualifying country".into()
+            }
+            Self::MissingUrbanRows => {
+                "no urban representative rows in any qualifying country".into()
+            }
+            Self::SingularDesign => "singular design matrix".into(),
+        }
+    }
+}
+
 /// The fit of one main class at the candidate radius that predicts best, on the rows of `rows`
 /// whose counts represent their class ([`represents_its_class`]), with its support:
 /// each candidate's weighted mean absolute error and, for every row of `rows`, the residuals of
 /// each country and design at the chosen law.
-fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
+fn main_model(class: u8, rows: &[&CountedRow]) -> Result<(MainModel, Value), MainFitFailure> {
     let mut best: Option<(f64, MainModel, usize, f64, Vec<f64>)> = None;
+    let mut reason = MainFitFailure::NoRepresentativeRows;
     let mut errors = serde_json::Map::new();
     for radius in MAIN_CANDIDATE_RADII {
         let population: Vec<&CountedRow> = rows
@@ -51,6 +85,9 @@ fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
             .copied()
             .filter(|r| r.around[radius] > 0.0 && represents_its_class(r))
             .collect();
+        if population.is_empty() {
+            continue;
+        }
         let weights = country_weights(
             &population
                 .iter()
@@ -63,6 +100,7 @@ fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
             .map(|(r, &w)| (r.around[radius], w))
             .collect();
         let Some(cap) = weighted_quantile(&trip_ends, MAIN_TRIP_END_QUANTILE) else {
+            reason = reason.max(MainFitFailure::TooFewCountryRows);
             continue;
         };
         let cap = cap.round().max(1.0);
@@ -70,10 +108,18 @@ fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
         for (r, &w) in population.iter().zip(&weights).filter(|(_, w)| **w > 0.0) {
             equations.add(&main_design(r, radius, cap), r.total.ln(), w);
         }
-        if equations.support(0) == 0.0 || equations.support(1) == 0.0 {
+        if equations.support(0) == 0.0 {
+            reason = reason.max(MainFitFailure::MissingRuralRows);
             continue;
         }
-        let Some(b) = equations.solve() else { continue };
+        if equations.support(1) == 0.0 {
+            reason = reason.max(MainFitFailure::MissingUrbanRows);
+            continue;
+        }
+        let Some(b) = equations.solve() else {
+            reason = reason.max(MainFitFailure::SingularDesign);
+            continue;
+        };
         let (sum, weight) =
             population
                 .iter()
@@ -98,13 +144,13 @@ fn main_model(class: u8, rows: &[&CountedRow]) -> Option<(MainModel, Value)> {
             best = Some((error, model, radius, cap, b));
         }
     }
-    let (_, model, radius, cap, b) = best?;
+    let (_, model, radius, cap, b) = best.ok_or(reason)?;
     let residuals: Vec<(&CountedRow, f64)> = rows
         .iter()
         .filter(|r| r.around[radius] > 0.0)
         .map(|r| (*r, main_residual(r, radius, cap, &b)))
         .collect();
-    Some((
+    Ok((
         model,
         json!({"class": class, "countries": design_errors(&residuals), "mean_absolute_db": errors}),
     ))
@@ -288,52 +334,48 @@ fn major_models(rows: &[&CountedRow]) -> Result<(RoadModels, Value)> {
     ))
 }
 
-/// Error when a main class has no country whose counts represent it: names the class and each
-/// country's counted rows, coverage and design for that class.
-fn missing_main_class_error(class: u8, rows: &[&CountedRow]) -> anyhow::Error {
-    let mut by_country: BTreeMap<[u8; 2], (usize, f64, BTreeMap<String, usize>)> = BTreeMap::new();
+/// Error when a main class could not be fitted: names the class, the fit's own reason and each
+/// country's counted rows and whole-network coverage from the collected coverage map.
+fn missing_main_class_error(
+    class: u8,
+    reason: MainFitFailure,
+    rows: &[&CountedRow],
+    coverage: &Coverage,
+) -> anyhow::Error {
+    let mut by_country: BTreeMap<[u8; 2], (usize, f64)> = BTreeMap::new();
+    for (&(country, row_class, rural_network), &[mapped, counted]) in coverage {
+        if row_class == class && !rural_network && mapped > 0.0 && counted > 0.0 {
+            by_country.insert(country, (0, counted / mapped));
+        }
+    }
     for r in rows {
-        let design = serde_json::to_value(r.design)
-            .expect("a design name")
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let entry = by_country
-            .entry(r.country)
-            .or_insert_with(|| (0, r.class_coverage, BTreeMap::new()));
+        let entry = by_country.entry(r.country).or_insert((0, r.class_coverage));
         entry.0 += 1;
-        entry.1 = entry.1.max(r.class_coverage);
-        *entry.2.entry(design).or_insert(0) += 1;
     }
     let countries = if by_country.is_empty() {
         "none".to_string()
     } else {
         by_country
             .into_iter()
-            .map(|(country, (count, coverage, designs))| {
-                let designs = designs
-                    .into_iter()
-                    .map(|(name, n)| format!("{name}={n}"))
-                    .collect::<Vec<_>>()
-                    .join(",");
+            .map(|(country, (count, share))| {
                 format!(
-                    "{} ({count} rows, coverage {:.1}%, {designs})",
+                    "{} ({count} rows, whole-network coverage {:.1}%)",
                     String::from_utf8_lossy(&country),
-                    coverage * 100.0
+                    share * 100.0
                 )
             })
             .collect::<Vec<_>>()
             .join("; ")
     };
     anyhow!(
-        "no main-class fit for class {class} (need representative rows: random-sample or whole-network coverage > {:.0}%); countries: {countries}",
-        REPRESENTATIVE_COVERAGE * 100.0
+        "main-class {class} could not be fitted: {}; countries: {countries}",
+        reason.describe()
     )
 }
 
 /// Every model of the table from the counted rows: the major roads', each main class's on rows
 /// off any rural road network, and a country's network's own where it has the support.
-pub(crate) fn fit_models(rows: &[CountedRow]) -> Result<(RoadModels, Value)> {
+pub(crate) fn fit_models(rows: &[CountedRow], coverage: &Coverage) -> Result<(RoadModels, Value)> {
     let major: Vec<&CountedRow> = rows
         .iter()
         .filter(|r| major_group(r.class).is_some())
@@ -345,8 +387,8 @@ pub(crate) fn fit_models(rows: &[CountedRow]) -> Result<(RoadModels, Value)> {
             .iter()
             .filter(|r| r.class == class && !r.rural_network)
             .collect();
-        let (model, support) =
-            main_model(class, &pooled).ok_or_else(|| missing_main_class_error(class, &pooled))?;
+        let (model, support) = main_model(class, &pooled)
+            .map_err(|reason| missing_main_class_error(class, reason, &pooled, coverage))?;
         models.main.push(model);
         main_support.push(support);
     }
@@ -363,7 +405,7 @@ pub(crate) fn fit_models(rows: &[CountedRow]) -> Result<(RoadModels, Value)> {
                 .copied()
                 .filter(|r| r.class == class)
                 .collect();
-            if let Some((model, support)) = main_model(class, &rows) {
+            if let Ok((model, support)) = main_model(class, &rows) {
                 fitted.push(model);
                 regional_support.push(support);
             }
@@ -383,7 +425,7 @@ pub(crate) fn fit_models(rows: &[CountedRow]) -> Result<(RoadModels, Value)> {
 
 /// Each country's main classes, on and off a rural road network: mapped km, km under a whole
 /// network's counts, their share and whether they stand for the class.
-fn coverage_record(coverage: &super::road_model_rows::Coverage) -> Value {
+fn coverage_record(coverage: &Coverage) -> Value {
     json!(
         coverage
             .iter()
@@ -411,7 +453,7 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
         rows.len(),
         squares.len()
     );
-    let (models, mut support) = fit_models(&rows).context("building-road-models")?;
+    let (models, mut support) = fit_models(&rows, &coverage).context("building-road-models")?;
     crate::source_tables::write_rows(output, &[models]).map_err(|e| anyhow!(e))?;
     support["squares"] = json!(squares);
     support["coverage"] = coverage_record(&coverage);

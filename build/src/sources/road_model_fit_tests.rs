@@ -233,7 +233,7 @@ fn a_rural_road_network_fits_its_own_law_apart_from_the_pooled_one() {
     }));
     rows.extend(major_rows(b"CZ", 1, false));
     rows.extend(major_rows(b"US", 2, false));
-    let (models, _) = fit_models(&rows).unwrap();
+    let (models, _) = fit_models(&rows, &Coverage::new()).unwrap();
     assert_eq!(models.main.len(), MAIN_CLASSES.len());
     let tertiary = models.main.iter().find(|m| m.class == 4).unwrap();
     assert_eq!(tertiary.intercept, [1.0, 2.0]);
@@ -271,7 +271,7 @@ fn selected_sites_stay_out_of_the_main_class_laws_but_not_the_major_law() {
         })
         .collect();
     rows.extend(italian_major);
-    let (models, support) = fit_models(&rows).unwrap();
+    let (models, support) = fit_models(&rows, &Coverage::new()).unwrap();
     let tertiary = models.main.iter().find(|m| m.class == 4).unwrap();
     assert_eq!(tertiary.intercept, [1.0, 2.0]);
     let tertiary_support = support["main"]
@@ -321,7 +321,7 @@ fn a_whole_network_stands_for_its_class_only_where_it_covers_most_of_it() {
         .collect();
     rows.extend(other_main_classes(b"SE"));
     rows.extend(major_rows(b"SE", 1, false));
-    let (models, support) = fit_models(&rows).unwrap();
+    let (models, support) = fit_models(&rows, &Coverage::new()).unwrap();
     let tertiary = models.main.iter().find(|m| m.class == 4).unwrap();
     assert_eq!(tertiary.intercept, [1.0, 2.0]);
     let tertiary_support = support["main"]
@@ -347,9 +347,10 @@ fn a_whole_network_stands_for_its_class_only_where_it_covers_most_of_it() {
     assert!(!at(SamplingDesign::SelectedSites, 1.0) && !at(SamplingDesign::Undeclared, 1.0));
 }
 
-/// Every class in `MAIN_CLASSES` must fit a law; if one has no representative rows, the fit fails
-/// naming the class and each country's coverage. One country's random sample suffices (GB for
-/// unclassified roads).
+/// Every class in `MAIN_CLASSES` must fit a law; if one cannot be fitted, the error names the
+/// class, the fit's own reason (non-representative support, too few country rows, or missing
+/// rural/urban rows) and each country's coverage from the coverage map. One country's random
+/// sample suffices (GB for unclassified roads).
 #[test]
 fn a_missing_main_class_law_fails_the_fit_naming_the_class_and_coverages() {
     let mut base = tertiary_rows(b"SE", 0.0);
@@ -360,6 +361,7 @@ fn a_missing_main_class_law_fails_the_fit_naming_the_class_and_coverages() {
     );
     base.extend(major_rows(b"SE", 1, false));
 
+    // Non-representative whole-network rows, plus a mapped country in `coverage` with no fit rows.
     let mut missing = base.clone();
     missing.extend(tertiary_rows(b"GB", 0.0).into_iter().map(|row| CountedRow {
         class: 9,
@@ -373,10 +375,79 @@ fn a_missing_main_class_law_fails_the_fit_naming_the_class_and_coverages() {
         class_coverage: 0.12,
         ..row
     }));
-    let error = fit_models(&missing).unwrap_err().to_string();
-    assert!(error.contains("class 9"), "{error}");
+    let coverage = Coverage::from([
+        ((*b"FR", 9, false), [10_000.0, 420.0]),
+        ((*b"GB", 9, false), [10_000.0, 300.0]),
+        ((*b"SE", 9, false), [10_000.0, 1_200.0]),
+    ]);
+    let error = fit_models(&missing, &coverage).unwrap_err().to_string();
+    assert!(
+        error.contains("main-class 9 could not be fitted"),
+        "{error}"
+    );
+    assert!(error.contains("no representative rows"), "{error}");
+    assert!(
+        error.contains("FR (0 rows, whole-network coverage 4.2%)"),
+        "{error}"
+    );
     assert!(error.contains("GB") && error.contains("3.0%"), "{error}");
     assert!(error.contains("SE") && error.contains("12.0%"), "{error}");
+
+    // Representative (random-sample) support with too few rows (< MINIMUM_COUNTRY_ROWS).
+    let mut too_few = base.clone();
+    too_few.extend(
+        tertiary_rows(b"GB", 0.0)
+            .into_iter()
+            .take(499)
+            .map(|row| CountedRow {
+                class: 9,
+                design: SamplingDesign::RandomSample,
+                class_coverage: 0.03,
+                ..row
+            }),
+    );
+    let error = fit_models(&too_few, &coverage).unwrap_err().to_string();
+    assert!(
+        error.contains("main-class 9 could not be fitted"),
+        "{error}"
+    );
+    assert!(error.contains("500 representative rows"), "{error}");
+    assert!(!error.contains("no representative rows"), "{error}");
+
+    // Representative support with >= 500 rows, all rural (missing urban intercept).
+    let mut no_urban = base.clone();
+    no_urban.extend(tertiary_rows(b"GB", 0.0).into_iter().map(|row| CountedRow {
+        class: 9,
+        built_up: 1,
+        design: SamplingDesign::RandomSample,
+        class_coverage: 0.03,
+        ..row
+    }));
+    let error = fit_models(&no_urban, &coverage).unwrap_err().to_string();
+    assert!(
+        error.contains("main-class 9 could not be fitted"),
+        "{error}"
+    );
+    assert!(error.contains("no urban representative rows"), "{error}");
+    assert!(!error.contains("no representative rows"), "{error}");
+
+    // Representative 100%-covered whole-network support, all urban (missing rural intercept).
+    let mut no_rural = base.clone();
+    no_rural.extend(tertiary_rows(b"SE", 0.0).into_iter().map(|row| CountedRow {
+        class: 9,
+        built_up: 2,
+        design: SamplingDesign::WholeNetwork,
+        class_coverage: 1.0,
+        ..row
+    }));
+    let full_se = Coverage::from([((*b"SE", 9, false), [10_000.0, 10_000.0])]);
+    let error = fit_models(&no_rural, &full_se).unwrap_err().to_string();
+    assert!(
+        error.contains("main-class 9 could not be fitted"),
+        "{error}"
+    );
+    assert!(error.contains("no rural representative rows"), "{error}");
+    assert!(error.contains("100.0%"), "{error}");
 
     let mut single_random_sample = base;
     single_random_sample.extend(tertiary_rows(b"GB", 0.0).into_iter().map(|row| CountedRow {
@@ -385,6 +456,6 @@ fn a_missing_main_class_law_fails_the_fit_naming_the_class_and_coverages() {
         class_coverage: 0.03,
         ..row
     }));
-    let (models, _) = fit_models(&single_random_sample).unwrap();
+    let (models, _) = fit_models(&single_random_sample, &coverage).unwrap();
     assert_eq!(models.main.len(), MAIN_CLASSES.len());
 }
