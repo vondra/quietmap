@@ -55,8 +55,8 @@ const WIDE_MIX_THRESHOLD: usize = u16::MAX as usize + 1;
 const WIDE_MIX_PERIOD_BYTES: usize = PERIOD_BYTES + 2;
 const FLIGHT_BYTES: usize = 19;
 
-fn period_bytes(mixes: usize) -> usize {
-    if mixes > WIDE_MIX_THRESHOLD {
+fn period_bytes(wide_mix: bool) -> usize {
+    if wide_mix {
         WIDE_MIX_PERIOD_BYTES
     } else {
         PERIOD_BYTES

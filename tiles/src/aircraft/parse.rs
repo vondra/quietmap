@@ -67,7 +67,7 @@ impl<'a> Aircraft<'a> {
             BLOCK_BYTES * boxes.div_ceil(BOXES_PER_BLOCK),
             boxes,
             BOX_BYTES * boxes,
-            period_bytes(mixes).saturating_mul(periods),
+            period_bytes(wide_mix).saturating_mul(periods),
             FLIGHT_BYTES * flights,
             PIECE_BYTES * pieces,
             WIDE_BYTES.saturating_mul(wide),
@@ -175,11 +175,7 @@ impl<'a> Aircraft<'a> {
     }
 
     fn period_record(&self, index: usize) -> &'a [u8] {
-        let width = if self.wide_mix {
-            WIDE_MIX_PERIOD_BYTES
-        } else {
-            PERIOD_BYTES
-        };
+        let width = period_bytes(self.wide_mix);
         &self.periods[index * width..(index + 1) * width]
     }
 

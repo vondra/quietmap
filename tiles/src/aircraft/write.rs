@@ -185,10 +185,7 @@ fn write_period(
     } else {
         bytes.extend_from_slice(&u16::try_from(mix).expect("narrow mix index").to_le_bytes());
     }
-    assert_eq!(
-        bytes.len() - start,
-        period_bytes(if wide_mix { WIDE_MIX_THRESHOLD + 1 } else { 0 })
-    );
+    assert_eq!(bytes.len() - start, period_bytes(wide_mix));
 }
 
 /// A piece, its ends from its box's stored centroid at `scale` (a wide piece's in its table).
@@ -295,7 +292,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             + MIX_BYTES * mixes.len()
             + BLOCK_BYTES * blocks
             + (1 + BOX_BYTES) * boxes.len()
-            + period_bytes(mixes.len()) * periods.len()
+            + period_bytes(wide_mix) * periods.len()
             + FLIGHT_BYTES * flights.len()
             + PIECE_BYTES * pieces.len()
             + WIDE_BYTES * wide.len(),
