@@ -152,12 +152,14 @@ fn tangent_and_clipped_corners_keep_cpu_roofs_and_source_containment() {
     }
 }
 
-/// Two footprints exiting at the same distance across the 16-crossing cell chunk boundary (crossings
-/// 16 and 17 in one grid cell) must stay tied so the longer roof is not dropped by `covered_to`.
-#[test]
-#[ignore = "requires a CUDA card and NVRTC; run explicitly in the painter release gate"]
-fn tied_roof_exits_at_crossings_16_and_17_match_cpu() {
-    let gpu = Gpu::new(0).unwrap();
+/// Builds the 17-crossing-in-cell-0 fixture with strictly ascending `footprint_id`s:
+/// - `evict_long_exit = true`: short roof (`10`), long roof (`20`), seven strips (`30..=36`) so
+///   the long exit at `x = 230` is inserted first and evicted from slot 16 by the earlier strips;
+/// - `evict_long_exit = false`: seven strips (`10..=16`), short roof (`20`), long roof (`30`) so
+///   the 16-slot buffer is already full when the long exit arrives and rejects it.
+fn tied_roof_exits_fixture(
+    evict_long_exit: bool,
+) -> (tempfile::TempDir, WeatherTable, TileId, [f64; 2]) {
     let root = tempfile::tempdir().unwrap();
     let year = root.path().join("2026");
     std::fs::create_dir(&year).unwrap();
@@ -173,16 +175,19 @@ fn tied_roof_exits_at_crossings_16_and_17_match_cpu() {
         height_m,
         vertices: vec![[x0, -100], [x1, -100], [x1, 100], [x0, 100], [x0, -100]],
     };
-    // Source at x = -50 (in cell -1, height 8 m) to receiver at x = 400 (in cell 1, height 4 m):
-    // unblocked over the 5 m roofs so the whole ray uses the roofs' mean ground plane. Cell 0
-    // (x in [0, 256)) gets 17 crossings: 14 from seven narrow 0.2 m strips in [10, 72], crossing
-    // 15 enters id 10 at x = 220, crossing 16 exits id 10 at x = 230, crossing 17 exits id 20
-    // (entered at x = -10 in cell -1) at x = 230. Listed first so crossing 17 is inserted and then
-    // evicted from the 16-slot buffer; without `tie`, id 10 closes first at x = 230 and drops id
-    // 20's 5 m roof over [72, 220].
-    let mut outlines = vec![rect(20, 5.0, -10, 230), rect(10, 0.5, 220, 230)];
-    for k in 0..7i16 {
-        outlines.push(rect(2 + k as u64, 0.2, 10 + 10 * k, 12 + 10 * k));
+    let mut outlines = Vec::with_capacity(9);
+    if evict_long_exit {
+        outlines.push(rect(10, 0.5, 220, 230));
+        outlines.push(rect(20, 5.0, -10, 230));
+        for k in 0..7i16 {
+            outlines.push(rect(30 + k as u64, 0.2, 10 + 10 * k, 12 + 10 * k));
+        }
+    } else {
+        for k in 0..7i16 {
+            outlines.push(rect(10 + k as u64, 0.2, 10 + 10 * k, 12 + 10 * k));
+        }
+        outlines.push(rect(20, 0.5, 220, 230));
+        outlines.push(rect(30, 5.0, -10, 230));
     }
     write_tiles(
         &year,
@@ -220,35 +225,84 @@ fn tied_roof_exits_at_crossings_16_and_17_match_cpu() {
     let release = Release::open(root.path(), "2026").unwrap();
     let files = Files::read(&release, tile).unwrap();
     let square = Square::new(&weather, tile, &files).unwrap();
-    let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
     let receiver = [400.0 * square.frame.east_m_per_unit / 32768.0, 0.0];
-    let mut bands = gpu.bands(1).unwrap();
-    let (energies, failed) = gpu
-        .evaluate_pairs(
-            &device_square,
-            (&[receiver], &[0]),
-            (&[0], &[0], &[0], &[1.0]),
-            &mut bands,
-            None,
-        )
-        .unwrap();
-    assert_eq!(failed, vec![0]);
-    let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
-    let (expected, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
-    let expected: Vec<_> = expected
-        .mixed
-        .into_iter()
-        .chain(expected.states.into_iter().flatten())
-        .collect();
-    let error = energies[0]
-        .into_iter()
-        .zip(expected)
-        .map(|(card, cpu)| (10.0 * (f64::from(card) / cpu).log10()).abs())
-        .fold(0.0_f64, f64::max);
-    assert!(
-        error < 0.05,
-        "tied exit across crossings 16 and 17 differs by {error} dB"
-    );
+    (root, weather, tile, receiver)
+}
+
+/// Verifies on the CPU that both P3 overflow-order fixtures encode cleanly (ascending footprint
+/// IDs) and yield identical finite positive CPU energies.
+#[test]
+fn tied_roof_exits_fixture_encodes_for_both_overflow_orders_on_cpu() {
+    let eval = |evict_long_exit| {
+        let (root, weather, tile, receiver) = tied_roof_exits_fixture(evict_long_exit);
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+        let (energy, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
+        for value in energy
+            .mixed
+            .into_iter()
+            .chain(energy.states.into_iter().flatten())
+        {
+            assert!(value.is_finite() && value > 0.0, "non-positive {value}");
+        }
+        energy
+    };
+    assert_eq!(eval(true), eval(false));
+}
+
+/// Two footprints exiting at the same distance across the 16-crossing cell chunk boundary (crossings
+/// 16 and 17 in one grid cell) must stay tied in both overflow orders (eviction and rejection) so
+/// the longer roof is not dropped by `covered_to`.
+#[test]
+#[ignore = "requires a CUDA card and NVRTC; run explicitly in the painter release gate"]
+fn tied_roof_exits_at_crossings_16_and_17_match_cpu() {
+    let gpu = Gpu::new(0).unwrap();
+    for (label, evict_long_exit) in [("eviction", true), ("rejection", false)] {
+        let (root, weather, tile, receiver) = tied_roof_exits_fixture(evict_long_exit);
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
+        let mut bands = gpu.bands(1).unwrap();
+        let (energies, failed) = gpu
+            .evaluate_pairs(
+                &device_square,
+                (&[receiver], &[0]),
+                (&[0], &[0], &[0], &[1.0]),
+                &mut bands,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            failed,
+            vec![0],
+            "{label}: must run on card without fallback"
+        );
+        let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+        let (expected, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
+        let expected: Vec<_> = expected
+            .mixed
+            .into_iter()
+            .chain(expected.states.into_iter().flatten())
+            .collect();
+        let error = energies[0]
+            .into_iter()
+            .zip(expected)
+            .map(|(card, cpu)| {
+                assert!(
+                    card.is_finite() && card > 0.0 && cpu.is_finite() && cpu > 0.0,
+                    "{label}: non-positive or non-finite energy card={card} cpu={cpu}"
+                );
+                (10.0 * (f64::from(card) / cpu).log10()).abs()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            error < 0.05,
+            "{label}: tied exit across crossings 16 and 17 differs by {error} dB"
+        );
+    }
 }
 
 /// Builds a synthetic tile with vertical walls along the x axis (outlines already sorted by
