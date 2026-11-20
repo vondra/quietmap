@@ -435,4 +435,29 @@ fn metadata_floors_match_the_storeys_used_by_emission() {
     let school_one = building_emission(&untagged(3, 1), (CZ, &climate, tables), None).unwrap();
     assert_eq!(school.floors, 1);
     assert_eq!(steady(&school).day_dba, steady(&school_one).day_dba);
+
+    // Tagged footprint-scaled buildings (warehouse, supermarket) count one footprint in emission
+    // and must report 1 floor in metadata rather than their raw tag, while non-footprint-scaled
+    // tagged buildings (school) keep their tagged count and ground activities keep 0.
+    let tagged = |class: u8, floors: u8, ground_activity: bool| BuildingRow {
+        centroid: at,
+        area_m2: Some(200.0),
+        ..row(class, 0.0, floors, ground_activity)
+    };
+    for class in [2, FOOD_RETAIL] {
+        let three =
+            building_emission(&tagged(class, 3, false), (CZ, &climate, tables), None).unwrap();
+        let one =
+            building_emission(&tagged(class, 1, false), (CZ, &climate, tables), None).unwrap();
+        assert_eq!(three.floors, 1);
+        assert_eq!(steady(&three).day_dba, steady(&one).day_dba);
+    }
+    let ground_shop =
+        building_emission(&tagged(FOOD_RETAIL, 3, true), (CZ, &climate, tables), None).unwrap();
+    assert_eq!(ground_shop.floors, 0);
+
+    let tagged_school =
+        building_emission(&tagged(3, 3, false), (CZ, &climate, tables), None).unwrap();
+    assert_eq!(tagged_school.floors, 3);
+    assert!(steady(&tagged_school).day_dba > steady(&school_one).day_dba);
 }

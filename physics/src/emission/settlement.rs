@@ -157,16 +157,21 @@ pub fn area_law_lw_dba(lw_fixed_dba: f64, lw_per_m2_dba: f64, area_m2: f64) -> f
     10.0 * (10f64.powf(lw_fixed_dba / 10.0) + area_m2 * 10f64.powf(lw_per_m2_dba / 10.0)).log10()
 }
 
+/// Effective floor count used by [`building_sound_power`]: one footprint for footprint-scaled
+/// classes, otherwise at least one.
+pub fn counted_floors(class: u8, floors: u8) -> u8 {
+    if is_footprint_scaled(class) {
+        1
+    } else {
+        floors.max(1)
+    }
+}
+
 /// A building of `class` over `footprint_m2` with `floors` (0 when unknown or a ground activity):
 /// the gross floor area counts one floor for footprint-scaled classes. `None` when silent.
 pub fn building_sound_power(class: u8, footprint_m2: f64, floors: u8) -> Option<SoundPower> {
     let profile = building_profile(class)?;
-    let counted_floors = if is_footprint_scaled(class) {
-        1
-    } else {
-        floors.max(1)
-    };
-    let gross_floor_area_m2 = footprint_m2 * f64::from(counted_floors);
+    let gross_floor_area_m2 = footprint_m2 * f64::from(counted_floors(class, floors));
     Some(SoundPower {
         day_dba: area_law_lw_dba(
             profile.lw_fixed_dba,

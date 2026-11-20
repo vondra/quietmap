@@ -26,8 +26,8 @@ use crate::traffic::building_load;
 use physics::bands::WeekHours;
 use physics::emission::plant::{BUSINESS_HOURS, Running, cooling_plant, kitchen_extract};
 use physics::emission::settlement::{
-    COMMERCIAL, FOOD_RETAIL, HOSPITALITY, building_sound_power, is_footprint_scaled, is_home,
-    plant_sound_power,
+    COMMERCIAL, FOOD_RETAIL, HOSPITALITY, building_sound_power, counted_floors,
+    is_footprint_scaled, is_home, plant_sound_power,
 };
 use physics::emission::spectrum::SoundPower;
 use serde_json::{Value, json};
@@ -162,7 +162,11 @@ pub fn building_emission(
         }
         _ => (
             Emitted::Steady(building_sound_power(row.class, floor_m2, floors)?),
-            floors,
+            if row.ground_activity {
+                0
+            } else {
+                counted_floors(row.class, floors)
+            },
         ),
     };
     if let Emitted::Steady(sound) = &emitted
