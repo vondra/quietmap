@@ -219,8 +219,8 @@ junctions and the place's yearly air temperature.
   of it (still under their cap): DfT's measured free-flow shares on 60 mph national-limit single
   carriageways for cars (Great Britain) and for heavy goods vehicles (England and Wales only, where
   HGVs over 7.5 t have a 50 mph limit; Scotland did not raise that limit), applied to medium and
-  heavy vehicles including buses as a proxy. Lorries and buses drive at most
-  80 km/h, 90 to 105 in thirteen countries.
+  heavy vehicles including buses as a proxy. Lorries and buses drive at most 80 km/h, or 90 to 100
+  in ten countries in the 2024 map (90 to 105 in thirteen countries in the 2026 map).
 - **Buses and bridges.** Uncounted roads also carry the buses of the lines mapped on them, a line at
   most twice, for its two directions, however many of its variants are mapped. One line direction
   carries 30 buses a day where 100,000 trips a day begin or end within 2 km; a street's buses grow

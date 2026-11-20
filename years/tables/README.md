@@ -348,6 +348,4 @@ shares of 43 places and a coach line's 4 departures by judgment.
 
 Legal and heavy speed histories retain their source, applicability and validity
 interval (exclusive end). A country lacking a documented historical row retains the
-road model's global speed fallback; no later legal check is backdated. Japan's 2024
-mixed lorry/bus cap retains 80 km/h to cover trailers; the rigid-lorry allowance of
-90 km/h cannot be applied to that entire mixed class.
+road model's global speed fallback; no later legal check is backdated.

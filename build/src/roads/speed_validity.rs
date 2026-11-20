@@ -151,6 +151,30 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years/tables");
         let history_bytes = std::fs::read(root.join("2024/road-heavy-history.json")).unwrap();
         let history: History = serde_json::from_slice(&history_bytes).unwrap();
+        for row in &history.rows {
+            assert!(
+                row.scope.contains(
+                    "Model proxy: applied as a country-wide cap for medium and heavy vehicles."
+                ),
+                "{} scope must state model-proxy usage",
+                row.country
+            );
+        }
+        let manifest_2024: Value =
+            serde_json::from_slice(&std::fs::read(root.join("../2024.json")).unwrap()).unwrap();
+        let history_input = manifest_2024["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|input| input["id"] == "practice-history-heavy-speeds")
+            .unwrap();
+        assert!(
+            history_input["url"]
+                .as_str()
+                .unwrap()
+                .ends_with("years/tables/2024/road-heavy-history.json"),
+            "manifest must cite the country history rather than a single EU directive"
+        );
         let derived_2024 = selected(
             history.rows,
             "2024-12-31".parse().unwrap(),
