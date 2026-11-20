@@ -95,21 +95,69 @@ fn unchanged_squares(
     Ok(covered)
 }
 
-/// Binds finished terrain to the selected manifest without building it again: for a manifest that
-/// changed in nothing the terrain reads (its national models and the rasters), which the caller
-/// checks and records with the run. The old receipt must cover `squares`, every square it lists
-/// still holding the bytes it recorded.
-pub fn rebind(inputs: &YearInputs, root: &Path, squares: &[Square]) -> Result<(), String> {
+/// A stopped run's migration of finished terrain to an edited manifest, reviewed to change nothing
+/// the terrain reads (`flows`, a description): the receipt must name `from_sha256` or already the
+/// selected manifest (a retry), every square it lists must still hold the bytes it recorded, and it
+/// keeps its squares. The terrain step's completion record `completion` then takes the receipt's new
+/// stamp, its other files unchanged, so the runner reuses the step instead of building it again.
+pub fn rebind(
+    inputs: &YearInputs,
+    root: &Path,
+    from_sha256: &str,
+    completion: &Path,
+) -> Result<(), String> {
     let path = root.join(RECEIPT);
-    let receipt: Receipt =
+    let mut receipt: Receipt =
         serde_json::from_slice(&fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
             .map_err(|e| e.to_string())?;
+    let selected =
+        tiles::manifest_hash(&fs::read(&inputs.manifest_path).map_err(|e| e.to_string())?);
     if receipt.layout != tiles::LAYOUT {
         return Err("terrain completion has another layout".into());
     }
-    let covered = unchanged_squares(root, receipt.squares)?;
-    if squares.iter().any(|square| !covered.contains(square)) {
-        return Err("terrain completion does not cover the requested squares".into());
+    if receipt.manifest_sha256 != from_sha256 && receipt.manifest_sha256 != selected {
+        return Err(format!(
+            "terrain completion names manifest {}, neither {from_sha256} nor the selected {selected}",
+            receipt.manifest_sha256
+        ));
     }
-    write(inputs, root, squares)
+    unchanged_squares(root, receipt.squares.clone())?;
+    let error = |e: anyhow::Error| format!("{e:#}");
+    let mut record: serde_json::Value = serde_json::from_slice(
+        &fs::read(completion).map_err(|e| format!("{}: {e}", completion.display()))?,
+    )
+    .map_err(|e| e.to_string())?;
+    let files = record["files"]
+        .as_array_mut()
+        .ok_or("the completion record lists no files")?;
+    let mut receipt_rows = 0;
+    for file in files.iter() {
+        let listed = Path::new(file[0].as_str().ok_or("a completion row names no file")?);
+        if listed == path {
+            receipt_rows += 1;
+        } else if crate::pipeline_files::stamp(listed).map_err(error)? != *file {
+            return Err(format!("completed output changed: {}", listed.display()));
+        }
+    }
+    if receipt_rows != 1 {
+        return Err(format!(
+            "the completion record lists {} {receipt_rows} times",
+            path.display()
+        ));
+    }
+    if receipt.manifest_sha256 != selected {
+        receipt.manifest_sha256 = selected;
+        crate::pipeline_files::write_json(
+            &path,
+            &serde_json::to_value(receipt).map_err(|e| e.to_string())?,
+        )
+        .map_err(error)?;
+    }
+    let stamp = crate::pipeline_files::stamp(&path).map_err(error)?;
+    for file in files.iter_mut() {
+        if Path::new(file[0].as_str().unwrap_or_default()) == path {
+            *file = stamp.clone();
+        }
+    }
+    crate::pipeline_files::write_json(completion, &record).map_err(error)
 }
