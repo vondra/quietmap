@@ -256,6 +256,10 @@ impl Gpu {
     /// Opens card `ordinal` and compiles the kernels for its architecture.
     pub fn new(ordinal: usize) -> Result<Self, String> {
         let device = driver(CudaDevice::new(ordinal))?;
+        // Resolve and verify `cuStreamSynchronize` before any host transfer is queued: cudarc's
+        // wrapper `.expect()`s the dynamically loaded symbol, so calling it here on an empty
+        // stream fails cleanly during startup instead of unwinding past a live download buffer.
+        driver(device.synchronize())?;
         let attribute = |which| driver(device.attribute(which));
         let major = attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
         let minor = attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;

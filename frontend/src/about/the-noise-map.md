@@ -308,9 +308,9 @@ the mean loudness of the pixels under it.
 the cores read the next square's tiles once, to the reach of its farthest pixel, give the card the
 fine terrain of every land tile among them, and take its corners, hum and aircraft lattices. In one
 painter process, two squares with up to 250,000 candidate ground sources each can paint their pixels
-together; three can paint their pixels together if they have at most 250,000 candidates between
-them; a square over that count paints its pixels alone (preparation can already be uploading the
-next square). Two
+together, and three can paint their pixels together if they have at most 250,000 candidates between
+them, while preparation can already be uploading the next square; a square over 250,000 candidates
+paints its pixels alone and preparation waits for the card to empty before starting the next. Two
 writers publish the squares before. The exact pairs, the hum's sampled pairs, the aircraft boxes' sums at the block corners'
 lattices and every pixel's loudness run on the first CUDA card (`paint-gpu/kernels/`, the popup's
 physics in single precision, with fast math except the loudness; a ray's crossing of a building's
@@ -320,8 +320,9 @@ the cores. A square's samples, then its pixels, then its
 façades run in passes, four at once, at most two launching their pairs on the card while the
 others list and sound their pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
 one before. Each launch of source pairs or pixel sounds copies its own inputs and clears its
-temporary working sums in its own queue on the card; point-band sums that span launches and aircraft
-uploads stay on the default stream.
+temporary working sums in its own queue on the card; aircraft uploads stay on the default stream,
+and point-band sums that span launches are zeroed and downloaded on the default stream while each
+pair launch adds to them on its own queue.
 The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
 while the card computes the current chunk's loudness.
 The passes return in spatial order, so equal façade energies keep the same first candidate.
