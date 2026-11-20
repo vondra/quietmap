@@ -4,7 +4,9 @@ use paint::exact::{Point, whole_energy};
 use paint::square::{Files, Square};
 use paint_gpu::device::{DeviceSquare, Gpu};
 use physics::bands::{BANDS, PERIODS};
-use physics::weather::{COLUMNS, ROWS, WeatherNode, WeatherTable, encode as encode_weather};
+use physics::weather::{
+    COLUMNS, ROWS, SECTORS, WeatherNode, WeatherTable, encode as encode_weather,
+};
 use popup::evaluate::Scratch;
 use popup::release::Release;
 use tiles::Kind;
@@ -152,18 +154,24 @@ fn tangent_and_clipped_corners_keep_cpu_roofs_and_source_containment() {
     }
 }
 
-/// Builds the 17-crossing-in-cell-0 fixture with strictly ascending `footprint_id`s:
+/// Builds the 17-crossing-in-cell-0 fixture with strictly ascending `footprint_id`s, distinct
+/// source emissions in every period and octave, and per-period favourable propagation shares:
 /// - `evict_long_exit = true`: short roof (`10`), long roof (`20`), seven strips (`30..=36`) so
 ///   the long exit at `x = 230` is inserted first and evicted from slot 16 by the earlier strips;
 /// - `evict_long_exit = false`: seven strips (`10..=16`), short roof (`20`), long roof (`30`) so
 ///   the 16-slot buffer is already full when the long exit arrives and rejects it.
 fn tied_roof_exits_fixture(
     evict_long_exit: bool,
+    favourable_percent: [u8; PERIODS],
 ) -> (tempfile::TempDir, WeatherTable, TileId, [f64; 2]) {
     let root = tempfile::tempdir().unwrap();
     let year = root.path().join("2026");
     std::fs::create_dir(&year).unwrap();
-    let weather_bytes = encode_weather(&vec![WeatherNode::default(); ROWS * COLUMNS]);
+    let weather_node = WeatherNode {
+        percent: favourable_percent.map(|p| [p; SECTORS]),
+        ..WeatherNode::default()
+    };
+    let weather_bytes = encode_weather(&vec![weather_node; ROWS * COLUMNS]);
     std::fs::write(year.join("weather"), &weather_bytes).unwrap();
     std::fs::write(year.join("complete"), b"qmsq1\n").unwrap();
     let weather = WeatherTable::parse(&weather_bytes).unwrap();
@@ -203,7 +211,11 @@ fn tied_roof_exits_fixture(
         exclusion_radius_m: 0.0,
         footprint_id: 1,
         group_key: 1,
-        emission: [[100.0; BANDS]; PERIODS],
+        emission: [
+            [92.0, 94.0, 96.0, 98.0, 100.0, 97.0, 94.0, 90.0],
+            [87.0, 90.0, 92.0, 95.0, 96.0, 93.0, 89.0, 84.0],
+            [82.0, 85.0, 88.0, 90.0, 91.0, 87.0, 83.0, 78.0],
+        ],
         display: Vec::new(),
     };
     write_tiles(
@@ -303,12 +315,25 @@ fn evaluate_and_compare_single_pair(
     (energies[0], pair_spectra)
 }
 
-/// Verifies on the CPU that both P3 overflow-order fixtures encode cleanly (ascending footprint
-/// IDs) and yield identical finite positive CPU state sums and mixed octave energies.
+/// P3 overflow-order and weather cases shared by the CPU and CUDA tests: both overflow orders
+/// (eviction and rejection) under calm weather (`[0, 0, 0]`) and mixed weather (`[25, 50, 75]`,
+/// non-zero favourable propagation share in every period).
+const TIED_ROOF_CASES: [(&str, bool, [u8; PERIODS]); 4] = [
+    ("eviction_calm", true, [0, 0, 0]),
+    ("rejection_calm", false, [0, 0, 0]),
+    ("eviction_mixed", true, [25, 50, 75]),
+    ("rejection_mixed", false, [25, 50, 75]),
+];
+
+/// Verifies on the CPU that all P3 overflow-order and mixed-weather fixtures encode cleanly
+/// (ascending footprint IDs), yield identical finite positive CPU state sums and mixed octave
+/// energies across overflow orders, distinguish every period, and mix favourable propagation when
+/// weather shares are non-zero.
 #[test]
 fn tied_roof_exits_fixture_encodes_for_both_overflow_orders_on_cpu() {
-    let eval = |evict_long_exit| {
-        let (root, weather, tile, receiver) = tied_roof_exits_fixture(evict_long_exit);
+    let eval = |evict_long_exit, favourable_percent| {
+        let (root, weather, tile, receiver) =
+            tied_roof_exits_fixture(evict_long_exit, favourable_percent);
         let release = Release::open(root.path(), "2026").unwrap();
         let files = Files::read(&release, tile).unwrap();
         let square = Square::new(&weather, tile, &files).unwrap();
@@ -324,18 +349,47 @@ fn tied_roof_exits_fixture_encodes_for_both_overflow_orders_on_cpu() {
         }
         (energy, bands)
     };
-    assert_eq!(eval(true), eval(false));
+    let results: Vec<_> = TIED_ROOF_CASES
+        .iter()
+        .map(|&(_, evict, weather)| eval(evict, weather))
+        .collect();
+    assert_eq!(results[0], results[1], "calm overflow orders differ");
+    assert_eq!(results[2], results[3], "mixed overflow orders differ");
+
+    let (calm_energy, calm_bands) = &results[0];
+    let (mixed_energy, mixed_bands) = &results[2];
+    for &(a, b) in &[(0, 1), (1, 2), (0, 2)] {
+        assert_ne!(
+            mixed_bands[a], mixed_bands[b],
+            "periods {a} and {b} must have distinct mixed octave spectra"
+        );
+    }
+    for period in 0..PERIODS {
+        assert_ne!(
+            mixed_energy.mixed[period], mixed_energy.states[0][period],
+            "period {period}: mixed weather must differ from calm propagation"
+        );
+        assert_ne!(
+            mixed_bands[period], calm_bands[period],
+            "period {period}: mixed octave spectrum must differ from calm-only weather"
+        );
+    }
+    assert_eq!(
+        calm_energy.states, mixed_energy.states,
+        "weather shares change only the mixture, not the calm/favourable states"
+    );
 }
 
 /// Two footprints exiting at the same distance across the 16-crossing cell chunk boundary (crossings
-/// 16 and 17 in one grid cell) must stay tied in both overflow orders (eviction and rejection) so
-/// the longer roof is not dropped by `covered_to`, matching CPU state sums and every mixed octave.
+/// 16 and 17 in one grid cell) must stay tied in both overflow orders (eviction and rejection) and
+/// under both calm and mixed weather, matching CPU state sums and every mixed octave.
 #[test]
 #[ignore = "requires a CUDA card and NVRTC; run explicitly in the painter release gate"]
 fn tied_roof_exits_at_crossings_16_and_17_match_cpu() {
     let gpu = Gpu::new(0).unwrap();
-    for (label, evict_long_exit) in [("eviction", true), ("rejection", false)] {
-        let (root, weather, tile, receiver) = tied_roof_exits_fixture(evict_long_exit);
+    for (label, evict_long_exit, favourable_percent) in TIED_ROOF_CASES {
+        let (root, weather, tile, receiver) =
+            tied_roof_exits_fixture(evict_long_exit, favourable_percent);
         let release = Release::open(root.path(), "2026").unwrap();
         let files = Files::read(&release, tile).unwrap();
         let square = Square::new(&weather, tile, &files).unwrap();
