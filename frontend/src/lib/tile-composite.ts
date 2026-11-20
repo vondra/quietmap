@@ -49,8 +49,8 @@ export function baseRange(bounds: LngLatBounds, build: TileBuilds): Range {
 }
 
 /** Stitch the base-zoom tiles of `range` of `source` (palette-mapped) into ONE
- *  seamless `ImageData` + its geo bounds. Null if nothing has a level. All tile
- *  fetches run in one parallel batch. */
+ *  seamless `ImageData` + its geo bounds. Keep individual tiles if a read
+ *  fails, the view changes, or the whole range is empty. */
 export async function buildComposite(
   range: Range,
   source: string,
@@ -72,11 +72,10 @@ export async function buildComposite(
       // batch (up to 96 requests) must not outrank the fresh view's sharp
       // tiles.
       return fetchSourceTile(tileUrl(build, source, z, wx, ty), undefined, 'low')
-        .catch(() => null)
     }),
-  )
-  // An absent or failed tile stays without a level, painted transparent. One source's tiles hold
-  // one quantity.
+  ).catch(() => null)
+  // A failed read leaves the individual tiles on screen. Only a published empty tile is transparent.
+  if (!decoded || isStale()) return null
   let grid: Uint8Array | null = null
   decoded.forEach((d, i) => {
     if (!d) return
@@ -85,10 +84,6 @@ export async function buildComposite(
   })
   const metric = decoded.find(d => d !== null)?.metric
   if (grid === null || metric === undefined) return null
-  // A pan/zoom during the fetches supersedes this composite — bail before the
-  // big compose (up to 96 tiles) so stale work never queues ahead of fresh
-  // tile composes in the single worker.
-  if (isStale()) return null
   const image = await composeOffThread(grid, metric, width, height)
   const bounds: Bounds = [tileXToLng(x0, z), tileYToLat(y1 + 1, z), tileXToLng(x1 + 1, z), tileYToLat(y0, z)]
   return { image, bounds }
