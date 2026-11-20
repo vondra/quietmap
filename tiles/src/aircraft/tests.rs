@@ -313,3 +313,128 @@ fn a_wide_piece_keeps_its_ends_exact() {
         "a wide piece without its ends"
     );
 }
+
+/// A tile below the wide-mix threshold encodes byte for byte as before Y2 (silent and heard
+/// periods, repeated mixes across boxes, two bands, two flights, normal and wide pieces).
+#[test]
+fn narrow_tile_matches_pre_wide_mix_bytes() {
+    #[rustfmt::skip]
+    const EXPECTED: [u8; 313] = [
+        0x71, 0x6d, 0x61, 0x69, 0x72, 0x35, 0x0a, 0x00, 0x02, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+        0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x13, 0x31, 0x00, 0x31, 0x00, 0x13, 0x96, 0x00, 0x64, 0x00, 0x33, 0x66,
+        0x1a, 0x4d, 0x00, 0x00, 0x0d, 0x0d, 0xff, 0x00, 0xe6, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x6d, 0x57, 0x00, 0x7f, 0x03, 0x2d, 0x01, 0x48, 0x74, 0x73, 0x01, 0xb8, 0xcb, 0xf8,
+        0xfd, 0x9c, 0x01, 0xbd, 0x45, 0xad, 0x92, 0x86, 0xa1, 0xa7, 0x82, 0x7d, 0x6a, 0x57, 0x7b, 0x01,
+        0x7f, 0x03, 0x2d, 0x01, 0x48, 0x74, 0x73, 0x01, 0xb8, 0xcb, 0xf8, 0xfd, 0x9c, 0x01, 0xbd, 0x45,
+        0xad, 0x92, 0x86, 0xa1, 0xa7, 0x82, 0x7d, 0x6a, 0x57, 0x7b, 0xf0, 0x55, 0x3c, 0x3c, 0x3c, 0x3c,
+        0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x7a, 0x92, 0xc2, 0x2c, 0x00, 0x00, 0x00, 0x28, 0x55, 0x3c, 0x3c,
+        0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0xcf, 0xe5, 0xfe, 0x26, 0x00, 0x01, 0x00, 0xf0, 0x55,
+        0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x7a, 0x92, 0xc2, 0x2c, 0x00, 0x00, 0x00,
+        0x8c, 0x55, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x82, 0x20, 0x52, 0x33, 0x00,
+        0x02, 0x00, 0x28, 0x55, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0x3c, 0xcf, 0xe5, 0xfe,
+        0x26, 0x00, 0x01, 0x00, 0xc1, 0xa9, 0x4b, 0x43, 0x53, 0x41, 0x31, 0x32, 0x33, 0x20, 0x20, 0x41,
+        0x31, 0x33, 0x39, 0x00, 0xe2, 0xb4, 0x68, 0x01, 0x00, 0x00, 0x43, 0x53, 0x41, 0x31, 0x32, 0x33,
+        0x20, 0x20, 0x41, 0x31, 0x33, 0x39, 0x00, 0xe2, 0xb4, 0x68, 0x01, 0x00, 0x00, 0xe7, 0x05, 0x6e,
+        0xc4, 0xa4, 0x01, 0xc7, 0x01, 0x8f, 0x05, 0x0b, 0x09, 0xe1, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xa4, 0x01, 0xc7, 0x01, 0x8f, 0x05, 0x0b, 0x39, 0xe1, 0x10, 0x00, 0x00, 0x00, 0xe7,
+        0x05, 0x6e, 0xc4, 0xa4, 0x01, 0xc7, 0x01, 0x8f, 0x05, 0x0b, 0x09, 0xe1, 0x10, 0x01, 0x00, 0x00,
+        0x00, 0xff, 0x3f, 0xff, 0x3f, 0x00, 0xc0, 0x00, 0xc0,
+    ];
+    let mut first = a_box(0, 2);
+    first.energy_db[1] = [f64::NEG_INFINITY; NPD_DISTANCES];
+    first.tail_energy_db[1] = f64::NEG_INFINITY;
+    first.flights_per_day[1] = 0.0;
+    let mut second = a_box(2, 1);
+    second.place.group = Group::FixedWing;
+    second.place.clearance_m = 150.0;
+    second.place.height_m = 100.0;
+    let flights = [a_flight(0x4b_a9_c1), a_flight(0x00_00_01)];
+    let mut far = a_piece(0);
+    far.ends = [[16_383, 16_383], [-16_384, -16_384]];
+    let pieces = [a_piece(1), far, a_piece(0)];
+    let bytes = encode(&[first, second], &flights, &pieces);
+    assert_eq!(bytes.as_slice(), EXPECTED);
+    let parsed = Aircraft::parse(&bytes).unwrap();
+    assert_eq!((parsed.box_count(), parsed.piece_count()), (2, 3));
+}
+
+/// A tile with more than 65,536 distinct installation mixes encodes with 32-bit mix indices and
+/// round-trips every mix; a tile at or below 65,536 mixes keeps the exact 18-byte period layout.
+#[test]
+fn more_than_65536_distinct_mixes_round_trip_and_smaller_tiles_stay_byte_identical() {
+    let share_at = |k: usize| -> [[f64; INSTALLATIONS]; 2] {
+        // 128 * 128 = 16,384 valid (wing, fuselage) pairs per slant with wing + fuselage <= 255,
+        // giving > 2.6e8 distinct four-byte mixes across the two slants.
+        let near = k % 16_384;
+        let far = k / 16_384;
+        let pair = |code: usize| {
+            let wing = (code % 128) as f64 / 255.0;
+            let fuselage = (code / 128) as f64 / 255.0;
+            [wing, fuselage, (1.0 - wing - fuselage).max(0.0)]
+        };
+        [pair(near), pair(far)]
+    };
+
+    // Boundary: 65,536 distinct mixes still fits u16 (18 B per heard period).
+    let at_bound: Vec<AircraftBox> = (0..21_846usize)
+        .map(|box_index| {
+            let mut record = a_box(0, 0);
+            for period in 0..PERIODS {
+                let mix_index = (box_index * PERIODS + period).min(65_535);
+                record.installation_shares[period] = share_at(mix_index);
+            }
+            record
+        })
+        .collect();
+    let at_bound_bytes = encode(&at_bound, &[], &[]);
+    let at_bound_periods = at_bound.len() * PERIODS;
+    let at_bound_blocks = at_bound.len().div_ceil(BOXES_PER_BLOCK);
+    assert_eq!(
+        at_bound_bytes.len(),
+        36 + 5
+            + 65_536 * 4
+            + at_bound_blocks * 8
+            + at_bound.len() * (1 + 27)
+            + at_bound_periods * 18
+    );
+    let parsed_bound = Aircraft::parse(&at_bound_bytes).unwrap();
+    assert_eq!(parsed_bound.box_count(), at_bound.len());
+
+    // Overflow: 70,000 distinct mixes switches to u32 mix indices (20 B per heard period) and
+    // preserves every mix across every box.
+    let wide: Vec<AircraftBox> = (0..23_334usize)
+        .map(|box_index| {
+            let mut record = a_box(0, 0);
+            for period in 0..PERIODS {
+                let mix_index = (box_index * PERIODS + period).min(69_999);
+                record.installation_shares[period] = share_at(mix_index);
+            }
+            record
+        })
+        .collect();
+    let mut wide_bytes = encode(&wide, &[], &[]);
+    let wide_periods = wide.len() * PERIODS;
+    let wide_blocks = wide.len().div_ceil(BOXES_PER_BLOCK);
+    let wide_period_offset = 36 + 5 + 70_000 * 4 + wide_blocks * 8 + wide.len() * (1 + 27);
+    assert_eq!(wide_bytes.len(), wide_period_offset + wide_periods * 20);
+    let parsed_wide = Aircraft::parse(&wide_bytes).unwrap();
+    assert_eq!(parsed_wide.box_count(), wide.len());
+    for (index, written) in wide.iter().enumerate() {
+        let read = parsed_wide.aircraft_box(index);
+        for (read_slant, written_slant) in read
+            .installation_shares
+            .iter()
+            .flatten()
+            .zip(written.installation_shares.iter().flatten())
+        {
+            for (r, w) in read_slant.iter().zip(written_slant) {
+                assert!(close(*r, *w, 1e-12), "{index}: {r} vs {w}");
+            }
+        }
+    }
+    // A wide period naming a mix past the table is refused.
+    wide_bytes[wide_period_offset + 16..wide_period_offset + 20]
+        .copy_from_slice(&70_000u32.to_le_bytes());
+    assert!(Aircraft::parse(&wide_bytes).is_err());
+}

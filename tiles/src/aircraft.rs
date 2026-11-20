@@ -23,9 +23,9 @@
 //! per box, 27 B: band u8, cell 2 x u8, ground i16 (m), centroid in its cell 2 x u8 (1/256), its
 //!   altitude i16 (m), axis u16, gradient i16, spread u16, lg scaled distance u16 (1e-4) and nine
 //!   steps u8 (0.004 from -0.3), loudest LAmax u8 (0.5 dB)
-//! per heard period, in box order, 18 B: energy u16 (0.01 dB) and nine drops u8 (0.05 dB), the
-//!   tail anchor's drop below the last u8 (0.1 dB), flights a day u16 (a rate, `crate::rate`),
-//!   piece length u16 (m), installation mix u16
+//! per heard period, in box order, 18 B (20 B when mixes > 65,536): energy u16 (0.01 dB) and nine
+//!   drops u8 (0.05 dB), the tail anchor's drop below the last u8 (0.1 dB), flights a day u16 (a
+//!   rate, `crate::rate`), piece length u16 (m), installation mix u16 (u32 when mixes > 65,536)
 //! per flight, 19 B: ICAO address u24, callsign 8, type designator 4, start u32
 //! per piece, in box order, 17 B: flight u24, ends 2 x 2 x i8 from the box's centroid (in 2, 8 or
 //!   32 tile steps by its scale; scale 3: wide, 0), altitudes 2 x i16 (m), speed u16 (0.1 kt),
@@ -49,7 +49,19 @@ const BOXES_PER_BLOCK: usize = 32;
 const BLOCK_BYTES: usize = 8;
 const BOX_BYTES: usize = 27;
 const PERIOD_BYTES: usize = 18;
+/// Above 65,536 distinct mixes a tile stores each period's mix index as a u32 (20 B per heard
+/// period) instead of a u16 (18 B), leaving tiles up to 65,536 mixes byte-identical.
+const WIDE_MIX_THRESHOLD: usize = u16::MAX as usize + 1;
+const WIDE_MIX_PERIOD_BYTES: usize = PERIOD_BYTES + 2;
 const FLIGHT_BYTES: usize = 19;
+
+fn period_bytes(wide_mix: bool) -> usize {
+    if wide_mix {
+        WIDE_MIX_PERIOD_BYTES
+    } else {
+        PERIOD_BYTES
+    }
+}
 const PIECE_BYTES: usize = 17;
 const WIDE_BYTES: usize = 12;
 /// A box head's bits: the heard periods (bit p), a helicopter, then the piece count, and whether

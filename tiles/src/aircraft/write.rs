@@ -9,7 +9,7 @@ use super::{
     AircraftBox, BAND_BYTES, BLOCK_BYTES, BOX_BYTES, BOXES_PER_BLOCK, FLIGHT_BYTES, Flight,
     FlightPiece, Group, HEAD_HELICOPTER, HEAD_PIECES_SHIFT, HEAD_REACHING, HEADER_BYTES,
     INSTALLATIONS, KIND_FLAGS_SHIFT, KIND_PERIOD_SHIFT, KIND_SCALE_SHIFT, MAGIC, MAXIMUM_ZOOM,
-    MIX_BYTES, PERIOD_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES,
+    MIX_BYTES, PERIODS, PIECE_BYTES, WIDE_BYTES, WIDE_MIX_THRESHOLD, period_bytes,
 };
 use crate::rate::rate_code;
 use std::collections::HashMap;
@@ -166,7 +166,13 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox, band: u8) {
     assert_eq!(bytes.len() - start, BOX_BYTES);
 }
 
-fn write_period(bytes: &mut Vec<u8>, record: &AircraftBox, period: usize, mix: u16) {
+fn write_period(
+    bytes: &mut Vec<u8>,
+    record: &AircraftBox,
+    period: usize,
+    mix: u32,
+    wide_mix: bool,
+) {
     let start = bytes.len();
     let (first, drops, end) = curve_codes(&record.energy_db[period]);
     bytes.extend_from_slice(&first.to_le_bytes());
@@ -174,8 +180,12 @@ fn write_period(bytes: &mut Vec<u8>, record: &AircraftBox, period: usize, mix: u
     bytes.push(tail_code(end, record.tail_energy_db[period]));
     bytes.extend_from_slice(&rate_code(record.flights_per_day[period]).to_le_bytes());
     bytes.extend_from_slice(&metres_u16(record.piece_length_m[period]).to_le_bytes());
-    bytes.extend_from_slice(&mix.to_le_bytes());
-    assert_eq!(bytes.len() - start, PERIOD_BYTES);
+    if wide_mix {
+        bytes.extend_from_slice(&mix.to_le_bytes());
+    } else {
+        bytes.extend_from_slice(&u16::try_from(mix).expect("narrow mix index").to_le_bytes());
+    }
+    assert_eq!(bytes.len() - start, period_bytes(wide_mix));
 }
 
 /// A piece, its ends from its box's stored centroid at `scale` (a wide piece's in its table).
@@ -223,8 +233,8 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
     assert!(bands.len() <= 256, "{} bands in a tile", bands.len());
 
     let mut mixes: Vec<[u8; MIX_BYTES]> = Vec::new();
-    let mut mix_rows: HashMap<[u8; MIX_BYTES], u16> = HashMap::new();
-    let mut periods: Vec<(usize, usize, u16)> = Vec::new();
+    let mut mix_rows: HashMap<[u8; MIX_BYTES], u32> = HashMap::new();
+    let mut periods: Vec<(usize, usize, u32)> = Vec::new();
     for (index, record) in boxes.iter().enumerate() {
         for period in 0..PERIODS {
             if !record.heard(period) {
@@ -238,7 +248,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             let mix = mix_of(&record.installation_shares[period]);
             let row = *mix_rows.entry(mix).or_insert_with(|| {
                 mixes.push(mix);
-                u16::try_from(mixes.len() - 1).expect("installation mixes of a tile")
+                u32::try_from(mixes.len() - 1).expect("installation mixes of a tile")
             });
             periods.push((index, period, row));
         }
@@ -274,6 +284,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             head_of(record, reaches_past(record, mine))
         })
         .collect();
+    let wide_mix = mixes.len() > WIDE_MIX_THRESHOLD;
     let blocks = boxes.len().div_ceil(BOXES_PER_BLOCK);
     let mut bytes = Vec::with_capacity(
         HEADER_BYTES
@@ -281,7 +292,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
             + MIX_BYTES * mixes.len()
             + BLOCK_BYTES * blocks
             + (1 + BOX_BYTES) * boxes.len()
-            + PERIOD_BYTES * periods.len()
+            + period_bytes(wide_mix) * periods.len()
             + FLIGHT_BYTES * flights.len()
             + PIECE_BYTES * pieces.len()
             + WIDE_BYTES * wide.len(),
@@ -321,7 +332,7 @@ pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece])
         write_box(&mut bytes, record, band as u8);
     }
     for &(index, period, mix) in &periods {
-        write_period(&mut bytes, &boxes[index], period, mix);
+        write_period(&mut bytes, &boxes[index], period, mix, wide_mix);
     }
     for flight in flights {
         u24(&mut bytes, flight.icao, "ICAO address");
