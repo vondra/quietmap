@@ -10,6 +10,7 @@ use crate::passes::PASSES_AT_ONCE;
 use crate::points::PointPainter;
 use crate::quiet::QuietBlocks;
 use crate::square::Square;
+use popup::obstacles::{BuildingParts, Footprint};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -29,9 +30,55 @@ fn ground_energy(layers: &[f64; LAYERS]) -> f64 {
         .sum()
 }
 
+/// Indoor pixels with one physical exterior, even when the input names several buildings together.
+pub(crate) struct BuildingPixels {
+    footprint: Footprint,
+    pixels: Vec<usize>,
+}
+
+pub(crate) fn building_pixels(
+    square: &Square,
+    n: usize,
+    indoor: Vec<(usize, u64)>,
+) -> Vec<BuildingPixels> {
+    let mut by_record = HashMap::<u64, Vec<usize>>::new();
+    for (pixel, id) in indoor {
+        by_record.entry(id).or_default().push(pixel);
+    }
+    let mut records: Vec<_> = by_record.into_iter().collect();
+    records.sort_unstable_by_key(|(id, _)| *id);
+    records
+        .into_par_iter()
+        .flat_map_iter(|(id, pixels)| {
+            let parts = match square.obstacles.building_parts(id) {
+                BuildingParts::One(footprint) => return vec![BuildingPixels { footprint, pixels }],
+                BuildingParts::Locate(parts) => parts,
+            };
+            let mut by_part = vec![Vec::new(); parts.len()];
+            for pixel in pixels {
+                let point = metres_at(
+                    square,
+                    n,
+                    (pixel % n) as f64 + 0.5,
+                    (pixel / n) as f64 + 0.5,
+                );
+                if let Some(index) = square.obstacles.part_at_indoor_point(&parts, point) {
+                    by_part[index].push(pixel);
+                }
+            }
+            parts
+                .into_iter()
+                .zip(by_part)
+                .filter(|(_, pixels)| !pixels.is_empty())
+                .map(|(footprint, pixels)| BuildingPixels { footprint, pixels })
+                .collect()
+        })
+        .collect()
+}
+
 /// A façade receiver chosen to be painted: its building, its point, the pixel it lies in.
 pub(crate) struct FacadeCandidate {
-    footprint: u64,
+    building: usize,
     point: Point,
     pixel: usize,
     exact: bool,
@@ -46,14 +93,8 @@ pub(crate) fn facade_candidates(
     square: &Square,
     n: usize,
     pixels: &[Option<Painted>],
-    indoor: &[(usize, u64)],
+    buildings: &[BuildingPixels],
 ) -> Result<Vec<FacadeCandidate>, String> {
-    let mut first: HashMap<u64, usize> = HashMap::new();
-    for &(at, footprint) in indoor {
-        first.entry(footprint).or_insert(at);
-    }
-    let mut buildings: Vec<(u64, usize)> = first.into_iter().collect();
-    buildings.sort_unstable();
     // A pixel's shorter side (m): half of it in front of a receiver lies in the pixel it faces.
     let pixel_m = shortest_pixel_side_metres(square, n);
     let in_front = |position: [f64; 2], bearing_deg: f64| -> f64 {
@@ -65,13 +106,12 @@ pub(crate) fn facade_candidates(
         let painted = pixel_of(square, n, front).and_then(|at| pixels[at].as_ref());
         painted.map_or(0.0, |(layers, _)| ground_energy(layers))
     };
-    let chosen: Vec<Vec<FacadeCandidate>> = (buildings.par_iter())
-        .map(|&(footprint, at)| -> Result<_, String> {
-            let inside = metres_at(square, n, (at % n) as f64 + 0.5, (at / n) as f64 + 0.5);
-            let Some(building) = square.obstacles.enclosing_building(inside)? else {
-                return Ok(Vec::new());
-            };
-            let receivers = square.obstacles.facade_receivers(&building)?;
+    let chosen: Vec<Vec<FacadeCandidate>> = buildings
+        .par_iter()
+        .enumerate()
+        .map(|(index, pixels)| -> Result<_, String> {
+            let building = &pixels.footprint;
+            let receivers = square.obstacles.facade_receivers(building)?;
             if receivers.is_empty() {
                 return Ok(Vec::new());
             }
@@ -81,10 +121,10 @@ pub(crate) fn facade_candidates(
                 .flat_map(|ring| &ring.points)
                 .any(|&position| pixel_of(square, n, position).is_none())
             {
-                let point = crate::boundary_facades::choose(square, &building, &receivers)?;
+                let point = crate::boundary_facades::choose(square, building, &receivers)?;
                 let pixel = crate::boundary_facades::background_pixel(square, n, point.position);
                 return Ok(vec![FacadeCandidate {
-                    footprint,
+                    building: index,
                     point,
                     pixel,
                     exact: true,
@@ -103,8 +143,8 @@ pub(crate) fn facade_candidates(
             (ranked.into_iter())
                 .map(|(_, position, pixel)| {
                     Ok(FacadeCandidate {
-                        footprint,
-                        point: Point::on_facade(square, position, footprint)?,
+                        building: index,
+                        point: Point::on_facade(square, position, building.id)?,
                         pixel,
                         exact: false,
                     })
@@ -122,7 +162,7 @@ pub(crate) fn building_levels(
     painter: &PointPainter,
     quiet: &QuietBlocks,
     candidates: Vec<FacadeCandidate>,
-) -> Result<HashMap<u64, Painted>, String> {
+) -> Result<HashMap<usize, Painted>, String> {
     let (boundary, mut candidates): (Vec<_>, Vec<_>) = candidates
         .into_iter()
         .partition(|candidate| candidate.exact);
@@ -145,7 +185,7 @@ pub(crate) fn building_levels(
     let mut pixels = Vec::with_capacity(candidates.len());
     let points: Vec<Point> = (candidates.into_iter())
         .map(|c| {
-            footprints.push(c.footprint);
+            footprints.push(c.building);
             pixels.push(c.pixel);
             c.point
         })
@@ -171,7 +211,7 @@ pub(crate) fn building_levels(
     let (footprints, points, pixels) = boundary.into_iter().fold(
         (Vec::new(), Vec::new(), Vec::new()),
         |(mut footprints, mut points, mut pixels), candidate| {
-            footprints.push(candidate.footprint);
+            footprints.push(candidate.building);
             points.push(candidate.point);
             pixels.push(candidate.pixel);
             (footprints, points, pixels)
@@ -196,9 +236,9 @@ pub(crate) fn building_levels(
 /// Per building the paint of its loudest candidate from the ground sources (the flights apart),
 /// equal energies to the first.
 fn loudest_by_ground(
-    painted: impl Iterator<Item = (u64, Option<Painted>)>,
-) -> HashMap<u64, Painted> {
-    let mut levels: HashMap<u64, Painted> = HashMap::new();
+    painted: impl Iterator<Item = (usize, Option<Painted>)>,
+) -> HashMap<usize, Painted> {
+    let mut levels: HashMap<usize, Painted> = HashMap::new();
     for (footprint, paint) in painted {
         let Some(paint) = paint else {
             continue;
@@ -211,16 +251,17 @@ fn loudest_by_ground(
     levels
 }
 
-/// Gives each building's pixels (`indoor`: their places and footprints) its level; a building
-/// without one keeps no level.
+/// Pixels without an exposed receiver keep their missing level.
 pub(crate) fn fill_buildings(
     pixels: &mut [Option<Painted>],
-    indoor: &[(usize, u64)],
-    levels: &HashMap<u64, Painted>,
+    buildings: Vec<BuildingPixels>,
+    levels: &HashMap<usize, Painted>,
 ) {
-    for &(at, footprint) in indoor {
-        if let Some(level) = levels.get(&footprint) {
-            pixels[at] = Some(*level);
+    for (index, building) in buildings.into_iter().enumerate() {
+        if let Some(level) = levels.get(&index) {
+            for at in building.pixels {
+                pixels[at] = Some(*level);
+            }
         }
     }
 }
@@ -233,9 +274,7 @@ mod boundary_tests;
 mod tests {
     use super::*;
 
-    /// A building takes its candidate loudest from the ground sources, not the one loudest with
-    /// its flights, and every one of its pixels takes it; a building without a painted candidate
-    /// keeps no level.
+    /// A building takes its loudest ground-source candidate; aircraft do not choose its façade.
     #[test]
     fn a_building_reads_its_loudest_facade() {
         let aircraft = Layer::Aircraft as usize;
@@ -251,11 +290,7 @@ mod tests {
             ]
             .into_iter(),
         );
-        let mut pixels: Vec<Option<Painted>> = vec![None; 6];
-        let indoor = [(1, 7), (2, 7), (4, 9)];
-        fill_buildings(&mut pixels, &indoor, &levels);
-        assert_eq!(pixels[1], Some((loud, [8.0; LAYERS + 1])));
-        assert_eq!(pixels[2], pixels[1]);
-        assert!(pixels[4].is_none() && pixels[0].is_none());
+        assert_eq!(levels[&7], (loud, [8.0; LAYERS + 1]));
+        assert!(!levels.contains_key(&9));
     }
 }

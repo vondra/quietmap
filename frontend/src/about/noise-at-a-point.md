@@ -180,8 +180,9 @@ low.
 ## Where the point is
 
 The point is 4 m above the ground, as the END prescribes. Inside a building the popup answers at
-the building's loudest façade, where a noise map's receivers stand. A building with no exposed
-façade gets no answer. No indoor attenuation is applied.
+the building's loudest façade, where a noise map's receivers stand. When one map record groups
+separate buildings, each has its own façades, including its courtyard walls. A building with no
+exposed façade gets no answer. No indoor attenuation is applied.
 
 <details>
 <summary>How the façade is chosen</summary>

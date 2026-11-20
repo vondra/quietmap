@@ -127,3 +127,35 @@ fn outdoor_roofs_are_not_enclosed_buildings() {
         assert_eq!(scene.enclosing_building([0.0, 0.0]).unwrap(), None);
     });
 }
+
+#[test]
+fn a_courtyard_and_its_island_keep_their_own_walls() {
+    let mut stock = Stock::new();
+    stock.building(9, 10.0, &[square(0.0, 0.0, 50.0), square(0.0, 0.0, 30.0)]);
+    stock.building(9, 10.0, &[square(0.0, 0.0, 15.0), square(0.0, 0.0, 5.0)]);
+    stock.with_scene(|scene| {
+        for (x, extent) in [(40.0, 50.0), (10.0, 15.0)] {
+            let building = scene.enclosing_building([x, 0.0]).unwrap().unwrap();
+            assert_eq!(building.rings.len(), 2);
+            assert!(building.rings[1].hole);
+            let receivers = scene.facade_receivers(&building).unwrap();
+            assert!(receivers.iter().all(|r| r.position[0].abs() < extent + 1.0));
+            assert!(receivers.iter().any(|r| r.position[0] > extent - 1.0));
+        }
+        for x in [0.0, 20.0] {
+            assert!(scene.enclosing_building([x, 0.0]).unwrap().is_none());
+        }
+    });
+}
+
+#[test]
+fn a_courtyard_outside_its_exterior_has_no_assessable_facade() {
+    let mut stock = Stock::new();
+    stock.building(9, 10.0, &[square(0.0, 0.0, 15.0), square(150.0, 0.0, 10.0)]);
+    stock.with_scene(|scene| {
+        let known = scene.enclosing_building([0.0, 0.0]).unwrap().unwrap();
+        assert!(!scene.facade_receivers(&known).unwrap().is_empty());
+        let unresolved = scene.enclosing_building([150.0, 0.0]).unwrap().unwrap();
+        assert!(scene.facade_receivers(&unresolved).unwrap().is_empty());
+    });
+}

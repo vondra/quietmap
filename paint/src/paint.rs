@@ -21,7 +21,7 @@
 //! click inside it is answered ([`crate::buildings`]).
 
 use crate::blocks::meets;
-use crate::buildings::{building_levels, facade_candidates, fill_buildings};
+use crate::buildings::{building_levels, building_pixels, facade_candidates, fill_buildings};
 use crate::corner_sources::{Corner, sector_of};
 use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all, loud_pairs};
 use crate::flight_spectra::FlightSpectra;
@@ -433,9 +433,10 @@ pub fn paint_pixels(
             pixels[at] = Some(paint);
         }
     }
-    let candidates = facade_candidates(square, n, &pixels, &indoor)?;
+    let buildings = building_pixels(square, n, indoor);
+    let candidates = facade_candidates(square, n, &pixels, &buildings)?;
     let levels = building_levels(&painter, &quiet, candidates)?;
-    fill_buildings(&mut pixels, &indoor, &levels);
+    fill_buildings(&mut pixels, buildings, &levels);
     let cells = PaintedCells::from_painted(pixels.into_par_iter().enumerate().map(
         |(at, pixel)| match pixel {
             Some(paint) => Some(paint),

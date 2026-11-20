@@ -10,6 +10,7 @@
 mod containment;
 mod crossings;
 mod facades;
+mod footprint_parts;
 mod reflection;
 mod reflection_coverage;
 mod skyline;
@@ -19,6 +20,7 @@ mod tile;
 
 pub use containment::{Footprint, FootprintRing};
 pub use facades::{FACADE_RECEIVER_OFFSET_M, FacadeReceiver};
+pub use footprint_parts::BuildingParts;
 pub use physics::reflection::REFLECTION_MAX_DB;
 
 use tile::SceneTile;
@@ -137,7 +139,7 @@ pub struct Scene<'a> {
     radius: i64,
     /// Row-major over tile offsets `-radius..=radius`.
     slots: Vec<Slot<'a>>,
-    widest_footprint_steps: i64,
+    widest_outline_steps: i64,
 }
 
 impl<'a> Scene<'a> {
@@ -153,7 +155,7 @@ impl<'a> Scene<'a> {
             origin_cell_in_centre: [column % CELLS_PER_SIDE, row % CELLS_PER_SIDE],
             radius: 0,
             slots: vec![Slot::NotRead],
-            widest_footprint_steps: 0,
+            widest_outline_steps: 0,
         }
     }
 
@@ -171,7 +173,7 @@ impl<'a> Scene<'a> {
         for (tile, prepared) in prepared {
             match prepared {
                 Some((scene_tile, widest)) => {
-                    self.widest_footprint_steps = self.widest_footprint_steps.max(widest);
+                    self.widest_outline_steps = self.widest_outline_steps.max(widest);
                     self.put(tile, Slot::Read(Box::new(scene_tile)));
                 }
                 None => self.put(tile, Slot::Empty),

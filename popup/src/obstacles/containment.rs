@@ -1,7 +1,7 @@
 //! Footprint containment by crossing parity along the eastward half-line.
 
-use super::{Scene, cell_of};
-use tiles::obstacles::{CELL_STEPS, EnvelopeClass, OutlineKind};
+use super::{BuildingParts, Scene, cell_of, footprint_parts::eastward_crossing_x};
+use tiles::obstacles::{CELL_STEPS, EnvelopeClass};
 
 /// A building footprint in click metres.
 #[derive(Clone, Debug, PartialEq)]
@@ -9,8 +9,7 @@ pub struct Footprint {
     pub id: u64,
     pub height_m: f64,
     pub envelope: EnvelopeClass,
-    /// Every ring as stored: each part's exterior followed by its holes, closed (the first point
-    /// repeated last).
+    /// This building's closed exterior followed by its courtyards.
     pub rings: Vec<FootprintRing>,
 }
 
@@ -79,7 +78,7 @@ impl<'a> Scene<'a> {
 
     /// Whether every receiver in the metre rectangle is outdoors without reflection: no edge
     /// in its reflection windows or containment walks. A footprint can cover the rectangle
-    /// without an edge inside it, so the eastward walk still extends by the widest footprint.
+    /// without an edge inside it, so the eastward walk still extends by the widest ring.
     pub fn is_open_rectangle(&self, low: [f64; 2], high: [f64; 2]) -> bool {
         let a = self.lattice.steps(low);
         let b = self.lattice.steps(high);
@@ -93,7 +92,7 @@ impl<'a> Scene<'a> {
         let mut last = cell_of([0, 1].map(|axis| a[axis].max(b[axis]) + padding[axis]));
         // The coverage's bilinear prefix can read just beyond a reflection window. Unknown
         // cells prevent the shortcut; the ordinary receiver still checks the cells it needs.
-        last[0] += (self.widest_footprint_steps + 2 * CELL_STEPS - 1) / CELL_STEPS;
+        last[0] += (self.widest_outline_steps + 2 * CELL_STEPS - 1) / CELL_STEPS;
         for row in first[1]..=last[1] {
             for column in first[0]..=last[0] {
                 let Ok(cell) = self.tile_at([column, row]) else {
@@ -113,8 +112,8 @@ impl<'a> Scene<'a> {
     /// from `point` (scene steps). Holes share their footprint's id, so a courtyard reads outside;
     /// a vertex on the half-line counts by the half-open rule `(y0 > y) != (y1 > y)` (transit
     /// once, tangent twice or never); an edge counts only in the cell holding its crossing (it is
-    /// listed in every cell it passes); footprints starting east of the point are skipped, so the
-    /// walk, as long as the widest footprint plus a cell, sees every crossing of the others.
+    /// listed in every cell it passes); rings starting east of the point are skipped, so the
+    /// walk, as long as the widest ring plus a cell, sees every crossing of the others.
     fn footprint_parities(
         &self,
         point: [f64; 2],
@@ -122,10 +121,10 @@ impl<'a> Scene<'a> {
         parities: &mut Vec<Parity>,
     ) -> Result<(), String> {
         parities.clear();
-        let [x, y] = point;
+        let x = point[0];
         let cell_steps = CELL_STEPS as f64;
         let [first_column, row] = cell_of(point);
-        let reach = (self.widest_footprint_steps + CELL_STEPS) as f64;
+        let reach = (self.widest_outline_steps + CELL_STEPS) as f64;
         let last_column = ((x + reach) / cell_steps).floor() as i64;
         for column in first_column..=last_column {
             let Some((tile, index)) = self.tile_at([column, row])? else {
@@ -136,7 +135,7 @@ impl<'a> Scene<'a> {
             for run in tile.obstacles.cell_runs(index) {
                 let outline = run.outline as usize;
                 let record = tile.obstacles.outline(outline);
-                let west = (tile.offset[0] + i64::from(tile.footprint_west[outline])) as f64;
+                let west = (tile.offset[0] + i64::from(tile.outline_west[outline])) as f64;
                 if !record.kind.is_building() || record.height_m <= min_height_m || west > x {
                     continue;
                 }
@@ -144,13 +143,12 @@ impl<'a> Scene<'a> {
                 let mut a = tile.vertex(first);
                 for next in first + 1..=first + usize::from(run.edge_count) {
                     let b = tile.vertex(next);
-                    let crossing_x = ((a[1] > y) != (b[1] > y))
-                        .then(|| a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]));
+                    let crossing_x = eastward_crossing_x(a, b, point);
                     a = b;
                     let Some(crossing_x) = crossing_x else {
                         continue;
                     };
-                    if crossing_x <= x || crossing_x < cell_west || crossing_x >= cell_east {
+                    if crossing_x < cell_west || crossing_x >= cell_east {
                         continue;
                     }
                     match parities
@@ -208,32 +206,22 @@ impl<'a> Scene<'a> {
     pub fn enclosing_building(&self, point: [f64; 2]) -> Result<Option<Footprint>, String> {
         let mut parities = Vec::new();
         self.footprint_parities(self.lattice.steps(point), 0.0, &mut parities)?;
-        Ok(tallest_enclosed(&parities).map(|winner| self.footprint(winner)))
-    }
-
-    /// Every ring of a footprint from every read tile storing it, copies once, tiles in id order.
-    fn footprint(&self, parity: &Parity) -> Footprint {
-        let mut rings: Vec<FootprintRing> = Vec::new();
-        for (_, tile) in self.read_tiles() {
-            for index in tile.outlines_of(parity.footprint_id) {
-                let record = tile.obstacles.outline(index);
-                let vertices = record.first_vertex..record.first_vertex + record.vertex_count;
-                let ring = FootprintRing {
-                    hole: record.kind == OutlineKind::Hole,
-                    points: vertices
-                        .map(|v| self.lattice.metres(tile.vertex(v)))
-                        .collect(),
-                };
-                if !rings.contains(&ring) {
-                    rings.push(ring);
-                }
-            }
-        }
-        Footprint {
-            id: parity.footprint_id,
-            height_m: parity.height_m,
-            envelope: parity.envelope,
-            rings,
-        }
+        let Some(winner) = tallest_enclosed(&parities) else {
+            return Ok(None);
+        };
+        let footprint = match self.building_parts(winner.footprint_id) {
+            BuildingParts::One(footprint) => footprint,
+            BuildingParts::Locate(mut parts) => self
+                .part_at_indoor_point(&parts, point)
+                .map(|index| parts.swap_remove(index))
+                // A stray courtyard can give odd parity outside every exterior. No façade is known.
+                .unwrap_or_else(|| Footprint {
+                    id: winner.footprint_id,
+                    height_m: winner.height_m,
+                    envelope: winner.envelope,
+                    rings: Vec::new(),
+                }),
+        };
+        Ok(Some(footprint))
     }
 }

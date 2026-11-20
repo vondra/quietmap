@@ -282,8 +282,9 @@ do: the flights do not pick the façade. A building crossing a painting square's
 receivers by the popup's rule, using the 100 ground-source pieces with the greatest bound at any
 façade. Its chosen receiver computes every loud ground source and the flights exactly; only its
 background hum and flight spectrum use the nearest pixel's fields. Both halves therefore choose
-from the complete building, even when its loudest façade is in the neighbouring square. New
-painting uses this rule; existing squares keep their earlier façade choice until repainted.
+from the complete building, even when its loudest façade is in the neighbouring square. Separate
+buildings listed together in the source map each take their own façade. Existing squares get the
+new façade choice when they are repainted.
 
 A pixel's loudness is computed as the popup computes it, at a coarser grain: the levels over time
 in steps of 2 dB and four groups of the day's hours, one of the
