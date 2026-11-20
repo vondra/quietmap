@@ -68,7 +68,7 @@ fn row(class: u8, height_tag_m: f64, floors: u8, ground_activity: bool) -> Build
         ring: Vec::new(),
         height_tag_m,
         floors,
-        storeys: floors,
+        storeys: 0,
         area_m2: Some(1_000.0),
         class,
         ground_activity,
@@ -311,10 +311,11 @@ fn shops_and_the_buildings_of_bars_and_restaurants_run_their_plant_in_its_hours(
     let (lat, lon) = (50.0, 14.5);
     let climate = climate_around(lat, lon);
     let at = crate::dev4::degrees_to_z30(lat, lon);
-    let building = |class: u8, floors: u8| BuildingRow {
+    let building = |class: u8, storeys: u8| BuildingRow {
         centroid: at,
         area_m2: Some(200.0),
-        ..row(class, 0.0, floors, false)
+        storeys,
+        ..row(class, 0.0, storeys, false)
     };
     let emission = |class: u8, floors: u8, hosted: Option<&PlaceHours>| {
         in_use(building_emission(
@@ -390,4 +391,48 @@ fn a_ground_area_counts_at_most_a_large_stores_floor() {
         emission(1_000.0).unwrap().emitted,
         emission(6_190.0).unwrap().emitted
     );
+}
+
+/// Popup metadata floors match the storeys each branch actually computed with: untagged homes and
+/// offices with two prepared storeys compute and report two storeys, while footprint-scaled
+/// hospitality and untagged area-law classes compute and report one.
+#[test]
+fn metadata_floors_match_the_storeys_used_by_emission() {
+    let (lat, lon) = (50.0, 14.5);
+    let climate = climate_around(lat, lon);
+    let at = crate::dev4::degrees_to_z30(lat, lon);
+    let tables = SourceTables::test_fixture();
+    let untagged = |class: u8, storeys: u8| BuildingRow {
+        centroid: at,
+        area_m2: Some(200.0),
+        storeys,
+        ..row(class, 0.0, 0, false)
+    };
+
+    let home_two = building_emission(&untagged(0, 2), (CZ, &climate, tables), None).unwrap();
+    let home_one = building_emission(&untagged(0, 1), (CZ, &climate, tables), None).unwrap();
+    assert_eq!((home_two.floors, home_one.floors), (2, 1));
+    assert!(
+        steady(&home_two).day_dba > steady(&home_one).day_dba + 2.5,
+        "two prepared storeys double a home's dwellings"
+    );
+
+    let office_two =
+        building_emission(&untagged(COMMERCIAL, 2), (CZ, &climate, tables), None).unwrap();
+    let office_one =
+        building_emission(&untagged(COMMERCIAL, 1), (CZ, &climate, tables), None).unwrap();
+    assert_eq!((office_two.floors, office_one.floors), (2, 1));
+    assert!(
+        in_use(Some(office_two))[0].1.running_dba > in_use(Some(office_one))[0].1.running_dba + 4.0,
+        "two prepared storeys double an office's cooled floor"
+    );
+
+    let hospitality =
+        building_emission(&untagged(HOSPITALITY, 2), (CZ, &climate, tables), None).unwrap();
+    assert_eq!(hospitality.floors, 1);
+
+    let school = building_emission(&untagged(3, 2), (CZ, &climate, tables), None).unwrap();
+    let school_one = building_emission(&untagged(3, 1), (CZ, &climate, tables), None).unwrap();
+    assert_eq!(school.floors, 1);
+    assert_eq!(steady(&school).day_dba, steady(&school_one).day_dba);
 }

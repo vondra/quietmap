@@ -117,20 +117,24 @@ pub fn building_emission(
         area_m2
     };
     let (lat, lon) = z30_corner_degrees(row.centroid.0, row.centroid.1);
-    let emitted = match row.class {
+    let (emitted, floors) = match row.class {
         class if is_home(class) => {
-            let (dwellings, _) =
-                building_load(&tables.trips, row.class, row.storeys.max(1), Some(area_m2));
+            let storeys = row.storeys.max(1);
+            let (dwellings, _) = building_load(&tables.trips, row.class, storeys, Some(area_m2));
             let uses = dwelling_plant(tables, country_iso, climate.degree_days(lat, lon));
-            Emitted::Steady(plant_sound_power(&uses, dwellings)?)
+            (
+                Emitted::Steady(plant_sound_power(&uses, dwellings)?),
+                if row.ground_activity { 0 } else { storeys },
+            )
         }
         COMMERCIAL | HOSPITALITY => {
-            // Unknown storeys count one: the 8 m height of an untagged building is no floor count.
-            let floor_area_m2 = if is_footprint_scaled(row.class) || row.ground_activity {
-                floor_m2
-            } else {
-                area_m2 * f64::from(row.storeys.max(1))
-            };
+            let (floor_area_m2, used_floors) =
+                if is_footprint_scaled(row.class) || row.ground_activity {
+                    (floor_m2, if row.ground_activity { 0 } else { 1 })
+                } else {
+                    let storeys = row.storeys.max(1);
+                    (area_m2 * f64::from(storeys), storeys)
+                };
             let cooling = |open: &WeekHours| {
                 let cooling_degree_days = climate.degree_days(lat, lon).cooling;
                 let cooled_share = cooled_service_share(tables, country_iso);
@@ -154,9 +158,12 @@ pub fn building_emission(
             if plants.is_empty() {
                 return None;
             }
-            Emitted::InUse(plants)
+            (Emitted::InUse(plants), used_floors)
         }
-        _ => Emitted::Steady(building_sound_power(row.class, floor_m2, floors)?),
+        _ => (
+            Emitted::Steady(building_sound_power(row.class, floor_m2, floors)?),
+            floors,
+        ),
     };
     if let Emitted::Steady(sound) = &emitted
         && sound.day_dba < AUDIBILITY_FLOOR_DBA
