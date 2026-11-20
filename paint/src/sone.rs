@@ -301,14 +301,23 @@ pub(crate) fn pixel_sound(
             steady[layer][p] = (steady[layer][p] - left[p]).max(0.0);
         }
     }
-    // Each layer: its steady rest and its groups, its spectrum the exact bands and the rest's.
+    // Each layer: its steady rest and its groups in key order, so a point's totals and
+    // fluctuating-line cutoff depend only on that point, never on prior scratch table capacity.
+    let mut views: Vec<Group> = (groups.iter())
+        .map(|(&key, group_sound)| Group {
+            key,
+            layer: group_sound.layer,
+            energy: group_sound.energy,
+            weather: &group_sound.weather,
+            slant_distance_m: group_sound.slant_distance_m,
+            display: group_sound.display.0,
+        })
+        .collect();
+    views.sort_unstable_by_key(|group| group.key);
     let flights = rest.flights.energy;
     let mut energies = steady;
-    for group_sound in groups.values() {
-        for (total, value) in energies[group_sound.layer as usize]
-            .iter_mut()
-            .zip(group_sound.energy)
-        {
+    for group in &views {
+        for (total, value) in energies[group.layer as usize].iter_mut().zip(group.energy) {
             *total += value;
         }
     }
@@ -322,16 +331,6 @@ pub(crate) fn pixel_sound(
             spectrum: std::array::from_fn(|p| {
                 std::array::from_fn(|b| bands[layer][p][b] + rest.bands[layer][p][b])
             }),
-        })
-        .collect();
-    let views: Vec<Group> = (groups.iter())
-        .map(|(&key, group_sound)| Group {
-            key,
-            layer: group_sound.layer,
-            energy: group_sound.energy,
-            weather: &group_sound.weather,
-            slant_distance_m: group_sound.slant_distance_m,
-            display: group_sound.display.0,
         })
         .collect();
     let passes = |group: &Group| displays.of_group(group);
@@ -348,4 +347,140 @@ pub(crate) fn pixel_sound(
         layer_curves: layer_curves(&sounds, &flight_sound),
         sounds,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::levels::cell;
+    use crate::square::Files;
+    use physics::bands::BANDS;
+    use physics::weather::{COLUMNS, ROWS, WeatherNode, WeatherTable, encode as encode_weather};
+    use popup::release::Release;
+    use tiles::Kind;
+    use tiles::geo::TileId;
+    use tiles::sources::{Attribute, Piece, encode as encode_sources};
+    use tiles::square::write_tiles;
+
+    /// A point's Nden must depend only on that point, never on how many groups an earlier pixel
+    /// put into the reused scratch table (different hash bucket counts previously changed the
+    /// rounding of the per-layer total at the fluctuating-line cutoff, cells 53 vs 79).
+    #[test]
+    fn pixel_sound_does_not_depend_on_prior_scratch_groups() {
+        let root = tempfile::tempdir().unwrap();
+        let year = root.path().join("2026");
+        std::fs::create_dir(&year).unwrap();
+        let weather_bytes = encode_weather(&vec![WeatherNode::default(); ROWS * COLUMNS]);
+        std::fs::write(year.join("weather"), &weather_bytes).unwrap();
+        std::fs::write(year.join("complete"), b"qmsq1\n").unwrap();
+        let weather = WeatherTable::parse(&weather_bytes).unwrap();
+        let tile = TileId { x: 2212, y: 1387 };
+        let keys: [u64; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 13, 14];
+        let attributes: Vec<_> = keys
+            .iter()
+            .map(|&group_key| Attribute {
+                layer: Layer::Industry,
+                height_m: 1.0,
+                ground_percent: 0,
+                platform_half_width_m: 0.0,
+                exclusion_radius_m: 0.0,
+                footprint_id: 0,
+                group_key,
+                emission: [[100.0; BANDS]; PERIODS],
+                display: Vec::new(),
+            })
+            .collect();
+        let pieces: Vec<_> = (0..keys.len() as u32)
+            .map(|attribute| Piece {
+                ends: [[0, 0]; 2],
+                attribute,
+            })
+            .collect();
+        write_tiles(
+            &year,
+            Kind::Sources,
+            &[(tile, encode_sources(&pieces, &attributes, &[]))],
+        )
+        .unwrap();
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let displays = Displays(
+            square
+                .candidates
+                .iter()
+                .map(|c| {
+                    (
+                        (c.display.tile, c.display.attribute),
+                        Passes::Steady(Some([1.0 / 1024.0; PERIODS])),
+                    )
+                })
+                .collect(),
+        );
+        let candidate_of = |key: u64| -> u32 {
+            square
+                .candidates
+                .iter()
+                .position(|c| c.group_key == key)
+                .unwrap() as u32
+        };
+        let point = Point::at(&square, [0.0, 0.0]).unwrap();
+        let target_groups: [(u64, f64); 4] = [(1, 0.05), (14, 9998.9), (4, 0.05), (13, 1.0)];
+        let target_ids: Vec<u32> = target_groups
+            .iter()
+            .map(|&(k, _)| candidate_of(k))
+            .collect();
+        let target_energies: Vec<PairEnergy> = target_groups
+            .iter()
+            .map(|&(_, relative)| {
+                let energy = relative * 1024.0;
+                PairEnergy {
+                    mixed: [energy; PERIODS],
+                    states: [[energy; PERIODS]; 2],
+                }
+            })
+            .collect();
+        let mut bands = [[[0.0; BANDS]; PERIODS]; LAYERS];
+        for period in &mut bands[Layer::Industry as usize] {
+            period[4] = 1024.0 * 10_000.0;
+        }
+        let rest = SoundBesideExactPairs {
+            steady: [[0.0; PERIODS]; LAYERS],
+            bands: [[[0.0; BANDS]; PERIODS]; LAYERS],
+            left_out: NOTHING_LEFT_OUT,
+            flights: FlightSums::default(),
+        };
+        let sound_after = |previous_groups: u64| -> (f64, u8) {
+            let mut scratch = PixelSoundScratch::default();
+            if previous_groups > 0 {
+                let prior_ids: Vec<u32> = (0..previous_groups).map(candidate_of).collect();
+                let prior_energies = vec![PairEnergy::default(); prior_ids.len()];
+                pixel_sound(
+                    &square,
+                    &displays,
+                    &mut scratch,
+                    (&point, 1.0),
+                    (&prior_ids, &prior_energies, &bands),
+                    (&rest, &[0.0; CLASS_THIRDS]),
+                )
+                .unwrap();
+            }
+            let nden = pixel_sound(
+                &square,
+                &displays,
+                &mut scratch,
+                (&point, 1.0),
+                (&target_ids, &target_energies, &bands),
+                (&rest, &[0.0; CLASS_THIRDS]),
+            )
+            .unwrap()
+            .ndens(Resolution::MAP)[LAYERS];
+            (nden, cell(nden))
+        };
+        let (nden_zero, cell_zero) = sound_after(0);
+        let (nden_eight, cell_eight) = sound_after(8);
+        assert_eq!(cell_zero, cell_eight, "Nden {nden_zero} vs {nden_eight}");
+        assert_eq!(cell_zero, 79);
+        assert_eq!(nden_zero, nden_eight);
+    }
 }
