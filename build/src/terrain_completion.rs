@@ -73,15 +73,43 @@ pub fn check(inputs: &YearInputs, root: &Path, required: &[Square]) -> Result<()
     if receipt.layout != tiles::LAYOUT || receipt.manifest_sha256 != expected {
         return Err("terrain completion differs from the selected year or layout".into());
     }
+    let covered = unchanged_squares(root, receipt.squares)?;
+    if required.iter().any(|square| !covered.contains(square)) {
+        return Err("terrain completion does not cover the requested context".into());
+    }
+    Ok(())
+}
+
+/// The squares a receipt lists, each still holding the bytes it recorded.
+fn unchanged_squares(
+    root: &Path,
+    squares: Vec<(u32, u32, Option<u64>)>,
+) -> Result<BTreeSet<Square>, String> {
     let mut covered = BTreeSet::new();
-    for (x, y, bytes) in receipt.squares {
+    for (x, y, bytes) in squares {
         let square = Square { x, y };
         if !covered.insert(square) || size(root, square)? != bytes {
             return Err(format!("terrain completion changed at {x}:{y}"));
         }
     }
-    if required.iter().any(|square| !covered.contains(square)) {
-        return Err("terrain completion does not cover the requested context".into());
+    Ok(covered)
+}
+
+/// Binds finished terrain to the selected manifest without building it again: for a manifest that
+/// changed in nothing the terrain reads (its national models and the rasters), which the caller
+/// checks and records with the run. The old receipt must cover `squares`, every square it lists
+/// still holding the bytes it recorded.
+pub fn rebind(inputs: &YearInputs, root: &Path, squares: &[Square]) -> Result<(), String> {
+    let path = root.join(RECEIPT);
+    let receipt: Receipt =
+        serde_json::from_slice(&fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)
+            .map_err(|e| e.to_string())?;
+    if receipt.layout != tiles::LAYOUT {
+        return Err("terrain completion has another layout".into());
     }
-    Ok(())
+    let covered = unchanged_squares(root, receipt.squares)?;
+    if squares.iter().any(|square| !covered.contains(square)) {
+        return Err("terrain completion does not cover the requested squares".into());
+    }
+    write(inputs, root, squares)
 }

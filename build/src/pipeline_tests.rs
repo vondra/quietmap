@@ -330,6 +330,35 @@ fn finished_terrain_can_feed_an_unfinished_year_but_missing_context_cannot() {
     assert!(crate::terrain_completion::check(&inputs, &terrain, &surrounding).is_err());
 }
 
+/// A manifest edited where the terrain reads nothing (its flight days) refuses the old receipt; rebinding the
+/// unchanged terrain admits it again, and a square changed since the old receipt refuses the rebind.
+#[test]
+fn unchanged_terrain_rebinds_to_an_edited_manifest_but_changed_terrain_does_not() {
+    let temporary = tempfile::tempdir().unwrap();
+    fixture(temporary.path());
+    let path = temporary.path().join("year.json");
+    let inputs =
+        || crate::year::YearInputs::read(&path, &temporary.path().join("sources")).unwrap();
+    let square = Square { x: 255, y: 170 };
+    let terrain = temporary.path().join("terrain");
+    let surrounding = context(&[square], 1);
+    let data = tiles::square::square_path(&terrain, tiles::Kind::Terrain, square);
+    fs::create_dir_all(data.parent().unwrap()).unwrap();
+    fs::write(&data, b"height nodes").unwrap();
+    crate::terrain_completion::write(&inputs(), &terrain, &surrounding).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["flows"]["excluded_days"] = serde_json::json!(["2000-02-11"]);
+    fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(crate::terrain_completion::check(&inputs(), &terrain, &surrounding).is_err());
+    crate::terrain_completion::rebind(&inputs(), &terrain, &surrounding).unwrap();
+    assert!(crate::terrain_completion::check(&inputs(), &terrain, &surrounding).is_ok());
+    value["flows"]["excluded_days"] = serde_json::json!(["2000-02-12"]);
+    fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    fs::write(&data, b"other height nodes").unwrap();
+    assert!(crate::terrain_completion::rebind(&inputs(), &terrain, &surrounding).is_err());
+    assert!(crate::terrain_completion::check(&inputs(), &terrain, &surrounding).is_err());
+}
+
 #[test]
 fn a_missing_declared_wall_file_fails_but_explicit_absence_keeps_mapped_walls() {
     let temporary = tempfile::tempdir().unwrap();

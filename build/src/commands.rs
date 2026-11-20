@@ -52,6 +52,17 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
         }
         return std::fs::write(out, json).map_err(|e| e.to_string());
     }
+    if command == "terrain-receipt" {
+        let inputs = year::YearInputs::read(
+            Path::new(options.get("year")?),
+            Path::new(options.get("sources")?),
+        )?;
+        return crate::terrain_completion::rebind(
+            &inputs,
+            &out,
+            &parse_squares(options.get("squares")?)?,
+        );
+    }
     if command == "complete" {
         let path = Path::new(options.get("year")?);
         let inputs = year::YearInputs::read(path, Path::new(options.get("sources")?))?;
