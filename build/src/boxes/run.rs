@@ -63,6 +63,14 @@ fn format_panic_message(square: Square, payload: &(dyn Any + Send)) -> String {
     format!("square {}/{}: panicked: {message}", square.x, square.y)
 }
 
+/// Drops a caught panic's payload; one whose destructor panics again is forgotten, so neither can
+/// unwind the driver past the square's error (the caveat in `std::panic::catch_unwind`'s documentation).
+fn drop_payload(payload: Box<dyn Any + Send>) {
+    if let Err(again) = catch_unwind(AssertUnwindSafe(move || drop(payload))) {
+        std::mem::forget(again);
+    }
+}
+
 fn run_log(
     square: Square,
     log: &(impl Fn(&str) -> Result<(), String> + Sync),
@@ -76,7 +84,7 @@ fn run_log(
         )),
         Err(payload) => {
             let message = format_panic_message(square, &*payload);
-            let _ = catch_unwind(AssertUnwindSafe(move || drop(payload)));
+            drop_payload(payload);
             Err(message)
         }
     }
@@ -160,7 +168,7 @@ fn build_squares_with_log(
                             // payload: a panicking payload destructor cannot strand the queue.
                             let message = format_panic_message(square, &*payload);
                             reservation.fail(message);
-                            let _ = catch_unwind(AssertUnwindSafe(move || drop(payload)));
+                            drop_payload(payload);
                         }
                     }
                 }
@@ -295,7 +303,9 @@ mod tests {
                 |line| {
                     if line.contains("1/0") {
                         err_about_to_return.wait();
-                        std::thread::sleep(Duration::from_millis(50));
+                        // Square 2's driver records its error right after the barrier; nothing in the
+                        // queue is observable from here, so give it ample time on a loaded machine.
+                        std::thread::sleep(Duration::from_millis(500));
                         panic!("stderr write panicked");
                     }
                     Ok(())
