@@ -460,10 +460,15 @@ fn tied_walls_fixture_encodes_and_agrees_in_either_order_on_cpu() {
     );
     assert_eq!(energies[2], energies[3], "three-way tied orders differ");
 
-    // The old buggy favourable hull popped `(203, 81)` when `(205, 6)` arrived before `(205, 15)`,
-    // collapsing the favourable hull to the single wall `(200, 80)`. Verify that hull shifts the
-    // favourable-state energy observably beyond the card test's order tolerance.
-    let popped = eval(&[(200, 80.0)]);
+    // The old buggy favourable hull popped the second wall when the low tied wall arrived first,
+    // collapsing the favourable hull to the scene's first wall alone. Derive the one-wall control
+    // from `TIED_WALL_CASES[0]` itself so reverting the scene cannot mask a tiny hull difference.
+    assert_eq!(
+        TIED_WALL_CASES[0].1[..2],
+        TIED_WALL_CASES[1].1[..2],
+        "preceding wall pairs must share their first two walls"
+    );
+    let popped = eval(&TIED_WALL_CASES[0].1[..1]);
     let favourable_gap_db = (10.0 * (energies[0].states[1][0] / popped.states[1][0]).log10()).abs();
     assert!(
         favourable_gap_db > 5.0 * TIED_WALL_ORDER_TOLERANCE_DB,
