@@ -229,8 +229,82 @@ fn tied_roof_exits_fixture(
     (root, weather, tile, receiver)
 }
 
+/// Evaluates the single pair `(candidate 0, receiver)` on the card (requesting mixed pair spectra)
+/// and compares both the 9 state sums and all `PERIODS * BANDS` mixed octave energies against
+/// `whole_energy` on the CPU, requiring zero fallback and finite positive values before folding.
+fn evaluate_and_compare_single_pair(
+    gpu: &Gpu,
+    square: &Square,
+    files: &Files,
+    weather: &WeatherTable,
+    receiver: [f64; 2],
+    label: &str,
+) -> ([f32; 9], Vec<f32>) {
+    let device_square = DeviceSquare::upload(gpu, square, files, weather).unwrap();
+    let mut bands = gpu.bands(1).unwrap();
+    let mut pair_spectra = Vec::new();
+    let (energies, failed) = gpu
+        .evaluate_pairs(
+            &device_square,
+            (&[receiver], &[0]),
+            (&[0], &[0], &[0], &[1.0]),
+            &mut bands,
+            Some(&mut pair_spectra),
+        )
+        .unwrap();
+    assert_eq!(
+        failed,
+        vec![0],
+        "{label}: must run on card without fallback"
+    );
+    assert_eq!(
+        pair_spectra.len(),
+        PERIODS * BANDS,
+        "{label}: expected {PERIODS}x{BANDS} mixed octave energies"
+    );
+    let point = Point::with_receiver_properties(square, receiver, 0, 0.0).unwrap();
+    let (expected, expected_bands) =
+        whole_energy(square, &point, 0, &mut Scratch::default()).unwrap();
+    let expected_sums: Vec<_> = expected
+        .mixed
+        .into_iter()
+        .chain(expected.states.into_iter().flatten())
+        .collect();
+    let sum_error = energies[0]
+        .into_iter()
+        .zip(expected_sums)
+        .map(|(card, cpu)| {
+            assert!(
+                card.is_finite() && card > 0.0 && cpu.is_finite() && cpu > 0.0,
+                "{label}: non-positive or non-finite state sum card={card} cpu={cpu}"
+            );
+            (10.0 * (f64::from(card) / cpu).log10()).abs()
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(
+        sum_error < 0.05,
+        "{label}: state sums differ from CPU by {sum_error:.6} dB"
+    );
+    let mut octave_error = 0.0_f64;
+    for (period, cpu_period) in expected_bands.iter().enumerate() {
+        for (band, &cpu) in cpu_period.iter().enumerate() {
+            let card = pair_spectra[period * BANDS + band];
+            assert!(
+                card.is_finite() && card > 0.0 && cpu.is_finite() && cpu > 0.0,
+                "{label}: period {period} band {band} non-positive or non-finite card={card} cpu={cpu}"
+            );
+            octave_error = octave_error.max((10.0 * (f64::from(card) / cpu).log10()).abs());
+        }
+    }
+    assert!(
+        octave_error < 0.05,
+        "{label}: mixed octave spectra differ from CPU by {octave_error:.6} dB"
+    );
+    (energies[0], pair_spectra)
+}
+
 /// Verifies on the CPU that both P3 overflow-order fixtures encode cleanly (ascending footprint
-/// IDs) and yield identical finite positive CPU energies.
+/// IDs) and yield identical finite positive CPU state sums and mixed octave energies.
 #[test]
 fn tied_roof_exits_fixture_encodes_for_both_overflow_orders_on_cpu() {
     let eval = |evict_long_exit| {
@@ -239,22 +313,23 @@ fn tied_roof_exits_fixture_encodes_for_both_overflow_orders_on_cpu() {
         let files = Files::read(&release, tile).unwrap();
         let square = Square::new(&weather, tile, &files).unwrap();
         let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
-        let (energy, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
+        let (energy, bands) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
         for value in energy
             .mixed
             .into_iter()
             .chain(energy.states.into_iter().flatten())
+            .chain(bands.into_iter().flatten())
         {
             assert!(value.is_finite() && value > 0.0, "non-positive {value}");
         }
-        energy
+        (energy, bands)
     };
     assert_eq!(eval(true), eval(false));
 }
 
 /// Two footprints exiting at the same distance across the 16-crossing cell chunk boundary (crossings
 /// 16 and 17 in one grid cell) must stay tied in both overflow orders (eviction and rejection) so
-/// the longer roof is not dropped by `covered_to`.
+/// the longer roof is not dropped by `covered_to`, matching CPU state sums and every mixed octave.
 #[test]
 #[ignore = "requires a CUDA card and NVRTC; run explicitly in the painter release gate"]
 fn tied_roof_exits_at_crossings_16_and_17_match_cpu() {
@@ -264,44 +339,7 @@ fn tied_roof_exits_at_crossings_16_and_17_match_cpu() {
         let release = Release::open(root.path(), "2026").unwrap();
         let files = Files::read(&release, tile).unwrap();
         let square = Square::new(&weather, tile, &files).unwrap();
-        let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
-        let mut bands = gpu.bands(1).unwrap();
-        let (energies, failed) = gpu
-            .evaluate_pairs(
-                &device_square,
-                (&[receiver], &[0]),
-                (&[0], &[0], &[0], &[1.0]),
-                &mut bands,
-                None,
-            )
-            .unwrap();
-        assert_eq!(
-            failed,
-            vec![0],
-            "{label}: must run on card without fallback"
-        );
-        let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
-        let (expected, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
-        let expected: Vec<_> = expected
-            .mixed
-            .into_iter()
-            .chain(expected.states.into_iter().flatten())
-            .collect();
-        let error = energies[0]
-            .into_iter()
-            .zip(expected)
-            .map(|(card, cpu)| {
-                assert!(
-                    card.is_finite() && card > 0.0 && cpu.is_finite() && cpu > 0.0,
-                    "{label}: non-positive or non-finite energy card={card} cpu={cpu}"
-                );
-                (10.0 * (f64::from(card) / cpu).log10()).abs()
-            })
-            .fold(0.0_f64, f64::max);
-        assert!(
-            error < 0.05,
-            "{label}: tied exit across crossings 16 and 17 differs by {error} dB"
-        );
+        evaluate_and_compare_single_pair(&gpu, &square, &files, &weather, receiver, label);
     }
 }
 
@@ -446,51 +484,30 @@ fn tied_walls_in_either_order_match_cpu() {
         let release = Release::open(root.path(), "2026").unwrap();
         let files = Files::read(&release, tile).unwrap();
         let square = Square::new(&weather, tile, &files).unwrap();
-        let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
-        let mut bands = gpu.bands(1).unwrap();
-        let (energies, failed) = gpu
-            .evaluate_pairs(
-                &device_square,
-                (&[receiver], &[0]),
-                (&[0], &[0], &[0], &[1.0]),
-                &mut bands,
-                None,
-            )
-            .unwrap();
-        assert_eq!(failed, vec![0], "{name}: must run on card without fallback");
-        let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
-        let (expected, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
-        let expected: Vec<_> = expected
-            .mixed
-            .into_iter()
-            .chain(expected.states.into_iter().flatten())
-            .collect();
-        let error = energies[0]
-            .into_iter()
-            .zip(expected)
-            .map(|(card, cpu)| {
-                assert!(
-                    card.is_finite() && card > 0.0 && cpu.is_finite() && cpu > 0.0,
-                    "{name}: non-positive or non-finite energy card={card} cpu={cpu}"
-                );
-                (10.0 * (f64::from(card) / cpu).log10()).abs()
-            })
-            .fold(0.0_f64, f64::max);
-        assert!(
-            error < 0.05,
-            "{name}: card differs from CPU by {error:.6} dB"
-        );
-        card_results.push(energies[0]);
+        card_results.push(evaluate_and_compare_single_pair(
+            &gpu, &square, &files, &weather, receiver, name,
+        ));
     }
     for (pair, label) in [((0, 1), "preceding"), ((2, 3), "triple")] {
-        let diff = card_results[pair.0]
+        let sum_diff = card_results[pair.0]
+            .0
             .into_iter()
-            .zip(card_results[pair.1])
+            .zip(card_results[pair.1].0)
             .map(|(a, b)| (10.0 * (f64::from(a) / f64::from(b)).log10()).abs())
             .fold(0.0_f64, f64::max);
         assert!(
-            diff < TIED_WALL_ORDER_TOLERANCE_DB,
-            "{label}: card order diff {diff} dB"
+            sum_diff < TIED_WALL_ORDER_TOLERANCE_DB,
+            "{label}: card state-sum order diff {sum_diff} dB"
+        );
+        let octave_diff = card_results[pair.0]
+            .1
+            .iter()
+            .zip(&card_results[pair.1].1)
+            .map(|(&a, &b)| (10.0 * (f64::from(a) / f64::from(b)).log10()).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            octave_diff < TIED_WALL_ORDER_TOLERANCE_DB,
+            "{label}: card octave order diff {octave_diff} dB"
         );
     }
 }
