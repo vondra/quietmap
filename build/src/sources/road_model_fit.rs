@@ -44,6 +44,7 @@ pub(crate) fn represents_its_class(r: &CountedRow) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MainFitFailure {
     NoRepresentativeRows,
+    NoPositiveTripEnds,
     TooFewCountryRows,
     MissingRuralRows,
     MissingUrbanRows,
@@ -57,6 +58,10 @@ impl MainFitFailure {
                 "no representative rows (random-sample or whole-network coverage > {:.0}%)",
                 REPRESENTATIVE_COVERAGE * 100.0
             ),
+            Self::NoPositiveTripEnds => {
+                "representative rows have no positive trip-end support at any candidate radius"
+                    .into()
+            }
             Self::TooFewCountryRows => {
                 format!("no country has at least {MINIMUM_COUNTRY_ROWS} representative rows")
             }
@@ -77,7 +82,11 @@ impl MainFitFailure {
 /// each country and design at the chosen law.
 fn main_model(class: u8, rows: &[&CountedRow]) -> Result<(MainModel, Value), MainFitFailure> {
     let mut best: Option<(f64, MainModel, usize, f64, Vec<f64>)> = None;
-    let mut reason = MainFitFailure::NoRepresentativeRows;
+    let mut reason = if rows.iter().any(|r| represents_its_class(r)) {
+        MainFitFailure::NoPositiveTripEnds
+    } else {
+        MainFitFailure::NoRepresentativeRows
+    };
     let mut errors = serde_json::Map::new();
     for radius in MAIN_CANDIDATE_RADII {
         let population: Vec<&CountedRow> = rows
@@ -344,7 +353,7 @@ fn missing_main_class_error(
 ) -> anyhow::Error {
     let mut by_country: BTreeMap<[u8; 2], (usize, f64)> = BTreeMap::new();
     for (&(country, row_class, rural_network), &[mapped, counted]) in coverage {
-        if row_class == class && !rural_network && mapped > 0.0 && counted > 0.0 {
+        if row_class == class && !rural_network && mapped > 0.0 {
             by_country.insert(country, (0, counted / mapped));
         }
     }

@@ -361,7 +361,8 @@ fn a_missing_main_class_law_fails_the_fit_naming_the_class_and_coverages() {
     );
     base.extend(major_rows(b"SE", 1, false));
 
-    // Non-representative whole-network rows, plus a mapped country in `coverage` with no fit rows.
+    // Non-representative whole-network rows, plus a mapped country in `coverage` with zero
+    // whole-network counted metres and no fit rows (must still appear at 0.0% coverage).
     let mut missing = base.clone();
     missing.extend(tertiary_rows(b"GB", 0.0).into_iter().map(|row| CountedRow {
         class: 9,
@@ -376,7 +377,7 @@ fn a_missing_main_class_law_fails_the_fit_naming_the_class_and_coverages() {
         ..row
     }));
     let coverage = Coverage::from([
-        ((*b"FR", 9, false), [10_000.0, 420.0]),
+        ((*b"FR", 9, false), [10_000.0, 0.0]),
         ((*b"GB", 9, false), [10_000.0, 300.0]),
         ((*b"SE", 9, false), [10_000.0, 1_200.0]),
     ]);
@@ -387,11 +388,46 @@ fn a_missing_main_class_law_fails_the_fit_naming_the_class_and_coverages() {
     );
     assert!(error.contains("no representative rows"), "{error}");
     assert!(
-        error.contains("FR (0 rows, whole-network coverage 4.2%)"),
+        error.contains("FR (0 rows, whole-network coverage 0.0%)"),
         "{error}"
     );
     assert!(error.contains("GB") && error.contains("3.0%"), "{error}");
     assert!(error.contains("SE") && error.contains("12.0%"), "{error}");
+
+    // A class with no fit rows at all and only a mapped country at 0% coverage must list that
+    // country rather than "countries: none".
+    let zero_only = Coverage::from([((*b"FR", 9, false), [10_000.0, 0.0])]);
+    let error = fit_models(&base, &zero_only).unwrap_err().to_string();
+    assert!(
+        error.contains("FR (0 rows, whole-network coverage 0.0%)"),
+        "{error}"
+    );
+    assert!(!error.contains("countries: none"), "{error}");
+
+    // 500 representative random-sample rows with positive counts but zero trip ends at every
+    // candidate radius must report missing trip-end support rather than "no representative rows".
+    let mut zero_trip_ends = base.clone();
+    zero_trip_ends.extend(
+        tertiary_rows(b"GB", 0.0)
+            .into_iter()
+            .take(500)
+            .map(|row| CountedRow {
+                class: 9,
+                design: SamplingDesign::RandomSample,
+                class_coverage: 0.03,
+                around: [0.0; RADII_M.len()],
+                ..row
+            }),
+    );
+    let error = fit_models(&zero_trip_ends, &coverage)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("main-class 9 could not be fitted"),
+        "{error}"
+    );
+    assert!(error.contains("no positive trip-end support"), "{error}");
+    assert!(!error.contains("no representative rows"), "{error}");
 
     // Representative (random-sample) support with too few rows (< MINIMUM_COUNTRY_ROWS).
     let mut too_few = base.clone();
