@@ -162,19 +162,6 @@ fn deeper_additions(set: &IndexSet, corners: [&Corner; 4]) -> Vec<u32> {
     more
 }
 
-/// The most sources a pixel of a block may trace (its deeper list's count) and whether its corners
-/// leave any out of its exact sources: what a quiet block's test and a pass's bound ask of every
-/// block, without the groups left out (building and sorting those was most of a dense city
-/// square's work on the cores, 2026-10-17).
-pub(crate) fn admission_counts(local: Vec<u32>, corners: [&Corner; 4]) -> (usize, bool) {
-    let (exact, set) = exact_sources(local, corners);
-    let leaves_out = (corners.iter())
-        .flat_map(|corner| corner.ranked.iter().flatten())
-        .any(|source| !set.contains(&source.index));
-    let most = exact.len() + deeper_additions(&set, corners).len();
-    (most, leaves_out)
-}
-
 /// A block's exact sources ([`exact_sources`]) and the energy they leave out at each corner by
 /// layer and direction, of it each source group's.
 pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {

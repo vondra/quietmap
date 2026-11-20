@@ -229,14 +229,15 @@ impl Gpu {
             offsets.iter().map(|&at| &input[at as usize..]),
             &period_groups(),
         );
-        // SAFETY: each buffer is written whole on the stream below before a kernel reads it, the
-        // inputs copied and the answers zeroed.
+        // SAFETY: each buffer is written whole on the stream below before a kernel reads it: the
+        // inputs copied, `mixtures` zeroed for `atomicAdd`, and `pixel_ndens` writes every element
+        // of `ndens`.
         let mut device_input = driver(unsafe { device.alloc::<f32>(input.len()) })?;
         let mut device_offsets = driver(unsafe { device.alloc::<u64>(count) })?;
         let mut device_tasks = driver(unsafe { device.alloc(tasks.len()) })?;
         let mut device_runs = driver(unsafe { device.alloc(runs.len()) })?;
         let mut mixtures = driver(unsafe { device.alloc::<f32>(mixture_floats() * count) })?;
-        let mut ndens = driver(unsafe { device.alloc::<f32>(LOUDNESS_FLOATS * count) })?;
+        let ndens = driver(unsafe { device.alloc::<f32>(LOUDNESS_FLOATS * count) })?;
         let kernel = |name: &str| {
             device
                 .get_func("loudness", name)
@@ -254,7 +255,6 @@ impl Gpu {
             stream.copy(&runs, &mut device_runs)?;
         }
         stream.zero(&mut mixtures)?;
-        stream.zero(&mut ndens)?;
         let pixels_config = LaunchConfig {
             grid_dim: (count as u32, 1, 1),
             block_dim: (32, 1, 1),

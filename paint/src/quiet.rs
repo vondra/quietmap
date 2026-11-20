@@ -34,7 +34,6 @@ impl QuietBlocks {
         let candidates = (0..side * side)
             .into_par_iter()
             .map_init(Vec::new, |near, at| {
-                let (most, leaves_out) = painter.block_admission(near, at);
                 let (x, y) = ((at % side) * grid.block, (at / side) * grid.block);
                 let (low, high) = rectangle_at(
                     square,
@@ -44,22 +43,20 @@ impl QuietBlocks {
                     (x + grid.block) as f64,
                     (y + grid.block) as f64,
                 );
-                (
-                    most == 0 && !leaves_out && square.obstacles.is_open_rectangle(low, high),
-                    most,
-                )
+                !painter.block_has_sources(near, at)
+                    && square.obstacles.is_open_rectangle(low, high)
             })
             .collect::<Vec<_>>();
         let corner_paint = paint_corners(painter)?;
         let mut quiet = Self {
             known_blocks: vec![false; candidates.len()],
             admissions: (0..candidates.len()).map(|_| None).collect(),
-            most_source_counts: candidates.iter().map(|&(_, count)| count).collect(),
+            most_source_counts: vec![0; candidates.len()],
             corner_paint,
             samples: (0..candidates.len()).map(|_| None).collect(),
         };
         let mut block_ids = Vec::new();
-        for (at, (background, _)) in candidates.into_iter().enumerate() {
+        for (at, background) in candidates.into_iter().enumerate() {
             if background {
                 quiet.known_blocks[at] = true;
             } else {
@@ -69,6 +66,9 @@ impl QuietBlocks {
         let background = quiet.known_blocks.iter().filter(|&&quiet| quiet).count();
         let candidate_count = block_ids.len();
         let sampled = sample_block_pixels(painter, block_ids, &quiet.corner_paint)?;
+        for (at, most) in sampled.most_source_counts {
+            quiet.most_source_counts[at] = most;
+        }
         for (at, block) in sampled.admissions {
             quiet.admissions[at] = Some(block);
         }

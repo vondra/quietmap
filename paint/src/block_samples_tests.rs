@@ -253,6 +253,13 @@ fn a_road_across_open_ground_is_blended_by_its_free_field() {
         without_a_pass > 480,
         "{without_a_pass} of 512 pixels without a pass"
     );
+    // Completed source blocks keep their deepest source count for façade-pass bounds, while
+    // open background blocks keep zero.
+    let mut near = Vec::new();
+    for at in 0..(grid.pixels / grid.block) * (grid.pixels / grid.block) {
+        let block = painter.block(&mut near, at);
+        assert_eq!(quiet.most_source_counts[at], block.most);
+    }
     let corners = corners_of(&square, grid, None).unwrap().unwrap();
     let painted = paint_pixels(&square, grid, None, corners).unwrap();
     let traced = crate::etalon::etalon(&square, grid, None, 1).unwrap();

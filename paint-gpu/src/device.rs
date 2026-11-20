@@ -437,9 +437,11 @@ impl Gpu {
         let device = &self.device;
         let receiver_count = receivers.len();
         // SAFETY (the buffers): each is written whole on the pairs' stream below before a kernel
-        // reads it: the inputs copied, the pairs' counts, failures, bands and sums zeroed;
-        // `point_receivers` writes every receiver's failure and every receiver that does not
-        // fail, which alone are read.
+        // reads it: the inputs copied; `sums` zeroed (read back unwritten when `total == 0`, and
+        // `atomicAdd`ed by `ray_transfers`); `point_receivers` writes every receiver's failure and
+        // every receiver that does not fail, which alone are read; pass-1 `pair_rays` writes every
+        // pair's `ray_counts` and `failed` and only the slots pass-2 reads (`0..4*count`), then
+        // `pair_bands` is zeroed before `ray_transfers` `atomicAdd`s into it.
         let mut device_xy = driver(unsafe { device.alloc::<f32>(xy.len()) })?;
         let mut device_own = driver(unsafe { device.alloc::<u64>(receiver_count) })?;
         let point_receivers =
@@ -449,12 +451,12 @@ impl Gpu {
         let mut device_candidates = driver(unsafe { device.alloc::<u32>(count) })?;
         let mut device_points = driver(unsafe { device.alloc::<u32>(count) })?;
         let mut device_band_weights = driver(unsafe { device.alloc::<f32>(count) })?;
-        let mut ray_counts = driver(unsafe { device.alloc::<u32>(count) })?;
-        let mut failed = driver(unsafe { device.alloc::<u32>(count) })?;
+        let ray_counts = driver(unsafe { device.alloc::<u32>(count) })?;
+        let failed = driver(unsafe { device.alloc::<u32>(count) })?;
         // The pairs' bands, which keep each pair's first rays from its counting to its writing
-        // (kernels/paint.cu PAIR_RAY_SLOTS), zeroed again before the rays fill them.
+        // (kernels/paint.cu PAIR_RAY_SLOTS), zeroed before the rays fill them when `total > 0`.
         let mut pair_bands = driver(unsafe { device.alloc::<f32>(PERIODS * BANDS * count) })?;
-        // Zeroed: a launch without rays reads them back unwritten.
+        // Zeroed: a launch without rays or a zero-ray pair reads them back unwritten.
         let mut sums = driver(unsafe { device.alloc::<f32>(PAIR_SUMS * count) })?;
         let kernel = |name: &str| {
             device
@@ -472,7 +474,7 @@ impl Gpu {
         // declared before the stream as every buffer is: the stream synchronizes on the host if
         // any copy is still pending and joins the default stream before they are freed.
         let mut offsets: Vec<u32>;
-        let (mut device_offsets, mut rays): (CudaSlice<u32>, CudaSlice<u8>);
+        let (mut device_offsets, rays): (CudaSlice<u32>, CudaSlice<u8>);
         // The pairs' kernels on a stream of their own, forked once their buffers are allocated:
         // another pass's or square's kernels run beside them on the card
         // ([`crate::stream::ForkedStream::copy`] on why its inputs go there too).
@@ -487,9 +489,6 @@ impl Gpu {
             stream.copy(points, &mut device_points)?;
             stream.copy(band_weights, &mut device_band_weights)?;
         }
-        stream.zero(&mut ray_counts)?;
-        stream.zero(&mut failed)?;
-        stream.zero(&mut pair_bands)?;
         stream.zero(&mut sums)?;
         // SAFETY (each launch): every buffer holds what the kernel indexes and is declared before
         // `stream`: 2 coordinates, an owner, a receiver (RECEIVER_BYTES) and a failure per
@@ -533,7 +532,8 @@ impl Gpu {
             (*offset, total) = (total, total + *offset);
         }
         if total > 0 {
-            // SAFETY: copied and zeroed whole on the stream before the kernels below read them.
+            // SAFETY: `device_offsets` is copied whole and pass-2 `pair_rays` writes all `total`
+            // `PairRay` records (24 bytes, no padding) before `ray_transfers` reads them.
             device_offsets = driver(unsafe { device.alloc::<u32>(count) })?;
             rays = driver(unsafe { device.alloc::<u8>(PAIR_RAY_BYTES * total as usize) })?;
             // The stream may use them only after their allocation: the pool may give them memory
@@ -541,7 +541,6 @@ impl Gpu {
             stream.wait_for_default()?;
             // SAFETY: `stream` is never leaked and drops before `offsets` and `device_offsets`.
             unsafe { stream.copy(&offsets, &mut device_offsets) }?;
-            stream.zero(&mut rays)?;
             unsafe {
                 stream.launch(
                     kernel("pair_rays")?,
@@ -601,7 +600,11 @@ impl Gpu {
         let sums = stream.read_back(&sums)?;
         let failed = stream.read_back(&failed)?;
         if let Some(spectra) = pair_spectra {
-            *spectra = stream.read_back(&pair_bands)?;
+            *spectra = if total > 0 {
+                stream.read_back(&pair_bands)?
+            } else {
+                vec![0.0; PERIODS * BANDS * count]
+            };
         }
         stream.finish()?;
         Ok((

@@ -570,3 +570,212 @@ fn tied_walls_in_either_order_match_cpu() {
         );
     }
 }
+
+/// Builds a synthetic tile with a degenerate (<1 mm) line, a point source, and a wide road behind
+/// alternating walls whose skyline splits its quadrature past `PAIR_RAY_SLOTS` (6 rays).
+fn mixed_ray_counts_fixture() -> (tempfile::TempDir, WeatherTable, TileId, [f64; 2]) {
+    let root = tempfile::tempdir().unwrap();
+    let year = root.path().join("2026");
+    std::fs::create_dir(&year).unwrap();
+    let weather_bytes = encode_weather(&vec![WeatherNode::default(); ROWS * COLUMNS]);
+    std::fs::write(year.join("weather"), &weather_bytes).unwrap();
+    std::fs::write(year.join("complete"), b"qmsq1\n").unwrap();
+    let weather = WeatherTable::parse(&weather_bytes).unwrap();
+    let tile = TileId { x: 2212, y: 1387 };
+    // Four short walls across the sight line to the wide road: creates > 6 alternating runs.
+    let outlines: Vec<_> = [-420i16, -180, 60, 300]
+        .into_iter()
+        .enumerate()
+        .map(|(k, x)| Outline {
+            footprint_id: (k + 1) as u64,
+            kind: OutlineKind::Wall,
+            envelope: EnvelopeClass::Residential,
+            height_m: 12.0,
+            vertices: vec![[x, 120], [x + 90, 120]],
+        })
+        .collect();
+    write_tiles(
+        &year,
+        Kind::Obstacles,
+        &[(tile, encode_obstacles(&outlines))],
+    )
+    .unwrap();
+    let road = Attribute {
+        layer: Layer::Road,
+        height_m: 0.05,
+        ground_percent: 0,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 0.0,
+        footprint_id: 0,
+        group_key: 1,
+        emission: [[90.0; BANDS]; PERIODS],
+        display: Vec::new(),
+    };
+    let point_source = Attribute {
+        layer: Layer::Industry,
+        height_m: 2.0,
+        ground_percent: 0,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 0.0,
+        footprint_id: 0,
+        group_key: 2,
+        emission: [[95.0; BANDS]; PERIODS],
+        display: Vec::new(),
+    };
+    write_tiles(
+        &year,
+        Kind::Sources,
+        &[(
+            tile,
+            encode_sources(
+                &[
+                    Piece {
+                        ends: [[0, 200], [1, 200]],
+                        attribute: 0,
+                    },
+                    Piece {
+                        ends: [[0, 200], [0, 200]],
+                        attribute: 1,
+                    },
+                    Piece {
+                        ends: [[-1000, 300], [1000, 300]],
+                        attribute: 0,
+                    },
+                ],
+                &[road, point_source],
+                &[],
+            ),
+        )],
+    )
+    .unwrap();
+    (root, weather, tile, [0.0, 0.0])
+}
+
+/// Finds `(short_line, point_source, wide_road)` candidate indices in `mixed_ray_counts_fixture`
+/// regardless of source-encoder ordering.
+fn mixed_ray_counts_indices(square: &Square) -> (u32, u32, u32) {
+    let point = square
+        .candidates
+        .iter()
+        .position(|c| !c.line)
+        .expect("point candidate") as u32;
+    let wide = square
+        .candidates
+        .iter()
+        .position(|c| {
+            c.line
+                && (c.ends_m[1][0] - c.ends_m[0][0]).hypot(c.ends_m[1][1] - c.ends_m[0][1]) > 50.0
+        })
+        .expect("wide road candidate") as u32;
+    let short = square
+        .candidates
+        .iter()
+        .enumerate()
+        .position(|(i, c)| c.line && i as u32 != wide)
+        .expect("short line candidate") as u32;
+    (short, point, wide)
+}
+
+/// Verifies on the CPU that the wide road behind four walls emits strictly more than 6 rays
+/// (forcing pass-2 `pair_rays` rewalk past `PAIR_RAY_SLOTS` on the card).
+#[test]
+fn wide_road_behind_walls_exceeds_cached_pair_ray_slots_on_cpu() {
+    let (root, weather, tile, receiver) = mixed_ray_counts_fixture();
+    let release = Release::open(root.path(), "2026").unwrap();
+    let files = Files::read(&release, tile).unwrap();
+    let square = Square::new(&weather, tile, &files).unwrap();
+    let (_, _, wide) = mixed_ray_counts_indices(&square);
+    let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+    let mut cand = square.candidates[wide as usize].clone();
+    cand.distance_m = cand.distance_from(point.position);
+    let mut rays = 0usize;
+    popup::evaluate::source_rays(
+        &point.receiver(&square),
+        &cand,
+        &square.attributes[cand.attribute],
+        &mut Scratch::default(),
+        &mut |_| rays += 1,
+    )
+    .unwrap();
+    assert!(rays > 6, "expected > 6 quadrature rays, got {rays}");
+}
+
+/// Verifies that removing dead device memsets keeps unwritten outputs clean: an all-zero-ray
+/// launch returns zero sums and spectra, and a mixed launch with a 0-ray degenerate line, a
+/// failed receiver, a 1-ray point, and a >6-ray line matches CPU sums and mixed octave spectra.
+#[test]
+#[ignore = "requires a CUDA card and NVRTC; run explicitly in the painter release gate"]
+fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
+    let gpu = Gpu::new(0).unwrap();
+    let (root, weather, tile, receiver) = mixed_ray_counts_fixture();
+    let release = Release::open(root.path(), "2026").unwrap();
+    let files = Files::read(&release, tile).unwrap();
+    let mut square = Square::new(&weather, tile, &files).unwrap();
+    let (short_cand, point_cand, wide_cand) = mixed_ray_counts_indices(&square);
+    // Collapse the short line to < 1 mm so `line_piece_geometry` emits 0 rays with status 0.
+    square.candidates[short_cand as usize].ends_m = [[0.0, 20.0], [1e-4, 20.0]];
+    assert!(square.candidates[short_cand as usize].line);
+    let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
+    let outside = [1.0e7, 0.0];
+
+    // 1. All-zero-ray launch (`total == 0`) with `pair_spectra` requested.
+    let mut bands = gpu.bands(2).unwrap();
+    let mut spectra = vec![123.0; 4];
+    let (sums, failed) = gpu
+        .evaluate_pairs(
+            &device_square,
+            (&[receiver, outside], &[0, 0]),
+            (&[short_cand, point_cand], &[0, 1], &[0, 1], &[1.0, 1.0]),
+            &mut bands,
+            Some(&mut spectra),
+        )
+        .unwrap();
+    assert_eq!(failed, vec![0, paint_gpu::device::FAILED_NOT_READ]);
+    assert_eq!(sums, vec![[0.0; 9]; 2]);
+    assert_eq!(spectra, vec![0.0; 2 * PERIODS * BANDS]);
+
+    // 2. Mixed launch (`total > 0`): 0-ray line, failed receiver, 1-ray point, >6-ray rewalk line.
+    let mut bands = gpu.bands(2).unwrap();
+    let mut spectra = Vec::new();
+    let (sums, failed) = gpu
+        .evaluate_pairs(
+            &device_square,
+            (&[receiver, outside], &[0, 0]),
+            (
+                &[short_cand, point_cand, point_cand, wide_cand],
+                &[0, 1, 0, 0],
+                &[0, 1, 0, 0],
+                &[1.0; 4],
+            ),
+            &mut bands,
+            Some(&mut spectra),
+        )
+        .unwrap();
+    assert_eq!(failed, vec![0, paint_gpu::device::FAILED_NOT_READ, 0, 0]);
+    assert_eq!(sums[0], [0.0; 9]);
+    assert_eq!(&spectra[0..PERIODS * BANDS], &[0.0; PERIODS * BANDS]);
+    let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+    for (pair_idx, cand_idx) in [(2usize, point_cand), (3, wide_cand)] {
+        let (expected, expected_bands) =
+            whole_energy(&square, &point, cand_idx, &mut Scratch::default()).unwrap();
+        let expected_sums: Vec<_> = expected
+            .mixed
+            .into_iter()
+            .chain(expected.states.into_iter().flatten())
+            .collect();
+        for (card, cpu) in sums[pair_idx].into_iter().zip(expected_sums) {
+            let err = (10.0 * (f64::from(card) / cpu).log10()).abs();
+            assert!(err < 0.05, "pair {pair_idx} sum diff {err} dB");
+        }
+        for (period, cpu_period) in expected_bands.iter().enumerate() {
+            for (band, &cpu) in cpu_period.iter().enumerate() {
+                let card = spectra[(pair_idx * PERIODS + period) * BANDS + band];
+                let err = (10.0 * (f64::from(card) / cpu).log10()).abs();
+                assert!(
+                    err < 0.05,
+                    "pair {pair_idx} p{period} b{band} diff {err} dB"
+                );
+            }
+        }
+    }
+}

@@ -18,10 +18,12 @@ use crate::points::PointPainter;
 use crate::quiet_samples::{Lattice, QuietSamples, sample_positions};
 use rayon::prelude::*;
 
-/// Each block's exact samples and checked patches; rejected patches retain their other pixels.
+/// Each block's exact samples and checked patches; rejected patches retain their other pixels,
+/// and every source block returns its deepest source count for pass and façade bounds.
 pub(crate) struct SampledBlocks {
     pub blocks: Vec<(usize, QuietSamples)>,
     pub admissions: Vec<(usize, Block)>,
+    pub most_source_counts: Vec<(usize, usize)>,
 }
 
 pub(crate) fn sample_block_pixels(
@@ -173,6 +175,12 @@ pub(crate) fn sample_block_pixels(
                 }
             }
         }
+        let most_source_counts: Vec<(usize, usize)> = chunk
+            .iter()
+            .copied()
+            .zip(&blocks)
+            .map(|(at, block)| (at, block.most))
+            .collect();
         let admissions = chunk
             .iter()
             .copied()
@@ -180,15 +188,21 @@ pub(crate) fn sample_block_pixels(
             .zip(retain)
             .filter_map(|(block, retain)| retain.then_some(block))
             .collect::<Vec<_>>();
-        Ok((accepted, admissions))
+        Ok((accepted, admissions, most_source_counts))
     })?;
     let mut blocks = Vec::new();
     let mut admissions = Vec::new();
-    for (_, (accepted, retained)) in sampled {
+    let mut most_source_counts = Vec::new();
+    for (_, (accepted, retained, counts)) in sampled {
         admissions.extend(retained);
         blocks.extend(accepted);
+        most_source_counts.extend(counts);
     }
-    Ok(SampledBlocks { blocks, admissions })
+    Ok(SampledBlocks {
+        blocks,
+        admissions,
+        most_source_counts,
+    })
 }
 
 /// The sample positions painted first (indices of `sample_positions`): the lattice at every second

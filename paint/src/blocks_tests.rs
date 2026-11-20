@@ -139,10 +139,7 @@ fn a_block_leaves_out_what_its_corners_do_not_trace_by_direction() {
     let block = admit(vec![7], [&corner; 4]);
     assert_eq!(block.exact, vec![1, 3, 7]);
     // A deeper trace would add the second: the most a pixel may trace is four.
-    assert_eq!(
-        (block.most, admission_counts(vec![7], [&corner; 4])),
-        (4, (4, true))
-    );
+    assert_eq!(block.most, 4);
     let road = Layer::Road as usize;
     for at_corner in block.left_out.iter() {
         assert_eq!(at_corner[road][EAST as usize], [even(30.0 * k); PERIODS]);
@@ -157,7 +154,15 @@ fn a_block_leaves_out_what_its_corners_do_not_trace_by_direction() {
     assert!((bins.iter()).all(|bin| bin.sector == EAST && bin.values == [even(30.0 * k); 3]));
     let all = admit(vec![1, 2, 3, 4], [&corner; 4]);
     assert!(all.left_groups.is_empty() && all.left_bins.is_empty());
-    assert_eq!(admission_counts(vec![1, 2, 3, 4], [&corner; 4]), (4, false));
+    assert_eq!(all.most, 4);
+    assert!(
+        all.left_out
+            .iter()
+            .flatten()
+            .flatten()
+            .flatten()
+            .all(|&v| v == 0.0)
+    );
 }
 
 /// A pixel tracing deeper adds each corner's loudest until what the corner has not traced is a
@@ -184,7 +189,6 @@ fn a_deeper_trace_leaves_a_fifth_of_the_quietest_corners_layer_and_a_twentieth_o
         assert_eq!(corner.traced, traced);
         let block = admit(vec![], [&corner; 4]);
         assert_eq!((block.exact.clone(), block.most), (traced, deeper.len()));
-        assert_eq!(admission_counts(vec![], [&corner; 4]), (deeper.len(), true));
         let deep = admit_deeper(&block, [&corner; 4]);
         assert_eq!(
             (deep.exact.clone(), deep.most),

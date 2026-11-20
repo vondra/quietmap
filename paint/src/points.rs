@@ -7,7 +7,7 @@
 //! the corners; its loudness by the popup's model ([`crate::sone`]), or given by the caller.
 //! Checked interpolation lives in [`crate::quiet`].
 
-use crate::blocks::{Block, admission_counts, admit, meets};
+use crate::blocks::{Block, admit, meets};
 use crate::buildings::ground_energy;
 use crate::corner_sources::Corner;
 use crate::exact::{Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Point};
@@ -17,7 +17,9 @@ use crate::lattice_blend::Anchor;
 use crate::levels::Painted;
 use crate::paint::{Corners, Grid, corner_weights, rectangle_at};
 use crate::passes::paint_passes;
-use crate::sone::{LeftOut, PixelSoundScratch, SoundBesideExactPairs, pixel_sound};
+use crate::sone::{
+    LeftOut, NOTHING_LEFT_OUT, PixelSoundScratch, SoundBesideExactPairs, pixel_sound,
+};
 use crate::square::Square;
 use crate::traced::{Traced, heard_among};
 use physics::bands::{BANDS, PERIODS, lden_energy};
@@ -78,11 +80,29 @@ impl PointPainter<'_> {
         admit(local, around)
     }
 
-    /// The most sources a pixel of block `at` may trace and whether its corners leave any out of
-    /// its exact sources ([`admission_counts`]).
-    pub fn block_admission(&self, near: &mut Vec<u32>, at: usize) -> (usize, bool) {
-        let (local, around) = self.block_sources(near, at);
-        admission_counts(local, around)
+    /// Whether any loud source reaches block `at`'s corners or crosses it or the eight blocks
+    /// around: a block without one is a background block where no obstacle crosses it, decided
+    /// without building its admission twice.
+    pub fn block_has_sources(&self, near: &mut Vec<u32>, at: usize) -> bool {
+        let (square, grid) = (self.square, self.grid);
+        let blocks = grid.pixels / grid.block;
+        let (i, j) = (at % blocks, at / blocks);
+        let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
+            .map(|(di, dj)| &self.corners.corners[(j + dj) * (blocks + 1) + i + di]);
+        if around
+            .iter()
+            .any(|corner| corner.ranked.iter().any(|layer| !layer.is_empty()))
+        {
+            return true;
+        }
+        let b = grid.block as f64;
+        let (x, y) = (i as f64 * b, j as f64 * b);
+        let (low, high) = rectangle_at(square, grid.pixels, x - b, y - b, x + 2.0 * b, y + 2.0 * b);
+        square.index.within(low, high, 0.0, near);
+        near.iter().any(|&index| {
+            let [a, b] = square.candidates[index as usize].ends_m;
+            meets(a, b, low, high)
+        })
     }
 
     /// Block `at`'s own sources (crossing it or the eight around) and its four corners.
@@ -197,12 +217,16 @@ impl PointPainter<'_> {
             // the block's far sources heard here against the corners' blend of them. A pixel
             // behind a wall hears a direction's far sources 10-20 dB under their blend, and the
             // left-out blended from the corners put Dobris's total 7 phon over the etalon there.
-            let reaching = block.reaching(corner_weights(fx, fy), heard_among(list, energies));
-            for (layer, left) in steady.iter_mut().zip(&reaching.energy) {
-                for (period, left) in layer.iter_mut().zip(left) {
-                    *period += left.iter().sum::<f64>();
+            // When `left_groups` is empty, `left_out` is identically zero (`blocks.rs:leave_out`).
+            let reaching = (!block.left_groups.is_empty()).then(|| {
+                let reaching = block.reaching(corner_weights(fx, fy), heard_among(list, energies));
+                for (layer, left) in steady.iter_mut().zip(&reaching.energy) {
+                    for (period, left) in layer.iter_mut().zip(left) {
+                        *period += left.iter().sum::<f64>();
+                    }
                 }
-            }
+                reaching
+            });
             let flights_around = around.map(|corner| &corners.flights[corner]);
             let layers = crate::levels::layer_energy(
                 square,
@@ -251,30 +275,36 @@ impl PointPainter<'_> {
                 return Ok((k, layers, Loudness::Known(ndens)));
             }
             // The left-out's bands: each corner's in the shape of all it hears in that layer.
-            let left = &reaching.energy;
             let (_, mut bands) = corners.hum.at(x, y);
-            for layer in 0..LAYERS {
-                for p in 0..PERIODS {
-                    for (c, &corner) in around.iter().enumerate() {
-                        let energy = left[layer][p][c];
-                        let shape = &corners.corner_bands[corner][layer][p];
-                        let sum = corners.corner_band_sums[corner][layer][p];
-                        if energy > 0.0 && sum > 0.0 {
-                            for b in 0..BANDS {
-                                bands[layer][p][b] += energy * shape[b] / sum;
+            let left_out = match &reaching {
+                Some(reaching) => {
+                    let left = &reaching.energy;
+                    for layer in 0..LAYERS {
+                        for p in 0..PERIODS {
+                            for (c, &corner) in around.iter().enumerate() {
+                                let energy = left[layer][p][c];
+                                let shape = &corners.corner_bands[corner][layer][p];
+                                let sum = corners.corner_band_sums[corner][layer][p];
+                                if energy > 0.0 && sum > 0.0 {
+                                    for b in 0..BANDS {
+                                        bands[layer][p][b] += energy * shape[b] / sum;
+                                    }
+                                }
                             }
                         }
                     }
+                    LeftOut {
+                        groups: &block.left_groups,
+                        bins: &block.left_bins,
+                        transfers: &reaching.transfers,
+                    }
                 }
-            }
+                None => NOTHING_LEFT_OUT,
+            };
             let rest = SoundBesideExactPairs {
                 steady,
                 bands,
-                left_out: LeftOut {
-                    groups: &block.left_groups,
-                    bins: &block.left_bins,
-                    transfers: &reaching.transfers,
-                },
+                left_out,
                 flights: blend_flights(flights_around, fx, fy),
             };
             self.sounds.fetch_add(1, Ordering::Relaxed);
