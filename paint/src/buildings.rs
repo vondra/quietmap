@@ -29,27 +29,6 @@ fn ground_energy(layers: &[f64; LAYERS]) -> f64 {
         .sum()
 }
 
-/// Which of a pass's receivers some building may still read (`footprints[k]` receiver `k`'s
-/// building, `ground[k]` its [`ground_energy`]): each building's loudest among them, the first of
-/// equals, as [`loudest_by_ground`] keeps it over all the passes; and every receiver of a
-/// building with an energy that is not a number here, which no comparison ranks.
-fn loudest_receivers(footprints: &[u64], ground: &[f64]) -> Vec<bool> {
-    let mut loudest: HashMap<u64, (usize, bool)> = HashMap::new();
-    for (k, &footprint) in footprints.iter().enumerate() {
-        let (kept, unranked) = loudest.entry(footprint).or_insert((k, false));
-        *unranked |= ground[k].is_nan();
-        if ground[k] > ground[*kept] {
-            *kept = k;
-        }
-    }
-    (footprints.iter().enumerate())
-        .map(|(k, footprint)| {
-            let (kept, unranked) = loudest[footprint];
-            unranked || kept == k
-        })
-        .collect()
-}
-
 /// A façade receiver chosen to be painted: its building, its point, the pixel it lies in.
 pub(crate) struct FacadeCandidate {
     footprint: u64,
@@ -183,12 +162,7 @@ pub(crate) fn building_levels(
             .flat_map(|(slot, (_, range))| range.clone().map(move |k| (slot, k)))
             .map(|(slot, k)| (slot, pixels[k]))
             .collect();
-        // Only a building's loudest receiver of the pass can be the one its pixels read.
-        let loudest = |layers: &[[f64; LAYERS]]| {
-            let ground: Vec<f64> = layers.iter().map(ground_energy).collect();
-            loudest_receivers(&footprints[points_run.clone()], &ground)
-        };
-        let paint = painter.paint_chosen(&pass, &points[points_run.clone()], &places, &loudest)?;
+        let paint = painter.paint(&pass, &points[points_run.clone()], &places)?;
         Ok((points_run, paint))
     })?;
     let painted = (painted.into_iter())
@@ -256,5 +230,32 @@ pub(crate) fn fill_buildings(
 mod boundary_tests;
 
 #[cfg(test)]
-#[path = "buildings_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+
+    /// A building takes its candidate loudest from the ground sources, not the one loudest with
+    /// its flights, and every one of its pixels takes it; a building without a painted candidate
+    /// keeps no level.
+    #[test]
+    fn a_building_reads_its_loudest_facade() {
+        let aircraft = Layer::Aircraft as usize;
+        let mut loud = [1000.0; LAYERS];
+        loud[aircraft] = 1.0;
+        let mut overflown = [10.0; LAYERS];
+        overflown[aircraft] = 1e9;
+        let levels = loudest_by_ground(
+            [
+                (7, Some((overflown, [1.0; LAYERS + 1]))),
+                (7, Some((loud, [8.0; LAYERS + 1]))),
+                (9, None),
+            ]
+            .into_iter(),
+        );
+        let mut pixels: Vec<Option<Painted>> = vec![None; 6];
+        let indoor = [(1, 7), (2, 7), (4, 9)];
+        fill_buildings(&mut pixels, &indoor, &levels);
+        assert_eq!(pixels[1], Some((loud, [8.0; LAYERS + 1])));
+        assert_eq!(pixels[2], pixels[1]);
+        assert!(pixels[4].is_none() && pixels[0].is_none());
+    }
+}
