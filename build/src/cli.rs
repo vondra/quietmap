@@ -36,6 +36,8 @@ impl Arguments {
                         "note",
                         "scratch",
                         "road-library-path",
+                        "from-manifest-sha256",
+                        "completion",
                     ]
                     .contains(&key)
                     {

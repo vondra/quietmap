@@ -130,12 +130,19 @@ pub fn rebind(
     let files = record["files"]
         .as_array_mut()
         .ok_or("the completion record lists no files")?;
+    // The receipt itself must be the one the step recorded, unless it already names the selected
+    // manifest: then an earlier migration stopped between its two writes and this one completes it.
+    let migrated = receipt.manifest_sha256 == selected;
     let mut receipt_rows = 0;
     for file in files.iter() {
         let listed = Path::new(file[0].as_str().ok_or("a completion row names no file")?);
         if listed == path {
             receipt_rows += 1;
-        } else if crate::pipeline_files::stamp(listed).map_err(error)? != *file {
+            if migrated {
+                continue;
+            }
+        }
+        if crate::pipeline_files::stamp(listed).map_err(error)? != *file {
             return Err(format!("completed output changed: {}", listed.display()));
         }
     }
@@ -145,7 +152,7 @@ pub fn rebind(
             path.display()
         ));
     }
-    if receipt.manifest_sha256 != selected {
+    if !migrated {
         receipt.manifest_sha256 = selected;
         crate::pipeline_files::write_json(
             &path,

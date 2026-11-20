@@ -331,8 +331,10 @@ fn finished_terrain_can_feed_an_unfinished_year_but_missing_context_cannot() {
 }
 
 /// A manifest edited where the terrain reads nothing (its flight days) refuses the old receipt and
-/// the old receipt's stamp in the terrain step's completion record; the migration admits both again,
-/// the step is reused, a retry is harmless, and a wrong source manifest or a changed square refuses.
+/// the old receipt's stamp in the terrain step's completion record. One `terrain-receipt` command
+/// admits both again and the runner reuses the step; a migration stopped between its two writes is
+/// completed by a retry; a wrong source manifest, a receipt edited since the step, and a changed
+/// square refuse.
 #[test]
 fn finished_terrain_migrates_to_an_edited_manifest_and_its_step_is_reused() {
     let temporary = tempfile::tempdir().unwrap();
@@ -357,20 +359,51 @@ fn finished_terrain_migrates_to_an_edited_manifest_and_its_step_is_reused() {
         crate::pipeline_files::stamp(&receipt).unwrap(),
     ];
     crate::pipeline_files::write_json(&completion, &json!({"files": files})).unwrap();
+    let recorded = fs::read(&completion).unwrap();
+    let original = fs::read(&receipt).unwrap();
     let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     value["flows"]["excluded_days"] = json!(["2000-02-11"]);
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     assert!(crate::terrain_completion::check(&inputs(), &terrain, &surrounding).is_err());
-    let wrong = "0".repeat(64);
-    assert!(crate::terrain_completion::rebind(&inputs(), &terrain, &wrong, &completion).is_err());
+    let command = |from: &str| {
+        let arguments: Vec<String> = [
+            "terrain-receipt",
+            "--year",
+            path.to_str().unwrap(),
+            "--sources",
+            temporary.path().join("sources").to_str().unwrap(),
+            "--out",
+            terrain.to_str().unwrap(),
+            "--from-manifest-sha256",
+            from,
+            "--completion",
+            completion.to_str().unwrap(),
+        ]
+        .map(String::from)
+        .to_vec();
+        crate::commands::run(&arguments)
+    };
+    assert!(command(&"0".repeat(64)).is_err());
     std::thread::sleep(std::time::Duration::from_millis(20));
-    crate::terrain_completion::rebind(&inputs(), &terrain, &old, &completion).unwrap();
-    crate::terrain_completion::rebind(&inputs(), &terrain, &old, &completion).unwrap();
+    command(&old).unwrap();
     assert!(crate::terrain_completion::check(&inputs(), &terrain, &surrounding).is_ok());
     run.set_executable_for_test(Path::new("/bin/false"));
     run.execute("terrain", &terrain, &[], None).unwrap();
+    // Stopped between the receipt and the record: the record still holds the old receipt's stamp.
+    fs::write(&completion, &recorded).unwrap();
+    assert!(run.execute("terrain", &terrain, &[], None).is_err());
+    command(&old).unwrap();
+    run.execute("terrain", &terrain, &[], None).unwrap();
+    // A receipt edited since the step recorded it is no receipt to migrate.
+    fs::write(&receipt, &original).unwrap();
+    fs::write(&completion, &recorded).unwrap();
+    let mut edited: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    edited["squares"] = json!([]);
+    fs::write(&receipt, serde_json::to_vec(&edited).unwrap()).unwrap();
+    assert!(command(&old).is_err());
+    fs::write(&receipt, &original).unwrap();
     fs::write(&data, b"other height nodes").unwrap();
-    assert!(crate::terrain_completion::rebind(&inputs(), &terrain, &old, &completion).is_err());
+    assert!(command(&old).is_err());
 }
 
 #[test]
