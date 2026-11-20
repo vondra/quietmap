@@ -9,8 +9,9 @@
 
 use crate::dev4::Square;
 use std::any::Any;
+use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, PoisonError};
 
 /// A square to build: the work its size stands for (any unit, compared between squares) and the
 /// memory it may take at most (bytes).
@@ -27,13 +28,58 @@ struct Queue {
     failure: Option<String>,
 }
 
-fn panic_message(square: Square, payload: Box<dyn Any + Send>) -> String {
+/// One square's reserved memory: returns the reservation, records any failure and wakes waiting
+/// drivers under one lock on every exit (normal return, error or unwind).
+struct Reservation<'a> {
+    queue: &'a Mutex<Queue>,
+    changed: &'a Condvar,
+    memory: u64,
+    failure: Option<String>,
+}
+
+impl Reservation<'_> {
+    fn fail(mut self, error: String) {
+        self.failure = Some(error);
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        let mut queue = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(error) = self.failure.take() {
+            queue.failure.get_or_insert(error);
+        }
+        queue.memory += self.memory;
+        self.changed.notify_all();
+    }
+}
+
+fn format_panic_message(square: Square, payload: &(dyn Any + Send)) -> String {
     let message = payload
         .downcast_ref::<&str>()
         .copied()
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("unknown panic");
     format!("square {}/{}: panicked: {message}", square.x, square.y)
+}
+
+fn run_log(
+    square: Square,
+    log: &(impl Fn(&str) -> Result<(), String> + Sync),
+    line: &str,
+) -> Result<(), String> {
+    match catch_unwind(AssertUnwindSafe(|| log(line))) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!(
+            "square {}/{}: log write failed: {error}",
+            square.x, square.y
+        )),
+        Err(payload) => {
+            let message = format_panic_message(square, &*payload);
+            let _ = catch_unwind(AssertUnwindSafe(move || drop(payload)));
+            Err(message)
+        }
+    }
 }
 
 /// Builds every job's square with `build`, which returns the line to log; stops starting squares
@@ -43,14 +89,16 @@ pub fn build_squares(
     budget: u64,
     build: impl Fn(Square) -> Result<String, String> + Sync,
 ) -> Result<(), String> {
-    build_squares_with_log(jobs, budget, build, |line| eprintln!("{line}"))
+    build_squares_with_log(jobs, budget, build, |line| {
+        writeln!(std::io::stderr(), "{line}").map_err(|error| error.to_string())
+    })
 }
 
 fn build_squares_with_log(
     mut jobs: Vec<Job>,
     budget: u64,
     build: impl Fn(Square) -> Result<String, String> + Sync,
-    log: impl Fn(&str) + Sync,
+    log: impl Fn(&str) -> Result<(), String> + Sync,
 ) -> Result<(), String> {
     for job in &mut jobs {
         job.memory = job.memory.min(budget);
@@ -65,50 +113,61 @@ fn build_squares_with_log(
     // Twice the pool's threads: a small square's serial part (reading, the day loop) runs on its
     // driver while the others keep the pool busy.
     let drivers = 2 * rayon::current_num_threads();
-    let next_job = || -> Option<Job> {
-        let mut queue = queue.lock().expect("the queue");
+    let next_job = || -> Option<(Square, Reservation<'_>)> {
+        let mut queue_guard = queue.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
-            if queue.jobs.is_empty() || queue.failure.is_some() {
+            if queue_guard.jobs.is_empty() || queue_guard.failure.is_some() {
                 return None;
             }
-            let left = queue.memory;
-            if let Some(index) = queue.jobs.iter().position(|job| job.memory <= left) {
-                let job = queue.jobs.remove(index);
-                queue.memory -= job.memory;
-                return Some(job);
+            let left = queue_guard.memory;
+            if let Some(index) = queue_guard.jobs.iter().position(|job| job.memory <= left) {
+                let job = queue_guard.jobs.remove(index);
+                queue_guard.memory -= job.memory;
+                return Some((
+                    job.square,
+                    Reservation {
+                        queue: &queue,
+                        changed: &changed,
+                        memory: job.memory,
+                        failure: None,
+                    },
+                ));
             }
-            queue = changed.wait(queue).expect("the queue");
+            queue_guard = changed
+                .wait(queue_guard)
+                .unwrap_or_else(PoisonError::into_inner);
         }
     };
     std::thread::scope(|scope| {
         for _ in 0..drivers {
             scope.spawn(|| {
-                while let Some(job) = next_job() {
-                    let result = catch_unwind(AssertUnwindSafe(|| build(job.square)))
-                        .unwrap_or_else(|payload| Err(panic_message(job.square, payload)));
-                    // Return the reservation and wake waiting drivers before logging so that a
-                    // panicking write (such as stderr on a full disk) cannot strand the queue.
-                    let line = {
-                        let mut queue = queue.lock().expect("the queue");
-                        let line = match result {
-                            Ok(line) => Some(line),
-                            Err(error) => {
+                while let Some((square, reservation)) = next_job() {
+                    match catch_unwind(AssertUnwindSafe(|| build(square))) {
+                        Ok(Ok(line)) => {
+                            // Return the reservation and wake waiters before logging so a failed
+                            // or slow log write cannot strand another square behind this budget.
+                            drop(reservation);
+                            if let Err(error) = run_log(square, &log, &line) {
+                                let mut queue =
+                                    queue.lock().unwrap_or_else(PoisonError::into_inner);
                                 queue.failure.get_or_insert(error);
-                                None
+                                changed.notify_all();
                             }
-                        };
-                        queue.memory += job.memory;
-                        changed.notify_all();
-                        line
-                    };
-                    if let Some(line) = line {
-                        log(&line);
+                        }
+                        Ok(Err(error)) => reservation.fail(error),
+                        Err(payload) => {
+                            // Extract the message and release the reservation before dropping the
+                            // payload: a panicking payload destructor cannot strand the queue.
+                            let message = format_panic_message(square, &*payload);
+                            reservation.fail(message);
+                            let _ = catch_unwind(AssertUnwindSafe(move || drop(payload)));
+                        }
                     }
                 }
             });
         }
     });
-    let queue = queue.into_inner().expect("the queue");
+    let queue = queue.into_inner().unwrap_or_else(PoisonError::into_inner);
     assert_eq!(queue.memory, budget);
     match queue.failure {
         Some(error) => Err(error),
@@ -173,31 +232,105 @@ mod tests {
         assert_eq!(ran, 2);
     }
 
-    /// A panicking log write after a finished square cannot strand a waiting square behind its
-    /// memory reservation.
+    /// A failing log write after a finished square returns an ordinary error and releases the
+    /// square's memory first, so a waiting square is never stranded behind it.
     #[test]
-    fn a_panicking_log_line_does_not_strand_waiting_squares() {
-        let (panicked, ran) = run_within(Duration::from_secs(5), || {
+    fn a_failing_log_line_returns_an_error_without_stranding_waiting_squares() {
+        let (error, ran) = run_within(Duration::from_secs(5), || {
+            let ran = AtomicUsize::new(0);
+            let job2_started = Barrier::new(2);
+            let jobs = vec![job(1, 20, 100), job(2, 10, 1)];
+            let error = build_squares_with_log(
+                jobs,
+                100,
+                |square| {
+                    ran.fetch_add(1, Ordering::Relaxed);
+                    if square.x == 2 {
+                        job2_started.wait();
+                    }
+                    Ok(format!("square {}/0: ok", square.x))
+                },
+                |line| {
+                    if line.contains("1/0") {
+                        // Must run after square 1 returned its full-budget reservation, otherwise
+                        // square 2 can never start and this blocks until the deadline.
+                        job2_started.wait();
+                        Err("no space left on device".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+            (error, ran.load(Ordering::Relaxed))
+        });
+        assert!(error.contains("1/0"), "{error}");
+        assert!(error.contains("no space left on device"), "{error}");
+        assert_eq!(ran, 2);
+    }
+
+    /// A failing log line (even a panicking logger) beside an already recorded build error never
+    /// unwinds out of `build_squares` and preserves the build's own diagnostic.
+    #[test]
+    fn a_failing_build_keeps_its_error_beside_a_failing_log() {
+        let error = run_within(Duration::from_secs(5), || {
+            let both_started = Barrier::new(2);
+            let err_about_to_return = Barrier::new(2);
+            let jobs = vec![job(1, 30, 50), job(2, 20, 50), job(3, 10, 50)];
+            build_squares_with_log(
+                jobs,
+                100,
+                |square| match square.x {
+                    1 => {
+                        both_started.wait();
+                        Ok("square 1/0: ok".into())
+                    }
+                    2 => {
+                        both_started.wait();
+                        err_about_to_return.wait();
+                        Err("square 2/0: corrupt input".into())
+                    }
+                    other => Ok(format!("square {other}/0: ok")),
+                },
+                |line| {
+                    if line.contains("1/0") {
+                        err_about_to_return.wait();
+                        std::thread::sleep(Duration::from_millis(50));
+                        panic!("stderr write panicked");
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap_err()
+        });
+        assert!(error.contains("square 2/0: corrupt input"), "{error}");
+    }
+
+    /// A build that unwinds with a `panic_any` payload whose own destructor panics still returns
+    /// its full-budget reservation, wakes waiting drivers and fails with the square's error.
+    #[test]
+    fn a_panicking_payload_destructor_still_returns_its_memory() {
+        struct DropPanics;
+        impl Drop for DropPanics {
+            fn drop(&mut self) {
+                panic!("payload drop panicked");
+            }
+        }
+
+        let (error, ran) = run_within(Duration::from_secs(5), || {
             let ran = AtomicUsize::new(0);
             let jobs = vec![job(1, 20, 100), job(2, 10, 1)];
-            let outcome = catch_unwind(AssertUnwindSafe(|| {
-                build_squares_with_log(
-                    jobs,
-                    100,
-                    |square| {
-                        ran.fetch_add(1, Ordering::Relaxed);
-                        Ok(format!("square {}/0: ok", square.x))
-                    },
-                    |line| {
-                        if line.contains("1/0") {
-                            panic!("no space left on device");
-                        }
-                    },
-                )
-            }));
-            (outcome.is_err(), ran.load(Ordering::Relaxed))
+            let error = build_squares(jobs, 100, |square| {
+                ran.fetch_add(1, Ordering::Relaxed);
+                match square.x {
+                    1 => std::panic::panic_any(DropPanics),
+                    other => Ok(format!("square {other}/0: ok")),
+                }
+            })
+            .unwrap_err();
+            (error, ran.load(Ordering::Relaxed))
         });
-        assert!(panicked);
-        assert_eq!(ran, 2);
+        assert!(error.contains("1/0"), "{error}");
+        assert_eq!(ran, 1);
     }
 }
