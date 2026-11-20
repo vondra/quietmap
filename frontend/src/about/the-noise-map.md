@@ -320,9 +320,9 @@ the cores. A square's samples, then its pixels, then its
 façades run in passes, four at once, at most two launching their pairs on the card while the
 others list and sound their pixels on the cores beside them; a pass gathers its next launch's pairs while the card evaluates the
 one before. Each launch of source pairs or pixel sounds copies its own inputs and clears its
-temporary working sums in its own queue on the card; aircraft uploads stay on the default stream,
-and point-band sums that span launches are zeroed and downloaded on the default stream while each
-pair launch adds to them on its own queue.
+temporary working sums in its own queue on the card; aircraft uploads stay on the default stream.
+The point-band sums that span launches are zeroed and downloaded on the default stream; a pair launch
+that adds to them does so in its own queue.
 The cores assemble sounds directly into chunks of at most 8,192 pixels, preparing the next chunk
 while the card computes the current chunk's loudness.
 The passes return in spatial order, so equal façade energies keep the same first candidate.

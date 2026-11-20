@@ -121,7 +121,8 @@ pub(crate) fn download_default<T: DeviceRepr + Default + Clone>(
 }
 
 pub(crate) struct ForkedStream<'a, 'host> {
-    /// `Some` while open; taken once in [`Self::close`] after any pending work is confirmed done.
+    /// `Some` while open; [`Self::close`] takes it first and keeps it alive while it confirms any
+    /// pending work, then drops it.
     stream: Option<CudaStream>,
     device: &'a Arc<CudaDevice>,
     event: &'a Mutex<()>,
