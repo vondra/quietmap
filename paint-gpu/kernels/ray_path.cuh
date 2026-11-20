@@ -142,8 +142,25 @@ __device__ float single_path_difference(const StateRay& ray, const RayFrame& f, 
     return 2.0f * (arc_excess(ray, along) + arc_excess(ray, f.chord_m - along)) - excess - arcs - f.arc_chord_m;
 }
 
+__device__ __forceinline__ u32 push_hull(StateStream& st, BandState& band, const StateRay& ray,
+                                         const HullEntry& entry, const Moments& prefix) {
+    while (band.depth >= 2 && under_state_ray(ray, st.hull[band.depth - 2], entry.x, entry.z, st.hull[band.depth - 1])) band.depth--;
+    if (band.depth >= HULL_CAPACITY) return FAILED_CAPACITY;
+    st.hull[band.depth] = entry;
+    st.hull_prefix[band.depth] = prefix;
+    band.depth++;
+    return 0;
+}
+
+__device__ __forceinline__ u32 flush_pending_hull(StateStream& st, BandState& band, const StateRay& ray) {
+    if (!band.has_pending) return 0;
+    band.has_pending = false;
+    return push_hull(st, band, ray, st.pending, st.pending_prefix);
+}
+
 // A diffraction candidate, in the CPU's candidate order, into both states (rubber_band.rs
-// diffraction_path): one above the state's chord after lowering joins the hull, otherwise it
+// diffraction_path): one above the state's chord after lowering joins the hull (equal-distance
+// groups coalesced to their highest in `st.pending` before entering the hull), otherwise it
 // competes for the unblocked path's single point. Inlined into the walk, so `bands` stays in its
 // registers.
 __device__ __forceinline__ u32 stream_candidate(RayStream& s, BandState* bands, const RayFrame& f, const BandCandidate& c) {
@@ -160,15 +177,20 @@ __device__ __forceinline__ u32 stream_candidate(RayStream& s, BandState* bands, 
         float lowered = c.z - frame_height_above_chord(f, state, c.x);
         if (lowered > chord) {
             band.blocked = true;
-            if (band.depth > 1 && st.hull[band.depth - 1].x == c.x) {
-                if (c.z <= st.hull[band.depth - 1].z) continue;
-                band.depth--;
+            if (band.has_pending && st.pending.x == c.x) {
+                if (c.z > st.pending.z) {
+                    st.pending = entry;
+                    st.pending_prefix = c.prefix;
+                }
+            } else {
+                if (band.has_pending) {
+                    u32 failed = push_hull(st, band, ray, st.pending, st.pending_prefix);
+                    if (failed) return failed;
+                }
+                st.pending = entry;
+                st.pending_prefix = c.prefix;
+                band.has_pending = true;
             }
-            while (band.depth >= 2 && under_state_ray(ray, st.hull[band.depth - 2], c.x, c.z, st.hull[band.depth - 1])) band.depth--;
-            if (band.depth >= HULL_CAPACITY) return FAILED_CAPACITY;
-            st.hull[band.depth] = entry;
-            st.hull_prefix[band.depth] = c.prefix;
-            band.depth++;
         } else if (!band.blocked) {
             if (to_source < 0.0f) {
                 to_source = hypotf(c.x - source.x, c.z - source.z);

@@ -250,3 +250,172 @@ fn tied_roof_exits_at_crossings_16_and_17_match_cpu() {
         "tied exit across crossings 16 and 17 differs by {error} dB"
     );
 }
+
+/// Builds a synthetic tile with vertical walls along the x axis (outlines already sorted by
+/// ascending `footprint_id`), returning the tempdir handle, parsed weather, files, square and
+/// receiver position at `x = 522` (~100 m east of the source at `x = 0`).
+fn tied_walls_fixture(walls: &[(i16, f64)]) -> (tempfile::TempDir, WeatherTable, TileId, [f64; 2]) {
+    let root = tempfile::tempdir().unwrap();
+    let year = root.path().join("2026");
+    std::fs::create_dir(&year).unwrap();
+    let weather_bytes = encode_weather(&vec![WeatherNode::default(); ROWS * COLUMNS]);
+    std::fs::write(year.join("weather"), &weather_bytes).unwrap();
+    std::fs::write(year.join("complete"), b"qmsq1\n").unwrap();
+    let weather = WeatherTable::parse(&weather_bytes).unwrap();
+    let tile = TileId { x: 2212, y: 1387 };
+    let outlines: Vec<_> = walls
+        .iter()
+        .enumerate()
+        .map(|(k, &(x, height_m))| Outline {
+            footprint_id: (k + 1) as u64,
+            kind: OutlineKind::Wall,
+            envelope: EnvelopeClass::Residential,
+            height_m,
+            vertices: vec![[x, -100], [x, 100]],
+        })
+        .collect();
+    write_tiles(
+        &year,
+        Kind::Obstacles,
+        &[(tile, encode_obstacles(&outlines))],
+    )
+    .unwrap();
+    let source = Attribute {
+        layer: Layer::Building,
+        height_m: 1.0,
+        ground_percent: 0,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 0.0,
+        footprint_id: 0,
+        group_key: 1,
+        emission: [[100.0; BANDS]; PERIODS],
+        display: Vec::new(),
+    };
+    write_tiles(
+        &year,
+        Kind::Sources,
+        &[(
+            tile,
+            encode_sources(
+                &[Piece {
+                    ends: [[0, 0]; 2],
+                    attribute: 0,
+                }],
+                &[source],
+                &[],
+            ),
+        )],
+    )
+    .unwrap();
+    let release = Release::open(root.path(), "2026").unwrap();
+    let files = Files::read(&release, tile).unwrap();
+    let square = Square::new(&weather, tile, &files).unwrap();
+    let receiver = [522.0 * square.frame.east_m_per_unit / 32768.0, 0.0];
+    (root, weather, tile, receiver)
+}
+
+/// Verifies on the CPU that the P1 tied-wall fixtures encode cleanly and give identical energies
+/// regardless of tied-wall order (both Astra's favourable-state hull-pop case and the 3-way tie).
+#[test]
+fn tied_walls_fixture_encodes_and_agrees_in_either_order_on_cpu() {
+    let cases: [&[(i16, f64)]; 4] = [
+        &[(470, 104.0), (473, 103.0), (475, 14.0), (475, 64.0)],
+        &[(470, 104.0), (473, 103.0), (475, 64.0), (475, 14.0)],
+        &[(261, 20.0), (261, 15.0), (261, 25.0)],
+        &[(261, 25.0), (261, 15.0), (261, 20.0)],
+    ];
+    let energies: Vec<_> = cases
+        .iter()
+        .map(|walls| {
+            let (root, weather, tile, receiver) = tied_walls_fixture(walls);
+            let release = Release::open(root.path(), "2026").unwrap();
+            let files = Files::read(&release, tile).unwrap();
+            let square = Square::new(&weather, tile, &files).unwrap();
+            let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+            let (energy, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
+            for value in energy
+                .mixed
+                .into_iter()
+                .chain(energy.states.into_iter().flatten())
+            {
+                assert!(value.is_finite() && value > 0.0, "non-positive {value}");
+            }
+            energy
+        })
+        .collect();
+    assert_eq!(energies[0], energies[1], "Astra tied-wall orders differ");
+    assert_eq!(energies[2], energies[3], "three-way tied orders differ");
+}
+
+/// Equal-distance walls in either order (Astra's preceding tall walls + tied walls, and a 3-way
+/// high-low-high tie) must match the CPU within 0.05 dB on the card without fallback.
+#[test]
+#[ignore = "requires a CUDA card and NVRTC; run explicitly in the painter release gate"]
+fn tied_walls_in_either_order_match_cpu() {
+    let gpu = Gpu::new(0).unwrap();
+    let cases: [(&str, &[(i16, f64)]); 4] = [
+        (
+            "preceding_low_first",
+            &[(470, 104.0), (473, 103.0), (475, 14.0), (475, 64.0)],
+        ),
+        (
+            "preceding_high_first",
+            &[(470, 104.0), (473, 103.0), (475, 64.0), (475, 14.0)],
+        ),
+        ("triple_low_mid", &[(261, 20.0), (261, 15.0), (261, 25.0)]),
+        (
+            "triple_high_first",
+            &[(261, 25.0), (261, 15.0), (261, 20.0)],
+        ),
+    ];
+    let mut card_results = Vec::new();
+    for (name, walls) in cases {
+        let (root, weather, tile, receiver) = tied_walls_fixture(walls);
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
+        let mut bands = gpu.bands(1).unwrap();
+        let (energies, failed) = gpu
+            .evaluate_pairs(
+                &device_square,
+                (&[receiver], &[0]),
+                (&[0], &[0], &[0], &[1.0]),
+                &mut bands,
+                None,
+            )
+            .unwrap();
+        assert_eq!(failed, vec![0], "{name}: must run on card without fallback");
+        let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+        let (expected, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
+        let expected: Vec<_> = expected
+            .mixed
+            .into_iter()
+            .chain(expected.states.into_iter().flatten())
+            .collect();
+        let error = energies[0]
+            .into_iter()
+            .zip(expected)
+            .map(|(card, cpu)| {
+                assert!(
+                    card.is_finite() && card > 0.0 && cpu.is_finite() && cpu > 0.0,
+                    "{name}: non-positive or non-finite energy card={card} cpu={cpu}"
+                );
+                (10.0 * (f64::from(card) / cpu).log10()).abs()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            error < 0.05,
+            "{name}: card differs from CPU by {error:.6} dB"
+        );
+        card_results.push(energies[0]);
+    }
+    for (pair, label) in [((0, 1), "preceding"), ((2, 3), "triple")] {
+        let diff = card_results[pair.0]
+            .into_iter()
+            .zip(card_results[pair.1])
+            .map(|(a, b)| (10.0 * (f64::from(a) / f64::from(b)).log10()).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(diff < 1e-4, "{label}: card order diff {diff} dB");
+    }
+}

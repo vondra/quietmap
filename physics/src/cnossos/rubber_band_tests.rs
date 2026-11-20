@@ -198,7 +198,9 @@ fn the_band_is_the_upper_envelope_of_the_states_rays() {
     }
 }
 
-/// Crossings at the same distance keep only the highest instead of dividing 0/0 in chord_altitude.
+/// Crossings at the same distance coalesce to their highest before entering the hull, so neither
+/// `chord_altitude` divides 0/0 nor a lower tied wall pops earlier hull points in the favourable
+/// state before the taller tied wall arrives.
 #[test]
 fn equal_distance_crossings_keep_only_the_highest() {
     let (source, receiver) = ((0.0, 0.0), (100.0, 0.0));
@@ -220,5 +222,41 @@ fn equal_distance_crossings_keep_only_the_highest() {
         );
         assert!(path.blocked);
         assert_eq!(path.points, vec![(50.0, 25.0)], "{state:?}");
+    }
+    // Preceding tall walls (90, 100) and (90.5, 99) followed by tied walls at x = 91 (10 m and
+    // 60 m): in the favourable state the steep arc to (91, 10) rises to 146.19 m at x = 90.5 and
+    // would pop (90.5, 99) if (91, 10) entered the hull before coalescing with (91, 60) (arc
+    // 88.01 m). Both orders must yield the exact same final hull.
+    let low_first = [(90.0, 100.0), (90.5, 99.0), (91.0, 10.0), (91.0, 60.0)];
+    let high_first = [(90.0, 100.0), (90.5, 99.0), (91.0, 60.0), (91.0, 10.0)];
+    for state in [
+        MeteorologicalState::Homogeneous,
+        MeteorologicalState::Favourable,
+    ] {
+        let ray = StateRay::between(state, source, receiver);
+        diffraction_path(
+            &ray,
+            source,
+            receiver,
+            &low_first,
+            &mut blocking,
+            &mut hull,
+            &mut path,
+        );
+        let from_low = path.points.clone();
+        diffraction_path(
+            &ray,
+            source,
+            receiver,
+            &high_first,
+            &mut blocking,
+            &mut hull,
+            &mut path,
+        );
+        assert!(path.blocked);
+        assert_eq!(from_low, path.points, "{state:?}");
+        if state == MeteorologicalState::Favourable {
+            assert_eq!(from_low, vec![(90.0, 100.0), (90.5, 99.0)]);
+        }
     }
 }

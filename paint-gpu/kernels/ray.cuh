@@ -189,7 +189,7 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
         rays[state] = state_ray_between(state, source, receiver);
         s.states[state].hull[0].x = 0.0f;
         s.states[state].hull[0].z = source.z;
-        bands[state] = BandState{1, false, false, 0.0f};
+        bands[state] = BandState{1, false, false, false, 0.0f};
     }
     float chord_m = plane_distance(source, receiver), gamma = rays[1].radius_m;
     RayFrame frame = {source, receiver, length, s.inverse_length, {rays[0], rays[1]}, chord_m, arc_excess(rays[1], chord_m),
@@ -319,8 +319,9 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
     // Indexed by a loop below: a copy, so the walk's bands stay in registers.
     BandState closed[2] = {bands[0], bands[1]};
     for (int state = 0; state < 2; state++) {
-        const StateStream& st = s.states[state];
+        StateStream& st = s.states[state];
         BandState& band = closed[state];
+        if ((failed = flush_pending_hull(st, band, rays[state]))) return failed;
         close_hull(s, st, band, rays[state]);
         const HullEntry* points = band.blocked ? st.hull + 1 : &st.best;
         const Moments* prefixes = band.blocked ? st.hull_prefix + 1 : &st.best_prefix;
