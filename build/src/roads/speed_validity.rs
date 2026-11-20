@@ -168,12 +168,34 @@ mod tests {
             .iter()
             .find(|input| input["id"] == "practice-history-heavy-speeds")
             .unwrap();
-        assert!(
-            history_input["url"]
-                .as_str()
+        assert_eq!(
+            history_input["url"].as_str(),
+            Some(
+                "https://github.com/vondra/quietmap/blob/years/years/tables/2024/road-heavy-history.json"
+            ),
+            "manifest must cite the years branch country history"
+        );
+        let scope_of = |country: &str| {
+            history
+                .rows
+                .iter()
+                .find(|row| row.country == country)
                 .unwrap()
-                .ends_with("years/tables/2024/road-heavy-history.json"),
-            "manifest must cite the country history rather than a single EU directive"
+                .scope
+                .as_str()
+        };
+        let gb_scope = scope_of("GB");
+        assert!(
+            gb_scope.contains("over 3,500 kg and not exceeding 12,000 kg")
+                && gb_scope.contains("first used on or after 1 January 2005")
+                && gb_scope.contains("attainable speed exceeding 90 km/h"),
+            "GB scope must state full Reg. 36B(1A) conditions: {gb_scope}"
+        );
+        let au_scope = scope_of("AU");
+        assert!(
+            au_scope.contains("1 January 1991 for NC over 300 hp and ME over 14.5 t GVM")
+                && au_scope.contains("1 July 1991"),
+            "AU scope must assign the January and July 1991 cut-offs: {au_scope}"
         );
         let derived_2024 = selected(
             history.rows,

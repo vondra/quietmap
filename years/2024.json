@@ -7152,7 +7152,7 @@
       "kind": "model-observations",
       "region": "world",
       "publisher": "National road authorities",
-      "url": "https://github.com/vondra/quietmap/blob/main/years/tables/2024/road-heavy-history.json",
+      "url": "https://github.com/vondra/quietmap/blob/years/years/tables/2024/road-heavy-history.json",
       "observed": {
         "start": "2004-01-23",
         "end": "2024-04-01"

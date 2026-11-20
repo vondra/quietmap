@@ -6,7 +6,7 @@
       "valid_from": "2006-07-22",
       "valid_until": null,
       "source_url": "https://www.legislation.gov.au/F2006L02297/latest/text",
-      "scope": "Vehicle Standard (Australian Design Rule 65/00 - Maximum Road Speed Limiting for Heavy Goods Vehicles and Heavy Omnibuses) 2006 (F2006L02297, clause 65.5.2 and applicability table, commenced 22 July 2006, continued under the Road Vehicle Standards Act 2018): 100 km/h maximum road speed capability for covered heavy goods vehicles (NC) and heavy omnibuses (ME) manufactured on or after the January/July 1991 applicability cut-offs (road trains follow state/territory authority under clause 65.5.1). Model proxy: applied as a country-wide cap for medium and heavy vehicles."
+      "scope": "Vehicle Standard (Australian Design Rule 65/00 - Maximum Road Speed Limiting for Heavy Goods Vehicles and Heavy Omnibuses) 2006 (F2006L02297, clause 65.5.2 and applicability table, commenced 22 July 2006, continued under the Road Vehicle Standards Act 2018): 100 km/h maximum road speed capability for covered heavy goods vehicles (NC/N3) and heavy omnibuses (ME/M3 >5 t GVM), manufactured on or after 1 January 1991 for NC over 300 hp and ME over 14.5 t GVM, or 1 July 1991 for the remaining covered groups (NC up to 300 hp and ME over 5 t up to 14.5 t GVM; road trains follow state/territory authority under clause 65.5.1). Model proxy: applied as a country-wide cap for medium and heavy vehicles."
     },
     {
       "country": "BE",
@@ -54,7 +54,7 @@
       "valid_from": "2005-01-01",
       "valid_until": null,
       "source_url": "https://www.legislation.gov.uk/uksi/1986/1078/regulation/36B",
-      "scope": "Road Vehicles (Construction and Use) Regulations 1986 Reg. 36B(1A) and (9) (as amended by S.I. 2004/2102, commenced 1 January 2005): 90 km/h stabilised speed-limiter setting for goods vehicles meeting Reg. 36B(1A)'s weight (>3,500 kg maximum gross weight), first-use date and attainable-speed conditions (certain domestic vehicles up to 7.5 t had transitional compliance until 1 January 2008; buses are separately governed by Reg. 36A). Model proxy: applied as a country-wide cap for medium and heavy vehicles."
+      "scope": "Road Vehicles (Construction and Use) Regulations 1986 Reg. 36B(1A), (1B), (2) and (9) (as amended by S.I. 2004/2102, commenced 1 January 2005): 90 km/h stabilised speed-limiter setting for goods vehicles—under Reg. 36B(1A), those over 3,500 kg and not exceeding 12,000 kg maximum gross weight, first used on or after 1 January 2005, with a relevant attainable speed exceeding 90 km/h (alongside Euro III goods vehicles 3,500-12,000 kg from 1 October 2001 under Reg. 36B(1B) and vehicles over 12,000 kg from 1 January 1988 under Reg. 36B(2); certain domestic vehicles up to 7.5 t had transitional compliance until 1 January 2008; buses are separately governed by Reg. 36A). Model proxy: applied as a country-wide cap for medium and heavy vehicles."
     },
     {
       "country": "IE",
