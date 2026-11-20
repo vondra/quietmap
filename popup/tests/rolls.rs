@@ -2,7 +2,7 @@
 //! runway, how the start of roll's directivity spreads its sound behind it, how far the rolls are
 //! heard, and how each Doc 29 segment enters the passes' classes for the seconds it is rolled.
 
-use physics::bands::{PERIODS, lden_energy};
+use physics::bands::{PERIOD_HOURS, PERIODS, lden_energy};
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::npd::Family;
 use physics::doc29::profiles_generated::{CLASS_FAMILY, CLASS_NAMES, NUM_CLASSES};
@@ -254,6 +254,80 @@ fn roll_passes_match_roll_duration_and_stay_stable_when_cut_ten_times_finer() {
         assert!(
             (passing_axis / expected_passing - 1.0).abs() < 1e-9,
             "landing={landing} on runway: {passing_axis} vs {expected_passing}"
+        );
+    }
+}
+
+/// Pass-class energy must equal roll energy in every period (day, evening and night), flight-kind
+/// totals must equal overall Lden energy, and total passing duration must match kinematics — for a
+/// take-off, a decelerating landing, and a steady-speed landing at or below 15 m/s.
+#[test]
+fn roll_pass_classes_and_kinds_conserve_energy_in_every_period() {
+    let movements = [60.0, 20.0, 10.0];
+    let cases = [
+        (
+            "takeoff",
+            Roll {
+                movements_per_day: movements,
+                ..roll(class("A320-232"), false, 0.0)
+            },
+        ),
+        (
+            "landing",
+            Roll {
+                movements_per_day: movements,
+                ..roll(class("A320-232"), true, 0.0)
+            },
+        ),
+        (
+            "steady_landing_15",
+            Roll {
+                length_m: 300.0,
+                speed_ms: LANDING_EXIT_SPEED_MS,
+                movements_per_day: movements,
+                ..roll(class("CNA172"), true, 0.0)
+            },
+        ),
+        (
+            "steady_landing_12",
+            Roll {
+                length_m: 300.0,
+                speed_ms: 12.0,
+                movements_per_day: movements,
+                ..roll(class("CNA172"), true, 0.0)
+            },
+        ),
+    ];
+    for (name, spec) in cases {
+        let sums = heard(std::slice::from_ref(&spec), [150.0, 200.0]);
+        let start_speed = if spec.landing { spec.speed_ms } else { 0.0 };
+        let end_speed = if spec.landing {
+            LANDING_EXIT_SPEED_MS.min(spec.speed_ms)
+        } else {
+            spec.speed_ms
+        };
+        let duration_s = 2.0 * spec.length_m / (start_speed + end_speed);
+        for period in 0..PERIODS {
+            assert!(sums.energy[period] > 0.0, "{name} period {period} silent");
+            let pass_energy: f64 = sums.passes.energy[period].iter().sum();
+            assert!(
+                (pass_energy / sums.energy[period] - 1.0).abs() < 1e-12,
+                "{name} period {period}: pass energy {pass_energy} vs roll {}",
+                sums.energy[period]
+            );
+            let expected_passing =
+                movements[period] / (PERIOD_HOURS[period] * 3_600.0) * duration_s;
+            let pass_time: f64 = sums.passes.passing[period].iter().sum();
+            assert!(
+                (pass_time / expected_passing - 1.0).abs() < 1e-9,
+                "{name} period {period}: passing {pass_time} vs {expected_passing}"
+            );
+        }
+        let kinds_total: f64 = sums.kinds.iter().sum();
+        let roll_lden = lden_energy(&sums.energy);
+        assert!(
+            (kinds_total / roll_lden - 1.0).abs() < 1e-12,
+            "{name}: kinds {kinds_total} vs Lden {roll_lden}"
         );
     }
 }

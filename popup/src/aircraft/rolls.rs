@@ -42,8 +42,8 @@ pub struct HeardPath {
 /// atmosphere of the tile's square (`tiles::square::Square::middle_tile`); a roll without segments
 /// (a helicopter's) is dropped.
 pub fn prepare(tile: TileId, rolls: &[Roll], place: &PlaceAtmosphere) -> Vec<HeardPath> {
-    // A path is its start, heading (as decoded, exact) and operation.
-    let mut paths: BTreeMap<([i16; 2], u64, bool), HeardPath> = BTreeMap::new();
+    // A path is its start and heading (as decoded, exact); each roll carries its own kind.
+    let mut paths: BTreeMap<([i16; 2], u64), HeardPath> = BTreeMap::new();
     for roll in rolls {
         let kind = if roll.landing {
             RollKind::Landing
@@ -67,7 +67,7 @@ pub fn prepare(tile: TileId, rolls: &[Roll], place: &PlaceAtmosphere) -> Vec<Hea
         if steps.is_empty() {
             continue;
         }
-        let key = (roll.start, roll.heading_rad.to_bits(), roll.landing);
+        let key = (roll.start, roll.heading_rad.to_bits());
         let path = paths.entry(key).or_insert_with(|| HeardPath {
             start: tile.to_mercator(roll.start),
             direction: [roll.heading_rad.cos(), roll.heading_rad.sin()],

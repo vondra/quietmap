@@ -87,32 +87,39 @@ impl RollProfile {
         }
         let anchor = class_anchor(self.class);
         let [start_speed, end_speed] = self.end_speeds();
-        let count = (1.0 + (end_speed - start_speed).abs() / speed_step_ms).floor() as usize;
-        let step = (end_speed - start_speed) / count as f64;
-        // Constant acceleration: the distance covered goes as the change of the squared speed.
-        let span = (end_speed * end_speed - start_speed * start_speed)
-            .abs()
-            .max(1e-9);
-        let along =
-            |speed: f64| self.length_m * (speed * speed - start_speed * start_speed).abs() / span;
-        let mut speeds: Vec<f64> = (0..=count).map(|k| start_speed + k as f64 * step).collect();
-        if self.kind == RollKind::Landing {
-            let turn = (start_speed * start_speed - REVERSE_SHARE_OF_STOP * span).sqrt();
-            if let Some(k) = (speeds.windows(2)).position(|pair| pair[0] > turn && turn > pair[1]) {
-                speeds.insert(k + 1, turn);
+        let spans: Vec<(f64, f64, f64, f64)> = if start_speed == end_speed {
+            vec![(0.0, self.length_m, start_speed, end_speed)]
+        } else {
+            let count = (1.0 + (end_speed - start_speed).abs() / speed_step_ms).floor() as usize;
+            let step = (end_speed - start_speed) / count as f64;
+            // Constant acceleration: the distance covered goes as the change of the squared speed.
+            let span = (end_speed * end_speed - start_speed * start_speed).abs();
+            let along = |speed: f64| {
+                self.length_m * (speed * speed - start_speed * start_speed).abs() / span
+            };
+            let mut speeds: Vec<f64> = (0..=count).map(|k| start_speed + k as f64 * step).collect();
+            if self.kind == RollKind::Landing {
+                let turn = (start_speed * start_speed - REVERSE_SHARE_OF_STOP * span).sqrt();
+                if let Some(k) =
+                    (speeds.windows(2)).position(|pair| pair[0] > turn && turn > pair[1])
+                {
+                    speeds.insert(k + 1, turn);
+                }
             }
-        }
+            speeds
+                .windows(2)
+                .map(|pair| (along(pair[0]), along(pair[1]), pair[0], pair[1]))
+                .collect()
+        };
         let aircraft = AircraftType {
             class: self.class,
             helicopter: None,
         };
         let landing_power = (self.kind == RollKind::Landing).then(|| self.landing_power());
-        speeds
-            .windows(2)
-            .filter_map(|pair| {
-                let (from_speed, to_speed) = (pair[0], pair[1]);
+        spans
+            .into_iter()
+            .filter_map(|(from_m, to_m, from_speed, to_speed)| {
                 let mean_kt = 0.5 * (from_speed + to_speed) / METRES_PER_SECOND_PER_KNOT;
-                let (from_m, to_m) = (along(from_speed), along(to_speed));
                 let speed_correction_db = roll_speed_correction_db(anchor.v_ref_kt, mean_kt);
                 let take_off_at = |speed_ms: f64| SegmentFlight {
                     departure: true,

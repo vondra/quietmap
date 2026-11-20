@@ -364,7 +364,8 @@ Flights are heard while they pass. A box of airspace holds how many flights cros
 how fast its loudest fly, so its flights are in it a known share of the time, at the level its
 sound has at the point; a runway take-off or landing roll enters the same pass classes over each
 of its Doc 29 speed segments for the seconds the aircraft spends rolling it. Boxes of like level,
-in steps of 3 dB, form one stream of passes, and several flights can pass at once. Against the real flights of 34 days of the year at 14 places,
+in steps of 3 dB, form one stream of passes, and several flights can pass at once. Against the real
+flights of 34 days of the year at 14 places,
 each followed second by second, the flights' loudness reads 9 % quieter to 30 % louder, 9 %
 louder at the typical place: a box takes all its flights at one level, though a climbing jet and a
 gliding one differ.

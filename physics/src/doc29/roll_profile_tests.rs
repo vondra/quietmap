@@ -86,4 +86,15 @@ fn a_landing_roll_runs_on_reverse_thrust() {
         "{:?}",
         cessna.iter().map(|step| step.thrust_lb).collect::<Vec<_>>()
     );
+    // A landing at or below the 15 m/s runway-exit speed rolls its whole length at constant speed.
+    for speed_ms in [LANDING_EXIT_SPEED_MS, 12.0] {
+        let steady = landing(class("C172"), 300.0, speed_ms);
+        assert_eq!(steady.len(), 1);
+        assert_eq!((steady[0].from_m, steady[0].to_m), (0.0, 300.0));
+        assert!(
+            (steady[0].duration_s - 300.0 / speed_ms).abs() < 1e-12,
+            "{}",
+            steady[0].duration_s
+        );
+    }
 }
