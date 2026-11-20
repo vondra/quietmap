@@ -213,10 +213,13 @@ junctions and the place's yearly air temperature.
   is known. A residential street takes 30 km/h and a living street, service road or track 20, or
   the class's lower median sign (a German living street 10). A main road signed slower than walking
   pace or faster than any country's limit (140 km/h) counts as unsigned: Barcelona's Passeig de
-  Maragall was signed 4. On a two-way road outside towns, other
-  than a motorway, at its country's open-road limit of 80 km/h or more, cars drive at 0.845 of it
-  and lorries and buses at 0.799 of it (still under their cap), the free-flow shares measured in
-  Great Britain. Lorries and buses drive at most 80 km/h, 90 to 105 in thirteen countries.
+  Maragall was signed 4. On a two-way road outside towns, other than a motorway, at or above its
+  country's open-road limit of 80 km/h or more (or at 80 km/h or more where no national rural limit
+  is listed), cars drive at 0.845 of it and medium and heavy vehicles (lorries and buses) at 0.799
+  of it (still under their cap): Great Britain's measured free-flow shares on 60 mph single
+  carriageways for cars and for heavy goods vehicles (where HGVs over 7.5 t have a 50 mph limit),
+  applied to medium and heavy vehicles including buses as a proxy. Lorries and buses drive at most
+  80 km/h, 90 to 105 in thirteen countries.
 - **Buses and bridges.** Uncounted roads also carry the buses of the lines mapped on them, a line at
   most twice, for its two directions, however many of its variants are mapped. One line direction
   carries 30 buses a day where 100,000 trips a day begin or end within 2 km; a street's buses grow

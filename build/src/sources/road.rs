@@ -326,10 +326,11 @@ fn electric_share(tables: &SourceTables, country_iso: u16) -> f64 {
 /// Global truck/bus limit where the admitted table has no country row (km/h).
 const HEAVY_SPEED_CAP_KMH: f64 = 80.0;
 
-/// The speed of lorries and buses (medium and heavy) on a road of `base_speed` in a country:
-/// on a rural single carriageway at its national limit (`rural_free_flow`) they run at their own
-/// measured free-flow share of that limit (DfT SPE0102, 2024: 47.93 of 60 mph = 0.799), still
-/// under their national speed cap.
+/// The speed of medium and heavy vehicles (lorries and buses) on a road of `base_speed` in a
+/// country: on a rural single carriageway selected by [`free_flows_below_limit`] they take DfT
+/// SPE0102's HGV free-flow share of the 60 mph rural single-carriageway limit (47.93 / 60 = 0.799,
+/// where HGVs over 7.5 t have a 50 mph limit, applied to medium and heavy vehicles including buses
+/// as a proxy), still under their national cap.
 fn heavy_speed(
     tables: &SourceTables,
     base_speed: f64,
@@ -381,9 +382,11 @@ fn road_period_shares(daily: [f64; 4], shares: &[[f64; PERIODS]; 4]) -> [f64; PE
 /// A national rural limit: this fast or faster (km/h).
 const RURAL_LIMIT_FROM_KMH: f64 = 80.0;
 
-/// Whether a row's cars drive below its limit by the rural free-flow share: a two-way rural row
-/// other than a motorway at its country's national rural limit for the class, posted or not (a
-/// lower posted limit is driven as posted).
+/// Whether a row's vehicles drive at the rural free-flow share: a two-way rural row other than a
+/// motorway or motorway link at or above `max(80 km/h, national_kmh)`. Because an unknown national
+/// rural limit is passed as `0`, rural roads at 80 km/h or more in countries without a listed
+/// national rural limit (such as FR, GB and US in 2024) are also accepted; a lower posted limit
+/// below the national rural limit is driven as posted.
 fn free_flows_below_limit(
     class_index: usize,
     built_up: u8,
@@ -1204,7 +1207,6 @@ mod tests {
             "a village lane"
         );
         assert!((90.0 * tables.rural_free_flow[0] - 76.05).abs() < 1e-9);
-        assert!((80.0 * tables.rural_free_flow[1] - 63.92).abs() < 1e-9);
         let fr = u16::from_le_bytes(*b"FR");
         // On an 80 km/h rural single carriageway lorries take their own 0.799 share (63.92 km/h,
         // below cars' 67.60 km/h), while on a 110 km/h motorway they keep their national cap.
@@ -1212,5 +1214,175 @@ mod tests {
         assert!((heavy_speed(tables, 110.0, false, fr) - 90.0).abs() < 1e-9);
         let de = u16::from_le_bytes(*b"DE");
         assert!((heavy_speed(tables, 100.0, true, de) - 79.9).abs() < 1e-9);
+    }
+
+    /// Production path through `road::convert`: a rural two-way single carriageway in France at
+    /// 80 km/h emits its heavy-vehicle flow at 80 * 0.799 = 63.92 km/h (not 80 or cars' 67.60),
+    /// while a one-way motorway at 110 km/h caps heavy vehicles at 90 km/h without the rural ratio.
+    #[test]
+    fn convert_applies_heavy_rural_free_flow_ratio_on_rural_single_carriageways() {
+        use arrow_array::{
+            ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+            StringArray, UInt8Array, UInt16Array,
+        };
+        use arrow_schema::{Field, Schema};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let square = Square { x: 256, y: 256 };
+        let sq_dir = dir.path().join("prepared/z9/256/256");
+        std::fs::create_dir_all(&sq_dir).unwrap();
+        let center = 1 << 29;
+        let fr = u16::from_le_bytes(*b"FR");
+        let columns: Vec<(&str, ArrayRef)> = vec![
+            ("osm_id", Arc::new(Int64Array::from(vec![101, 102]))),
+            ("segment_idx", Arc::new(Int16Array::from(vec![0, 0]))),
+            (
+                "start_gx",
+                Arc::new(Int32Array::from(vec![center + 1_000, center + 1_000])),
+            ),
+            (
+                "start_gy",
+                Arc::new(Int32Array::from(vec![center + 1_000, center + 2_000])),
+            ),
+            (
+                "end_gx",
+                Arc::new(Int32Array::from(vec![center + 2_000, center + 2_000])),
+            ),
+            (
+                "end_gy",
+                Arc::new(Int32Array::from(vec![center + 1_000, center + 2_000])),
+            ),
+            ("road_class", Arc::new(UInt8Array::from(vec![3, 0]))),
+            ("speed_limit", Arc::new(UInt8Array::from(vec![80, 110]))),
+            ("surface_type", Arc::new(UInt8Array::from(vec![0, 0]))),
+            ("lanes", Arc::new(UInt8Array::from(vec![2, 2]))),
+            ("oneway", Arc::new(UInt8Array::from(vec![0, 1]))),
+            ("junction", Arc::new(UInt8Array::from(vec![0, 0]))),
+            ("built_up", Arc::new(UInt8Array::from(vec![1, 1]))),
+            ("access", Arc::new(UInt8Array::from(vec![0, 0]))),
+            ("tunnel", Arc::new(BooleanArray::from(vec![false, false]))),
+            ("bridge", Arc::new(BooleanArray::from(vec![false, false]))),
+            ("name", Arc::new(StringArray::from(vec!["D1", "A1"]))),
+            ("ref", Arc::new(StringArray::from(vec!["D 1", "A 1"]))),
+            ("country_iso", Arc::new(UInt16Array::from(vec![fr, fr]))),
+            ("length_m", Arc::new(Float32Array::from(vec![100.0, 100.0]))),
+            ("source_id", Arc::new(UInt16Array::from(vec![1041, 1041]))),
+            ("traffic_estimated", Arc::new(UInt8Array::from(vec![0, 0]))),
+            ("aadt_light", Arc::new(Float64Array::from(vec![0.0, 0.0]))),
+            ("aadt_medium", Arc::new(Float64Array::from(vec![0.0, 0.0]))),
+            (
+                "aadt_heavy",
+                Arc::new(Float64Array::from(vec![1_000.0, 1_000.0])),
+            ),
+            ("aadt_moto", Arc::new(Float64Array::from(vec![0.0, 0.0]))),
+            (
+                "cross_section_aadt",
+                Arc::new(Float64Array::from(vec![1_000.0, 1_000.0])),
+            ),
+            ("way_start_node", Arc::new(Int64Array::from(vec![1, 3]))),
+            ("way_end_node", Arc::new(Int64Array::from(vec![2, 4]))),
+        ];
+        let fields: Vec<Field> = columns
+            .iter()
+            .map(|(name, array)| Field::new(*name, array.data_type().clone(), false))
+            .collect();
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            HashMap::from([
+                ("grid".into(), "z30".into()),
+                ("roads_contract".into(), "country_baked_v1".into()),
+                ("road_traffic_contract".into(), "1".into()),
+            ]),
+        ));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            columns.into_iter().map(|(_, a)| a).collect(),
+        )
+        .unwrap();
+        let mut writer = arrow_ipc::writer::FileWriter::try_new(
+            std::fs::File::create(sq_dir.join("roads.arrow")).unwrap(),
+            &schema,
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        // Sea grid: Temperature::at returns REFERENCE_AIR_TEMPERATURE_C (20 C) everywhere.
+        let temp_path = dir.path().join("bio1.f32");
+        let sea: Vec<u8> = (-3.4e38f32).to_le_bytes().repeat(2_160 * 1_080);
+        std::fs::write(&temp_path, sea).unwrap();
+        let temperature = Temperature::load(&temp_path).unwrap();
+        let dev4 = Dev4 {
+            prepared: dir.path().join("prepared"),
+            rasters: dir.path().join("rasters"),
+        };
+        let tables = SourceTables::test_fixture();
+        let mut out = Vec::new();
+        convert(
+            (&dev4, &temperature, None, None, tables),
+            square,
+            None,
+            &Decks::default(),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 2);
+
+        let expected_day = |class_index: usize, speed_kmh: f64| {
+            let share = period_shares(tables, fr, class_index, true)[0];
+            let vph = 1_000.0 * share / PERIOD_HOURS[0];
+            line_emission_db(
+                &[CategoryFlow {
+                    vehicles_per_hour: vph,
+                    speed_kmh,
+                    category: VehicleCategory::Heavy,
+                    slope_percent: 0.0,
+                    junction: None,
+                    electric_share: electric_share(tables, fr),
+                }],
+                (
+                    &REFERENCE_SURFACE,
+                    physics::emission::road::REFERENCE_AIR_TEMPERATURE_C,
+                ),
+            )
+        };
+
+        // Row 0 (rural 2-way secondary, 80 km/h): heavy speed = 80 * 0.799 = 63.92 km/h.
+        let rural_at_hgv = expected_day(3, 80.0 * 0.799);
+        let rural_at_unscaled = expected_day(3, 80.0);
+        let rural_at_car = expected_day(3, 80.0 * 0.845);
+        for (band, (&actual, &expected)) in out[0].attribute.emission[0]
+            .iter()
+            .zip(&rural_at_hgv)
+            .enumerate()
+        {
+            assert!(
+                (actual - expected).abs() < 1e-9,
+                "band {band}: {actual} vs {expected}"
+            );
+        }
+        assert!(
+            (out[0].attribute.emission[0][4] - rural_at_unscaled[4]).abs() > 1.0,
+            "rural heavy flow must not run at unscaled 80 km/h"
+        );
+        assert!(
+            (out[0].attribute.emission[0][4] - rural_at_car[4]).abs() > 0.2,
+            "rural heavy flow must use 0.799, not cars' 0.845"
+        );
+
+        // Row 1 (one-way motorway, 110 km/h): heavy speed = FR cap 90 km/h (no rural ratio).
+        let motorway_at_cap = expected_day(0, 90.0);
+        for (band, (&actual, &expected)) in out[1].attribute.emission[0]
+            .iter()
+            .zip(&motorway_at_cap)
+            .enumerate()
+        {
+            assert!(
+                (actual - expected).abs() < 1e-9,
+                "band {band}: {actual} vs {expected}"
+            );
+        }
     }
 }

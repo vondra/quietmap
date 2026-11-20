@@ -174,9 +174,9 @@ impl SourceTables {
         if tables
             .rural_free_flow
             .iter()
-            .any(|v| !v.is_finite() || *v <= 0.0 || *v > 1.0)
+            .any(|v| !v.is_finite() || *v <= 0.0)
         {
-            return Err("rural-free-flow: ratios must lie in (0, 1]".into());
+            return Err("rural-free-flow: ratios must be finite and positive".into());
         }
         for groups in tables.period_shares.values() {
             for shares in groups.iter().flatten() {
