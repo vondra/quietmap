@@ -4,6 +4,7 @@
 // Coordinates are rebased in f64 before the GPU uses f32 frame metres. The repr(C) records mirror
 // scene.cuh, evaluate.cuh and paint.cu field by field.
 
+use crate::stream::{download_default, upload_default};
 use cudarc::driver::sys::CUdevice_attribute;
 use cudarc::driver::{CudaDevice, CudaSlice, DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig};
 use cudarc::nvrtc::{CompileOptions, compile_ptx_with_opts};
@@ -328,7 +329,7 @@ impl Gpu {
             .ok_or("kernel struct_sizes missing")?;
         // SAFETY: the kernel writes one u64 per struct into `sizes`.
         driver(unsafe { function.launch(ONE_THREAD, (&sizes,)) })?;
-        let device_sizes = driver(device.dtoh_sync_copy(&sizes))?;
+        let device_sizes = download_default(&device, &sizes)?;
         if device_sizes
             .iter()
             .zip(HOST_STRUCT_SIZES)
@@ -344,7 +345,7 @@ impl Gpu {
             .ok_or("kernel flight_struct_sizes missing")?;
         // SAFETY: the kernel writes one u64 per struct into `sizes`.
         driver(unsafe { function.launch(ONE_THREAD, (&sizes,)) })?;
-        let device_sizes = driver(device.dtoh_sync_copy(&sizes))?;
+        let device_sizes = download_default(&device, &sizes)?;
         let host_sizes = crate::aircraft::FLIGHT_STRUCT_SIZES;
         if device_sizes
             .iter()
@@ -361,7 +362,7 @@ impl Gpu {
             .ok_or("kernel loud_struct_sizes missing")?;
         // SAFETY: the kernel writes one u64.
         driver(unsafe { function.launch(ONE_THREAD, (&warp_bytes,)) })?;
-        let warp_bytes = driver(device.dtoh_sync_copy(&warp_bytes))?[0];
+        let warp_bytes = download_default(&device, &warp_bytes)?[0];
         if warp_bytes != crate::loudness::loud_warp_bytes() as u64 {
             return Err(format!(
                 "loudness warp layouts differ: device {warp_bytes}, host {}",
@@ -386,7 +387,7 @@ impl Gpu {
 
     /// The band sums as the pairs left them.
     pub fn download(&self, bands: &CudaSlice<f32>) -> Result<Vec<f32>, String> {
-        driver(self.device.dtoh_sync_copy(bands))
+        download_default(&self.device, bands)
     }
 
     /// Per receiver its position in the square's frame and the building it stands in (or 0); per
@@ -472,7 +473,8 @@ impl Gpu {
         // another pass's or square's kernels run beside them on the card
         // ([`crate::stream::ForkedStream::copy`] on why its inputs go there too).
         let stream = self.fork()?;
-        // SAFETY: `stream` is never leaked and drops before `xy` and the caller's arrays.
+        // SAFETY: `stream` is never leaked and drops before `xy`, the caller's arrays, and every
+        // device destination declared above.
         unsafe {
             stream.copy(&xy, &mut device_xy)?;
             stream.copy(own_footprint, &mut device_own)?;
@@ -485,13 +487,14 @@ impl Gpu {
         stream.zero(&mut failed)?;
         stream.zero(&mut pair_bands)?;
         stream.zero(&mut sums)?;
-        // SAFETY (each launch): every buffer holds what the kernel indexes: 2 coordinates, an owner,
-        // a receiver (RECEIVER_BYTES) and a failure per receiver; a receiver (within the receivers,
-        // checked), a candidate and a point (within `bands`, checked) per pair; a count, an offset,
-        // PAIR_SUMS sums, PERIODS x BANDS bands and a failure per pair; a PairRay (PAIR_RAY_BYTES) per ray.
-        driver(unsafe {
-            kernel("point_receivers")?.launch_on_stream(
-                &stream,
+        // SAFETY (each launch): every buffer holds what the kernel indexes and is declared before
+        // `stream`: 2 coordinates, an owner, a receiver (RECEIVER_BYTES) and a failure per
+        // receiver; a receiver (within the receivers, checked), a candidate and a point (within
+        // `bands`, checked) per pair; a count, an offset, PAIR_SUMS sums, PERIODS x BANDS bands
+        // and a failure per pair; a PairRay (PAIR_RAY_BYTES) per ray.
+        unsafe {
+            stream.launch(
+                kernel("point_receivers")?,
                 threads(receiver_count),
                 (
                     &square.scene,
@@ -501,11 +504,9 @@ impl Gpu {
                     &point_receivers,
                     &receiver_failed,
                 ),
-            )
-        })?;
-        driver(unsafe {
-            kernel("pair_rays")?.launch_on_stream(
-                &stream,
+            )?;
+            stream.launch(
+                kernel("pair_rays")?,
                 threads(count),
                 (
                     &square.scene,
@@ -520,8 +521,8 @@ impl Gpu {
                     &failed,
                     &pair_bands,
                 ),
-            )
-        })?;
+            )?;
+        }
         offsets = stream.read_back(&ray_counts)?;
         let mut total = 0u32;
         for offset in &mut offsets {
@@ -534,12 +535,12 @@ impl Gpu {
             // The stream may use them only after their allocation: the pool may give them memory
             // another launch freed after it joined.
             stream.wait_for_default()?;
-            // SAFETY: `stream` is never leaked and drops before `offsets`.
+            // SAFETY: `stream` is never leaked and drops before `offsets` and `device_offsets`.
             unsafe { stream.copy(&offsets, &mut device_offsets) }?;
             stream.zero(&mut rays)?;
-            driver(unsafe {
-                kernel("pair_rays")?.launch_on_stream(
-                    &stream,
+            unsafe {
+                stream.launch(
+                    kernel("pair_rays")?,
                     threads(count),
                     (
                         &square.scene,
@@ -554,12 +555,12 @@ impl Gpu {
                         &failed,
                         &pair_bands,
                     ),
-                )
-            })?;
+                )?;
+            }
             stream.zero(&mut pair_bands)?;
-            driver(unsafe {
-                kernel("ray_transfers")?.launch_on_stream(
-                    &stream,
+            unsafe {
+                stream.launch(
+                    kernel("ray_transfers")?,
                     threads(total as usize),
                     (
                         &square.scene,
@@ -572,12 +573,12 @@ impl Gpu {
                         &pair_bands,
                         &failed,
                     ),
-                )
-            })?;
+                )?;
+            }
             if pair_spectra.is_none() {
-                driver(unsafe {
-                    kernel("pair_bands_to_points")?.launch_on_stream(
-                        &stream,
+                unsafe {
+                    stream.launch(
+                        kernel("pair_bands_to_points")?,
                         threads(count),
                         (
                             &square.scene,
@@ -589,8 +590,8 @@ impl Gpu {
                             &failed,
                             &mut *bands,
                         ),
-                    )
-                })?;
+                    )?;
+                }
             }
         }
         let sums = stream.read_back(&sums)?;
@@ -598,6 +599,7 @@ impl Gpu {
         if let Some(spectra) = pair_spectra {
             *spectra = stream.read_back(&pair_bands)?;
         }
+        stream.finish()?;
         Ok((
             sums.chunks_exact(PAIR_SUMS)
                 .map(|chunk| std::array::from_fn(|k| chunk[k]))

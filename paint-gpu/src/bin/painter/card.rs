@@ -18,39 +18,30 @@ pub(crate) struct CardState {
     pub(crate) stopped: bool,
 }
 
-impl CardState {
-    /// A square of `candidates` leaves the card.
-    fn leave(&mut self, candidates: usize) {
-        self.squares -= 1;
-        self.candidates -= candidates;
-    }
-}
-
 /// One square's reservation on the card: returns its slot and candidate count on drop (including
-/// on failed hand-over or unwind), and wakes waiters.
+/// on failed hand-over or unwind), optionally stopping the card under the same lock, and wakes
+/// waiters.
 pub(crate) struct Reservation<'a> {
     card: &'a Card,
     candidates: usize,
-    released: bool,
+    stop_on_drop: bool,
 }
 
 impl Reservation<'_> {
     /// Releases the square from the card and marks the card stopped when `stop` is true, under one
     /// lock so a preparer waiting for room or an empty card never sees the free slot first.
     pub(crate) fn finish(mut self, stop: bool) {
-        self.released = true;
-        self.card.change(|state| {
-            state.leave(self.candidates);
-            state.stopped |= stop;
-        });
+        self.stop_on_drop = stop;
     }
 }
 
 impl Drop for Reservation<'_> {
     fn drop(&mut self) {
-        if !self.released {
-            self.card.change(|state| state.leave(self.candidates));
-        }
+        self.card.change(|state| {
+            state.squares -= 1;
+            state.candidates -= self.candidates;
+            state.stopped |= self.stop_on_drop;
+        });
     }
 }
 
@@ -97,7 +88,7 @@ impl Card {
         Some(Reservation {
             card: self,
             candidates,
-            released: false,
+            stop_on_drop: false,
         })
     }
 
@@ -112,11 +103,9 @@ impl Card {
     }
 }
 
-/// Squares whose pixels are painted at once, at most: one square's passes leave the card idle
-/// between them (two painter processes on one card: light squares 1.4x, 30-300 KB 1.17x, Dobris
-/// 1.12x, 2026-10-14); two processes also kept two copies of the kernels' card memory. A third
-/// beside two small ones ([`has_room`]) took 2-5 % off squares of up to 300 KB on two kinds of
-/// card, each square's own pixels over a quarter slower beside two (2026-11-19).
+/// Squares whose pixels are painted at once, at most, in one painter process: one square's passes
+/// leave the card idle between them, while sharing one process avoids duplicating the kernels'
+/// card memory. A third square joins only beside two small ones ([`has_room`]).
 pub(crate) const SQUARES_ON_THE_CARD: usize = 3;
 
 /// A square's sources at most this many candidates paint while the next one is prepared (Dobris's

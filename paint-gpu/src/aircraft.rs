@@ -4,7 +4,8 @@
 //! its segments: one tile's boxes of one file and band, a block each (kernels/aircraft.cuh).
 
 use crate::device::{Gpu, driver};
-use cudarc::driver::{CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig};
+use crate::stream::upload_default;
+use cudarc::driver::{CudaSlice, DeviceRepr, LaunchConfig};
 use paint::flight_boxes::{FlightBoxes, FlightRequest, FlightWeight};
 use paint::flights::{FlightSums, tiles_heard};
 use paint::square::Square;
@@ -208,7 +209,7 @@ impl DeviceFlightBoxes {
                 })
             })
             .collect();
-        let boxes = driver(gpu.device.htod_sync_copy(&boxes))?;
+        let boxes = upload_default(&gpu.device, &boxes)?;
         Ok(DeviceFlightBoxes { boxes, first })
     }
 }
@@ -290,10 +291,10 @@ impl Gpu {
             return Ok(sums);
         }
         let device = &self.device;
-        let horizons = driver(device.htod_sync_copy(&horizons))?;
-        let points = driver(device.htod_sync_copy(&points))?;
+        let horizons = upload_default(device, &horizons)?;
+        let points = upload_default(device, &points)?;
         let segment_count = segments.len() as u32;
-        let segments = driver(device.htod_sync_copy(&segments))?;
+        let segments = upload_default(device, &segments)?;
         let totals = driver(device.alloc_zeros::<f64>(2 * SUMS * requests.len()))?;
         let stream = self.fork()?;
         let kernel = device
@@ -305,15 +306,17 @@ impl Gpu {
             shared_mem_bytes: 0,
         };
         // SAFETY: every segment's boxes lie in `boxes` (counted when they were uploaded), its point
-        // in `points`, its horizons in `horizons`, its sums (SUMS doubles) in `totals`.
-        driver(unsafe {
-            kernel.launch_on_stream(
-                &stream,
+        // in `points`, its horizons in `horizons`, its sums (SUMS doubles) in `totals`, and every
+        // device buffer is declared before `stream`.
+        unsafe {
+            stream.launch(
+                kernel,
                 config,
                 (&device_boxes.boxes, &points, &horizons, &segments, &totals),
-            )
-        })?;
+            )?;
+        }
         let totals = stream.read_back(&totals)?;
+        stream.finish()?;
         for (slot, request_sums) in sums.iter_mut().enumerate() {
             for (band, band_sums) in request_sums.iter_mut().enumerate() {
                 let at = (2 * slot + band) * SUMS;

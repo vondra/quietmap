@@ -191,7 +191,7 @@ impl DeviceSquare {
             })
             .collect::<Result<_, String>>()?;
         let device = &gpu.device;
-        let upload = |bytes: Vec<u8>| driver(device.htod_sync_copy(&bytes));
+        let upload = |bytes: Vec<u8>| upload_default(device, &bytes);
         let pointer = |slice: &CudaSlice<u8>| *slice.device_ptr();
         // An empty buffer still needs an allocation to point at.
         let nonempty = |mut bytes: Vec<u8>| {
@@ -204,15 +204,18 @@ impl DeviceSquare {
         let terrain_tiles = upload(bytes_of(&terrain_tiles))?;
         let nodes = upload(nonempty(nodes))?;
         let scene_row_count = scene_rows.len() as u32;
-        let scene_rows = driver(device.htod_sync_copy(&scene_rows))?;
+        let scene_rows = upload_default(device, &scene_rows)?;
         let centre_west_node = Window::of_tile(square.tile).west_node;
         let obstacle_tiles = upload(nonempty(bytes_of(&obstacle_tiles)))?;
         let blob = upload(nonempty(blob))?;
-        let cell_max = driver(device.htod_sync_copy(&if cell_max.is_empty() {
-            vec![0.0]
-        } else {
-            cell_max
-        }))?;
+        let cell_max = upload_default(
+            device,
+            if cell_max.is_empty() {
+                &[0.0]
+            } else {
+                &cell_max
+            },
+        )?;
         let weather_nodes = upload(weather.node_bytes().to_vec())?;
         let candidates_bytes = upload(nonempty(bytes_of(&candidates)))?;
         let attributes_bytes = upload(nonempty(bytes_of(&attributes)))?;

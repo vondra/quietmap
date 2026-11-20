@@ -5,7 +5,7 @@
 
 use crate::device::{Gpu, driver};
 use crate::weather_runs::mixture_blocks;
-use cudarc::driver::{LaunchAsync, LaunchConfig};
+use cudarc::driver::LaunchConfig;
 use paint::exact::LAYERS;
 use paint::sone::PACKED_LINE_FLOATS;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS};
@@ -245,8 +245,8 @@ impl Gpu {
         // On a stream of their own, forked once their buffers are allocated: the pairs' kernels
         // of another pass run beside them on the card.
         let stream = self.fork()?;
-        // SAFETY: `stream` is never leaked and drops before `tasks`, `runs` and the caller's
-        // arrays.
+        // SAFETY: `stream` is never leaked and drops before `tasks`, `runs`, the caller's arrays,
+        // and every device destination declared above.
         unsafe {
             stream.copy(input, &mut device_input)?;
             stream.copy(offsets, &mut device_offsets)?;
@@ -262,7 +262,8 @@ impl Gpu {
         };
         // SAFETY: the kernels read each pixel's floats from its offset (the host packed them as
         // kernels/distribution.cuh lays them out); the first adds into `mixture_floats()` zeroed
-        // floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel.
+        // floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel; every device
+        // buffer is declared before `stream`.
         let state_bytes = loud_warp_bytes() + 4;
         for (states, &(first, blocks)) in spans.iter().enumerate().filter(|(_, (_, n))| *n > 0) {
             let config = LaunchConfig {
@@ -270,9 +271,9 @@ impl Gpu {
                 block_dim: (states as u32 * 32, 1, 1),
                 shared_mem_bytes: (states * state_bytes) as u32,
             };
-            driver(unsafe {
-                kernel("pixel_mixtures")?.launch_on_stream(
-                    &stream,
+            unsafe {
+                stream.launch(
+                    kernel("pixel_mixtures")?,
                     config,
                     (
                         &device_input,
@@ -282,12 +283,12 @@ impl Gpu {
                         first as u32,
                         &mixtures,
                     ),
-                )
-            })?;
+                )?;
+            }
         }
-        driver(unsafe {
-            kernel("pixel_ndens")?.launch_on_stream(
-                &stream,
+        unsafe {
+            stream.launch(
+                kernel("pixel_ndens")?,
                 pixels_config,
                 (
                     &device_input,
@@ -296,9 +297,10 @@ impl Gpu {
                     count as u32,
                     &ndens,
                 ),
-            )
-        })?;
+            )?;
+        }
         let flat = stream.read_back(&ndens)?;
+        stream.finish()?;
         Ok(flat
             .chunks_exact(LOUDNESS_FLOATS)
             .map(|pixel| std::array::from_fn(|k| pixel[k]))

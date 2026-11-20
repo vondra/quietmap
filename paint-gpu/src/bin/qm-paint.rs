@@ -212,7 +212,6 @@ fn run(arguments: &[String]) -> Result<(), String> {
                                 return Ok(());
                             };
                             if card.stopped() {
-                                drop(reservation);
                                 return Ok(());
                             }
                             // A panic is this square's error: the preparer may wait for the card.

@@ -19,9 +19,8 @@ pub(crate) fn paint_corners(painter: &PointPainter) -> Result<Vec<Painted>, Stri
     let mut painted = Vec::with_capacity(count);
     for first in (0..count).step_by(PIXELS_PER_LOUDNESS_BATCH) {
         let chunk = first..(first + PIXELS_PER_LOUDNESS_BATCH).min(count);
-        // A scratch of its own for every corner: a shared one keeps the capacity its earlier corners
-        // left, the groups then sum in another order, and the parallel jobs' cuts would show in
-        // the last bit of a corner's loudness.
+        // Each corner takes its own scratch because the chunk's corners run in parallel under
+        // `into_par_iter`.
         let sounds: Vec<([f64; LAYERS], PixelSound)> = chunk
             .into_par_iter()
             .map(|at| corner_sound(painter, &mut PixelSoundScratch::default(), at))
