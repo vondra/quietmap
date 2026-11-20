@@ -779,3 +779,188 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
         }
     }
 }
+
+/// Builds a forested tile (80 % cover, 15 m canopy) with mixed weather, a continuous wall
+/// saturating a wide road's skyline mask, and a 1-ray point source behind a building so hoisted
+/// `add_foliage`, mask-saturation early exit, 16-byte `RayCrossing`, and 1-ray direct stores all
+/// run on the same scene.
+fn foliage_and_saturated_skyline_fixture() -> (tempfile::TempDir, WeatherTable, TileId, [f64; 2]) {
+    use tiles::terrain::{Node, Window, code_of_height_m, encode as encode_terrain};
+
+    let root = tempfile::tempdir().unwrap();
+    let year = root.path().join("2026");
+    std::fs::create_dir(&year).unwrap();
+    let weather_node = WeatherNode {
+        percent: [25u8, 50, 75].map(|p| [p; SECTORS]),
+        ..WeatherNode::default()
+    };
+    let weather_bytes = encode_weather(&vec![weather_node; ROWS * COLUMNS]);
+    std::fs::write(year.join("weather"), &weather_bytes).unwrap();
+    std::fs::write(year.join("complete"), b"qmsq1\n").unwrap();
+    let weather = WeatherTable::parse(&weather_bytes).unwrap();
+    let tile = TileId { x: 2212, y: 1387 };
+    let window = Window::of_tile(tile);
+    let nodes = vec![
+        Node {
+            height_code: code_of_height_m(100.0),
+            impervious_percent: 20,
+            forest_percent: 80,
+            canopy_m: 15,
+        };
+        window.node_count()
+    ];
+    write_tiles(
+        &year,
+        Kind::Terrain,
+        &[(tile, encode_terrain(window, &nodes))],
+    )
+    .unwrap();
+    let outlines = vec![
+        // Continuous tall wall covering the entire azimuth of the wide road, saturating every mask.
+        Outline {
+            footprint_id: 1,
+            kind: OutlineKind::Wall,
+            envelope: EnvelopeClass::Residential,
+            height_m: 12.0,
+            vertices: vec![[-1500, 100], [1500, 100]],
+        },
+        // Second wall behind the first (skipped once masks saturate) and a building screening the
+        // 1-ray point source to the east.
+        Outline {
+            footprint_id: 2,
+            kind: OutlineKind::Wall,
+            envelope: EnvelopeClass::Residential,
+            height_m: 10.0,
+            vertices: vec![[-1500, 150], [1500, 150]],
+        },
+        Outline {
+            footprint_id: 3,
+            kind: OutlineKind::Exterior,
+            envelope: EnvelopeClass::Residential,
+            height_m: 8.5,
+            vertices: vec![
+                [300, -100],
+                [420, -100],
+                [420, 100],
+                [300, 100],
+                [300, -100],
+            ],
+        },
+    ];
+    write_tiles(
+        &year,
+        Kind::Obstacles,
+        &[(tile, encode_obstacles(&outlines))],
+    )
+    .unwrap();
+    let road = Attribute {
+        layer: Layer::Road,
+        height_m: 0.5,
+        ground_percent: 0,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 0.0,
+        footprint_id: 0,
+        group_key: 1,
+        emission: [[95.0; BANDS]; PERIODS],
+        display: Vec::new(),
+    };
+    let point_source = Attribute {
+        layer: Layer::Industry,
+        height_m: 2.0,
+        ground_percent: 0,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 0.0,
+        footprint_id: 0,
+        group_key: 2,
+        emission: [[98.0; BANDS]; PERIODS],
+        display: Vec::new(),
+    };
+    write_tiles(
+        &year,
+        Kind::Sources,
+        &[(
+            tile,
+            encode_sources(
+                &[
+                    Piece {
+                        ends: [[-800, 300], [800, 300]],
+                        attribute: 0,
+                    },
+                    Piece {
+                        ends: [[1000, 0], [1000, 0]],
+                        attribute: 1,
+                    },
+                ],
+                &[road, point_source],
+                &[],
+            ),
+        )],
+    )
+    .unwrap();
+    (root, weather, tile, [0.0, 0.0])
+}
+
+/// Verifies on the CPU that the forested fixture has non-zero foliage attenuation and distinct
+/// calm/favourable propagation for both its wide road and its screened 1-ray point source.
+#[test]
+fn foliage_and_saturated_skyline_fixture_exercises_foliage_on_cpu() {
+    let (root, weather, tile, receiver) = foliage_and_saturated_skyline_fixture();
+    let release = Release::open(root.path(), "2026").unwrap();
+    let files = Files::read(&release, tile).unwrap();
+    let square = Square::new(&weather, tile, &files).unwrap();
+    assert_eq!(square.candidates.len(), 2);
+    let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+    for index in 0..2u32 {
+        let (energy, _) = whole_energy(&square, &point, index, &mut Scratch::default()).unwrap();
+        assert!(energy.mixed[0] > 0.0 && energy.states[0][0] != energy.states[1][0]);
+    }
+}
+
+/// Verifies GPU/CPU parity on forested rays (`add_foliage`), saturated skyline masks
+/// (`mask_wide_buckets`), packed 16-byte `RayCrossing`s, and 1-ray direct stores (`PAIR_RAY_SINGLE`).
+#[test]
+#[ignore = "requires a CUDA card and NVRTC; run explicitly in the painter release gate"]
+fn foliage_saturated_skyline_and_single_ray_stores_match_cpu() {
+    let gpu = Gpu::new(0).unwrap();
+    let (root, weather, tile, receiver) = foliage_and_saturated_skyline_fixture();
+    let release = Release::open(root.path(), "2026").unwrap();
+    let files = Files::read(&release, tile).unwrap();
+    let square = Square::new(&weather, tile, &files).unwrap();
+    let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
+    let mut bands = gpu.bands(1).unwrap();
+    let mut spectra = Vec::new();
+    let (sums, failed) = gpu
+        .evaluate_pairs(
+            &device_square,
+            (&[receiver], &[0]),
+            (&[0, 1], &[0, 0], &[0, 0], &[1.0, 1.0]),
+            &mut bands,
+            Some(&mut spectra),
+        )
+        .unwrap();
+    assert_eq!(failed, vec![0, 0]);
+    let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
+    for (pair_idx, cand_idx) in [(0usize, 0u32), (1, 1)] {
+        let (expected, expected_bands) =
+            whole_energy(&square, &point, cand_idx, &mut Scratch::default()).unwrap();
+        let expected_sums: Vec<_> = expected
+            .mixed
+            .into_iter()
+            .chain(expected.states.into_iter().flatten())
+            .collect();
+        for (card, cpu) in sums[pair_idx].into_iter().zip(expected_sums) {
+            let err = (10.0 * (f64::from(card) / cpu).log10()).abs();
+            assert!(err < 0.05, "pair {pair_idx} sum diff {err} dB");
+        }
+        for (period, cpu_period) in expected_bands.iter().enumerate() {
+            for (band, &cpu) in cpu_period.iter().enumerate() {
+                let card = spectra[(pair_idx * PERIODS + period) * BANDS + band];
+                let err = (10.0 * (f64::from(card) / cpu).log10()).abs();
+                assert!(
+                    err < 0.05,
+                    "pair {pair_idx} p{period} b{band} diff {err} dB"
+                );
+            }
+        }
+    }
+}

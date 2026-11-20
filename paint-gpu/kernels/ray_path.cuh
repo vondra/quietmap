@@ -119,6 +119,43 @@ __device__ __forceinline__ float frame_height_above_chord(const RayFrame& f, int
     return perpendicular * f.chord_m * f.inverse_length;
 }
 
+// ray_height_above_chord reusing the frame's invariant chord and favourable root while preserving
+// the original divisions by horizontal length so canopy-boundary comparisons stay identical.
+__device__ __forceinline__ float foliage_height_above_chord(const RayFrame& f, int state, float x) {
+    if (state == HOMOGENEOUS) return 0.0f;
+    float horizontal = f.receiver.x - f.source.x;
+    float chord = f.chord_m;
+    float along = (x - f.source.x) * chord / horizontal;
+    float gamma = f.rays[state].radius_m;
+    float offset = along - 0.5f * chord;
+    float perpendicular = along * (chord - along) / (sqrtf(fmaxf(gamma * gamma - offset * offset, 0.0f)) + f.chord_root_m);
+    return perpendicular * chord / horizontal;
+}
+
+// Each state's foliage depth over the stretch from the last vertex to `ground` at `x`: the cover
+// where the state's ray runs inside the crowns, linear between the vertices, times the stretch's
+// length along the ray.
+__device__ __forceinline__ void add_foliage(const RayFrame& f, Crowns& crowns, float x, const GroundSample& ground) {
+    const GroundSample& behind = crowns.behind;
+    bool covered = behind.forest_cover > 0.0f || ground.forest_cover > 0.0f;
+    if (covered) {
+#pragma unroll
+        for (int state = 0; state < 2; state++) {
+            // A covered stretch after a covered one starts where that one's ray ended.
+            float za = crowns.behind_z_taken ? crowns.behind_z[state]
+                                             : chord_altitude(f.source, f.receiver, crowns.behind_x)
+                                                   + foliage_height_above_chord(f, state, crowns.behind_x);
+            float zb = chord_altitude(f.source, f.receiver, x) + foliage_height_above_chord(f, state, x);
+            float cover = cover_inside_crowns(za, behind) + cover_inside_crowns(zb, ground);
+            crowns.metres[state] += 0.5f * cover * hypotf(x - crowns.behind_x, zb - za);
+            crowns.behind_z[state] = zb;
+        }
+    }
+    crowns.behind_z_taken = covered;
+    crowns.behind = ground;
+    crowns.behind_x = x;
+}
+
 // state_ray_path_difference of the one point O = (x, z) from |SO| and |OR|: the triangle's excess
 // without cancellation (triangle_excess's) and downwind the arcs' excesses, over O, or for O under
 // the chord (2.5.27) with A on the chord under O, where SA + AR = SR leaves the triangle S A R

@@ -106,9 +106,12 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const Receiv
     if (pair >= pair_count || (rays && failed[pair])) return;
     float* pair_slots = slots + (u64)pair * (PERIODS * BANDS);
     if (rays && ray_counts[pair] <= PAIR_RAY_SLOTS) {
-        for (u32 k = 0; k < ray_counts[pair]; k++) {
+        u32 count = ray_counts[pair];
+        u32 single = count == 1u ? PAIR_RAY_SINGLE : 0u;
+        for (u32 k = 0; k < count; k++) {
             const float* slot = pair_slots + 4 * k;
-            rays[ray_offsets[pair] + k] = PairRay{pair, signbit(slot[2]) ? 0u : 1u, slot[0], slot[1], fabsf(slot[2]), slot[3]};
+            u32 flags = (signbit(slot[2]) ? 0u : PAIR_RAY_OBSTACLES) | single;
+            rays[ray_offsets[pair] + k] = PairRay{pair, flags, slot[0], slot[1], fabsf(slot[2]), slot[3]};
         }
         return;
     }
@@ -151,13 +154,20 @@ extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, RAY_BLOCKS_PER_M
     float out[PAIR_SUMS], ray_bands[PERIODS * BANDS];
     for (int j = 0; j < PAIR_SUMS; j++) out[j] = 0.0f;
     for (int j = 0; j < PERIODS * BANDS; j++) ray_bands[j] = 0.0f;
+    bool single = (ray.obstacles_on_ray & PAIR_RAY_SINGLE) != 0u;
     u32 status = ray_received(square.ground, square.obstacles, receiver, square.attributes[candidate.attribute], ray, s, out, ray_bands);
     if (status) {
-        atomicOr(&failed[pair], status);
+        if (single) failed[pair] = status;
+        else atomicOr(&failed[pair], status);
         return;
     }
-    for (int j = 0; j < PAIR_SUMS; j++) atomicAdd(&sums[(u64)PAIR_SUMS * pair + j], out[j]);
-    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&pair_bands[(u64)pair * (PERIODS * BANDS) + j], ray_bands[j]);
+    if (single) {
+        for (int j = 0; j < PAIR_SUMS; j++) sums[(u64)PAIR_SUMS * pair + j] = out[j];
+        for (int j = 0; j < PERIODS * BANDS; j++) pair_bands[(u64)pair * (PERIODS * BANDS) + j] = ray_bands[j];
+    } else {
+        for (int j = 0; j < PAIR_SUMS; j++) atomicAdd(&sums[(u64)PAIR_SUMS * pair + j], out[j]);
+        for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&pair_bands[(u64)pair * (PERIODS * BANDS) + j], ray_bands[j]);
+    }
 }
 
 // Per answered pair: its mixed bands added to point `point_index[i]`'s in `bands` (LAYERS x PERIODS

@@ -41,11 +41,12 @@ struct CrossingLister {
         if (failed) return failed;
         if (index == r.crossing_count) {
             if (r.crossing_count == RAY_CROSSINGS) return FAILED_CAPACITY;
-            r.crossings[r.crossing_count++] = RayCrossing{(float)c.t, c.height_m, c.footprint_id, c.bounds_roof, 0};
+            u16 flags = (u16)(c.bounds_roof ? RAY_CROSSING_BOUNDS_ROOF : 0u);
+            r.crossings[r.crossing_count++] = RayCrossing{c.footprint_id, (float)c.t, c.height_dm, flags};
         } else if (index >= 0) {
-            r.crossings[index].bounds_roof |= c.bounds_roof;
+            r.crossings[index].flags |= (u16)(c.bounds_roof ? RAY_CROSSING_BOUNDS_ROOF : 0u);
         }
-        if (!c.tie && r.crossing_count > 0) r.crossings[r.crossing_count - 1].closes = 1;
+        if (!c.tie && r.crossing_count > 0) r.crossings[r.crossing_count - 1].flags |= (u16)RAY_CROSSING_CLOSES;
         return 0;
     }
 };
@@ -66,7 +67,7 @@ __device__ __noinline__ u32 list_crossings(const ObstacleScene& obstacles, float
     if (ends.own_footprint != 0) {
         for (int i = 0; i < s.crossing_count; i++) {
             const RayCrossing& c = s.crossings[i];
-            if (!c.bounds_roof) continue;
+            if (!(c.flags & RAY_CROSSING_BOUNDS_ROOF)) continue;
             int k = 0;
             while (k < s.containing_count && s.containing[k] != c.footprint_id) k++;
             if (k < s.containing_count) s.containing[k] = s.containing[--s.containing_count];
@@ -92,7 +93,7 @@ __device__ __forceinline__ u32 next_taken_crossing(RayStream& s, int* crossing, 
             *crossing_x = *last_x = fmaxf(c.t * s.length, *last_x);
             return 0;
         }
-        if (c.closes && s.closing_count > 0) {
+        if ((c.flags & RAY_CROSSING_CLOSES) && s.closing_count > 0) {
             u32 failed = stream_closing_roofs(s);
             if (failed) return failed;
         }
@@ -111,8 +112,9 @@ __device__ __forceinline__ u32 take_crossing(RayStream& s, const RayCrossing& c,
     terrain_on(behind, ahead, x, &terrain_z, &terrain_g);
     Moments prefix = prefix_behind;
     add_stretch(prefix, behind.x, x, behind.z, terrain_z, behind.g, terrain_g, 0.0f, s.path.source_ground_z);
-    float height = terrain_z + c.height_m;
-    if (c.bounds_roof) {
+    // Round height_dm * 0.1f before adding terrain_z so fast-math FMA cannot shift wall tops.
+    float height = terrain_z + __fmul_rn((float)c.height_dm, 0.1f);
+    if (c.flags & RAY_CROSSING_BOUNDS_ROOF) {
         int open = -1;
         for (int k = 0; k < s.open_count; k++) {
             if (s.open[k].footprint_id == c.footprint_id) open = k;
@@ -134,7 +136,7 @@ __device__ __forceinline__ u32 take_crossing(RayStream& s, const RayCrossing& c,
     *is_top = x > 0.0f && x < s.length;
     *top = BandCandidate{x, height, terrain_z, terrain_g, prefix};
     // Close the roofs at this distance once no other crossing there follows.
-    if (c.closes && s.closing_count > 0) return stream_closing_roofs(s);
+    if ((c.flags & RAY_CROSSING_CLOSES) && s.closing_count > 0) return stream_closing_roofs(s);
     return 0;
 }
 
@@ -251,7 +253,7 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
             ahead.x = t * length;
             ahead.z = ahead.x < platform ? fminf(sample.height_m, stand) : sample.height_m;
             ahead.g = sample.ground_factor;
-            add_foliage(source, receiver, rays, crowns, ahead.x, sample);
+            add_foliage(frame, crowns, ahead.x, sample);
             Moments prefix = prefix_behind;
             add_stretch(prefix, behind.x, ahead.x, behind.z, ahead.z, behind.g, ahead.g, 0.0f, ground_z);
             keep_vertex(s, ahead, prefix);

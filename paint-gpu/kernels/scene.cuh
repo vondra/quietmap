@@ -45,6 +45,7 @@ __device__ __forceinline__ u16 read_u16(const u8* bytes) {
 struct Outline {
     u64 footprint_id;
     u32 first_vertex;
+    u16 height_dm;
     float height_m;
     int kind;
 };
@@ -84,13 +85,33 @@ __device__ __forceinline__ const u8* tile_vertices(const ObstacleScene& scene, c
     return tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * tile.outline_count;
 }
 
+__device__ __forceinline__ u32 tile_outline_first_vertex(const ObstacleScene& scene, const ObstacleTile& tile, u32 index) {
+    return read_u32(tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index);
+}
+
+__device__ __forceinline__ u64 tile_outline_footprint_id(const ObstacleScene& scene, const ObstacleTile& tile, u32 index) {
+    const u8* record = tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index;
+    u64 square = read_u32(tile_squares(scene, tile) + 4 * (u32)record[10]);
+    return (square << 32) | (u64)read_u32(record + 4);
+}
+
+// The fields of an outline read by skyline masking (no tile_squares indirection for footprint_id).
+__device__ __forceinline__ void tile_outline_skyline(const ObstacleScene& scene, const ObstacleTile& tile, u32 index,
+                                                     u32* first_vertex, float* height_m, int* kind) {
+    const u8* record = tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index;
+    *first_vertex = read_u32(record);
+    *height_m = (float)read_u16(record + 8) * 0.1f;
+    *kind = record[11] & 3;
+}
+
 __device__ Outline tile_outline(const ObstacleScene& scene, const ObstacleTile& tile, u32 index) {
     const u8* record = tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index;
     Outline outline;
     u64 square = read_u32(tile_squares(scene, tile) + 4 * (u32)record[10]);
     outline.footprint_id = (square << 32) | (u64)read_u32(record + 4);
     outline.first_vertex = read_u32(record);
-    outline.height_m = (float)read_u16(record + 8) * 0.1f;
+    outline.height_dm = read_u16(record + 8);
+    outline.height_m = (float)outline.height_dm * 0.1f;
     outline.kind = record[11] & 3;
     return outline;
 }
@@ -154,10 +175,10 @@ __device__ __forceinline__ bool segment_surely_missed(float sx, float sy, float 
     float u1 = __fmul_rn(wx, dy), u2 = __fmul_rn(wy, dx);
     float denominator = d1 - d2;
     float bound = filter_bound((fabsf(d1) + fabsf(d2)) + (fabsf(t1) + fabsf(t2)) + (fabsf(u1) + fabsf(u2)));
-    if (!(fabsf(denominator) > bound)) return false;
-    float sign = denominator > 0.0f ? 1.0f : -1.0f, reach = fabsf(denominator) + bound;
+    float abs_d = fabsf(denominator);
+    float sign = denominator > 0.0f ? 1.0f : -1.0f, reach = abs_d + bound;
     float t_numerator = sign * (t1 - t2), u_numerator = sign * (u1 - u2);
-    return t_numerator < -bound || t_numerator > reach || u_numerator < -bound || u_numerator > reach;
+    return abs_d > bound && (t_numerator < -bound || t_numerator > reach || u_numerator < -bound || u_numerator > reach);
 }
 
 // crossings::segment_intersection_t; false for no crossing.
@@ -194,12 +215,27 @@ __device__ __forceinline__ bool segment_intersection_t(double sx, double sy, dou
 // next crossing handed on has the same t.
 struct Crossing {
     double t;
-    float height_m;
+    u16 height_dm;
     u64 footprint_id;
     u64 edge;
     int bounds_roof;
     int tie;
 };
+
+// Compact cell-local hit kept while sorting a cell's crossings: `slot` is constant across the
+// cell, and `height_dm` and `edge_bounds_roof` are resolved only for the hits emitted.
+struct CellHit {
+    double t;
+    u64 footprint_id;
+    u32 edge;
+    u32 outline_index;
+};
+
+__device__ __forceinline__ bool cell_hit_before(const CellHit& a, const CellHit& b) {
+    if (a.t != b.t) return a.t < b.t;
+    if (a.footprint_id != b.footprint_id) return a.footprint_id < b.footprint_id;
+    return a.edge < b.edge;
+}
 
 // The sign of crossings::edge_bounds_roof's side of a vertex: from f32 where the filter's bound
 // proves it (the vertex offset + int is exact in f32 below 2^24), else from the f64 value. Its uses,
@@ -228,7 +264,7 @@ __device__ bool edge_bounds_roof(const ObstacleScene& scene, const ObstacleTile&
     int b = vertex_side_sign(scene, tile, edge + 1, sx, sy, dx, dy);
     if (a != 0 && b != 0) return true;
     u32 end = outline_index + 1 < tile.outline_count
-        ? tile_outline(scene, tile, outline_index + 1).first_vertex : tile.vertex_count;
+        ? tile_outline_first_vertex(scene, tile, outline_index + 1) : tile.vertex_count;
     u32 distinct = end - outline.first_vertex - 1;
     u32 vertex = ((a == 0 ? edge : edge + 1) - outline.first_vertex) % distinct;
     int before = 0, after = 0;
@@ -238,12 +274,6 @@ __device__ bool edge_bounds_roof(const ObstacleScene& scene, const ObstacleTile&
         if (before != 0 && after != 0) break;
     }
     return before * after < 0;
-}
-
-__device__ __forceinline__ bool crossing_before(const Crossing& a, const Crossing& b) {
-    if (a.t != b.t) return a.t < b.t;
-    if (a.footprint_id != b.footprint_id) return a.footprint_id < b.footprint_id;
-    return a.edge < b.edge;
 }
 
 // Crossings of one cell sorted at a time; a cell with more inside its stretch of the ray is walked
@@ -280,7 +310,8 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
     float length_m = hypotf(delta[0] * scene.metres_per_step_x, delta[1] * scene.metres_per_step_y);
     float endpoint_t = length_m > 0.0f ? ENDPOINT_TOLERANCE_M / length_m : 0.0f;
     float t_enter = 0.0f;
-    Crossing found[CELL_CROSSINGS];
+    CellHit hits[CELL_CROSSINGS];
+    u8 order[CELL_CROSSINGS];
     while (true) {
         float t_max[2];
         for (int axis = 0; axis < 2; axis++) {
@@ -313,16 +344,16 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                 u64 slot = (u64)(tile - scene.tiles);
                 const u8* runs = tile_runs(scene, *tile);
                 bool have_taken = false;
-                Crossing taken;
+                CellHit taken;
                 bool more = true;
                 while (more) {
                     more = false;
                     int count = 0;
                     double next_t = 2.0;
                     // The cell's runs and their edges in one loop through the f32 filter, then the edges
-                    // it kept, KEPT_EDGES at a time, through the exact test, the ordered insertion and the
-                    // roof check on every lane that kept one: taken where each lane met its edge, these ran
-                    // on 2.6 to 3.1 of a warp's 32 lanes. The same crossings in the same order.
+                    // it kept, KEPT_EDGES at a time, through the exact test and index-sorted insertion;
+                    // `edge_bounds_roof` runs only on the emitted crossings. The same crossings in the
+                    // same order.
                     u32 run_index = run_begin, next = 1, last_edge = 0, outline_index = 0;
                     int ax = 0, ay = 0;
                     while (run_index < run_end || next <= last_edge) {
@@ -333,7 +364,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                                 if (run_index == run_end) break;
                                 const u8* run = runs + (u64)RUN_BYTES * run_index++;
                                 outline_index = read_u32(run);
-                                u32 first = tile_outline(scene, *tile, outline_index).first_vertex + read_u16(run + 4);
+                                u32 first = tile_outline_first_vertex(scene, *tile, outline_index) + read_u16(run + 4);
                                 tile_vertex_local(scene, *tile, first, &ax, &ay);
                                 next = first + 1;
                                 last_edge = first + read_u16(run + 6);
@@ -364,42 +395,53 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                             if (!segment_intersection_t(start[0], start[1], delta[0], delta[1], a[0], a[1], b[0], b[1], &t)
                                 || t < t_enter - CELL_WINDOW_SLACK || t > t_exit + CELL_WINDOW_SLACK
                                 || !(t > endpoint_t && t < 1.0f - endpoint_t)) continue;
-                            Outline outline = tile_outline(scene, *tile, kept_outline[k]);
-                            Crossing crossing;
-                            crossing.t = t;
-                            crossing.height_m = outline.height_m;
-                            crossing.footprint_id = outline.footprint_id;
-                            crossing.edge = (slot << 32) | (u64)edge;
-                            if (have_taken && !crossing_before(taken, crossing)) continue;
-                            // Insert in order, keeping the first CELL_CROSSINGS.
+                            CellHit hit;
+                            hit.t = t;
+                            hit.footprint_id = tile_outline_footprint_id(scene, *tile, kept_outline[k]);
+                            hit.edge = edge;
+                            hit.outline_index = kept_outline[k];
+                            if (have_taken && !cell_hit_before(taken, hit)) continue;
+                            // Insert in order via byte indices, keeping the first CELL_CROSSINGS.
+                            u8 entry;
                             int at = count;
                             if (count == CELL_CROSSINGS) {
                                 more = true;
-                                if (!crossing_before(crossing, found[count - 1])) {
-                                    if (crossing.t < next_t) next_t = crossing.t;
+                                u8 last_entry = order[count - 1];
+                                if (!cell_hit_before(hit, hits[last_entry])) {
+                                    if (hit.t < next_t) next_t = hit.t;
                                     continue;
                                 }
-                                if (found[count - 1].t < next_t) next_t = found[count - 1].t;
+                                if (hits[last_entry].t < next_t) next_t = hits[last_entry].t;
+                                entry = last_entry;
                                 at = --count;
+                            } else {
+                                entry = (u8)count;
                             }
-                            // The roof check, which the order does not read, for the crossings kept.
-                            crossing.bounds_roof = edge_bounds_roof(scene, *tile, kept_outline[k], outline, edge, start[0], start[1],
-                                                                    delta[0], delta[1]);
-                            while (at > 0 && crossing_before(crossing, found[at - 1])) {
-                                found[at] = found[at - 1];
+                            hits[entry] = hit;
+                            while (at > 0 && cell_hit_before(hit, hits[order[at - 1]])) {
+                                order[at] = order[at - 1];
                                 at--;
                             }
-                            found[at] = crossing;
+                            order[at] = entry;
                             count++;
                         }
                     }
                     for (int k = 0; k < count; k++) {
-                        found[k].tie = (k + 1 < count ? found[k + 1].t : next_t) == found[k].t;
-                        u32 failed = take(found[k]);
+                        const CellHit& h = hits[order[k]];
+                        Outline outline = tile_outline(scene, *tile, h.outline_index);
+                        Crossing crossing;
+                        crossing.t = h.t;
+                        crossing.height_dm = outline.height_dm;
+                        crossing.footprint_id = h.footprint_id;
+                        crossing.edge = (slot << 32) | (u64)h.edge;
+                        crossing.bounds_roof = edge_bounds_roof(scene, *tile, h.outline_index, outline, h.edge, start[0], start[1],
+                                                                delta[0], delta[1]);
+                        crossing.tie = (k + 1 < count ? hits[order[k + 1]].t : next_t) == h.t;
+                        u32 failed = take(crossing);
                         if (failed) return failed;
                     }
                     if (count > 0) {
-                        taken = found[count - 1];
+                        taken = hits[order[count - 1]];
                         have_taken = true;
                     }
                 }

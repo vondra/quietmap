@@ -101,16 +101,20 @@ struct KeptCrossing {
     int index;
 };
 
-// A crossing the ray keeps: its place along the ray (0 at the source, 1 at the receiver), its
-// obstacle, and whether the roofs queued at its place close after it (the last crossing there, kept
-// or not).
+// Flags of a kept RayCrossing: bit 0 enters/leaves a footprint roof, bit 1 closes queued roofs.
+#define RAY_CROSSING_BOUNDS_ROOF 1u
+#define RAY_CROSSING_CLOSES 2u
+
+// A crossing the ray keeps: its obstacle, its place along the ray (0 at the source, 1 at the
+// receiver), its stored height in decimetres (qmobs2 u16), and its roof/closing flags. Packed to
+// 16 bytes so the per-thread crossings buffer takes a third less local memory.
 struct RayCrossing {
-    float t;
-    float height_m;
     u64 footprint_id;
-    int bounds_roof;
-    int closes;
+    float t;
+    u16 height_dm;
+    u16 flags;
 };
+static_assert(sizeof(RayCrossing) == 16, "RayCrossing stays 16 bytes");
 
 // Everything a ray carries while it walks.
 struct RayStream {
@@ -155,8 +159,9 @@ struct RayStream {
     // crest carried in. Its bytes a multiple of 16 keep the hulls after it aligned for wide loads (65
     // entries cost a dense city square's rays 7 % on compute capability 7.5, 2026-10-20).
     u16 candidates[2 * CHUNK_VERTICES];
-    StateStream states[2];
+    alignas(16) StateStream states[2];
 };
+static_assert(alignof(RayStream) >= 16, "RayStream keeps 16-byte hull alignment");
 
 // The tree cover where a ray at `altitude` runs inside the crowns over `ground`, else 0.
 __device__ __forceinline__ float cover_inside_crowns(float altitude, const GroundSample& ground) {
@@ -174,32 +179,6 @@ struct Crowns {
     bool behind_z_taken;
     float metres[2];
 };
-
-// Each state's foliage depth over the stretch from the last vertex to `ground` at `x`: the cover
-// where the state's ray runs inside the crowns, linear between the vertices, times the stretch's
-// length along the ray.
-__device__ __forceinline__ void add_foliage(const PlanePoint& source, const PlanePoint& receiver, const StateRay* rays, Crowns& crowns,
-                                            float x, const GroundSample& ground) {
-    const GroundSample& behind = crowns.behind;
-    bool covered = behind.forest_cover > 0.0f || ground.forest_cover > 0.0f;
-    if (covered) {
-#pragma unroll
-        for (int state = 0; state < 2; state++) {
-            const StateRay ray = unrolled_state_ray(rays, state);
-            // A covered stretch after a covered one starts where that one's ray ended.
-            float za = crowns.behind_z_taken ? crowns.behind_z[state]
-                                             : chord_altitude(source, receiver, crowns.behind_x)
-                                                   + ray_height_above_chord(ray, source, receiver, crowns.behind_x);
-            float zb = chord_altitude(source, receiver, x) + ray_height_above_chord(ray, source, receiver, x);
-            float cover = cover_inside_crowns(za, behind) + cover_inside_crowns(zb, ground);
-            crowns.metres[state] += 0.5f * cover * hypotf(x - crowns.behind_x, zb - za);
-            crowns.behind_z[state] = zb;
-        }
-    }
-    crowns.behind_z_taken = covered;
-    crowns.behind = ground;
-    crowns.behind_x = x;
-}
 
 // Vertex k of the walk, among the last VERTEX_RING.
 __device__ __forceinline__ TerrainPoint recent_vertex(const RayStream& s, int k) {
