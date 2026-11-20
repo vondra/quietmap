@@ -86,15 +86,42 @@ fn a_landing_roll_runs_on_reverse_thrust() {
         "{:?}",
         cessna.iter().map(|step| step.thrust_lb).collect::<Vec<_>>()
     );
-    // A landing at or below the 15 m/s runway-exit speed rolls its whole length at constant speed.
+    // A landing at or below the 15 m/s runway-exit speed rolls its whole length at constant speed,
+    // split at REVERSE_SHARE_OF_STOP so the +5 dB reverse-thrust peak and 20%-max thrust
+    // breakpoint are preserved alongside total duration.
     for speed_ms in [LANDING_EXIT_SPEED_MS, 12.0] {
-        let steady = landing(class("C172"), 300.0, speed_ms);
-        assert_eq!(steady.len(), 1);
-        assert_eq!((steady[0].from_m, steady[0].to_m), (0.0, 300.0));
+        let profile = RollProfile {
+            kind: RollKind::Landing,
+            class: class("C172"),
+            length_m: 300.0,
+            speed_ms,
+            field_altitude_m: 0.0,
+        };
+        let steady = profile.steps();
+        assert_eq!(steady.len(), 2);
+        let turn_m = REVERSE_SHARE_OF_STOP * 300.0;
+        assert!((steady[0].from_m - 0.0).abs() < 1e-12);
+        assert!((steady[0].to_m - turn_m).abs() < 1e-12);
+        assert!((steady[1].from_m - turn_m).abs() < 1e-12);
+        assert!((steady[1].to_m - 300.0).abs() < 1e-12);
+        assert_eq!(steady[0].increment_db[0], 0.0);
+        assert!((steady[0].increment_db[1] - REVERSE_INCREMENT_DB).abs() < 1e-12);
+        assert!((steady[1].increment_db[0] - REVERSE_INCREMENT_DB).abs() < 1e-12);
+        assert_eq!(steady[1].increment_db[1], 0.0);
+        let [t0, t_turn] = steady[0].thrust_lb.expect("a thrust model");
+        let [t_turn_next, t_stop] = steady[1].thrust_lb.expect("a thrust model");
+        assert!((t_turn - t_turn_next).abs() < 1e-12);
+        let expected_turn = profile
+            .landing_power()
+            .thrust_lb(REVERSE_SHARE_OF_STOP)
+            .expect("a thrust model");
+        assert!((t_turn - expected_turn).abs() < 1e-12);
+        let linear_chord = t0 + (t_stop - t0) * REVERSE_SHARE_OF_STOP;
         assert!(
-            (steady[0].duration_s - 300.0 / speed_ms).abs() < 1e-12,
-            "{}",
-            steady[0].duration_s
+            (t_turn - linear_chord).abs() > 1.0,
+            "thrust breakpoint {t_turn} should differ from linear chord {linear_chord}"
         );
+        let total_s: f64 = steady.iter().map(|step| step.duration_s).sum();
+        assert!((total_s - 300.0 / speed_ms).abs() < 1e-12, "{total_s}");
     }
 }

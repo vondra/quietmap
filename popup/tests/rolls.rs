@@ -258,26 +258,46 @@ fn roll_passes_match_roll_duration_and_stay_stable_when_cut_ten_times_finer() {
     }
 }
 
-/// Pass-class energy must equal roll energy in every period (day, evening and night), flight-kind
-/// totals must equal overall Lden energy, and total passing duration must match kinematics — for a
-/// take-off, a decelerating landing, and a steady-speed landing at or below 15 m/s.
+/// Pass-class energy must equal roll energy in every period (with distinct hourly rates per
+/// period), flight-kind totals must land solely in the roll's expected installation kind (wing,
+/// fuselage, propeller), total passing duration must match kinematics, and a steady-speed landing
+/// at <= 15 m/s must keep its +5 dB reverse-thrust peak beside one tenth of its length.
 #[test]
 fn roll_pass_classes_and_kinds_conserve_energy_in_every_period() {
-    let movements = [60.0, 20.0, 10.0];
+    // Distinct hourly movement rates: day 6/h (72/12), evening 3/h (12/4), night 2/h (16/8).
+    let movements = [72.0, 12.0, 16.0];
     let cases = [
         (
-            "takeoff",
+            "takeoff_wing",
             Roll {
                 movements_per_day: movements,
                 ..roll(class("A320-232"), false, 0.0)
             },
+            0usize,
         ),
         (
-            "landing",
+            "landing_wing",
             Roll {
                 movements_per_day: movements,
                 ..roll(class("A320-232"), true, 0.0)
             },
+            0usize,
+        ),
+        (
+            "takeoff_fuselage",
+            Roll {
+                movements_per_day: movements,
+                ..roll(class("CRJ9-ER"), false, 0.0)
+            },
+            1usize,
+        ),
+        (
+            "landing_fuselage",
+            Roll {
+                movements_per_day: movements,
+                ..roll(class("CRJ9-ER"), true, 0.0)
+            },
+            1usize,
         ),
         (
             "steady_landing_15",
@@ -287,6 +307,7 @@ fn roll_pass_classes_and_kinds_conserve_energy_in_every_period() {
                 movements_per_day: movements,
                 ..roll(class("CNA172"), true, 0.0)
             },
+            2usize,
         ),
         (
             "steady_landing_12",
@@ -296,9 +317,10 @@ fn roll_pass_classes_and_kinds_conserve_energy_in_every_period() {
                 movements_per_day: movements,
                 ..roll(class("CNA172"), true, 0.0)
             },
+            2usize,
         ),
     ];
-    for (name, spec) in cases {
+    for (name, spec, expected_kind) in cases {
         let sums = heard(std::slice::from_ref(&spec), [150.0, 200.0]);
         let start_speed = if spec.landing { spec.speed_ms } else { 0.0 };
         let end_speed = if spec.landing {
@@ -323,11 +345,51 @@ fn roll_pass_classes_and_kinds_conserve_energy_in_every_period() {
                 "{name} period {period}: passing {pass_time} vs {expected_passing}"
             );
         }
-        let kinds_total: f64 = sums.kinds.iter().sum();
-        let roll_lden = lden_energy(&sums.energy);
+        // Distinct hourly rates (6/h : 3/h : 2/h) must carry straight through into period energies.
         assert!(
-            (kinds_total / roll_lden - 1.0).abs() < 1e-12,
-            "{name}: kinds {kinds_total} vs Lden {roll_lden}"
+            (sums.energy[0] / sums.energy[1] - 2.0).abs() < 1e-12,
+            "{name}: day/evening ratio {}",
+            sums.energy[0] / sums.energy[1]
         );
+        assert!(
+            (sums.energy[1] / sums.energy[2] - 1.5).abs() < 1e-12,
+            "{name}: evening/night ratio {}",
+            sums.energy[1] / sums.energy[2]
+        );
+        let roll_lden = lden_energy(&sums.energy);
+        for (kind, &energy) in sums.kinds.iter().enumerate() {
+            if kind == expected_kind {
+                assert!(
+                    (energy / roll_lden - 1.0).abs() < 1e-12,
+                    "{name}: kind {kind} energy {energy} vs Lden {roll_lden}"
+                );
+            } else {
+                assert_eq!(
+                    energy, 0.0,
+                    "{name}: unexpected energy {energy} in kind {kind} (expected {expected_kind})"
+                );
+            }
+        }
     }
+
+    // Beside the 1/10th reverse-thrust peak (x = 30 m on a 300 m roll), a steady 15.0 m/s landing
+    // must match a barely decelerating 15.01 m/s landing continuously instead of losing the +5 dB
+    // reverse-thrust increment.
+    let steady = Roll {
+        length_m: 300.0,
+        speed_ms: LANDING_EXIT_SPEED_MS,
+        movements_per_day: movements,
+        ..roll(class("CNA172"), true, 0.0)
+    };
+    let just_above = Roll {
+        speed_ms: LANDING_EXIT_SPEED_MS + 0.01,
+        ..steady.clone()
+    };
+    let steady_peak = heard(&[steady], [30.0, 200.0]);
+    let above_peak = heard(&[just_above], [30.0, 200.0]);
+    let gap_db = (10.0 * (steady_peak.energy[0] / above_peak.energy[0]).log10()).abs();
+    assert!(
+        gap_db < 0.05,
+        "steady landing lost reverse-thrust peak beside x=30m: {gap_db:.3} dB gap vs 15.01 m/s"
+    );
 }

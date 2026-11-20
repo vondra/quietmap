@@ -88,7 +88,16 @@ impl RollProfile {
         let anchor = class_anchor(self.class);
         let [start_speed, end_speed] = self.end_speeds();
         let spans: Vec<(f64, f64, f64, f64)> = if start_speed == end_speed {
-            vec![(0.0, self.length_m, start_speed, end_speed)]
+            if self.kind == RollKind::Landing {
+                // Keep the reverse-thrust peak and thrust breakpoint at REVERSE_SHARE_OF_STOP.
+                let turn = REVERSE_SHARE_OF_STOP * self.length_m;
+                vec![
+                    (0.0, turn, start_speed, end_speed),
+                    (turn, self.length_m, start_speed, end_speed),
+                ]
+            } else {
+                vec![(0.0, self.length_m, start_speed, end_speed)]
+            }
         } else {
             let count = (1.0 + (end_speed - start_speed).abs() / speed_step_ms).floor() as usize;
             let step = (end_speed - start_speed) / count as f64;
