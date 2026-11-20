@@ -23,7 +23,7 @@ use tiles::sources::Layer;
 const FACADE_CANDIDATES: usize = 3;
 
 /// The ground layers' energy of a point: what the popup ranks façades by (the flights apart).
-fn ground_energy(layers: &[f64; LAYERS]) -> f64 {
+pub(crate) fn ground_energy(layers: &[f64; LAYERS]) -> f64 {
     (layers.iter().enumerate())
         .filter(|&(layer, _)| layer != Layer::Aircraft as usize)
         .map(|(_, energy)| energy)
@@ -73,6 +73,26 @@ pub(crate) fn building_pixels(
                 .map(|(footprint, pixels)| BuildingPixels { footprint, pixels })
                 .collect()
         })
+        .collect()
+}
+
+/// Which of a pass's receivers some building may still read (`buildings[k]` receiver `k`'s
+/// building, `ground[k]` its [`ground_energy`]): each building's loudest among them, the first of
+/// equals, as [`loudest_by_ground`] keeps it over all the passes; if any energy in the pass is not
+/// a number, every receiver is kept so the pass matches the unpruned reduction.
+fn loudest_receivers(buildings: &[usize], ground: &[f64]) -> Vec<bool> {
+    if ground.iter().any(|value| value.is_nan()) {
+        return vec![true; buildings.len()];
+    }
+    let mut loudest: HashMap<usize, usize> = HashMap::new();
+    for (k, &building) in buildings.iter().enumerate() {
+        let kept = loudest.entry(building).or_insert(k);
+        if ground[k] > ground[*kept] {
+            *kept = k;
+        }
+    }
+    (buildings.iter().enumerate())
+        .map(|(k, building)| loudest[building] == k)
         .collect()
 }
 
@@ -202,7 +222,11 @@ pub(crate) fn building_levels(
             .flat_map(|(slot, (_, range))| range.clone().map(move |k| (slot, k)))
             .map(|(slot, k)| (slot, pixels[k]))
             .collect();
-        let paint = painter.paint(&pass, &points[points_run.clone()], &places)?;
+        // Only a building's loudest receiver of the pass can be the one its pixels read.
+        let paint =
+            painter.paint_chosen(&pass, &points[points_run.clone()], &places, &|ground| {
+                loudest_receivers(&footprints[points_run.clone()], ground)
+            })?;
         Ok((points_run, paint))
     })?;
     let painted = (painted.into_iter())
@@ -271,26 +295,5 @@ pub(crate) fn fill_buildings(
 mod boundary_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A building takes its loudest ground-source candidate; aircraft do not choose its façade.
-    #[test]
-    fn a_building_reads_its_loudest_facade() {
-        let aircraft = Layer::Aircraft as usize;
-        let mut loud = [1000.0; LAYERS];
-        loud[aircraft] = 1.0;
-        let mut overflown = [10.0; LAYERS];
-        overflown[aircraft] = 1e9;
-        let levels = loudest_by_ground(
-            [
-                (7, Some((overflown, [1.0; LAYERS + 1]))),
-                (7, Some((loud, [8.0; LAYERS + 1]))),
-                (9, None),
-            ]
-            .into_iter(),
-        );
-        assert_eq!(levels[&7], (loud, [8.0; LAYERS + 1]));
-        assert!(!levels.contains_key(&9));
-    }
-}
+#[path = "buildings_tests.rs"]
+mod tests;
