@@ -13,10 +13,6 @@
       "value": 90
     },
     {
-      "country": "CA",
-      "value": 105
-    },
-    {
       "country": "CN",
       "value": 100
     },
@@ -38,19 +34,11 @@
     },
     {
       "country": "JP",
-      "value": 80
+      "value": 90
     },
     {
       "country": "NZ",
       "value": 90
-    },
-    {
-      "country": "RU",
-      "value": 90
-    },
-    {
-      "country": "US",
-      "value": 105
     }
   ]
 }

@@ -147,13 +147,11 @@ mod tests {
     }
 
     #[test]
-    fn committed_2024_heavy_speeds_match_dated_history_and_cover_2026_countries() {
+    fn committed_2024_heavy_speeds_match_dated_history_and_2026_where_still_valid() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../years/tables");
-        let history: History = serde_json::from_slice(
-            &std::fs::read(root.join("2024/road-heavy-history.json")).unwrap(),
-        )
-        .unwrap();
-        let derived = selected(
+        let history_bytes = std::fs::read(root.join("2024/road-heavy-history.json")).unwrap();
+        let history: History = serde_json::from_slice(&history_bytes).unwrap();
+        let derived_2024 = selected(
             history.rows,
             "2024-12-31".parse().unwrap(),
             Kind::HeavySpeeds,
@@ -162,18 +160,38 @@ mod tests {
         let committed_2024: Value =
             serde_json::from_slice(&std::fs::read(root.join("2024/heavy-speeds.json")).unwrap())
                 .unwrap();
-        assert_eq!(derived, committed_2024);
-        let countries = |table: &Value| -> std::collections::BTreeSet<String> {
+        assert_eq!(derived_2024, committed_2024);
+
+        let history_2026: History = serde_json::from_slice(&history_bytes).unwrap();
+        let derived_2026 = selected(
+            history_2026.rows,
+            "2026-12-31".parse().unwrap(),
+            Kind::HeavySpeeds,
+        )
+        .unwrap();
+        let committed_2026: Value =
+            serde_json::from_slice(&std::fs::read(root.join("2026/heavy-speeds.json")).unwrap())
+                .unwrap();
+        let by_country = |table: &Value| -> BTreeMap<String, f64> {
             table["rows"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|row| row["country"].as_str().unwrap().to_string())
+                .map(|row| {
+                    (
+                        row["country"].as_str().unwrap().to_string(),
+                        row["value"].as_f64().unwrap(),
+                    )
+                })
                 .collect()
         };
-        let committed_2026: Value =
-            serde_json::from_slice(&std::fs::read(root.join("2026/heavy-speeds.json")).unwrap())
-                .unwrap();
-        assert_eq!(countries(&committed_2024), countries(&committed_2026));
+        let table_2026 = by_country(&committed_2026);
+        for (country, value) in by_country(&derived_2026) {
+            assert_eq!(
+                table_2026.get(&country).copied(),
+                Some(value),
+                "{country} valid in 2026 must match 2026/heavy-speeds.json"
+            );
+        }
     }
 }

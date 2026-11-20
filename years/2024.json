@@ -7154,14 +7154,14 @@
       "publisher": "National road authorities",
       "url": "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32002L0085",
       "observed": {
-        "start": "1975-12-01",
+        "start": "2004-01-23",
         "end": "2024-04-01"
       },
       "published": null,
       "licence": "Published aggregate observations and model parameters",
       "public_ok": true,
       "depends_on": [],
-      "description": "Dated national statutory limits and speed-limiter caps for heavy vehicles valid at the 2024 map-state cutoff (13 countries). Other countries retain the documented global 80 km/h cap."
+      "description": "Dated national statutory limits and speed-limiter caps for heavy vehicles valid at the 2024 map-state cutoff (10 countries: AU, BE, BR, CN, ES, FR, GB, IE, JP, NZ). CA, RU and US have no row here and retain the documented global 80 km/h cap alongside other unlisted countries."
     },
     {
       "id": "legal-speeds-osm",
