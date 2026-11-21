@@ -191,13 +191,8 @@ pub(super) fn report(
         let (mut searched, mut exhaustive) =
             (FlightTotals::reading(pieces), FlightTotals::reading(pieces));
         for ring in &popup_rings {
-            // The list alone: no lambda read, so no far boxes beside the fine ones.
             let heard: Vec<RingTile> = (ring.iter())
-                .map(|&(tile, heard)| RingTile {
-                    tile,
-                    heard,
-                    far: None,
-                })
+                .map(|&(tile, heard)| RingTile { tile, heard })
                 .collect();
             ring_aircraft(
                 &heard,

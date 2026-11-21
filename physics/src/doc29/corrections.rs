@@ -12,10 +12,14 @@ use super::npd::Installation;
 /// engines peaks at 0.401395 dB at 50.43 deg; fuselage and propeller never exceed 0.
 pub const INSTALLATION_CORRECTION_MAX_DB: f64 = 0.4014;
 
-/// Delta_V = 10 lg(V_ref / V) (Eq. 4-14) for ground speed `speed_kt`; 0 at or below 10 kt (dev4:
-/// a hovering or stationary sample keeps the reference level instead of an unbounded gain).
+/// At or below this ground speed (kt) a sample is taken at its NPD reference speed (dev4: a
+/// hovering or stationary sample keeps the reference level instead of an unbounded gain).
+pub const SLOWEST_OWN_SPEED_KT: f64 = 10.0;
+
+/// Delta_V = 10 lg(V_ref / V) (Eq. 4-14) for ground speed `speed_kt`; 0 at or below
+/// [`SLOWEST_OWN_SPEED_KT`].
 pub fn speed_correction_db(reference_speed_kt: f64, speed_kt: f64) -> f64 {
-    if speed_kt > 10.0 {
+    if speed_kt > SLOWEST_OWN_SPEED_KT {
         10.0 * (reference_speed_kt / speed_kt).log10()
     } else {
         0.0

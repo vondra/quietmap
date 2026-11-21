@@ -187,20 +187,15 @@ impl<'a> Square<'a> {
         let mut obstacles = Scene::new(frame);
         let half = [frame.east_m_per_unit / 2.0, frame.north_m_per_unit / 2.0];
         let (mut receiver_low, mut receiver_high) = (half.map(|value| -value), half);
-        let facade_footprints: std::collections::HashSet<u64> = obstacle_tiles
-            .iter()
-            .filter(|(other, _)| *other == tile)
-            .filter_map(|(_, outlines)| outlines.as_ref())
-            .flat_map(|outlines| (0..outlines.outline_count()).map(|index| outlines.outline(index)))
-            .filter(|outline| outline.kind.is_building() && outline.envelope.is_enclosed())
-            .map(|outline| outline.footprint_id)
-            .collect();
-        // A footprint can have a detached wing stored only in a neighbouring tile.
+        // An outline crossing the square is stored whole here, including its far façades.
         for (other, outlines) in &obstacle_tiles {
+            if *other != tile {
+                continue;
+            }
             let Some(outlines) = outlines else { continue };
             for index in 0..outlines.outline_count() {
                 let outline = outlines.outline(index);
-                if !facade_footprints.contains(&outline.footprint_id) {
+                if !outline.kind.is_building() || !outline.envelope.is_enclosed() {
                     continue;
                 }
                 for vertex in outline.first_vertex..outline.first_vertex + outline.vertex_count {

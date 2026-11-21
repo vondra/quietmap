@@ -332,17 +332,17 @@ __device__ void mask_wide_buckets(const ObstacleScene& scene, float origin_x, fl
             u32 run_begin, run_end;
             tile_cell_runs(scene, *tile, index, &run_begin, &run_end);
             const u8* runs = tile_runs(scene, *tile);
-            for (u32 run_index = run_begin; run_index < run_end; run_index++) {
+            for (u32 run_index = run_begin; run_index < run_end && walking; run_index++) {
                 const u8* run = runs + (u64)RUN_BYTES * run_index;
-                Outline outline = tile_outline(scene, *tile, read_u32(run));
-                if (outline.kind == OUTLINE_KIND_WALL && outline.height_m <= los_floor_m) continue;
+                OutlineMeta outline = tile_outline_meta(scene, *tile, read_u32(run));
+                if (outline.kind == OUTLINE_KIND_WALL && (float)outline.height_dm * 0.1f <= los_floor_m) continue;
                 u32 first = outline.first_vertex + read_u16(run + 4);
                 u32 edge_count = read_u16(run + 6);
                 int lx, ly;
                 tile_vertex_local(scene, *tile, first, &lx, &ly);
                 float ax = (tile->offset_x + (float)lx - ox) * east_m, ay = (oy - (tile->offset_y + (float)ly)) * north_m;
                 float azimuth_a = atan2f(ay, ax);
-                for (u32 next = first + 1; next <= first + edge_count; next++) {
+                for (u32 next = first + 1; next <= first + edge_count && walking; next++) {
                     tile_vertex_local(scene, *tile, next, &lx, &ly);
                     float bx = (tile->offset_x + (float)lx - ox) * east_m, by = (oy - (tile->offset_y + (float)ly)) * north_m;
                     float azimuth_b = atan2f(by, bx);
@@ -350,11 +350,21 @@ __device__ void mask_wide_buckets(const ObstacleScene& scene, float origin_x, fl
                     if (nearest_m >= 1e-6f) {
                         float unwrapped_b = azimuth_a + wrap_to_pi(azimuth_b - azimuth_a);
                         float arc_lo = fminf(azimuth_a, unwrapped_b), arc_hi = fmaxf(azimuth_a, unwrapped_b);
+                        u32 saturated = 0u;
                         for (int k = 0; k < b.count; k++) {
                             const WideSpan& w = b.span[k];
                             if ((walking >> k & 1u) && nearest_m <= w.need_radius) {
                                 mark_blocked_bins(b.g, arc_lo, arc_hi, nearest_m, w.need_radius, w.span_lo, w.span_hi, w.bin_width, b.mask[k]);
+                                u32 all = 0xffffffffu;
+#pragma unroll
+                                for (int word = 0; word < WIDE_BUCKET_MASK_WORDS; word++) all &= b.mask[k][word];
+                                if (all == 0xffffffffu) saturated |= 1u << k;
                             }
+                        }
+                        if (saturated) {
+                            wide &= ~saturated;
+                            walking &= ~saturated;
+                            if (!wide) return;
                         }
                     }
                     ax = bx;

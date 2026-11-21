@@ -1,9 +1,9 @@
 //! Quiet ground source energies and spectra from shared importance samples on the hum lattice.
 //!
 //! The quiet hum of a square: at points every `spacing` pixels, per layer the energy per period of
-//! the ground sources not loud there (`popup::candidates::loud`), with the click's error budget:
-//! left out under 0.1 dB of the whole answer, else sampled to 0.05 dB (`popup::sampling`), over the
-//! loud ones evaluated exactly, and its bands. The selected quiet rays are batched through
+//! the ground sources not loud there (`popup::candidates::loud`): left out under 0.1 dB of the
+//! whole answer, else sampled (`popup::sampling`) to 0.05 dB of it or to what no visitor hears
+//! (`crate::hum_samples`), over the loud ones evaluated exactly, and its bands. The selected quiet rays are batched through
 //! `crate::hum_samples`; their importance weights apply to spectra, while unweighted energies
 //! determine the sample's confidence. A pixel takes it blended from the four points around in
 //! decibels; the painter and its etalon take the same.
@@ -87,10 +87,12 @@ impl Hum {
         let side = pixels / spacing + 1;
         let seeds: Vec<u64> = (0..points.len())
             .map(|at| {
-                // Shared world coordinates give neighbouring squares the same receiver sample.
-                let x = u64::from(square.tile.x) * pixels as u64 + ((at % side) * spacing) as u64;
-                let y = u64::from(square.tile.y) * pixels as u64 + ((at / side) * spacing) as u64;
-                (x << 32) | y
+                point_seed(
+                    square.tile,
+                    pixels,
+                    (at % side) * spacing,
+                    (at / side) * spacing,
+                )
             })
             .collect();
         let quiet = sampled_hum(square, points, loud_energy, &seeds, batch)?;
@@ -160,9 +162,30 @@ impl Hum {
     }
 }
 
+/// The sample's seed of the hum point at pixel (x, y) of the square `tile`, `pixels` a side: its
+/// world coordinates, so that neighbouring squares draw the same sample at a point they share,
+/// the two sides of the antimeridian too.
+fn point_seed(tile: tiles::geo::TileId, pixels: usize, x: usize, y: usize) -> u64 {
+    let world = pixels as u64 * u64::from(tiles::geo::TILES_PER_AXIS);
+    let x = (u64::from(tile.x) * pixels as u64 + x as u64) % world;
+    let y = u64::from(tile.y) * pixels as u64 + y as u64;
+    (x << 32) | y
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two squares draw the same sample at a hum point of their shared edge, across the
+    /// antimeridian too (there the eastern square's seed was a world further).
+    #[test]
+    fn neighbouring_squares_seed_a_shared_hum_point_alike() {
+        let tile = |x: u32| tiles::geo::TileId { x, y: 1387 };
+        let seed = |x: u32, pixel: usize| point_seed(tile(x), 1024, pixel, 64);
+        assert_eq!(seed(2212, 1024), seed(2213, 0));
+        assert_eq!(seed(4095, 1024), seed(0, 0));
+        assert_ne!(seed(2212, 0), seed(2212, 64));
+    }
 
     #[test]
     fn energy_only_background_is_the_original_hum_at_every_pixel() {

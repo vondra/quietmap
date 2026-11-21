@@ -59,7 +59,7 @@ function heatmapCellReadoutText(readout: HeatmapCellReadout): string {
   switch (readout.kind) {
     case 'level': return `${fmtSone(readout.sone)} sone`
     case 'lden': return `${readout.db.toFixed(1)} dB`
-    case 'silence': return 'silent'
+    case 'below-floor': return 'Below map range'
     case 'no-level': return '—'
     case 'unavailable': return '— (unavailable)'
   }

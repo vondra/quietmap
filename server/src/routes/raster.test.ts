@@ -20,6 +20,7 @@ async function app(t: test.TestContext) {
     years: ['2026', '2025'],
     popupConcurrency: 1,
     tilesDir: '/nonexistent/tiles',
+    basemapDir: null,
     noIndex: false,
     photonUrl: 'http://127.0.0.1:9',
     valhallaUrl: 'http://127.0.0.1:9',

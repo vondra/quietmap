@@ -18,12 +18,12 @@ same answer.
 
 The popup leads with how loud the place sounds, then lists the sources heard there, the largest
 share first. A row opens to the source's data and how its sound arrives, and highlights it on the
-map. An industrial site shows its mapped boundary where one is available. At Greenwich, October 2026:
+map. An industrial site shows its mapped boundary where one is available. At Greenwich, November 2026:
 
 | In the popup | What it tells |
 |---|---|
 | 19 sone Nden | How loud the place sounds over the day |
-| 66.5 dB Lden | The level in decibels, the year's average |
+| 66.6 dB Lden | The level in decibels, the year's average |
 | Greenwich Church Street | A source heard there: a road as one row, a factory, the aircraft |
 | 590 veh/h | How often it passes: vehicles an hour by day, trains a day, flights a day above 50 dB, how many times a day bells ring, a call sounds or a car parks or leaves; nothing for a steady source |
 | 28 m | How far it is |
@@ -36,8 +36,8 @@ map. An industrial site shows its mapped boundary where one is available. At Gre
 | Detailed calculation | The whole place: each period and layer, the weather, the façade the point is answered at, and the levels exceeded 5 to 90 % of the time |
 
 <p>
-<img src="click.jpg" width="1500" height="880" alt="The popup at Greenwich in London: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
-<img src="calculation.jpg" width="1500" height="1390" alt="The same point's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
+<img src="click.jpg" width="1740" height="1040" alt="The popup at Greenwich in London, under the search field's open place: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
+<img src="calculation.jpg" width="1740" height="1588" alt="The same point's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
 </p>
 
 <details>
@@ -171,15 +171,18 @@ low.
   the place's weather, the same for all its rays, as a night's inversion bends them all at once: a
   piece with p = 0.3 is bent down in the three most favourable states. The levels exceeded 5 to 90 %
   of the time and Nden are computed over every hour and these states. New painting keeps the same ten
-  weather states; existing squares keep their earlier weather calculation until repainted.
+  weather states (the map gives consecutive states in which every source group's mean varies by at
+  most 1 dB that group's average over them);
+  existing squares keep their earlier weather calculation until repainted.
 
 </details>
 
 ## Where the point is
 
 The point is 4 m above the ground, as the END prescribes. Inside a building the popup answers at
-the building's loudest façade, where a noise map's receivers stand. A building with no exposed
-façade gets no answer. No indoor attenuation is applied.
+the building's loudest façade, where a noise map's receivers stand. When one map record groups
+separate buildings, each has its own façades, including its courtyard walls. A building with no
+exposed façade gets no answer. No indoor attenuation is applied.
 
 <details>
 <summary>How the façade is chosen</summary>
@@ -189,6 +192,10 @@ the building (flights do not choose it), among receivers placed as
 <abbr title="Common Noise Assessment Methods in Europe, the EU's method for road, railway and industrial noise">CNOSSOS-EU</abbr>
 places them: every 5 m or less along each façade, 0.1 m in front of the wall and 4 m up, the
 façade's own reflection left out.
+
+Sources are ranked first by a cheap ceiling that omits air absorption. A source is skipped only
+when its ceiling falls below the hundredth full bound at the façades; equal bounds keep their
+original source order.
 
 </details>
 
@@ -212,8 +219,8 @@ The popup reads the point's tile, its eight neighbours and the terrain out to 8 
 and sends a first answer. It reads one more ring of tiles at a time until every ground source
 within 12 km, every flight within 16 km and every runway roll starting within 8 km is covered,
 sending the whole answer again
-after each ring. At Greenwich in London it
-reads 225 MB in 119 reads, the flight tracks and the weather among them.
+after each ring. Once the receiver is placed, it skips ground-source tiles lying wholly beyond
+12 km; every source within reach still counts.
 
 Every flight uses the same horizon, built once from that terrain and the nearby buildings.
 
@@ -333,7 +340,7 @@ every wall the ray crosses stands at its height. Over this cross-section the pop
 
 Every term is computed in eight octave bands from 63 Hz to 8 kHz. At 392 Polish road monitoring
 stations behind forest the model read a median 2.4 dB above the measurement without the crowns'
-term and 0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above.
+term and 0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above (October 2026).
 
 </details>
 
@@ -351,12 +358,19 @@ much of the time the level spends at each value (Kurze's statistics of moving so
 distance runs from the point, 4 m up, to the vehicles or trains where they pass nearest, as if
 they drove on the point's own ground (on a bridge, on its deck): over a road's middle it is about
 4 m, not none; beside a cutting it reads short, beside an embankment long. A road with 600
-vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m;
-one flight a day 1 km away is near its peak for about half a minute; a take-off passes a house
-100 m beside its start of roll in about 11 seconds, as it sets off from rest. The flights heard
-and the runways' rolls are one stream, its rate and passing time weighted by sound energy; the
-flights' come from the coarse boxes of airspace everywhere, also where the fine boxes give the
-sound, so the stream does not jump where one gives way to the other. Sources add up only within the same moment, so the sum is taken
+vehicles an hour at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m.
+
+Flights are heard while they pass. A box of airspace holds how many flights cross it a day and
+how fast its loudest fly, so its flights are in it a known share of the time, at the level its
+sound has at the point; a runway take-off or landing roll enters the same pass classes over each
+of its Doc 29 speed segments for the seconds the aircraft spends rolling it. Boxes of like level,
+in steps of 3 dB, form one stream of passes, and several flights can pass at once. Against the real
+flights of 34 days of the year at 14 places,
+each followed second by second, the flights' loudness reads 9 % quieter to 30 % louder, 9 %
+louder at the typical place: a box takes all its flights at one level, though a climbing jet and a
+gliding one differ.
+
+Sources add up only within the same moment, so the sum is taken
 for every hour of road traffic and ten states of the weather; bells, calls, a car park's cars, a
 range's shots, courts, pitches, playgrounds, pools and terraces in use, the guests outside bars
 and restaurants and the plant of shops, offices and restaurants while it runs sound in their share
@@ -404,7 +418,7 @@ legal noise map or a property certificate.
 <details>
 <summary>The popup's code: popup/, server/ and frontend/, and its targets</summary>
 
-`popup/` (`qm-popup`) answers a point:
+[`popup/`](https://github.com/vondra/quietmap/tree/main/popup) (`qm-popup`) answers a point:
 
 - `answer.rs`: the ring loop, until every kind's reach is covered (`candidates::GROUND_REACH_M`,
   `aircraft::boxes::AIRCRAFT_REACH_M`); an update after every ring.
@@ -415,7 +429,7 @@ legal noise map or a property certificate.
 - `scene.rs`: the ground under a point and along a ray, at every line of the terrain grid it crosses.
 - `evaluate.rs`: one source at the receiver, its rays through `physics/src/ray.rs`, `line.rs`,
   `cnossos/` and `foliage.rs`, and its sound path.
-- `building.rs`: a point inside a building, answered at its loudest façade.
+- `building.rs`, `facade_sources.rs`: a point inside a building, answered at its loudest façade.
 - `obstacles/reflection.rs`, `obstacles/reflection_coverage.rs`: the same covered area for the popup
   and the painter, tabulated only where the bounds of tall footprints and reachable receiver windows
   intersect; `physics/src/reflection.rs` turns its share into the receiver bonus.
@@ -425,8 +439,8 @@ legal noise map or a property certificate.
   `listing.rs`, `json.rs`: the rows, the levels over time, Nden, the shares, the lines on the map,
   the listed pieces and the update as one line of JSON.
 
-`server/` runs `qm-popup` once per point (two at once, two waiting per slot, 503 when full, stopped
-after 30 s or when the visitor leaves) and forwards its lines as they come; `frontend/` redraws the
+[`server/`](https://github.com/vondra/quietmap/tree/main/server) runs `qm-popup` once per point (two at once, two waiting per slot, 503 when full, stopped
+after 30 s or when the visitor leaves) and forwards its lines as they come; [`frontend/`](https://github.com/vondra/quietmap/tree/main/frontend) redraws the
 panel on every line.
 
 The latency targets, checked with `bench/cold.py` and `bench/report.py` from a cold disk, are

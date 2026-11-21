@@ -4,7 +4,7 @@
 // visitor's names come from the account and go to it, the browser's own left as they were until
 // signing out at the top right.
 import { expect, test, type Page, type Route } from '@playwright/test'
-import { PHONE, POINT, installHermeticMap, openPoint, renameOpenPlace } from './support'
+import { PHONE, POINT, installHermeticMap, openPoint, renameOpenPlace, swipeDown } from './support'
 
 test.use(PHONE)
 
@@ -42,8 +42,8 @@ test('a signed-out visitor finds the sign-in at the top right and under the plac
   await account.getByRole('button', { name: 'Send me a link' }).tap()
   await expect(account.getByTestId('sign-in-sent')).toContainText(ACCOUNT)
   expect(asked).toEqual([{ email: ACCOUNT }])
-  // A tap elsewhere closes it; the top right opens it again.
-  await page.getByTestId('mobile-detail-sheet').getByRole('button', { name: 'Close' }).tap()
+  // Closing the place closes the account's panel; the account at the field's end opens it again.
+  await swipeDown(page.getByTestId('mobile-detail-sheet').getByRole('button', { name: /^(Collapse|Expand)$/ }))
   await expect(page.getByTestId('mobile-detail-sheet')).toHaveCount(0)
   await expect(account.getByTestId('sign-in-sent')).toHaveCount(0)
   await account.getByRole('button', { name: 'Sign in' }).tap()

@@ -1,14 +1,15 @@
-// Aircraft box energies at the painter's lattice points: popup/src/aircraft/boxes.rs tile_flight_sums
-// and physics/src/doc29/boxes.rs box_sel_at_receiver in single precision, every box of a segment
-// (one point's boxes of one tile, file and lattice) a thread, summed per point in double.
+// Aircraft box energies and passes at the painter's lattice points: popup/src/aircraft/boxes.rs
+// tile_flight_passes and physics/src/doc29/boxes.rs box_sel_at_receiver in single precision, every
+// box of a segment (one point's boxes of one tile, file and lattice) a thread, summed per point in
+// double.
 
 // The constants (NPD_DISTANCES, LOG10_NPD_DISTANCES_FT, the installation slants, the screening's
 // ceiling and slope, PERIOD_SECONDS, ...) come from aircraft.rs aircraft_constants, from the Rust.
 
 // tiles::aircraft::AircraftBox at the square's frame, with what boxes.rs derives once a box:
 // the centroid in the square's frame (m), the average length (boxes.rs average_length_m), whether
-// screening applies (centroid altitude above ground under the ceiling), per period its flights' Kurze
-// rate per slant (boxes.rs box_lambda without the slant) and whether it is silent.
+// screening applies (centroid altitude above ground under the ceiling), per period the share of it
+// its flights are in the box (boxes.rs box_passing) and whether it is silent.
 struct FlightBox {
     float east_m, north_m;
     float centroid_altitude_m;
@@ -20,7 +21,7 @@ struct FlightBox {
     float tail_levels_db[PERIODS];
     float lg_scaled_distance[NPD_DISTANCES];
     float installation_shares[PERIODS][2][3];
-    float lambda_per_slant[PERIODS];
+    float passing[PERIODS];
     u32 screened;
     u32 helicopter;
     u32 silent[PERIODS];
@@ -36,15 +37,13 @@ struct FlightPoint {
 };
 
 // One point's boxes of one tile, file and band: `count` boxes from `first`, heard within
-// `within_m`, each weighted by `weight` (FLIGHT_WEIGHT_*) at its distance, into sums `sum`: the
-// energy heard and the lambda's weights as `role` (FLIGHT_ROLE_* bits) says.
+// `within_m`, each weighted by `weight` (FLIGHT_WEIGHT_*) at its distance, into sums `sum`.
 struct FlightSegment {
     u32 point;
     u32 sum;
     u32 first;
     u32 count;
     u32 weight;
-    u32 role;
     float within_m;
     float coarse_m;
 };
@@ -172,9 +171,9 @@ __device__ float installation_energy_gain(int installation, float height_m, floa
 
 // One average piece's SEL energy per period at the receiver (physics::doc29::boxes::
 // average_piece_sel), the piece `centroid_m` (relative to the receiver) along the box's axis at
-// `gradient`; its closest slant to `closest_slant_m`.
+// `gradient`.
 __device__ void average_piece_sel(const FlightBox& b, const float* centroid_m, float gradient, const float* terrain,
-                                  const float* buildings, float* sel_energy, float* closest_slant_m) {
+                                  const float* buildings, float* sel_energy) {
     float half = 0.5f * fmaxf(b.average_length_m, 1.0f);
     float step[3] = {b.cos_axis * half, b.sin_axis * half, gradient * half};
     float start[3], delta[3];
@@ -206,7 +205,6 @@ __device__ void average_piece_sel(const FlightBox& b, const float* centroid_m, f
     }
     float segment_length_m = fmaxf(sqrtf(length_squared), 1.0f);
     float slant_m = sqrtf(on_line[0] * on_line[0] + on_line[1] * on_line[1] + on_line[2] * on_line[2]);
-    *closest_slant_m = slant_m;
     NpdPosition position = npd_position(slant_m);
     float scaled_distance_m = expf(npd_linear(position, b.lg_scaled_distance) * QM_LN_10);
     float along_m = along * segment_length_m;
@@ -238,9 +236,18 @@ __device__ void average_piece_sel(const FlightBox& b, const float* centroid_m, f
     }
 }
 
-// Per segment, a block: its boxes' energies and energies times their flights' Kurze lambda per
-// period (popup::aircraft::boxes::tile_flight_sums) added to its point's `sums` (FLIGHT_SUMS
-// doubles: the energy heard, then the lambda's weights, paint::flights::FlightSums).
+// popup::aircraft::FlightPasses::add_pass: the class of passes heard at `energy` while `passing` of
+// the period are in progress.
+__device__ int pass_class(float energy, float passing) {
+    float level_db = 10.0f * log10f(energy / passing);
+    int class_of = (int)fmaxf((level_db - PASS_LOWEST_DB) / PASS_CLASS_DB, 0.0f);
+    return min(class_of, PASS_CLASSES - 1);
+}
+
+// Per segment, a block: its boxes' energies and passes per period
+// (popup::aircraft::boxes::tile_flight_passes) added to its point's `sums` (FLIGHT_SUMS doubles: the
+// energy per period, then per period the passes' classes' energies, then their passing shares,
+// paint::flights::FlightSums). A box's weight takes its energy and its passing share alike.
 extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint* points, const float* horizons,
                                        const FlightSegment* segments, double* sums) {
     const FlightSegment segment = segments[blockIdx.x];
@@ -248,7 +255,12 @@ extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint
     const float* terrain = horizons + point.horizons;
     const float* buildings = terrain + TERRAIN_HORIZON_FLOATS;
     float reach_m = fminf(segment.within_m, AIRCRAFT_REACH_M);
-    float energy[PERIODS] = {0.0f, 0.0f, 0.0f}, lambda[PERIODS] = {0.0f, 0.0f, 0.0f};
+    double* at = sums + (u64)segment.sum * FLIGHT_SUMS;
+    double* class_energy = at + PERIODS;
+    double* class_passing = class_energy + PERIODS * PASS_CLASSES;
+    // In double, as the classes: summed in single precision a point's energy differed from its
+    // classes' sum by a rounding, which its pixels then held as a steady sound between the flights.
+    double energy[PERIODS] = {0.0, 0.0, 0.0};
     for (u32 k = threadIdx.x; k < segment.count; k += blockDim.x) {
         const FlightBox& b = boxes[segment.first + k];
         float east_m = b.east_m - point.x, north_m = b.north_m - point.y;
@@ -257,36 +269,34 @@ extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint
         float share = flight_weight(segment.weight, distance_m, segment.coarse_m);
         if (share <= 0.0f) continue;
         float centroid_m[3] = {east_m, north_m, b.centroid_altitude_m - point.altitude_m};
-        float sel[PERIODS], closest_slant_m;
+        float sel[PERIODS];
         if (b.gradient_spread <= 0.0f) {
-            average_piece_sel(b, centroid_m, b.gradient, terrain, buildings, sel, &closest_slant_m);
+            average_piece_sel(b, centroid_m, b.gradient, terrain, buildings, sel);
         } else {
-            float upper[PERIODS], upper_slant_m;
-            average_piece_sel(b, centroid_m, b.gradient - b.gradient_spread, terrain, buildings, sel, &closest_slant_m);
-            average_piece_sel(b, centroid_m, b.gradient + b.gradient_spread, terrain, buildings, upper, &upper_slant_m);
+            float upper[PERIODS];
+            average_piece_sel(b, centroid_m, b.gradient - b.gradient_spread, terrain, buildings, sel);
+            average_piece_sel(b, centroid_m, b.gradient + b.gradient_spread, terrain, buildings, upper);
             for (int period = 0; period < PERIODS; period++) sel[period] = 0.5f * (sel[period] + upper[period]);
         }
         float impedance = b.helicopter ? 1.0f : point.impedance_gain;
         for (int period = 0; period < PERIODS; period++) {
             float e = share * sel[period] * impedance / PERIOD_SECONDS[period];
-            energy[period] += e;
-            // The slant at least the NPD curves' nearest, where the exposure is read, as on the cores.
-            lambda[period] += e * b.lambda_per_slant[period] * fmaxf(closest_slant_m, NPD_NEAREST_SLANT_M);
+            float passing = share * b.passing[period];
+            energy[period] += (double)e;
+            if (e > 0.0f && passing > 0.0f) {
+                int class_of = period * PASS_CLASSES + pass_class(e, passing);
+                atomicAdd(&class_energy[class_of], (double)e);
+                atomicAdd(&class_passing[class_of], (double)passing);
+            }
         }
     }
-    __shared__ float partial[2 * PERIODS][FLIGHT_THREADS];
-    for (int period = 0; period < PERIODS; period++) {
-        partial[period][threadIdx.x] = energy[period];
-        partial[PERIODS + period][threadIdx.x] = lambda[period];
-    }
+    __shared__ double partial[PERIODS][FLIGHT_THREADS];
+    for (int period = 0; period < PERIODS; period++) partial[period][threadIdx.x] = energy[period];
     __syncthreads();
-    if (threadIdx.x < 2 * PERIODS) {
+    if (threadIdx.x < PERIODS) {
         double total = 0.0;
-        for (int t = 0; t < FLIGHT_THREADS; t++) total += (double)partial[threadIdx.x][t];
-        double* at = sums + (u64)segment.sum * FLIGHT_SUMS;
-        // The energy heard, then the lambda's weights: the energy again and energy times lambda.
-        if (threadIdx.x < PERIODS && (segment.role & FLIGHT_ROLE_ENERGY)) atomicAdd(&at[threadIdx.x], total);
-        if (segment.role & FLIGHT_ROLE_LAMBDA) atomicAdd(&at[PERIODS + threadIdx.x], total);
+        for (int t = 0; t < FLIGHT_THREADS; t++) total += partial[threadIdx.x][t];
+        atomicAdd(&at[threadIdx.x], total);
     }
 }
 

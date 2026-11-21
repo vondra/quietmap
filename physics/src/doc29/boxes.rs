@@ -56,13 +56,11 @@ pub struct AircraftBoxAtReceiver<'a> {
     pub ground_m: f64,
 }
 
-/// A box's SEL energies at the receiver per period, its closest slant and its installation mix.
+/// A box's SEL energies at the receiver per period and its installation mix.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxSel {
     /// After screening (linear energy per period, zero silent).
     pub sel_energy: [f64; PERIODS],
-    /// The slant to the average piece's line at its closest point (m).
-    pub closest_slant_m: f64,
     /// Per period, the received energy's shares of wing-mounted jets, fuselage-mounted jets and
     /// propellers.
     pub installation_fractions: [[f64; 3]; PERIODS],
@@ -193,7 +191,6 @@ pub fn box_sel_at_receiver(
     BoxSel {
         sel_energy,
         installation_fractions,
-        ..lower
     }
 }
 
@@ -278,7 +275,6 @@ fn average_piece_sel(
     });
     BoxSel {
         sel_energy,
-        closest_slant_m: slant_m,
         installation_fractions,
     }
 }

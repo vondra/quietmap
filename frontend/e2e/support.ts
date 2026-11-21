@@ -1,6 +1,6 @@
 // Hermetic browser fixtures for heatmap cells, the basemap and streamed popup answers.
-import { devices, expect, type Page } from '@playwright/test'
-import { HM3_MANIFEST_URL, HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
+import { devices, expect, type Locator, type Page } from '@playwright/test'
+import { HM3_MANIFEST_URL, HM3_SILENCE, HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
 
 export const FIXTURE_DB = 63
 export const SOURCE_DB = 60
@@ -70,8 +70,7 @@ export function mapUrl(point: PixelCenter, layers = 'road', zoom = TILE_Z): stri
   return `/#lat=${point.lat}&lng=${point.lng}&z=${zoom}&bm=terrain&ro=${layers}`
 }
 
-/** The fixture carries twice the loudness level in phon after native HTTP decompression. */
-/** A tile without levels but at `point`: its loudness (`sone`), or with `lden` its Lden in dB. */
+/** The test point's sone (or Lden in dB), one adjacent cell below the scale and the rest unassessed. */
 function hm3Tile(point?: PixelCenter, level?: number, lden = false): Buffer {
   const tile = Buffer.alloc(6 + TILE_PX * TILE_PX, 255)
   tile.write(lden ? 'HMD ' : 'HM3 ', 0, 'ascii')
@@ -79,6 +78,7 @@ function hm3Tile(point?: PixelCenter, level?: number, lden = false): Buffer {
   tile[5] = 1
   if (point && level != null) {
     tile[6 + point.py * TILE_PX + point.px] = Math.round(lden ? 2 * level : 80 + 20 * Math.log2(level))
+    if (point.px + 1 < TILE_PX) tile[6 + point.py * TILE_PX + point.px + 1] = HM3_SILENCE
   }
   for (let at = TILE_PX * TILE_PX - 1; at >= 0; at--) {
     const left = at % TILE_PX ? tile[6 + at - 1] : 0
@@ -96,6 +96,17 @@ export async function mockTerrainBasemap(page: Page): Promise<void> {
     contentType: 'image/png',
     body: BLACK_PNG,
   }))
+}
+
+/** The map's own base map without a server: no tile anywhere, an empty sprite sheet, no glyph. */
+async function mockOwnBasemap(page: Page): Promise<void> {
+  await page.route('**/api/basemap/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('.mvt')) return route.fulfill({ status: 204 })
+    if (path.endsWith('.json')) return route.fulfill({ json: {} })
+    if (path.endsWith('.png')) return route.fulfill({ contentType: 'image/png', body: BLACK_PNG })
+    return route.fulfill({ contentType: 'application/x-protobuf', body: '' })
+  })
 }
 
 type PopupSeam = {
@@ -176,6 +187,7 @@ export async function endPopup(page: Page, index = -1): Promise<void> {
  *  their Lden. */
 export async function installHermeticMap(page: Page, point: PixelCenter): Promise<void> {
   await mockTerrainBasemap(page)
+  await mockOwnBasemap(page)
   await installPopupSeam(page)
   await page.route(`**${HM3_MANIFEST_URL}`, route => route.fulfill({
     status: 200,
@@ -299,4 +311,18 @@ export async function mapPixels(
   }))
   await afterPaint(page)
   return pngPixels(page, await canvas.screenshot({ scale: 'css' }), at)
+}
+
+/** A finger dragging a phone sheet's handle down by `distance` px, as a visitor closes the sheet:
+ *  Playwright's touchscreen only taps, so the touches are dispatched on the handle. */
+export async function swipeDown(handle: Locator, distance = 160): Promise<void> {
+  const box = (await handle.boundingBox())!
+  const x = box.x + box.width / 2, top = box.y + box.height / 2
+  const touch = (y: number) => [{ identifier: 0, clientX: x, clientY: y }]
+  await handle.dispatchEvent('touchstart', { touches: touch(top), changedTouches: touch(top), targetTouches: touch(top) })
+  for (const step of [1, 2, 3, 4]) {
+    const y = top + distance * step / 4
+    await handle.dispatchEvent('touchmove', { touches: touch(y), changedTouches: touch(y), targetTouches: touch(y) })
+  }
+  await handle.dispatchEvent('touchend', { touches: [], changedTouches: touch(top + distance), targetTouches: [] })
 }

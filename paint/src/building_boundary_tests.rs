@@ -1,6 +1,6 @@
 //! Adjacent squares must answer a split building at the same complete façade.
 
-use crate::paint::{Grid, corners_of, paint_pixels};
+use crate::paint::{Grid, corners_of, metres_at, paint_pixels};
 
 use crate::square::{Files, Square};
 use physics::bands::{BANDS, PERIODS};
@@ -42,8 +42,7 @@ fn both_halves_of_a_building_take_the_facade_facing_its_source() {
                 height_m: 15.0,
                 vertices: vertices.to_vec(),
             }];
-            // A detached wing is stored only in the square it occupies; the complete footprint
-            // seen from the other square must still rank all its façades with prepared reflection.
+            // A second building in the same input record stands farther from the source.
             if side == 0 {
                 parts.push(Outline {
                     footprint_id: 7,
@@ -101,6 +100,16 @@ fn both_halves_of_a_building_take_the_facade_facing_its_source() {
         .map(|tile| {
             let files = Files::read(&release, tile).unwrap();
             let square = Square::new(&weather, tile, &files).unwrap();
+            if tile == tiles[0] {
+                // The detached building covers column 16. The gap to the split building covers 30.
+                for (column, expected) in [(16.5, Some(7)), (30.5, None)] {
+                    let point = metres_at(&square, grid.pixels, column, 32.5);
+                    assert_eq!(
+                        square.obstacles.enclosing_building_id(point).unwrap(),
+                        expected
+                    );
+                }
+            }
             let corners = corners_of(&square, grid, None).unwrap().unwrap();
             paint_pixels(&square, grid, None, corners).unwrap()
         })
@@ -110,4 +119,8 @@ fn both_halves_of_a_building_take_the_facade_facing_its_source() {
     assert!(painted[0].lden[left][Layer::Industry as usize] < 254);
     assert_eq!(painted[0].lden[left], painted[1].lden[right]);
     assert_eq!(painted[0].nden[left], painted[1].nden[right]);
+    let detached = 32 * grid.pixels + 16;
+    let industry = Layer::Industry as usize;
+    assert!(painted[0].lden[detached][industry] < painted[0].lden[left][industry]);
+    assert_ne!(painted[0].nden[detached], painted[0].nden[left]);
 }

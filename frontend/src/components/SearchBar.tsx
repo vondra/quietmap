@@ -5,19 +5,13 @@
 // or a press elsewhere closes it (a press on the map does nothing more). While it is closed the
 // open place stands under the field, as the list's selected item, its name the field that renames
 // it, with its action and what that opens (App: the reachable area).
-import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react'
+import { useState, useRef, useEffect, type ReactNode } from 'react'
 import type { Metric } from '../lib/hm3-decoder'
 import { History, Search, UserRound } from 'lucide-react'
 import PlaceRow from './PlaceRow'
 import { FLOATING } from './ui/button'
 import { placeLabel, samePlace, titleAt, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
-
-interface SearchResult {
-  display_name: string
-  secondary: string
-  lat: number
-  lon: number
-}
+import { coordinateSuggestions, MAX_LATITUDE, type SearchResult } from '../lib/coordinates'
 
 type Point = { lat: number; lng: number }
 
@@ -27,7 +21,7 @@ const NAMED_MAX = 3
 const LIST_MAX_PX = 336
 
 interface SearchBarProps {
-  onSelect: (result: SearchResult) => void
+  onSelect: (at: Point, name: string | null) => void
   /** The map's view when the visitor types (read then, not at the last render). */
   getMapView?: () => { lat: number; lng: number; zoom: number }
   /** The places opened, in the history's order, and the names the visitor gave places. */
@@ -48,6 +42,8 @@ interface SearchBarProps {
   openAction?: ReactNode
   /** The open place's action at the field's end, where Google's directions stand (the reachable area). */
   fieldAction?: ReactNode
+  /** The phone's account, at the field's end whatever is open (Google Maps' place for it). */
+  accountAction?: ReactNode
   /** Under the open place's row: what its actions opened. */
   children?: ReactNode
 }
@@ -56,17 +52,14 @@ interface SearchBarProps {
 const folded = (text: string) => text.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 const keyOf = (at: Point) => `${at.lat},${at.lng}`
 
-export default function SearchBar({ onSelect, getMapView, history, titles, metric, open, notSaved, onOpenPlace, onRename, onForget, onSignIn, openAction, fieldAction, children }: SearchBarProps) {
+export default function SearchBar({ onSelect, getMapView, history, titles, metric, open, notSaved, onOpenPlace, onRename, onForget, onSignIn, openAction, fieldAction, accountAction, children }: SearchBarProps) {
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<SearchResult[]>([])
+  const [suggestions, setSuggestions] = useState<{ query: string, results: SearchResult[] } | null>(null)
   // The visitor is at the field (it took the focus or the keys): the list shows what it has.
   const [listing, setListing] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [highlighted, setHighlighted] = useState(-1)
+  const [rowIndex, setRowIndex] = useState(-1)
   // The list's height above a phone's keyboard (the visual viewport shrinks under it, the layout's not).
   const [room, setRoom] = useState(LIST_MAX_PX)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
@@ -84,67 +77,67 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
     }
   }
   const asked = query.trim()
-  const places = asked
+  const coordinates = coordinateSuggestions(asked)
+  const places = coordinates ? [] : asked
     ? history.filter(place => {
       const { name, detail } = described(place, place.place)
       return folded(`${name} ${detail ?? ''}`).includes(folded(asked))
     }).slice(0, NAMED_MAX)
     : history
-  const shownResults = asked.length >= 2 ? results : []
+  const searchNames = asked.length >= 2 && coordinates === null
+  const shownResults = coordinates ?? (searchNames && suggestions?.query === asked ? suggestions.results : [])
   const count = places.length + shownResults.length
+  const highlighted = coordinates?.length ? 0 : rowIndex
   const listed = listing && count > 0
+  const showingSearch = listed || (listing && asked !== '')
 
-  const search = useCallback(async (q: string) => {
-    if (q.length < 2) {
-      setResults([])
-      return
-    }
-
-    abortRef.current?.abort()
+  useEffect(() => {
+    if (!searchNames) return
     const controller = new AbortController()
-    abortRef.current = controller
-
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({ q })
+    const timer = setTimeout(async () => {
+      const params = new URLSearchParams({ q: asked })
       const view = getMapView?.()
       if (view) {
         params.set('lat', view.lat.toFixed(4))
         params.set('lon', view.lng.toFixed(4))
         params.set('zoom', view.zoom.toFixed(1))
       }
-      const res = await fetch(`/api/search?${params}`, { signal: controller.signal })
-      if (!res.ok) return
-      setResults(await res.json() as SearchResult[])
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') return
-    } finally {
-      setLoading(false)
+      let results: SearchResult[] = []
+      try {
+        const res = await fetch(`/api/search?${params}`, { signal: controller.signal })
+        if (res.ok) results = await res.json() as SearchResult[]
+      } catch { /* The geocoder could not answer this query. */ }
+      if (!controller.signal.aborted) setSuggestions({ query: asked, results })
+    }, 150)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
     }
-  }, [getMapView])
+  }, [asked, searchNames, getMapView])
 
   const handleInput = (value: string) => {
     setQuery(value)
     setListing(true)
-    setHighlighted(-1)
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => search(value.trim()), 150)
+    setRowIndex(-1)
   }
 
   // A choice closes the list and leaves the field, which a phone's keyboard leaves with it; a search
   // still on its way is dropped.
   const done = () => {
-    if (timerRef.current) clearTimeout(timerRef.current)
-    abortRef.current?.abort()
     setQuery('')
-    setResults([])
+    setSuggestions(null)
     setListing(false)
-    setHighlighted(-1)
+    setRowIndex(-1)
     inputRef.current?.blur()
   }
   const choose = (k: number) => {
     if (k < places.length) onOpenPlace(places[k])
-    else onSelect(shownResults[k - places.length])
+    else {
+      const result = shownResults[k - places.length]
+      // A coordinate gets its name from the same reverse lookup as a map click.
+      const name = coordinates ? null : [result.display_name, result.secondary].filter(Boolean).join(', ')
+      onSelect({ lat: result.lat, lng: result.lon }, name)
+    }
     done()
   }
 
@@ -158,11 +151,11 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setListing(true)
-      setHighlighted(prev => (count === 0 ? -1 : (prev + 1) % count))
+      setRowIndex(prev => (count === 0 ? -1 : (prev + 1) % count))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setHighlighted(prev => (prev <= 0 ? count - 1 : prev - 1))
-    } else if (e.key === 'Enter' && highlighted >= 0) {
+      setRowIndex(prev => (prev <= 0 ? count - 1 : prev - 1))
+    } else if (e.key === 'Enter' && highlighted >= 0 && highlighted < count) {
       e.preventDefault()
       choose(highlighted)
     } else if (e.key === 'Delete' && e.shiftKey && place) {
@@ -218,14 +211,15 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
               if (!containerRef.current?.contains(e.relatedTarget)) setListing(false)
             }}
             onKeyDown={handleKeyDown}
-            placeholder={open ? 'Search another place…' : 'Search address…'}
-            className="w-full rounded-lg bg-background px-4 py-2.5 pr-10 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 pointer-fine:text-sm"
+            placeholder={open ? 'Search another place…' : 'Search address or coordinates…'}
+            className={`w-full rounded-lg bg-background px-4 py-2.5 pr-10 ${open ? 'max-md:pr-[4.75rem]' : ''} text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 pointer-fine:text-sm`}
           />
-          <span id="search-keys" hidden>Up and down choose a place, Enter opens it, Shift+Delete forgets it.</span>
-          {loading && (
-            <div className="absolute right-10 top-3 text-muted-foreground text-sm">...</div>
-          )}
-          {open && !listed && <div className="absolute right-1.5 top-1/2 -translate-y-1/2">{fieldAction}</div>}
+          <span id="search-keys" hidden>Enter coordinates as latitude, longitude. Up and down choose a place, Enter opens it, Shift+Delete forgets it.</span>
+          <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+            {listing && searchNames && suggestions?.query !== asked && <span className="px-1 text-sm text-muted-foreground">...</span>}
+            {!showingSearch && open && fieldAction}
+            {!showingSearch && accountAction}
+          </div>
         </div>
         {listed ? (
           <div
@@ -236,7 +230,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
           >
             <ul ref={listRef} id="search-list" role="listbox" aria-label="Places" className="overflow-y-auto overscroll-contain" style={{ maxHeight: room }}>
               {places.map((place, k) => (
-                <li key={keyOf(place)} id={`search-option-${k}`} role="option" aria-selected={k === highlighted} onMouseEnter={() => setHighlighted(k)}>
+                <li key={keyOf(place)} id={`search-option-${k}`} role="option" aria-selected={k === highlighted} onMouseEnter={() => setRowIndex(k)}>
                   <PlaceRow
                     listed
                     {...described(place, place.place)}
@@ -260,7 +254,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
                     id={`search-option-${k}`}
                     role="option"
                     aria-selected={k === highlighted}
-                    onMouseEnter={() => setHighlighted(k)}
+                    onMouseEnter={() => setRowIndex(k)}
                     // The geocoder's answers under the history's places, a line between them.
                     className={i === 0 && places.length > 0 ? 'border-t border-border' : undefined}
                   >
@@ -270,7 +264,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
                       name={r.display_name}
                       given={false}
                       proposal={null}
-                      detail={r.secondary}
+                      detail={coordinates ? 'Latitude, longitude' : r.secondary}
                       metric={metric}
                       sone={null}
                       lden={null}
@@ -299,7 +293,11 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
               </button>
             )}
           </div>
-        ) : open && (
+        ) : listing && coordinates?.length === 0 ? (
+          <p role="status" className="rounded-b-lg border border-border bg-popover px-3 py-2 text-xs text-muted-foreground">
+            Use latitude −{MAX_LATITUDE} to {MAX_LATITUDE} and longitude −180 to 180.
+          </p>
+        ) : open && !showingSearch && (
           <>
             {/* Made anew for each place: a name being written belongs to the place it was begun for. Its
                 key names the row alone: siblings under one key once left a row behind at every place. */}
@@ -316,7 +314,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
               {/* Scrolled within what is left above a phone's sheet (MobileDetailSheet's sheetTop) under a
                   notch too, and never shut on a short screen; a desktop has no
                   sheet. */}
-              <div className="max-h-[max(6rem,calc(50dvh-11rem-env(safe-area-inset-top,0px)))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
+              <div className="max-h-[max(6rem,calc(60dvh-11rem-env(safe-area-inset-top,0px)))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
             </div>
           </>
         )}

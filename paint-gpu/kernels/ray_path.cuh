@@ -119,6 +119,43 @@ __device__ __forceinline__ float frame_height_above_chord(const RayFrame& f, int
     return perpendicular * f.chord_m * f.inverse_length;
 }
 
+// ray_height_above_chord reusing the frame's invariant chord and favourable root while preserving
+// the original divisions by horizontal length so canopy-boundary comparisons stay identical.
+__device__ __forceinline__ float foliage_height_above_chord(const RayFrame& f, int state, float x) {
+    if (state == HOMOGENEOUS) return 0.0f;
+    float horizontal = f.receiver.x - f.source.x;
+    float chord = f.chord_m;
+    float along = (x - f.source.x) * chord / horizontal;
+    float gamma = f.rays[state].radius_m;
+    float offset = along - 0.5f * chord;
+    float perpendicular = along * (chord - along) / (sqrtf(fmaxf(gamma * gamma - offset * offset, 0.0f)) + f.chord_root_m);
+    return perpendicular * chord / horizontal;
+}
+
+// Each state's foliage depth over the stretch from the last vertex to `ground` at `x`: the cover
+// where the state's ray runs inside the crowns, linear between the vertices, times the stretch's
+// length along the ray.
+__device__ __forceinline__ void add_foliage(const RayFrame& f, Crowns& crowns, float x, const GroundSample& ground) {
+    const GroundSample& behind = crowns.behind;
+    bool covered = behind.forest_cover > 0.0f || ground.forest_cover > 0.0f;
+    if (covered) {
+#pragma unroll
+        for (int state = 0; state < 2; state++) {
+            // A covered stretch after a covered one starts where that one's ray ended.
+            float za = crowns.behind_z_taken ? crowns.behind_z[state]
+                                             : chord_altitude(f.source, f.receiver, crowns.behind_x)
+                                                   + foliage_height_above_chord(f, state, crowns.behind_x);
+            float zb = chord_altitude(f.source, f.receiver, x) + foliage_height_above_chord(f, state, x);
+            float cover = cover_inside_crowns(za, behind) + cover_inside_crowns(zb, ground);
+            crowns.metres[state] += 0.5f * cover * hypotf(x - crowns.behind_x, zb - za);
+            crowns.behind_z[state] = zb;
+        }
+    }
+    crowns.behind_z_taken = covered;
+    crowns.behind = ground;
+    crowns.behind_x = x;
+}
+
 // state_ray_path_difference of the one point O = (x, z) from |SO| and |OR|: the triangle's excess
 // without cancellation (triangle_excess's) and downwind the arcs' excesses, over O, or for O under
 // the chord (2.5.27) with A on the chord under O, where SA + AR = SR leaves the triangle S A R
@@ -142,8 +179,25 @@ __device__ float single_path_difference(const StateRay& ray, const RayFrame& f, 
     return 2.0f * (arc_excess(ray, along) + arc_excess(ray, f.chord_m - along)) - excess - arcs - f.arc_chord_m;
 }
 
+__device__ __forceinline__ u32 push_hull(StateStream& st, BandState& band, const StateRay& ray,
+                                         const HullEntry& entry, const Moments& prefix) {
+    while (band.depth >= 2 && under_state_ray(ray, st.hull[band.depth - 2], entry.x, entry.z, st.hull[band.depth - 1])) band.depth--;
+    if (band.depth >= HULL_CAPACITY) return FAILED_CAPACITY;
+    st.hull[band.depth] = entry;
+    st.hull_prefix[band.depth] = prefix;
+    band.depth++;
+    return 0;
+}
+
+__device__ __forceinline__ u32 flush_pending_hull(StateStream& st, BandState& band, const StateRay& ray) {
+    if (!band.has_pending) return 0;
+    band.has_pending = false;
+    return push_hull(st, band, ray, st.pending, st.pending_prefix);
+}
+
 // A diffraction candidate, in the CPU's candidate order, into both states (rubber_band.rs
-// diffraction_path): one above the state's chord after lowering joins the hull, otherwise it
+// diffraction_path): one above the state's chord after lowering joins the hull (equal-distance
+// groups coalesced to their highest in `st.pending` before entering the hull), otherwise it
 // competes for the unblocked path's single point. Inlined into the walk, so `bands` stays in its
 // registers.
 __device__ __forceinline__ u32 stream_candidate(RayStream& s, BandState* bands, const RayFrame& f, const BandCandidate& c) {
@@ -156,15 +210,24 @@ __device__ __forceinline__ u32 stream_candidate(RayStream& s, BandState* bands, 
     for (int state = 0; state < 2; state++) {
         StateStream& st = s.states[state];
         BandState& band = bands[state];
-        const StateRay& ray = f.rays[state];
+        const StateRay ray = unrolled_state_ray(f.rays, state);
         float lowered = c.z - frame_height_above_chord(f, state, c.x);
         if (lowered > chord) {
             band.blocked = true;
-            while (band.depth >= 2 && under_state_ray(ray, st.hull[band.depth - 2], c.x, c.z, st.hull[band.depth - 1])) band.depth--;
-            if (band.depth >= HULL_CAPACITY) return FAILED_CAPACITY;
-            st.hull[band.depth] = entry;
-            st.hull_prefix[band.depth] = c.prefix;
-            band.depth++;
+            if (band.has_pending && st.pending.x == c.x) {
+                if (c.z > st.pending.z) {
+                    st.pending = entry;
+                    st.pending_prefix = c.prefix;
+                }
+            } else {
+                if (band.has_pending) {
+                    u32 failed = push_hull(st, band, ray, st.pending, st.pending_prefix);
+                    if (failed) return failed;
+                }
+                st.pending = entry;
+                st.pending_prefix = c.prefix;
+                band.has_pending = true;
+            }
         } else if (!band.blocked) {
             if (to_source < 0.0f) {
                 to_source = hypotf(c.x - source.x, c.z - source.z);

@@ -1,358 +1,238 @@
-//! Sub-block loudness lattices checked against pixel probes, retaining exact samples and screening edges.
+//! A block's pixels painted without a pass: its exact samples and the pixels blended between them, and which refused patches carry its lattice's loudness.
 //!
-//! These samples use the ordinary painter's source admission, propagation and sound model.
-//! A block first paints a coarse lattice (its edges and middle) and one probe a quadrant; where all
-//! four agree and no source or screening edge crosses the block, the coarse lattice blends the whole
-//! block. Elsewhere the fine lattice and its sixteen patch probes follow, the coarse samples among
-//! them. Interpolation replaces a patch's remaining receivers only after checking loudness and Lden;
-//! rejected patches reuse their exact lattice and probe results. Half-phon and half-dB checks match the stored steps,
-//! an empirical safeguard verified against the independent etalon, not a bound on unsampled rays.
+//! A pixel takes a lattice's blend ([`crate::lattice_blend::blend`]) only after the probes of its
+//! block or its patch agreed with that blend as far as a visitor sees ([`crate::visible`]), where
+//! no screening edge crosses; a refused patch keeps its exact lattice values, and where its probe
+//! confirms it, its other pixels take their loudness from the lattice and their own energies
+//! ([`crate::lattice_blend::carried_loudness`]). A probe pixel paints as its patch does.
+//! An empirical safeguard verified against the independent etalon, not a bound on unsampled rays.
 
-use crate::blocks::{Block, meets};
-use crate::exact::{LAYERS, Point};
-use crate::levels::{Painted, SILENCE, cell};
-use crate::paint::{
-    PASS_BLOCKS, bilinear, metres_at, rectangle_at, runs_within, shortest_pixel_side_metres,
+use crate::exact::LAYERS;
+use crate::lattice_blend::{
+    Anchor, Heard, blend, carried_loudness, log_energies, loudness_slopes, within_lattice_range,
 };
-use crate::points::PointPainter;
-use rayon::prelude::*;
+use crate::levels::Painted;
+use crate::paint::corner_weights;
+use crate::visible::{Loudest, loudness_visibly_agrees, visibly_agrees};
 
-pub(crate) struct QuietSamples {
-    axis: [usize; 5],
-    values: Vec<Option<Painted>>,
-    accepted: [bool; 16],
+/// Exact points on lattice lines across a block, row-major (`None`: in a building or not painted),
+/// with the slopes its pixels' loudness is carried along. The lines are in pixels along either
+/// axis, a pixel's centre at its number: the block's corners stand half a pixel before its first
+/// pixel and after its last.
+pub(crate) struct Lattice {
+    lines: Vec<f64>,
+    heard: Vec<Option<Heard>>,
+    slopes: [f64; LAYERS + 1],
 }
 
-impl QuietSamples {
-    fn patch_at(&self, x: usize, y: usize) -> [usize; 2] {
-        let interval = |at: usize| {
-            self.axis
-                .partition_point(|&sample| sample <= at)
-                .saturating_sub(1)
-                .min(3)
-        };
-        [interval(x), interval(y)]
+impl Lattice {
+    pub fn new(lines: &[f64], anchors: &[Option<Anchor>]) -> Self {
+        let heard: Vec<Option<Heard>> = (anchors.iter())
+            .map(|anchor| anchor.as_ref().map(Heard::of))
+            .collect();
+        Lattice {
+            lines: lines.to_vec(),
+            slopes: loudness_slopes(&heard),
+            heard,
+        }
     }
 
-    pub fn at(&self, x: usize, y: usize) -> Painted {
-        let [i, j] = self.patch_at(x, y);
-        let fraction =
-            |at, low| (at - self.axis[low]) as f64 / (self.axis[low + 1] - self.axis[low]) as f64;
-        let (fx, fy) = (fraction(x, i), fraction(y, j));
-        let around = lattice_corners([i, j]);
+    /// The interval of the lines holding pixel `at` and where the pixel stands in it.
+    fn interval(&self, at: usize) -> (usize, f64) {
+        let lines = &self.lines;
+        let interval = (lines.partition_point(|&line| line <= at as f64))
+            .saturating_sub(1)
+            .min(lines.len() - 2);
+        let width = lines[interval + 1] - lines[interval];
+        (interval, (at as f64 - lines[interval]) / width)
+    }
+
+    /// The four points around pixel (x, y) and the pixel's weights among them.
+    fn around(&self, x: usize, y: usize) -> ([Option<&Heard>; 4], [f64; 4]) {
+        let ((i, fx), (j, fy)) = (self.interval(x), self.interval(y));
+        let side = self.lines.len();
+        let first = j * side + i;
+        let around = [first, first + 1, first + side, first + side + 1];
         (
-            std::array::from_fn(|layer| {
-                bilinear(around.map(|at| self.values[at].unwrap().0[layer]), fx, fy)
-            }),
-            std::array::from_fn(|layer| {
-                bilinear(around.map(|at| self.values[at].unwrap().1[layer]), fx, fy)
-            }),
+            around.map(|at| self.heard[at].as_ref()),
+            corner_weights(fx, fy),
         )
     }
 
-    pub fn accepts(&self, x: usize, y: usize) -> bool {
-        let [i, j] = self.patch_at(x, y);
-        self.accepted[j * 4 + i]
+    /// The paint the lattice blends at pixel (x, y), `free` the block's own sources' free field
+    /// there; `None` where a point around it is missing or its energies lie beyond theirs.
+    pub fn blend_at(&self, x: usize, y: usize, free: &[f64; LAYERS]) -> Option<Painted> {
+        let ([a, b, c, d], weights) = self.around(x, y);
+        blend([a?, b?, c?, d?], weights, free, &self.slopes)
     }
 
-    pub fn complete(&self) -> bool {
-        self.accepted.iter().all(|&accepted| accepted)
+    /// The loudest among the points around pixel (x, y).
+    fn loudest_around(&self, x: usize, y: usize) -> Loudest {
+        let (around, _) = self.around(x, y);
+        Loudest::of(around.iter().flatten().map(|point| &point.paint))
     }
 
-    pub fn interpolated_patches(&self) -> usize {
-        self.accepted.iter().filter(|&&accepted| accepted).count()
+    /// Whether `probe`, exact at pixel (x, y), agrees with the lattice's blend there as far as a
+    /// visitor can see of the loudest point around it.
+    pub fn agrees_with(&self, x: usize, y: usize, probe: &Anchor) -> bool {
+        (self.blend_at(x, y, &probe.free)).is_some_and(|blended| {
+            visibly_agrees(&probe.paint, &blended, &self.loudest_around(x, y))
+        })
     }
 
-    fn agrees_with_probe(
+    /// The loudness `energies` carry at pixel (x, y) from the outdoor points around it
+    /// ([`carried_loudness`]): `None` where all four stand in buildings, or with `within` where
+    /// the energies lie beyond the points' ([`within_lattice_range`]).
+    fn carried_at(
         &self,
-        [i, j]: [usize; 2],
         (x, y): (usize, usize),
-        heard: &Painted,
-    ) -> bool {
-        // A one-pixel interval has no independent interior probe.
-        if x <= self.axis[i]
-            || x >= self.axis[i + 1]
-            || y <= self.axis[j]
-            || y >= self.axis[j + 1]
-            || lattice_corners([i, j])
-                .iter()
-                .any(|&at| self.values[at].is_none())
-        {
-            return false;
-        }
-        let blended = self.at(x, y);
-        agrees_with_interpolation(&heard.1, &blended.1)
-            && energies_agree_within_half_decibel(&heard.0, &blended.0)
-    }
-
-    fn sample_index(&self, x: usize, y: usize) -> Option<usize> {
-        if let (Some(i), Some(j)) = (
-            self.axis.iter().position(|&at| at == x),
-            self.axis.iter().position(|&at| at == y),
-        ) {
-            return Some(j * 5 + i);
-        }
-        let centres: [usize; 4] = std::array::from_fn(|at| (self.axis[at] + self.axis[at + 1]) / 2);
-        if let (Some(i), Some(j)) = (
-            centres.iter().position(|&at| at == x),
-            centres.iter().position(|&at| at == y),
-        ) {
-            return Some(25 + j * 4 + i);
-        }
-        None
-    }
-
-    pub fn has_paint(&self, x: usize, y: usize) -> bool {
-        self.sample_index(x, y)
-            .map_or_else(|| self.accepts(x, y), |at| self.values[at].is_some())
-    }
-
-    pub fn known_at(&self, x: usize, y: usize) -> Option<Painted> {
-        if let Some(at) = self.sample_index(x, y) {
-            return self.values[at];
-        }
-        self.accepts(x, y).then(|| self.at(x, y))
-    }
-}
-
-/// Each block's exact samples and checked patches; rejected patches retain their other pixels.
-pub(crate) struct SampledBlocks {
-    pub blocks: Vec<(usize, QuietSamples)>,
-    pub admissions: Vec<(usize, Block)>,
-}
-
-pub(crate) fn sample_block_pixels(
-    painter: &PointPainter,
-    block_ids: Vec<usize>,
-) -> Result<SampledBlocks, String> {
-    let (square, grid) = (painter.square, painter.grid);
-    let side = grid.pixels / grid.block;
-    let b = grid.block;
-    // The wall can be a whole pixel from the centre of the pixel in front of its façade receiver.
-    let receiver_protection_pixels = 1.0
-        + popup::obstacles::FACADE_RECEIVER_OFFSET_M
-            / shortest_pixel_side_metres(square, grid.pixels);
-    let (axis, positions) = sample_positions(b);
-    let passes = (0..block_ids.len())
-        .step_by(PASS_BLOCKS)
-        .map(|start| start..(start + PASS_BLOCKS).min(block_ids.len()))
-        .collect();
-    // The existing scheduler overlaps sample assembly and card work, retaining its bounded chunks.
-    let sampled = painter.in_passes(passes, |range| {
-        let chunk = &block_ids[range];
-        let mut accepted = Vec::new();
-        let mut retain = vec![true; chunk.len()];
-        let blocks: Vec<_> = chunk
-            .par_iter()
-            .map_init(Vec::new, |near, &at| painter.block(near, at))
-            .collect();
-        let bounds: Vec<_> = blocks
-            .iter()
-            .map(|block| positions.len() * block.exact.len())
-            .collect();
-        let rectangle_of = |at: usize, low: [usize; 2], high: [usize; 2]| {
-            let (base_x, base_y) = ((at % side) * b, (at / side) * b);
-            rectangle_at(
-                square,
-                grid.pixels,
-                (base_x + low[0]) as f64 + 0.5 - receiver_protection_pixels,
-                (base_y + low[1]) as f64 + 0.5 - receiver_protection_pixels,
-                (base_x + high[0]) as f64 + 0.5 + receiver_protection_pixels,
-                (base_y + high[1]) as f64 + 0.5 + receiver_protection_pixels,
-            )
-        };
-        // Whether block `slot` of the chunk has no exact source and no screening edge across a
-        // rectangle of its pixels (with the façade margin).
-        let clear = |slot: usize, at: usize, low: [usize; 2], high: [usize; 2]| {
-            let (low, high) = rectangle_of(at, low, high);
-            let near = blocks[slot].exact.iter().any(|&source| {
-                let [a, b] = square.candidates[source as usize].ends_m;
-                meets(a, b, low, high)
-            });
-            !near && square.obstacles.has_no_screening_edges(low, high)
-        };
-        for run in runs_within(&bounds, PASS_BLOCKS) {
-            let ids = &chunk[run.clone()];
-            // First the coarse lattice and its quadrants' probes; then the rest where they disagree.
-            let coarse = paint_positions(painter, &blocks[run.clone()], ids, &COARSE_FIRST)?;
-            let mut values: Vec<Vec<Option<Painted>>> =
-                vec![vec![None; positions.len()]; ids.len()];
-            let mut finer = Vec::new();
-            for (slot, &at) in ids.iter().enumerate() {
-                for (&k, value) in COARSE_FIRST.iter().zip(&coarse[slot]) {
-                    values[slot][k] = *value;
-                }
-                // The quadrants' rectangles with their margins cover the block's with its margin.
-                match coarse_lattice(axis, &values[slot]) {
-                    Some(lattice) if clear(run.start + slot, at, [0, 0], [axis[4], axis[4]]) => {
-                        values[slot] = lattice;
-                    }
-                    _ => finer.push(slot),
-                }
-            }
-            let rest: Vec<usize> = (0..positions.len())
-                .filter(|k| !COARSE_FIRST.contains(k))
-                .collect();
-            let finer_ids: Vec<usize> = finer.iter().map(|&slot| ids[slot]).collect();
-            let finer_blocks: Vec<&Block> = finer
-                .iter()
-                .map(|&slot| &blocks[run.start + slot])
-                .collect();
-            let painted = paint_positions(painter, &finer_blocks, &finer_ids, &rest)?;
-            for (&slot, heard) in finer.iter().zip(painted) {
-                for (&k, value) in rest.iter().zip(heard) {
-                    values[slot][k] = value;
-                }
-            }
-            for (slot, &at) in ids.iter().enumerate() {
-                let complete_coarse = !finer.contains(&slot);
-                let mut sampled = QuietSamples {
-                    axis,
-                    values: std::mem::take(&mut values[slot]),
-                    accepted: [complete_coarse; 16],
-                };
-                if complete_coarse {
-                    retain[run.start + slot] = false;
-                    accepted.push((at, sampled));
-                    continue;
-                }
-                let heard = sampled.values.clone();
-                for (cell, (&(x, y), probe)) in positions[25..].iter().zip(&heard[25..]).enumerate()
-                {
-                    let Some(heard) = probe else {
-                        continue;
-                    };
-                    let (i, j) = (cell % 4, cell / 4);
-                    if !sampled.agrees_with_probe([i, j], (x, y), heard) {
-                        continue;
-                    }
-                    sampled.accepted[cell] = clear(
-                        run.start + slot,
-                        at,
-                        [axis[i], axis[j]],
-                        [axis[i + 1], axis[j + 1]],
-                    );
-                }
-                retain[run.start + slot] = !sampled.complete();
-                if sampled.values.iter().any(Option::is_some) {
-                    accepted.push((at, sampled));
-                }
-            }
-        }
-        let admissions = chunk
-            .iter()
-            .copied()
-            .zip(blocks)
-            .zip(retain)
-            .filter_map(|(block, retain)| retain.then_some(block))
-            .collect::<Vec<_>>();
-        Ok((accepted, admissions))
-    })?;
-    let mut blocks = Vec::new();
-    let mut admissions = Vec::new();
-    for (_, (accepted, retained)) in sampled {
-        admissions.extend(retained);
-        blocks.extend(accepted);
-    }
-    Ok(SampledBlocks { blocks, admissions })
-}
-
-/// The sample positions painted first (indices of `sample_positions`): the lattice at every second
-/// axis line (the block's edges and middle) and the four lattice points between them, each the
-/// probe of one quadrant.
-const COARSE_FIRST: [usize; 13] = [0, 2, 4, 10, 12, 14, 20, 22, 24, 6, 8, 16, 18];
-
-/// A block's 41 samples blended from its coarse lattice (`values` at [`COARSE_FIRST`], the rest
-/// unknown) when each quadrant's probe agrees with the blend there, as a patch's probe must; `None`
-/// otherwise. The coarse lattice keeps its exact values; every other sample, the probes too, takes
-/// the blend, so that the fine lattice interpolates the coarse one exactly.
-fn coarse_lattice(axis: [usize; 5], values: &[Option<Painted>]) -> Option<Vec<Option<Painted>>> {
-    let coarse = |i: usize, j: usize| values[j * 5 + i];
-    let blend = |x: usize, y: usize| -> Option<Painted> {
-        let i = if x < axis[2] { 0 } else { 2 };
-        let j = if y < axis[2] { 0 } else { 2 };
-        let fraction =
-            |at: usize, low: usize| (at - axis[low]) as f64 / (axis[low + 2] - axis[low]) as f64;
-        let (fx, fy) = (fraction(x, i), fraction(y, j));
-        let around = [
-            coarse(i, j)?,
-            coarse(i + 2, j)?,
-            coarse(i, j + 2)?,
-            coarse(i + 2, j + 2)?,
-        ];
-        Some((
-            std::array::from_fn(|layer| bilinear(around.map(|value| value.0[layer]), fx, fy)),
-            std::array::from_fn(|layer| bilinear(around.map(|value| value.1[layer]), fx, fy)),
-        ))
-    };
-    for (i, j) in [(1, 1), (3, 1), (1, 3), (3, 3)] {
-        let (probe, blended) = (values[j * 5 + i]?, blend(axis[i], axis[j])?);
-        if !(agrees_with_interpolation(&probe.1, &blended.1)
-            && energies_agree_within_half_decibel(&probe.0, &blended.0))
-        {
+        energies: &[f64; LAYERS],
+        within: bool,
+    ) -> Option<[f64; LAYERS + 1]> {
+        let (around, weights) = self.around(x, y);
+        let here = log_energies(energies);
+        if within && !within_lattice_range(around, &here) {
             return None;
         }
+        carried_loudness(around, weights, &here, &self.slopes)
     }
-    let (_, positions) = sample_positions(axis[4] + 1);
-    positions
-        .iter()
-        .enumerate()
-        .map(|(k, &(x, y))| match COARSE_FIRST[..9].contains(&k) {
-            true => values[k].map(Some),
-            false => blend(x, y).map(Some),
-        })
-        .collect()
 }
 
-/// Each block's paint at `positions` (indices of `sample_positions`), `ids` the blocks' places.
-fn paint_positions(
-    painter: &PointPainter,
-    blocks: &[impl std::borrow::Borrow<Block> + Sync],
-    ids: &[usize],
-    positions: &[usize],
-) -> Result<Vec<Vec<Option<Painted>>>, String> {
-    let (square, grid) = (painter.square, painter.grid);
-    let (side, b) = (grid.pixels / grid.block, grid.block);
-    let (_, all) = sample_positions(b);
-    let places: Vec<_> = ids
-        .iter()
-        .enumerate()
-        .flat_map(|(slot, &at)| {
-            let (x, y) = ((at % side) * b, (at / side) * b);
-            let all = &all;
-            positions.iter().map(move |&k| {
-                let (dx, dy) = all[k];
-                (slot, (y + dy) * grid.pixels + x + dx)
-            })
-        })
-        .collect();
-    if places.is_empty() {
-        return Ok(Vec::new());
+/// A block's own sources' free field at its pixel (x, y), where its ground can be read.
+pub(crate) type OwnFreeField<'a> = dyn Fn(usize, usize) -> Option<[f64; LAYERS]> + 'a;
+
+/// A block's pixels painted without a pass, row-major (`None`: a pass paints it, or it stands in
+/// a building); its fine lattice where some refused patch carries its loudness, with those
+/// patches; and how many of its sixteen patches blend.
+pub(crate) struct QuietSamples {
+    side: usize,
+    pixels: Vec<Option<Painted>>,
+    lattice: Option<Lattice>,
+    carried: [bool; 16],
+    blended: usize,
+}
+
+impl QuietSamples {
+    /// A block of `side` pixels every pixel of which `lattice` blends (its corners, or its coarse
+    /// lattice, whose points are their own blend), `free(x, y)` the block's own sources' free
+    /// field at a pixel: a pixel without one or beyond the lattice points' range is left to a pass.
+    pub fn blended_whole(side: usize, lattice: &Lattice, free: &OwnFreeField) -> Self {
+        let pixels = (0..side * side)
+            .map(|at| lattice.blend_at(at % side, at / side, &free(at % side, at / side)?))
+            .collect();
+        QuietSamples {
+            side,
+            pixels,
+            lattice: None,
+            carried: [false; 16],
+            blended: 16,
+        }
     }
-    let points = places
-        .par_iter()
-        .map(|&(_, at)| {
-            Point::at(
-                square,
-                metres_at(
-                    square,
-                    grid.pixels,
-                    (at % grid.pixels) as f64 + 0.5,
-                    (at / grid.pixels) as f64 + 0.5,
-                ),
-            )
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let painted = painter.paint(blocks, &points, &places)?;
-    Ok(painted.chunks(positions.len()).map(<[_]>::to_vec).collect())
+
+    /// A block of `side` pixels settled patch by patch from its 41 `samples`
+    /// ([`sample_positions`]). A patch whose probe agrees with the lattice's blend and which no
+    /// screening edge crosses (`edge_free` of its number) blends its pixels; any other keeps its
+    /// samples, its probe painted as its pixels will be: with the lattice's loudness carried to
+    /// its own energies where the probe confirms that carry. A probe that kept its own value in a
+    /// blended patch stood alone among its neighbours by half a phon at 2.3 % of the probes on
+    /// even ground, seven times as often as other pixels (the world sample, 2026-11-12).
+    pub fn patched(
+        side: usize,
+        samples: &[Option<Anchor>],
+        edge_free: &dyn Fn(usize) -> bool,
+        free: &OwnFreeField,
+    ) -> Self {
+        let (axis, positions) = sample_positions(side);
+        let lattice = Lattice::new(&axis.map(|at| at as f64), &samples[..25]);
+        let mut pixels = vec![None; side * side];
+        for (&(x, y), anchor) in positions.iter().zip(samples) {
+            pixels[y * side + x] = anchor.map(|anchor| anchor.paint);
+        }
+        let (mut carried, mut blended) = ([false; 16], 0);
+        for (cell, &(x, y)) in positions[25..].iter().enumerate() {
+            let (i, j) = (cell % 4, cell / 4);
+            let Some(probe) = samples[25 + cell] else {
+                continue;
+            };
+            // A probe on a lattice line (a one-pixel interval's) is no independent check.
+            if !(x > axis[i] && x < axis[i + 1] && y > axis[j] && y < axis[j + 1]) {
+                continue;
+            }
+            if lattice.agrees_with(x, y, &probe) && edge_free(cell) {
+                blended += 1;
+                let within = |low: usize, high: usize, last: bool| low..high + usize::from(last);
+                for py in within(axis[j], axis[j + 1], j == 3) {
+                    for px in within(axis[i], axis[i + 1], i == 3) {
+                        if !(axis.contains(&px) && axis.contains(&py)) {
+                            pixels[py * side + px] =
+                                free(px, py).and_then(|free| lattice.blend_at(px, py, &free));
+                        }
+                    }
+                }
+                continue;
+            }
+            let (energies, ndens) = probe.paint;
+            carried[cell] = (lattice.carried_at((x, y), &energies, false)).is_some_and(|carried| {
+                loudness_visibly_agrees(&ndens, &carried, &lattice.loudest_around(x, y).ndens)
+            });
+            if carried[cell] {
+                let carried = lattice.carried_at((x, y), &energies, true);
+                pixels[y * side + x] = Some((energies, carried.unwrap_or(ndens)));
+            }
+        }
+        let keeps_lattice = carried.iter().any(|&carried| carried);
+        QuietSamples {
+            side,
+            pixels,
+            lattice: keeps_lattice.then_some(lattice),
+            carried,
+            blended,
+        }
+    }
+
+    /// The loudness of the pixel (x, y) from its `energies` (each layer's Lden energy) where its
+    /// patch carries it and they lie within its lattice points' range: the patch's outdoor lattice
+    /// points' loudness blended, each first taken to the pixel's energy along the block's slope
+    /// (loudness against energy, both in the logarithm).
+    pub fn loudness_from(
+        &self,
+        x: usize,
+        y: usize,
+        energies: &[f64; LAYERS],
+    ) -> Option<[f64; LAYERS + 1]> {
+        let lattice = self.lattice.as_ref()?;
+        let (patch_x, patch_y) = (lattice.interval(x).0, lattice.interval(y).0);
+        if !self.carried[patch_y * 4 + patch_x] {
+            return None;
+        }
+        lattice.carried_at((x, y), energies, true)
+    }
+
+    /// The paint of the pixel (x, y) where the block knows it without a pass.
+    pub fn known_at(&self, x: usize, y: usize) -> Option<Painted> {
+        self.pixels[y * self.side + x]
+    }
+
+    /// Whether every pixel of the block is painted.
+    pub fn complete(&self) -> bool {
+        self.pixels.iter().all(Option::is_some)
+    }
+
+    /// Whether any pixel of the block is painted.
+    pub fn paints_a_pixel(&self) -> bool {
+        self.pixels.iter().any(Option::is_some)
+    }
+
+    /// How many of its patches are blended, and how many of the others carry their loudness.
+    pub fn patches(&self) -> (usize, usize) {
+        let carried = self.carried.iter().filter(|&&carried| carried).count();
+        (self.blended, carried)
+    }
 }
 
-fn lattice_corners([i, j]: [usize; 2]) -> [usize; 4] {
-    let first = j * 5 + i;
-    [first, first + 1, first + 5, first + 6]
-}
-
-fn sample_positions(b: usize) -> ([usize; 5], Vec<(usize, usize)>) {
+/// A block of `b` pixels' sample axis (five lattice lines) and its 41 sample positions: the 25
+/// lattice points row by row, then the 16 patches' probes.
+pub(crate) fn sample_positions(b: usize) -> ([usize; 5], Vec<(usize, usize)>) {
     let axis = [0, b / 4, b / 2, 3 * b / 4, b - 1];
     let centres: [usize; 4] = std::array::from_fn(|at| (axis[at] + axis[at + 1]) / 2);
     let positions: Vec<_> = axis
@@ -365,50 +245,6 @@ fn sample_positions(b: usize) -> ([usize; 5], Vec<(usize, usize)>) {
         )
         .collect();
     (axis, positions)
-}
-
-/// A layer quieter than this at the probe and in the blend needs only [`QUIET_LAYER_SONE`] there
-/// (sone): the map shows it clear under 1 sone and the etalon scores a layer from 1 sone, while the
-/// total keeps the half phon. In Dobris such layers alone rejected a sixth of the probed patches of
-/// its busiest square, 2207/1394 (2026-10-14).
-const QUIET_LAYER_UNDER_SONE: f64 = 0.5;
-/// How far a quiet layer may differ from its blend (sone): what the map's hover reads stays within
-/// a tenth of a sone, never a quiet place's silence read as a few tenths.
-const QUIET_LAYER_SONE: f64 = 0.1;
-
-/// A quiet intermittent source may pass the loudness check and still change Lden substantially.
-/// Below-zero layers need no level, but their sum can cross the stored floor.
-fn energy_agrees(heard: f64, blended: f64) -> bool {
-    heard.is_finite()
-        && blended.is_finite()
-        && heard >= 0.0
-        && blended >= 0.0
-        && (heard.max(blended) < 1.0
-            || (heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log10()).abs() <= 0.5))
-}
-
-fn energies_agree_within_half_decibel(heard: &[f64; LAYERS], blended: &[f64; LAYERS]) -> bool {
-    (0..LAYERS).all(|layer| energy_agrees(heard[layer], blended[layer]))
-        && energy_agrees(heard.iter().sum(), blended.iter().sum())
-}
-
-/// One half-phon cell step in the total and in every layer not quieter than
-/// [`QUIET_LAYER_UNDER_SONE`], a tenth of a sone in the quieter; silence is already quantized.
-fn loudness_agrees(layer: usize, heard: f64, blended: f64) -> bool {
-    if !heard.is_finite() || !blended.is_finite() || heard < 0.0 || blended < 0.0 {
-        return false;
-    }
-    if layer < LAYERS && heard.max(blended) < QUIET_LAYER_UNDER_SONE {
-        return (heard - blended).abs() <= QUIET_LAYER_SONE;
-    }
-    if cell(heard) == SILENCE && cell(blended) == SILENCE {
-        return true;
-    }
-    heard > 0.0 && blended > 0.0 && (10.0 * (heard / blended).log2()).abs() <= 0.5
-}
-
-fn agrees_with_interpolation(heard: &[f64; LAYERS + 1], blended: &[f64; LAYERS + 1]) -> bool {
-    (0..=LAYERS).all(|layer| loudness_agrees(layer, heard[layer], blended[layer]))
 }
 
 #[cfg(test)]

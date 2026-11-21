@@ -2,7 +2,9 @@
 // click popup and the track of the loudest flight highlighted in it.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import Map, { NavigationControl, GeolocateControl, type MapRef, type ViewStateChangeEvent } from 'react-map-gl/maplibre'
-import type { StyleSpecification, GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
+import { setRTLTextPlugin, type GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
+// The package's exports name its ES module only; MapLibre's workers load this script file.
+import rtlTextPlugin from '../../node_modules/@mapbox/mapbox-gl-rtl-text/dist/mapbox-gl-rtl-text.js?url'
 import FlyToLocation from './FlyToLocation'
 import DetailPopup from './DetailPopup'
 import FlightTrackLayer from './FlightTrackLayer'
@@ -19,13 +21,19 @@ import type { Stay, StaySearch } from '../lib/stays'
 import type { DataLayerId } from '../lib/data-layers'
 import MapStateSync from './MapStateSync'
 import PublicOverlayOrder from './PublicOverlayOrder'
-import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
+import { DEFAULT_BASEMAP, basemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT } from '../lib/url-state'
 import type { SelectedLocation } from './FlyToLocation'
 import { pixelPadding, type MapCamera } from '../lib/url-state'
 import type { Metric } from '../lib/hm3-decoder'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
+
+// Arabic and Hebrew names need MapLibre's text-shaping plugin: without it the base map's style falls
+// back to a name in English and shows none where OpenStreetMap has no English one. Loaded with the
+// map from its own origin: left for the first such name, it never comes while every name in view
+// has an English one to fall back to (Cairo stayed without its Arabic name).
+void setRTLTextPlugin(new URL(rtlTextPlugin, location.href).href, false)
 
 // A geolocate move ends with the position at the map's centre (its accuracy's box is centred in
 // Mercator, a fraction of a pixel off); a move cut short leaves it farther.
@@ -75,7 +83,7 @@ export default function MapView({
   const bm = basemap ?? DEFAULT_BASEMAP
   const activeQuietThreshold = quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null
   const [flyToPos, setFlyToPos] = useState<{ lat: number; lng: number } | null>(null)
-  const [mapStyle, setMapStyle] = useState<string | StyleSpecification | null>(null)
+  const mapStyle = useMemo(() => basemapStyle(bm, window.location.origin), [bm])
 
   const handleArrived = useCallback((pos: { lat: number; lng: number }) => {
     setFlyToPos(pos)
@@ -127,20 +135,6 @@ export default function MapView({
     return sourceOf(active.filter(s => tileBuild === null || s in tileBuild.byLayer), metric)
   }, [heatmapLayers, tileBuild, metric])
 
-  useEffect(() => {
-    let cancelled = false
-    void loadBasemapStyle(bm).then((style) => {
-      if (!cancelled) setMapStyle(style)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [bm])
-
-  if (!mapStyle) {
-    return <div className="h-full w-full bg-[#fafaf8]" />
-  }
-
   return (
     <Map
       ref={mapRef}
@@ -164,7 +158,7 @@ export default function MapView({
       dragPan={{ deceleration: 4000, maxSpeed: 1100 }}
     >
       <NavigationControl position="bottom-left" showCompass={false} />
-      <MapCredits />
+      <MapCredits folds={bm === 'standard'} />
       <AboutControl />
       {/* Precise location is user-triggered (Google pattern): the initial view
           only approximates from browser language (utils/initial-view.ts); GPS

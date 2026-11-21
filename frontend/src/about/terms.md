@@ -8,7 +8,8 @@ attribution.
 
 - **You may** link to quietmap.org and embed the map or screenshots in your articles, apps
   and projects, with a visible credit "**quietmap.org**" linking back here, plus
-  "© OpenStreetMap contributors" and the base map's credit from the bottom of the map.
+  "© OpenStreetMap contributors" and, on the terrain or satellite base map, its credit from the
+  bottom of the map.
 - **You may not** bulk-download tiles, scrape or mirror the dataset, or republish a copy of
   the map as your own service. Raw model data is not distributed.
 - **Commercial or high-volume use:** [talk to us first](mailto:info@quietmap.org) — we're
@@ -32,10 +33,11 @@ and are kept for at most **30 days**. From them we derive anonymous, aggregated 
 (visitor countries, browser types, popular areas of the map) — never profiles of
 individual visitors, and nothing from the logs is shared with third parties.
 
-The base map loads from CARTO, with OpenTopoMap's terrain or Esri's satellite images when you
-pick them; each sees your IP address and the area you view. If you turn on places to stay, our
-server asks Stay22 for rooms in that area for your dates and number of guests, without your IP
-address; the places' photos load from other sites, and an offer's link is an affiliate link.
+The standard base map loads from our own server. OpenTopoMap's terrain and Esri's satellite images
+load from theirs when you pick them; each then sees your IP address and the area you view. If you
+turn on places to stay, our server asks Stay22 for rooms in that area for your dates and number of
+guests, without your IP address; the places' photos load from other sites, and an offer's link is
+an affiliate link.
 
 Your precise location is used only if you tap the locate button and grant your browser's
 permission prompt. While you are signed out, the places you opened (up to 50, with when you last

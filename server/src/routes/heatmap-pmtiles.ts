@@ -1,106 +1,16 @@
 // Serve the stored HM3 Brotli streams by range from immutable per-layer PMTiles archives.
 
-import { constants } from 'node:fs'
-import { open } from 'node:fs/promises'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
-import { gunzip } from 'node:zlib'
 import type { FastifyInstance } from 'fastify'
-import {
-  Compression,
-  PMTiles,
-  SharedPromiseCache,
-  type RangeResponse,
-  type Source,
-} from 'pmtiles'
+import { Compression, type PMTiles, type RangeResponse } from 'pmtiles'
 import { parseTileParams } from './heatmap-shared.ts'
-
-const gunzipAsync = promisify(gunzip)
+import { openArchiveServedAsStored } from './pmtiles-file.ts'
 
 const BUILD_ID = /^b\d+$/
 
-// Retain parsed directories for up to 32 immutable layer archives.
+// Retain parsed directories for up to 32 immutable layer archives, 100 directories each.
 const ARCHIVE_CACHE_MAX = 32
-
-/** Cache parsed directories, but retain an archive descriptor only during a range read:
- * an idle cached descriptor would pin hundreds of GB after publication GC unlinks it. */
-class FileRangeSource implements Source {
-  private readonly path: string
-
-  constructor(path: string) {
-    this.path = path
-  }
-
-  getKey(): string {
-    return this.path
-  }
-
-  async getBytes(offset: number, length: number): Promise<RangeResponse> {
-    const handle = await open(
-      this.path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    )
-    try {
-      if (!(await handle.stat()).isFile()) throw new Error(`${this.path} is not a regular file`)
-      // Positional reads may be short; only EOF ends the range early. The initial
-      // header probe asks for 16 KiB even when an empty archive is smaller.
-      const data = new ArrayBuffer(length)
-      const view = new Uint8Array(data)
-      let filled = 0
-      while (filled < length) {
-        const { bytesRead } = await handle.read(view, filled, length - filled, offset + filled)
-        if (bytesRead === 0) break
-        filled += bytesRead
-      }
-      return filled === length ? { data } : { data: data.slice(0, filled) }
-    } finally {
-      await handle.close()
-    }
-  }
-}
-
-/**
- * Decompressor for our archives: gunzip directories, pass tile bytes through.
- *
- * The pmtiles lib runs this over BOTH internal directories (internalCompression,
- * gzip — the packer's default) and tile entries (tileCompression). Tile bytes
- * are whole-file-Brotli HM3 that the route ships verbatim with
- * `Content-Encoding: br` (browser inflates in its network stack; server stays a
- * dumb byte reader), so Brotli passthrough here is the point, not an omission.
- * `openHeatmapArchive` rejects any archive whose header contradicts these
- * assumptions instead of ever serving corrupt bytes.
- */
-async function gunzipDirectoriesPassthroughTiles(
-  buf: ArrayBuffer,
-  compression: Compression,
-): Promise<ArrayBuffer> {
-  if (compression === Compression.Gzip) {
-    const out = await gunzipAsync(buf)
-    const copy = new ArrayBuffer(out.byteLength)
-    new Uint8Array(copy).set(out)
-    return copy
-  }
-  if (compression === Compression.Zstd) throw new Error('zstd archives not supported')
-  return buf // None | Unknown | Brotli → verbatim
-}
-
-async function openHeatmapArchive(path: string): Promise<PMTiles> {
-  const pmtiles = new PMTiles(
-    new FileRangeSource(path),
-    new SharedPromiseCache(100, true, gunzipDirectoriesPassthroughTiles),
-    gunzipDirectoriesPassthroughTiles,
-  )
-  const header = await pmtiles.getHeader()
-  if (header.internalCompression !== Compression.Gzip
-    && header.internalCompression !== Compression.None) {
-    throw new Error(`unsupported internal compression ${header.internalCompression}`)
-  }
-  // The route declares Brotli without re-encoding, so a different header is unsafe.
-  if (header.tileCompression !== Compression.Brotli) {
-    throw new Error(`tile compression ${header.tileCompression} contradicts verbatim-Brotli serving`)
-  }
-  return pmtiles
-}
+const ARCHIVE_DIRECTORIES_MAX = 100
 
 /**
  * GET /api/tiles/:build/:layer/:z/:x/:y.bin
@@ -121,7 +31,7 @@ export async function heatmapPmtilesRoutes(app: FastifyInstance, { tilesDir }: {
     const key = `${build}/${layer}`
     let entry = archiveCache.get(key)
     if (!entry) {
-      entry = openHeatmapArchive(join(tilesDir, `${layer}.${build}.pmtiles`))
+      entry = openArchiveServedAsStored(join(tilesDir, `${layer}.${build}.pmtiles`), Compression.Brotli, ARCHIVE_DIRECTORIES_MAX)
       archiveCache.set(key, entry)
       if (archiveCache.size > ARCHIVE_CACHE_MAX) {
         const oldestKey = archiveCache.keys().next().value

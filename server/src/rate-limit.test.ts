@@ -16,6 +16,7 @@ const CONFIG: AppConfig = {
   years: ['2026'],
   popupConcurrency: 1,
   tilesDir: tmpdir(),
+  basemapDir: null,
   noIndex: false,
   photonUrl: 'http://127.0.0.1:9',
   valhallaUrl: 'http://127.0.0.1:9',
@@ -65,8 +66,8 @@ test('geocode proxies are rate-limited too', async (t) => {
   const server = await app(t)
   const statuses: number[] = []
   for (let i = 0; i < 6; i++) {
-    // q shorter than 2 chars answers [] without calling the geocoder.
-    const response = await server.inject({ method: 'GET', url: '/api/search?q=a', remoteAddress: '203.0.113.20' })
+    const response = await server.inject({ method: 'GET', url: '/api/search?q=0,-180', remoteAddress: '203.0.113.20' })
+    if (i === 0) assert.deepEqual(response.json(), [{ lat: 0, lon: -180, display_name: '0, -180', secondary: '' }])
     statuses.push(response.statusCode)
   }
   assert.deepEqual(statuses, [200, 200, 200, 200, 200, 429])

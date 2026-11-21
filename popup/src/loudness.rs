@@ -12,9 +12,7 @@
 
 use crate::distribution::Distribution;
 use crate::evaluate::Bands;
-use crate::percentiles::{
-    Group, Line, Passes, Resolution, Weather, layered_distributions, place_lines,
-};
+use crate::percentiles::{Group, Line, Passes, Resolution, layered_distributions, place_lines};
 use crate::selection::LayerSelection;
 use physics::bands::{
     A_WEIGHTING_DB as OCTAVE_A_DB, BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy,
@@ -163,7 +161,7 @@ pub fn place_loudness(
     groups: &[Group],
     layers: &[LayerSound],
     (curves, layer_curves): (&[Curve; PERIODS], &[(Layer, [Curve; PERIODS])]),
-    flights: (&Weather, ([f64; PERIODS], [f64; PERIODS])),
+    flights: &[Line],
     passes: &dyn Fn(&Group) -> Result<Passes, String>,
     resolution: Resolution,
 ) -> Result<PlaceLoudness, String> {
@@ -212,10 +210,9 @@ pub type PlacedLayer = (Vec<Line>, [f64; PERIODS]);
 pub fn place_layers(
     groups: &[Group],
     layers: &[LayerSound],
-    flights: (&Weather, ([f64; PERIODS], [f64; PERIODS])),
+    flights: &[Line],
     passes: &dyn Fn(&Group) -> Result<Passes, String>,
 ) -> Result<Vec<PlacedLayer>, String> {
-    let no_flights = ([0.0; PERIODS], [0.0; PERIODS]);
     (layers.iter())
         .map(|layer| {
             let own = (groups.iter())
@@ -223,7 +220,7 @@ pub fn place_layers(
                 .copied();
             let heard = match layer.layer {
                 Layer::Aircraft => flights,
-                _ => (flights.0, no_flights),
+                _ => &[],
             };
             place_lines(own, layer.energy, heard, passes)
         })
@@ -471,8 +468,10 @@ mod tests {
             (12.0 * road[0].at(50.0) + 4.0 * road[1].at(55.0) + 8.0 * road[2].at(60.0)) / 24.0;
         assert!((steady - expected).abs() < 1e-9);
         let weather = Weather::default();
-        let lane =
-            crate::percentiles::Line::flights(&weather, ([energy(50.0); PERIODS], [1e-3; PERIODS]));
+        let lane = crate::percentiles::Line::at_lambda(
+            &weather,
+            ([energy(50.0); PERIODS], [1e-3; PERIODS]),
+        );
         let rare = own_nden(Some(&lane), [0.0; PERIODS], &road);
         assert!(rare > 0.0 && rare < 0.5 * steady, "{rare} {steady}");
         let over_floor = own_nden(Some(&lane), [energy(45.0); PERIODS], &road);

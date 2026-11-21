@@ -139,9 +139,14 @@ __device__ __forceinline__ RayEnds source_ends(const Attribute& source, const Re
     return ends;
 }
 
+// Flags packed in PairRay::obstacles_on_ray: bit 0 indicates obstacles may stand on the ray,
+// bit 1 marks the sole ray of a 1-ray pair so ray_transfers can store per-pair outputs directly.
+#define PAIR_RAY_OBSTACLES 1u
+#define PAIR_RAY_SINGLE 2u
+
 // One ray of a pair (evaluate::received_bands: a point source's ray, or a line piece's quadrature
 // node): where it leaves the source, its weight, a deck's ground under it (NaN: the terrain) and
-// whether obstacles may stand on it. A pair's rays are listed together; each runs on its own thread.
+// its obstacle/single-ray flags. A pair's rays are listed together; each runs on its own thread.
 struct PairRay {
     u32 pair;
     u32 obstacles_on_ray;
@@ -161,7 +166,7 @@ __device__ u32 pair_rays_of(const ObstacleScene& obstacles, const Receiver& rece
     if (!candidate.line) {
         float distance_m = hypotf(candidate.ax - receiver.x, candidate.ay - receiver.y);
         float distance = fmaxf(hypotf(fmaxf(distance_m, source.exclusion_radius_m), receiver.altitude_m - (candidate.ground0 + source.height_m)), 1.0f);
-        ray.obstacles_on_ray = 1u;
+        ray.obstacles_on_ray = PAIR_RAY_OBSTACLES;
         ray.px = candidate.ax;
         ray.py = candidate.ay;
         ray.weight = 1.0f / (distance * distance * energy_of_level(11.0f));
@@ -182,7 +187,7 @@ __device__ u32 pair_rays_of(const ObstacleScene& obstacles, const Receiver& rece
     float divergence = hypotf(g.unit[0], g.unit[1]) / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m);
     for (int node = 0; node < nodes.count; node++) {
         float fraction = nodes.along_m[node] / g.length_m;
-        ray.obstacles_on_ray = nodes.obstacles_on_ray[node] ? 1u : 0u;
+        ray.obstacles_on_ray = nodes.obstacles_on_ray[node] ? PAIR_RAY_OBSTACLES : 0u;
         ray.px = candidate.ax + fraction * (candidate.bx - candidate.ax);
         ray.py = candidate.ay + fraction * (candidate.by - candidate.ay);
         ray.weight = nodes.weight_rad[node] * divergence;
@@ -199,6 +204,6 @@ __device__ u32 ray_received(const TerrainScene& ground, const ObstacleScene& obs
                             const Attribute& source, const PairRay& ray, RayStream& s, float* sums, float* bands) {
     RayEnds ends = source_ends(source, receiver);
     if (!isnan(ray.source_ground_m)) ends.source_ground_m = ray.source_ground_m;
-    return add_ray(ground, obstacles, receiver, source, ends, ray.px, ray.py, ray.obstacles_on_ray != 0u, ray.weight, s, sums,
-                   bands);
+    return add_ray(ground, obstacles, receiver, source, ends, ray.px, ray.py, (ray.obstacles_on_ray & PAIR_RAY_OBSTACLES) != 0u,
+                   ray.weight, s, sums, bands);
 }

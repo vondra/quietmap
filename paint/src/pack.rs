@@ -165,21 +165,28 @@ impl Archive<'_> {
             }
         }
         painted.sort_unstable_by_key(|&coordinate| TileId::from(coordinate).value());
-        for (number, layer) in layer_names().iter().enumerate() {
-            let name = archive_name(metric, layer, build);
-            let path = self.directory.join(&name);
-            let file = File::create_new(&path).map_err(|e| e.to_string())?;
-            let archive_layer = metric.archive_layer(layer);
-            let mut writer = PmTilesWriter::new(TileType::Unknown)
-                .tile_compression(Compression::Brotli)
-                .internal_compression(Compression::Gzip)
-                .min_zoom(MIN_ZOOM)
-                .max_zoom(zoom)
-                .bounds(-180.0, -85.051_13, 180.0, 85.051_13)
-                .metadata(&serde_json::json!({ "name": archive_layer, "build": build }).to_string())
-                .create(file)
-                .map_err(|e| e.to_string())?;
-            for tile in &parents {
+        let mut writers = layer_names()
+            .iter()
+            .map(|layer| {
+                let file =
+                    File::create_new(self.directory.join(archive_name(metric, layer, build)))
+                        .map_err(|e| e.to_string())?;
+                PmTilesWriter::new(TileType::Unknown)
+                    .tile_compression(Compression::Brotli)
+                    .internal_compression(Compression::Gzip)
+                    .min_zoom(MIN_ZOOM)
+                    .max_zoom(zoom)
+                    .bounds(-180.0, -85.051_13, 180.0, 85.051_13)
+                    .metadata(
+                        &serde_json::json!({ "name": metric.archive_layer(layer), "build": build })
+                            .to_string(),
+                    )
+                    .create(file)
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for tile in &parents {
+            for (number, writer) in writers.iter_mut().enumerate() {
                 let (offset, length) = tile.ranges[number];
                 let mut bytes = vec![0; length];
                 parents_file
@@ -189,15 +196,18 @@ impl Archive<'_> {
                     .add_raw_tile(tile.coordinate, &bytes)
                     .map_err(|e| e.to_string())?;
             }
-            // A square's children are consecutive in Hilbert order, so one handle reads them all.
-            let mut opened: Option<((u32, u32), PaintedSquare)> = None;
-            for &coordinate in &painted {
-                let (x, y) = (coordinate.x(), coordinate.y());
-                let square = (x / per_side, y / per_side);
-                if opened.as_ref().map(|(at, _)| *at) != Some(square) {
-                    opened = Some((square, PaintedSquare::open(out, u32::from(zoom), square)?));
-                }
-                let stored = &opened.as_ref().expect("opened square").1;
+        }
+        // Hilbert order keeps a square's children together. Read all layers before leaving its
+        // bundle, so the next layer does not reopen it and read its filesystem pages again.
+        let mut opened: Option<((u32, u32), PaintedSquare)> = None;
+        for &coordinate in &painted {
+            let (x, y) = (coordinate.x(), coordinate.y());
+            let square = (x / per_side, y / per_side);
+            if opened.as_ref().map(|(at, _)| *at) != Some(square) {
+                opened = Some((square, PaintedSquare::open(out, u32::from(zoom), square)?));
+            }
+            let stored = &opened.as_ref().expect("opened square").1;
+            for (number, writer) in writers.iter_mut().enumerate() {
                 let bytes = stored.compressed_tile(
                     metric,
                     number,
@@ -208,12 +218,15 @@ impl Archive<'_> {
                     .add_raw_tile(coordinate, &bytes)
                     .map_err(|e| e.to_string())?;
             }
+        }
+        for (writer, layer) in writers.into_iter().zip(layer_names()) {
+            let name = archive_name(metric, layer, build);
             writer.finalize().map_err(|e| e.to_string())?;
-            File::open(&path)
+            File::open(self.directory.join(&name))
                 .and_then(|file| file.sync_all())
                 .map_err(|e| e.to_string())?;
             layers.insert(
-                archive_layer,
+                metric.archive_layer(layer),
                 serde_json::json!({ "file": name, "build": build }),
             );
         }

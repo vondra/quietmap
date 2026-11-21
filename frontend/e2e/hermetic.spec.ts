@@ -34,6 +34,38 @@ const soneCells = (sone: number) => Uint8Array.of(Math.round(80 + 20 * Math.log2
 const ALL_LAYERS = 'road,railway,industrial,building,ship,aircraft'
 const lden = (page: import('@playwright/test').Page) => page.locator('[data-testid="lden"]:visible')
 
+test('a close map keeps its tile colours when one read for the seamless image fails', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  const tile = `/api/tiles/b1/total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  await page.addInitScript(tile => {
+    const fetchTile = window.fetch.bind(window)
+    window.fetch = (input, init) => {
+      if (String(input).endsWith(tile) && init?.priority === 'low') {
+        performance.mark('close-map-read')
+        if (performance.getEntriesByName('close-map-read').length === 1) {
+          return Promise.resolve(new Response('', { status: 503 }))
+        }
+      }
+      return fetchTile(input, init)
+    }
+  }, tile)
+  await page.goto(mapUrl(POINT, ALL_LAYERS, TILE_Z + 2))
+  const { canvas } = await canvasCenter(page)
+  const reads = () => page.evaluate(() => performance.getEntriesByName('close-map-read').length)
+  await expect.poll(reads).toBe(1)
+  await page.waitForLoadState('networkidle')
+  const centreIsPainted = async () => {
+    const [red, green, blue] = await pngCenterPixel(page, await canvas.screenshot())
+    return red > green + 35 && red > blue + 35
+  }
+  await expect.poll(centreIsPainted).toBe(true)
+  // The next pan retries the incomplete image.
+  await canvas.focus()
+  expect(await reads()).toBe(1)
+  await page.keyboard.press('ArrowRight')
+  await expect.poll(reads).toBeGreaterThan(1)
+})
+
 test('desktop: hover reads the painted cell, the popup redraws on every streamed update', async ({ page }) => {
   await installHermeticMap(page, POINT)
   const totalTile = `/api/tiles/b1/total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
@@ -46,6 +78,11 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await page.goto(mapUrl(POINT, ALL_LAYERS, TILE_Z + 2))
   await tileLoaded
   const { canvas, x, y } = await canvasCenter(page)
+  // At two zooms above the tile a cell is four screen pixels wide.
+  await page.mouse.move(x + 8, y)
+  await expect(page.getByTestId('heatmap-hover')).toHaveText('—')
+  await page.mouse.move(x + 4, y)
+  await expect(page.getByTestId('heatmap-hover')).toHaveText('Below map range')
   await page.mouse.move(x, y)
   await expect(page.getByTestId('heatmap-hover')).toHaveText(`${TOTAL_SONE} sone`)
   let combinedPixel: number[] = []
@@ -143,6 +180,8 @@ test('desktop: the Lden switch shows the Lden tiles in dB, adds layers as energy
   await expect(page).toHaveURL(/m=lden/)
   const { x, y } = await canvasCenter(page)
   const hover = page.getByTestId('heatmap-hover')
+  await page.mouse.move(x + 4, y)
+  await expect(hover).toHaveText('Below map range')
   await page.mouse.move(x, y)
   await expect(hover).toHaveText(`${TOTAL_LDEN.toFixed(1)} dB`)
   const layer = (id: string) => page.getByTestId(`layer-${id}`).filter({ visible: true })
@@ -334,6 +373,39 @@ test('desktop: an opened row computes its segments, how they arrive and their ra
   } finally { await recipient.close() }
 })
 
+test('paste a microphone position, open its level and share the exact point', async ({ page, context }) => {
+  await installHermeticMap(page, POINT)
+  await page.route('**/api/search?**', route => route.fulfill({
+    json: [{ display_name: 'An unrelated street', secondary: '', lat: -27.01, lon: -66.39 }],
+  }))
+  await page.goto(mapUrl(POINT, 'road', 2))
+  const search = page.getByRole('combobox')
+  const options = page.getByRole('option')
+  await search.fill('Street')
+  await expect(options.first()).toContainText('An unrelated street')
+  await search.fill('40.41939, −3.747319')
+  await expect(options).toHaveCount(1)
+  await expect(options.first()).toContainText('40.41939, -3.747319')
+  await expect(options.first()).toHaveAttribute('aria-selected', 'true')
+  await search.fill('40.41939, -193.747319')
+  await expect(options).toHaveCount(0)
+  await expect(page.getByRole('status')).toContainText('longitude')
+  await search.fill('40.41939, -3.747319')
+  await search.press('Enter')
+  await expect.poll(() => popupRequests(page)).toEqual([{ lat: 40.41939, lng: -3.747319 }])
+  await sendPopupLine(page, popupUpdate(1, false, 40.41939, -3.747319, FIXTURE_DB))
+  await endPopup(page)
+  await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
+  const reader = await context.newPage()
+  await installHermeticMap(reader, POINT)
+  await reader.goto(page.url())
+  await expect.poll(() => popupRequests(reader)).toEqual([{ lat: 40.41939, lng: -3.747319 }])
+  // At the map's edge the camera cannot centre on the receiver. The calculation still belongs there.
+  await search.fill('-85.05, 180')
+  await search.press('Enter')
+  await expect.poll(async () => (await popupRequests(page)).at(-1)).toEqual({ lat: -85.05, lng: 180 })
+})
+
 test('search: picking a result flies the map there and opens its popup', async ({ page }) => {
   const target = { display_name: 'Ruzyně Airport', secondary: 'Prague, CZ', lat: 50.1, lon: 14.26 }
   await installHermeticMap(page, POINT)
@@ -465,6 +537,13 @@ test("desktop: the reachable area is drawn from the open place by the button at 
   const button = page.getByRole('button', { name: 'Reachable area' })
   const panel = page.getByTestId('open-place').getByTestId('isochron-panel')
   const minutes = panel.getByRole('spinbutton', { name: 'Minutes' })
+  const search = page.getByRole('combobox')
+  await search.fill('Ω')
+  await expect(button).toBeHidden()
+  await search.fill('0, 181')
+  await expect(page.getByRole('status')).toContainText('longitude')
+  await expect(button).toBeHidden()
+  await search.press('Escape')
   await button.click()
   await panel.getByRole('button', { name: 'Car' }).click()
   await minutes.fill('5')

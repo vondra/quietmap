@@ -250,6 +250,20 @@ impl LocalFrame {
         ]
     }
 
+    /// The horizontal distance (m) from `position` (click metres) to the nearest point of `tile`.
+    pub fn tile_gap_m(&self, tile: TileId, position: [f64; 2]) -> f64 {
+        let corner = |dx: f64, dy: f64| {
+            let m = self.to_metres(Mercator {
+                x: f64::from(tile.x) + dx,
+                y: f64::from(tile.y) + dy,
+            });
+            [m[0] - position[0], m[1] - position[1]]
+        };
+        let (a, b) = (corner(0.0, 0.0), corner(1.0, 1.0));
+        let gap = |low: f64, high: f64| (low.min(high)).max(-high.max(low)).max(0.0);
+        gap(a[0], b[0]).hypot(gap(a[1], b[1]))
+    }
+
     /// [east, north] metres of a (fractional) position on the global step lattice.
     pub fn metres_of_steps(&self, steps: [f64; 2]) -> [f64; 2] {
         self.to_metres(Mercator {

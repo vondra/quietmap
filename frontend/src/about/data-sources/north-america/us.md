@@ -47,6 +47,7 @@ Homes: heat pumps and air conditioners as the RECS survey counts them. Mosques: 
 
 ## Checked against
 
-Minneapolis–St Paul airport's monitors ([validation](/about/validation)).
+Minneapolis–St Paul airport's monitors measure aircraft. At six sites in Olympic National Park,
+seasonal recordings give the level of all sound. [Validation](/about/validation).
 
 <!-- YEAR SOURCES -->

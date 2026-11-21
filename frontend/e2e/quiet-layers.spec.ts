@@ -4,7 +4,8 @@ import { HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
 import { PHONE, POINT, afterPaint, canvasCenter, installHermeticMap, mapPixels, mapUrl, pngCenterPixel } from './support'
 
 const TRAFFIC = [40, 80, 200, 255]
-const LABEL = [210, 30, 40, 255]
+/** The colours of the base map's labels (utils/basemaps.ts): dark on the standard map, white over the imagery. */
+const LABEL: Record<string, number[]> = { Standard: [26, 26, 26, 255], Satellite: [255, 255, 255, 255] }
 
 function uniformTile(lden: boolean, byte: number): Buffer {
   const tile = Buffer.alloc(6 + TILE_PX * TILE_PX, byte)
@@ -17,6 +18,49 @@ function uniformTile(lden: boolean, byte: number): Buffer {
       at >= TILE_PX && at % TILE_PX ? tile[6 + at - TILE_PX - 1] : 0)
   }
   return tile
+}
+
+const varint = (value: number): number[] => (value < 128 ? [value] : [value % 128 + 128, ...varint(Math.floor(value / 128))])
+const bytesField = (field: number, bytes: number[]) => [field << 3 | 2, ...varint(bytes.length), ...bytes]
+const textField = (field: number, text: string) => bytesField(field, [...Buffer.from(text)])
+const numberField = (field: number, value: number) => [field << 3, ...varint(value)]
+
+/** The base map's vector tile z/x/y holding POINT (none elsewhere): one town there, named "A". */
+function townTile(z: number, x: number, y: number): Buffer | null {
+  const EXTENT = 4096
+  const worldX = (POINT.lng + 180) / 360 * 2 ** z
+  const worldY = (1 - Math.asinh(Math.tan(POINT.lat * Math.PI / 180)) / Math.PI) / 2 * 2 ** z
+  if (Math.floor(worldX) !== x || Math.floor(worldY) !== y) return null
+  // A town of the largest size class, for the largest letter.
+  const properties = { kind: textField(1, 'locality'), name: textField(1, 'A'), min_zoom: numberField(5, 9), population_rank: numberField(5, 12) }
+  const town = [
+    ...bytesField(2, Object.keys(properties).flatMap((_, index) => [index, index])),
+    ...numberField(3, 1), // a point
+    // MoveTo the town: zigzag deltas from the tile's corner, positive.
+    ...bytesField(4, [9, ...[worldX, worldY].flatMap(world => varint(2 * Math.round(world % 1 * EXTENT)))]),
+  ]
+  return Buffer.from(bytesField(3, [
+    ...textField(1, 'places'),
+    ...bytesField(2, town),
+    ...Object.keys(properties).flatMap(key => textField(3, key)),
+    ...Object.values(properties).flatMap(value => bytesField(4, value)),
+    ...numberField(5, EXTENT),
+    ...numberField(15, 2), // the vector tile specification's version
+  ]))
+}
+
+/** The font's glyphs: an "A" that is a solid block (a signed distance field inside everywhere), so
+ *  the town's label covers POINT in the label's own colour. */
+function blockGlyphs(fontstack: string): Buffer {
+  const SIZE = 24, BORDER = 3
+  const letter = [
+    ...numberField(1, 'A'.charCodeAt(0)),
+    ...bytesField(2, Array<number>((SIZE + 2 * BORDER) ** 2).fill(255)),
+    ...numberField(3, SIZE), ...numberField(4, SIZE),
+    ...numberField(5, 0), ...numberField(6, 0), // its left and top bearings
+    ...numberField(7, SIZE),
+  ]
+  return Buffer.from(bytesField(1, [...textField(1, fontstack), ...textField(2, '0-255'), ...bytesField(3, letter)]))
 }
 
 async function colourPng(page: Page, rgba: number[]): Promise<Buffer> {
@@ -33,7 +77,7 @@ async function colourPng(page: Page, rgba: number[]): Promise<Buffer> {
 
 async function fixtures(page: Page) {
   await installHermeticMap(page, POINT)
-  const [traffic, label, black] = await Promise.all([TRAFFIC, LABEL, [0, 0, 0, 255]].map(rgba => colourPng(page, rgba)))
+  const [traffic, black] = await Promise.all([TRAFFIC, [0, 0, 0, 255]].map(rgba => colourPng(page, rgba)))
   await page.route('**/api/me', route => route.fulfill({ status: 401, body: '{}' }))
   await page.route('**/api/raster/traffic/**', route => route.fulfill({ contentType: 'image/png', body: traffic }))
   await page.route('**/api/tiles/b1/**/*.bin', route => {
@@ -42,21 +86,16 @@ async function fixtures(page: Page) {
     // Quiet total: 0.5 sone / 30 dB; the selected road layer has a visible colour.
     return route.fulfill({ contentType: 'application/octet-stream', body: uniformTile(lden, source.endsWith('total') ? 60 : 100) })
   })
-  await page.route('**/positron-gl-style/style.json', route => route.fulfill({ json: {
-    version: 8,
-    sprite: 'https://map-fixture.invalid/labels',
-    sources: { labels: { type: 'geojson', data: { type: 'FeatureCollection', features: [
-      { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [POINT.lng, POINT.lat] } },
-    ] } } },
-    layers: [
-      { id: 'paper', type: 'background', paint: { 'background-color': '#000000' } },
-      { id: 'place-label', type: 'symbol', source: 'labels', layout: { 'icon-image': 'label' } },
-    ],
-  } }))
-  await page.route(/https:\/\/map-fixture\.invalid\/labels(?:@2x)?\.json/, route => route.fulfill({ json: {
-    label: { x: 0, y: 0, width: 32, height: 32, pixelRatio: 1 },
-  } }))
-  await page.route(/https:\/\/map-fixture\.invalid\/labels(?:@2x)?\.png/, route => route.fulfill({ contentType: 'image/png', body: label }))
+  // The base map's one label in this world: a town at the point, its letter a block.
+  await page.route('**/api/basemap/*/*/*.mvt', route => {
+    const [z, x, y] = new URL(route.request().url()).pathname.match(/\d+/g)!.map(Number)
+    const tile = townTile(z, x, y)
+    return tile ? route.fulfill({ contentType: 'application/x-protobuf', body: tile }) : route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/basemap/fonts/*/0-255.pbf', route => route.fulfill({
+    contentType: 'application/x-protobuf',
+    body: blockGlyphs(decodeURIComponent(new URL(route.request().url()).pathname.split('/')[4])),
+  }))
   await page.route('**/World_Imagery/MapServer/tile/**', route => route.fulfill({ contentType: 'image/png', body: black }))
 }
 
@@ -118,10 +157,18 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
         geometry: { type: 'Polygon', coordinates: [[[x - 0.004, y - 0.004], [x + 0.004, y - 0.004], [x + 0.004, y + 0.004], [x - 0.004, y + 0.004], [x - 0.004, y - 0.004]]] } }] } })
     })
     await page.goto(`${mapUrl(POINT, 'road', 14)}&stay=1&reach=${POINT.lat},${POINT.lng},12,walk&panel=none`)
-    const pin = async () => (await mapPixels(page, POINT, [stayPoint], 14))[0]
+    // Opening the point may move it clear of the phone's sheet. Sample each geographic place
+    // against the settled camera, not the screen pixel it occupied before the selection.
+    const camera = () => {
+      const state = new URLSearchParams(new URL(page.url()).hash.slice(1))
+      return { ...POINT, lat: Number(state.get('lat')), lng: Number(state.get('lng')) }
+    }
+    const pin = async () => (await mapPixels(page, camera(), [stayPoint], 14))[0]
+    // How much bluer than the ground beside it the area is, blue against red: the standard map's
+    // light ground has no blue to gain.
     const areaBlue = async () => {
-      const [inside, outside] = await mapPixels(page, POINT, [[POINT.lat, POINT.lng - 0.002], [POINT.lat, POINT.lng - 0.006]], 14)
-      return inside[2] - outside[2]
+      const [inside, outside] = await mapPixels(page, camera(), [[POINT.lat, POINT.lng - 0.002], [POINT.lat, POINT.lng - 0.006]], 14)
+      return (inside[2] - inside[0]) - (outside[2] - outside[0])
     }
     await expect.poll(pin).toEqual([51, 65, 85, 255])
     const received = page.waitForResponse(response => response.url().includes('/api/isochron?'))
@@ -131,11 +178,11 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
     for (const name of ['Standard', 'Terrain']) {
       await page.getByRole('button', { name, exact: true }).filter({ visible: true }).click()
       const centre = expect.poll(() => centrePixel(page))
-      await (name === 'Standard' ? centre.toEqual(LABEL) : centre.not.toEqual(LABEL))
+      await (name === 'Standard' ? centre.toEqual(LABEL.Standard) : centre.not.toEqual(LABEL.Standard))
       await expect.poll(areaBlue).toBeGreaterThan(20)
       await expect.poll(pin).toEqual([51, 65, 85, 255])
     }
-    const selectionPixels = () => mapPixels(page, POINT,
+    const selectionPixels = () => mapPixels(page, camera(),
       [[stayPoint[0], stayPoint[1] - 0.0001], [stayPoint[0], stayPoint[1] + 0.00015]], 14)
     await page.evaluate(point => { location.hash += `&d=${point.join(',')}` }, [stayPoint[0], stayPoint[1] + 0.0003])
     await expect.poll(selectionPixels).toEqual([[51, 65, 85, 255], [59, 130, 246, 255]])
@@ -173,7 +220,7 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
 
     for (const name of ['Standard', 'Satellite', 'Terrain']) {
       await page.getByRole('button', { name, exact: true }).filter({ visible: true }).click()
-      await expect.poll(() => centrePixel(page)).toEqual(name === 'Terrain' ? TRAFFIC : LABEL)
+      await expect.poll(() => centrePixel(page)).toEqual(LABEL[name] ?? TRAFFIC)
     }
 
     // Quiet zones also work with every noise layer off, in both quantities.

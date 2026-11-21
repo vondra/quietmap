@@ -6,22 +6,24 @@ import type { Metric } from '../lib/hm3-decoder'
 import { X } from 'lucide-react'
 import DetailSkeleton from './DetailSkeleton'
 import StayHeader from './StayHeader'
-import SharePlace from './SharePlace'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import type { Stay } from '../lib/stays'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
+import { sheetHeightRef } from '../lib/sheet-height'
 import { ICON_BUTTON } from './ui/button'
 
 // Lazy popup body: see DetailCard.
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
 
-// The handle and touch actions above the sheet's body.
-const SHEET_CHROME_PX = 44
+// The handle above the sheet's body: the sheet's only control, a tap opens or collapses it and a
+// swipe down closes it (owner 2026-11-17: "Tam má být jen ta čárka ... ten křížek vyhodit").
+const SHEET_CHROME_PX = 28
 
-/** How far from the viewport's top the opened sheet reaches at most: its body is at most half the
- *  viewport less 16 px and the attribution footer, the handle over it. */
+/** How far from the viewport's top the opened sheet reaches at most: from the screen's bottom, its body
+ *  is at most 40 % of the viewport less 16 px (the class below; owner 2026-11-17: "moc zakrývá tu
+ *  mapu"), the handle over it. */
 export function sheetTop(viewportHeight: number): number {
-  return viewportHeight / 2 + 16 - SHEET_CHROME_PX
+  return viewportHeight * 0.6 + 16 - SHEET_CHROME_PX
 }
 
 interface MobileDetailSheetProps {
@@ -35,7 +37,6 @@ interface MobileDetailSheetProps {
   position?: { lat: number; lng: number } | null
   error?: string | null
   onClose: () => void
-  getShareUrl: () => string
   onHighlight: (key: string | null) => void
   calculationOpen: boolean
   onCalculationToggle: () => void
@@ -45,7 +46,7 @@ interface MobileDetailSheetProps {
   stayMessage: string | null
 }
 
-export default function MobileDetailSheet({ metric, expanded, onExpandedChange: setExpanded, data, position, error, onClose, getShareUrl, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, stayMessage }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ metric, expanded, onExpandedChange: setExpanded, data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, stay, stayMessage }: MobileDetailSheetProps) {
   const desktop = useIsDesktop()
   const scrollRef = useViewScroll('detail', !desktop)
   const [dismissing, setDismissing] = useState(false)
@@ -81,7 +82,7 @@ export default function MobileDetailSheet({ metric, expanded, onExpandedChange: 
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!dragRef.current.isDragging) return
-    const { cancelClick, dismiss } = resolveSheetTouchEnd(e.changedTouches[0].clientY - dragRef.current.startY)
+    const { cancelClick, dismiss } = resolveSheetTouchEnd(e.changedTouches[0].clientY - dragRef.current.startY, e.currentTarget.parentElement!.offsetHeight)
     dragRef.current.isDragging = false
     if (cancelClick) {
       e.preventDefault()
@@ -112,27 +113,25 @@ export default function MobileDetailSheet({ metric, expanded, onExpandedChange: 
   const transition = dragRef.current.isDragging ? 'none' : 'transform 0.3s ease-out'
 
   return (
-    <div className="fixed bottom-(--map-footer-height) left-0 right-0 z-[2000] md:hidden">
+    <div className="fixed bottom-0 left-0 right-0 z-[2000] md:hidden">
       <div
+        ref={sheetHeightRef}
         data-testid="mobile-detail-sheet"
         className="relative bg-background rounded-t-xl shadow-2xl"
         style={{ transform, transition }}
       >
-        {/* A visible way to close it, as the desktop card has; a swipe down on the handle closes it
-            too, but nothing on a phone tells that. */}
-        <div className="absolute top-0 right-1.5 z-10 flex">
-          <SharePlace key={`${position.lat},${position.lng}`} getUrl={getShareUrl} />
-          <button type="button" onClick={onClose} aria-label="Close" className={`${ICON_BUTTON} size-11`}>
-            <X className="size-5" />
-          </button>
-        </div>
+        {/* A finger closes the sheet by its handle (owner 2026-11-17: no X on a phone); a mouse in a narrow
+            window cannot swipe it and sees the X, as does a keyboard's focus; a screen reader reads it. */}
+        <button type="button" onClick={onClose} aria-label="Close" className={`${ICON_BUTTON} absolute right-1.5 -top-0.5 z-10 pointer-coarse:not-focus-visible:sr-only`}>
+          <X className="size-4" />
+        </button>
         <div
-          className="flex h-11 items-center justify-center cursor-grab"
+          className="flex items-center justify-center cursor-grab"
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
           onClick={() => setExpanded(!expanded)}
-          style={{ touchAction: 'none' }}
+          style={{ height: SHEET_CHROME_PX, touchAction: 'none' }}
           role="button"
           aria-label={expanded ? 'Collapse' : 'Expand'}
         >
@@ -144,7 +143,7 @@ export default function MobileDetailSheet({ metric, expanded, onExpandedChange: 
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
         {stay && <StayHeader stay={stay} />}
         {stayMessage && <p role="status" data-testid="stay-status" className="border-b border-border px-2.5 py-2 text-xs text-muted-foreground">{stayMessage}</p>}
-        <div key={`${position.lat},${position.lng}`} ref={scrollRef} className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50dvh-16px-var(--map-footer-height))]' : 'overflow-hidden max-h-24'}`}>
+        <div key={`${position.lat},${position.lng}`} ref={scrollRef} className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(40dvh-16px)]' : 'overflow-hidden max-h-24'}`}>
           {!desktop && (showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

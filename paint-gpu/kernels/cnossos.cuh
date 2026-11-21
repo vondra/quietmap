@@ -1,6 +1,8 @@
 // CNOSSOS meteorological paths, diffraction and ground/diffraction combinations.
 
-__device__ __forceinline__ float plane_distance(PlanePoint a, PlanePoint b) {
+// Out of line, as arc_excess below: their copies, inlined at the ray kernel's many call sites, made
+// the kernel slower (2026-11-12).
+__device__ __noinline__ float plane_distance(PlanePoint a, PlanePoint b) {
     return hypotf(b.x - a.x, b.z - a.z);
 }
 __device__ __forceinline__ float chord_altitude(PlanePoint from, PlanePoint to, float x) {
@@ -19,10 +21,18 @@ __device__ StateRay state_ray_between(int state, PlanePoint source, PlanePoint r
     return ray;
 }
 
+// State `state`'s ray of `rays` in a loop unrolled over the states: its state the loop's index, so
+// the calm state's code folds away when the loop is compiled, as it does not for a state read
+// back from the walk's memory (536 instructions fewer in the ray kernel, 2026-11-12).
+__device__ __forceinline__ StateRay unrolled_state_ray(const StateRay* rays, int state) {
+    return StateRay{state, rays[state].radius_m};
+}
+
 // 2 Gamma asin(l / 2 Gamma) - l, the arc's excess over its chord: by its series in x = l / 2 Gamma
 // up to 1/16 (Gamma >= 8 d holds the direct chord there): x^3/6 + 3x^5/40 + 5x^7/112 + 35x^9/1152;
-// by asin beyond (a leg to an image or through A can be longer than d).
-__device__ __forceinline__ float arc_excess(const StateRay& ray, float chord) {
+// by asin beyond (a leg to an image or through A can be longer than d). Out of line, as
+// plane_distance.
+__device__ __noinline__ float arc_excess(const StateRay& ray, float chord) {
     if (ray.state == HOMOGENEOUS) return 0.0f;
     float x = chord / (2.0f * ray.radius_m);
     if (x > 1.0f / 16.0f) return 2.0f * ray.radius_m * asinf(fminf(x, 1.0f)) - chord;

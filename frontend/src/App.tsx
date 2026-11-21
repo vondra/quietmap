@@ -37,7 +37,7 @@ import { useSelectedStay } from './hooks/useSelectedStay'
 import type { MapCamera, Position, ReachRequest } from './lib/url-state'
 
 export default function App() {
-  const { state, updateUrl, getShareUrl } = useUrlState()
+  const { state, updateUrl } = useUrlState()
   const { detailPosition, metric, quietThreshold, basemap, heatmapLayers, dataLayers,
     stays: staysOn, quietClusters: quietClustersEnabled, staySearch, stayMaxPrice,
     controls: cardTab, calculation: calculationOpen, isochronOpen } = state
@@ -270,12 +270,9 @@ export default function App() {
     <div className="fixed inset-0 overflow-hidden">
       <SearchBar
         metric={metric}
-        onSelect={result => {
-          searchedName.current = {
-            at: { lat: result.lat, lng: result.lon },
-            name: result.secondary ? `${result.display_name}, ${result.secondary}` : result.display_name,
-          }
-          setSelectedLocation({ lat: result.lat, lon: result.lon, zoom: SEARCH_FLIGHT_ZOOM })
+        onSelect={(at, name) => {
+          searchedName.current = name ? { at, name } : null
+          setSelectedLocation({ lat: at.lat, lon: at.lng, zoom: SEARCH_FLIGHT_ZOOM })
         }}
         getMapView={getMapView}
         history={recentPlaces}
@@ -307,21 +304,18 @@ export default function App() {
         // key once left a name field behind.
         openAction={<MediaButtons media={media} />}
         fieldAction={isochronButton}
+        accountAction={<AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={cardTab === 'account' && !desktop} onOpenChange={setAccountOpen} />}
       >
         {isochronPanel}
         {detailPosition && <PlaceMedia key={`${isSignedIn(account) ? account.email : ''}@${detailPosition.lat},${detailPosition.lng}`} media={media} />}
       </SearchBar>
-      {/* The phone's account beside the search field (a desktop has it as the corner card's tab). */}
-      <div className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] right-(--map-gutter) z-[2004] md:hidden">
-        <AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={cardTab === 'account' && !desktop} onOpenChange={setAccountOpen} />
-      </div>
 
       {/* UI overlays */}
       <div className="absolute inset-0 z-[1002] pointer-events-none">
         {/* The layers card and the detail card are shrinkable flex items (min-h-0)
             that scroll their own content, so on a short viewport both stay reachable. The column ends
             over the map's corner, whose credits and ⓘ stay in sight with every card open. */}
-        <div className="hidden md:flex absolute top-3 right-(--map-gutter) bottom-11 flex-col gap-2 w-(--map-card-column) overflow-hidden">
+        <div className="map-card-column hidden md:flex absolute top-3 right-(--map-gutter) bottom-11 flex-col gap-2 w-(--map-card-column) overflow-hidden">
           <ControlCard
             tab={desktop ? cardTab : null}
             onTabChange={setCardTab}
@@ -346,7 +340,6 @@ export default function App() {
             position={detailPosition}
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
-            getShareUrl={getShareUrl}
             onHighlight={setHighlighted}
             calculationOpen={calculationOpen && desktop}
             onCalculationToggle={toggleCalculation}
@@ -436,7 +429,6 @@ export default function App() {
         position={detailPosition}
         error={noiseDetailError}
         onClose={handleNoiseClose}
-        getShareUrl={getShareUrl}
         onHighlight={setHighlighted}
         calculationOpen={calculationOpen && !desktop}
         onCalculationToggle={toggleCalculation}

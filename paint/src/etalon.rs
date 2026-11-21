@@ -15,7 +15,8 @@ use crate::levels::PaintedCells;
 use crate::paint::Grid;
 use crate::paint::metres_at;
 use crate::sone::{
-    Displays, PixelSound, PixelSoundScratch, SoundBesideExactPairs, pixel_ndens, pixel_sound,
+    Displays, NOTHING_LEFT_OUT, PixelSound, PixelSoundScratch, SoundBesideExactPairs, pixel_ndens,
+    pixel_sound,
 };
 use crate::square::Square;
 use popup::evaluate::Scratch;
@@ -124,8 +125,7 @@ pub(crate) fn paint_points(
             let rest = SoundBesideExactPairs {
                 steady,
                 bands,
-                left_groups: (&[], [0.0; 4]),
-                left_reach: 1.0,
+                left_out: NOTHING_LEFT_OUT,
                 flights: flights[k],
             };
             let range = starts[k]..starts[k + 1];
@@ -205,8 +205,7 @@ pub fn sounds_at(
             let rest = SoundBesideExactPairs {
                 steady,
                 bands: hum_bands,
-                left_groups: (&[], [0.0; 4]),
-                left_reach: 1.0,
+                left_out: NOTHING_LEFT_OUT,
                 flights: aircraft_sums(square, point)?,
             };
             pixel_sound(

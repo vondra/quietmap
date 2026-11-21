@@ -12,6 +12,25 @@ use popup::selection::OMITTED_ENERGY_FRACTION;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 
+/// A layer's hum is sampled first with this many of its quiet sources (a click's sample starts with
+/// 512): 72 % of the hums of the two lightest classes of ground squares lie under 10 dB, and a
+/// first round of 512 was 37 % of their pairs where one of 64 is 7 % (15,377 hums of 28 squares
+/// whose quiet sources were all traced; the world sample, 2026-11-18).
+const FIRST_DRAWS: usize = 64;
+
+/// Two standard errors of a layer's sampled hum may reach this Lden energy (15 dB) whatever the
+/// layer's answer: under 20 dB no visitor hears a layer, and 15 dB moves a total of 32 dB, the
+/// quietest held to half a decibel, by 0.09 dB. A click's budget, 0.05 dB of the layer's answer,
+/// asked the same of a hum of 5 dB under no loud source: 85 % of those hums lie under 15 dB, and
+/// with this the sample's map changes by over 1 phon at 0.001 % of its visible cells.
+const UNHEARD_LDEN_ENERGY: f64 = 31.622_776_601_683_793;
+
+/// Whether two standard errors of a sampled hum (its `variance` a period) stay under
+/// [`UNHEARD_LDEN_ENERGY`] together: one sample draws all three periods, so their errors add.
+fn unheard(variance: &[f64; PERIODS]) -> bool {
+    lden_energy(&variance.map(|variance| 2.0 * variance.sqrt())) <= UNHEARD_LDEN_ENERGY
+}
+
 struct QuietSourceSample {
     point: usize,
     layer: usize,
@@ -88,8 +107,9 @@ pub(crate) fn sampled_hum(
                         indices,
                         orders,
                         certain_energy: [0.0; PERIODS],
-                        sample: BoundSample::new(
+                        sample: BoundSample::starting_at(
                             seeds[at] ^ (layer as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+                            FIRST_DRAWS,
                         ),
                         finished: None,
                     })
@@ -165,7 +185,7 @@ pub(crate) fn sampled_hum(
                     + sample.certain_energy[period]
                     + estimate[period]
             });
-            if sample.sample.converged(&round, variance, answer) {
+            if unheard(&variance) || sample.sample.converged(&round, variance, answer) {
                 quiet[sample.point].0[sample.layer] =
                     std::array::from_fn(|period| sample.certain_energy[period] + estimate[period]);
                 sample.finished = Some(round);
@@ -200,4 +220,19 @@ pub(crate) fn sampled_hum(
         }
     }
     Ok(quiet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The hum's budget is its Lden energy: two standard errors of 20 by day and in the evening
+    /// and of 3 at night stay under 15 dB together, of 4 at night do not (a night's decibel
+    /// counts ten times), though each period alone would pass a third of the budget's share.
+    #[test]
+    fn a_hums_errors_are_unheard_together_in_lden() {
+        let of = |two_errors: [f64; PERIODS]| two_errors.map(|error| (error / 2.0).powi(2));
+        assert!(unheard(&of([20.0, 20.0, 3.0])));
+        assert!(!unheard(&of([20.0, 20.0, 4.0])));
+    }
 }

@@ -10,6 +10,8 @@ the optional sign-in and the streamed popup:
 | `GET /api/source-outline/:id[?year=]` | the site's mapped parts as a GeoJSON FeatureCollection, empty without a boundary; `id` is 16 lowercase hex digits, `year` one of `QM_YEARS` (the first by default), otherwise 400; 503 when that year's outline file was absent at startup; `no-cache` |
 | `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{build, zoom, layers}` |
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
+| `GET /api/basemap/:z/:x/:y.mvt` | one vector tile of the standard base map as the archive of `QM_BASEMAP_DIR` stores it (MVT, gzip); a missing tile is 204; kept a day |
+| `GET /api/basemap/fonts/:fontstack/:range.pbf`, `GET /api/basemap/sprites/:file` | the glyphs of the base map's labels and the sprite sheet of its icons (`light.json`, `light.png` and their `@2x`); 404 for any other name; kept a day |
 | `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
 | `GET /api/search?q=&lat=&lon=`, `GET /api/reverse?lat=&lon=` | address suggestions and place names (public Photon geocoder) |
 | `GET /api/isochron?lat=&lng=&minutes=&modes=` | the area reachable from a point in `minutes` (a whole number from 1 to 120) on foot and by car (`modes`: `walk`, `car` or both, comma separated), drawn by the Valhalla router of `QM_VALHALLA_URL`: a GeoJSON FeatureCollection of one polygon a mode, each with `{mode, minutes}`, the car's first so that the walk's draws over it; a mode the router failed is left out and the others kept; only the point and the minutes leave; 400 for a wrong query, 502 when no mode was drawn; limited per client like the popup |
@@ -78,6 +80,7 @@ opened read-only at startup. The browser asks for an outline when the site's row
 | `QM_PREPARED_DIR` | the prepared release: one directory per year beside the global tables |
 | `QM_YEARS` | comma-separated years the release serves, e.g. `2026,2025`; the first is the default |
 | `QM_TILES_DIR` | the heatmap tiles: `current.json` and the `{layer}.{build}.pmtiles` archives it names |
+| `QM_BASEMAP_DIR` | the standard base map, optional: `planet.pmtiles` (a Protomaps planet archive of OpenStreetMap, a regular file, replaced only while the server is stopped), `fonts/<fontstack>/<range>.pbf` and `sprites/light{,@2x}.{json,png}` (Protomaps' basemaps-assets); without it the base map's routes answer 404 and the noise is drawn on blank paper |
 | `QM_POPUP_CONCURRENCY` | clicks computed at the same time; default `2` |
 | `QM_NOINDEX` | `1` marks every response `X-Robots-Tag: noindex` (a host search engines must skip) |
 | `QM_PHOTON_URL` | the Photon geocoder's base URL for search and place names; default the public `https://photon.komoot.io` |
@@ -87,8 +90,9 @@ opened read-only at startup. The browser asks for an outline when the site's row
 | `QM_PUBLIC_ORIGIN` | the map's own origin, e.g. `https://quietmap.org`: the links point there and only its pages change an account |
 | `QM_MAIL_KEY_FILE`, `QM_MAIL_FROM` | the file holding the mail API's key (Resend) and the sender of the sign-in mails, e.g. `Quiet Map <sign-in@quietmap.org>` |
 
-The server refuses to start without either binary, a year directory or the tiles directory, with
-only one of the two Stay22 values, or with only some of the sign-in's four.
+The server refuses to start without either binary, a year directory or the tiles directory, with a
+base map directory named that is none, with only one of the two Stay22 values, or with only some of
+the sign-in's four.
 
 How to build, run and test it is in the repository's `README.md`; its tests (`npm --prefix server
 run check`) run the popup route against a fake `qm-popup`, with Stay22 mocked.

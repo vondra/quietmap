@@ -214,7 +214,16 @@ pub fn diffraction_path(
     let sag = ray.sag(source, receiver);
     for (index, &(x, z)) in candidates.iter().enumerate() {
         if z > chord_altitude(source, receiver, x) + sag.at(x - source.0) {
-            blocking.push((x, z, index));
+            // Candidates are sorted by distance: collapse each equal-distance group to its highest
+            // before building the hull so a lower tied wall cannot pop earlier hull points in the
+            // favourable state and chord_altitude never divides by zero.
+            if let Some(last) = blocking.last_mut().filter(|last| last.0 == x) {
+                if z > last.1 {
+                    *last = (x, z, index);
+                }
+            } else {
+                blocking.push((x, z, index));
+            }
         }
     }
     if !blocking.is_empty() {

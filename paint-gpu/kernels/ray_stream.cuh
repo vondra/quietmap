@@ -60,20 +60,26 @@ struct Roof {
 };
 
 // One state's hull (rubber_band.rs diffraction_path): the source first, the candidates that stand
-// above the state's chord after the monotone chain; while no candidate does, the one nearest to
-// blocking. Each point's terrain moments from the source beside it.
-struct StateStream {
+// above the state's chord after the monotone chain; `pending` holds the highest blocking candidate
+// at the current distance until x advances; while no candidate blocks, `best` is the one nearest
+// to blocking. Each point's terrain moments from the source beside it.
+struct alignas(16) StateStream {
     HullEntry hull[HULL_CAPACITY];
     Moments hull_prefix[HULL_CAPACITY];
+    HullEntry pending;
+    Moments pending_prefix;
     HullEntry best;
     Moments best_prefix;
 };
+static_assert(sizeof(StateStream) % 16 == 0, "both StateStream hulls stay 16-byte aligned");
 
 // What a state's band is while the walk streams, in the walk's registers: its hull's depth, whether a
-// candidate has blocked it, and the unblocked path's best path difference so far.
+// candidate has blocked it, whether a blocking candidate is pending at the current distance, and the
+// unblocked path's best path difference so far.
 struct BandState {
     int depth;
     bool blocked;
+    bool has_pending;
     bool has_best;
     float best_delta;
 };
@@ -96,16 +102,20 @@ struct KeptCrossing {
     int index;
 };
 
-// A crossing the ray keeps: its place along the ray (0 at the source, 1 at the receiver), its
-// obstacle, and whether the roofs queued at its place close after it (the last crossing there, kept
-// or not).
+// Flags of a kept RayCrossing: bit 0 enters/leaves a footprint roof, bit 1 closes queued roofs.
+#define RAY_CROSSING_BOUNDS_ROOF 1u
+#define RAY_CROSSING_CLOSES 2u
+
+// A crossing the ray keeps: its obstacle, its place along the ray (0 at the source, 1 at the
+// receiver), its stored height in decimetres (qmobs2 u16), and its roof/closing flags. Packed to
+// 16 bytes so the per-thread crossings buffer takes a third less local memory.
 struct RayCrossing {
-    float t;
-    float height_m;
     u64 footprint_id;
-    int bounds_roof;
-    int closes;
+    float t;
+    u16 height_dm;
+    u16 flags;
 };
+static_assert(sizeof(RayCrossing) == 16, "RayCrossing stays 16 bytes");
 
 // Everything a ray carries while it walks.
 struct RayStream {
@@ -145,13 +155,14 @@ struct RayStream {
     float closing_x;
     Moments closing_prefix;
     int closing_vertex;
-    // The walk's indices of a chunk's candidate vertices waiting for the crossings before them (the
-    // ends' vertices, the middle stretches' crests), in order: one a vertex walked, and a crest
-    // carried in. Its bytes a multiple of 16 keep the hulls after it aligned for wide loads (65
+    // The walk's indices of a chunk's candidate vertices (the ends' vertices, the middle stretches'
+    // crests), in order, which the chunk's end takes with its crossings: one a vertex walked, and a
+    // crest carried in. Its bytes a multiple of 16 keep the hulls after it aligned for wide loads (65
     // entries cost a dense city square's rays 7 % on compute capability 7.5, 2026-10-20).
     u16 candidates[2 * CHUNK_VERTICES];
     StateStream states[2];
 };
+static_assert(alignof(RayStream) >= 16, "RayStream keeps 16-byte hull alignment");
 
 // The tree cover where a ray at `altitude` runs inside the crowns over `ground`, else 0.
 __device__ __forceinline__ float cover_inside_crowns(float altitude, const GroundSample& ground) {
@@ -160,31 +171,15 @@ __device__ __forceinline__ float cover_inside_crowns(float altitude, const Groun
 }
 
 // The crowns the states' rays have passed so far: the last vertex's ground and distance from the
-// source, and each state's cover-weighted metres inside them (physics/src/foliage.rs depth_m).
+// source, each state's ray altitude there once a covered stretch took it (`behind_z_taken`), and
+// each state's cover-weighted metres inside them (physics/src/foliage.rs depth_m).
 struct Crowns {
     GroundSample behind;
     float behind_x;
+    float behind_z[2];
+    bool behind_z_taken;
     float metres[2];
 };
-
-// Each state's foliage depth over the stretch from the last vertex to `ground` at `x`: the cover
-// where the state's ray runs inside the crowns, linear between the vertices, times the stretch's
-// length along the ray.
-__device__ __forceinline__ void add_foliage(const PlanePoint& source, const PlanePoint& receiver, const StateRay* rays, Crowns& crowns,
-                                            float x, const GroundSample& ground) {
-    const GroundSample& behind = crowns.behind;
-    if (behind.forest_cover > 0.0f || ground.forest_cover > 0.0f) {
-        for (int state = 0; state < 2; state++) {
-            float za = chord_altitude(source, receiver, crowns.behind_x)
-                + ray_height_above_chord(rays[state], source, receiver, crowns.behind_x);
-            float zb = chord_altitude(source, receiver, x) + ray_height_above_chord(rays[state], source, receiver, x);
-            float cover = cover_inside_crowns(za, behind) + cover_inside_crowns(zb, ground);
-            crowns.metres[state] += 0.5f * cover * hypotf(x - crowns.behind_x, zb - za);
-        }
-    }
-    crowns.behind = ground;
-    crowns.behind_x = x;
-}
 
 // Vertex k of the walk, among the last VERTEX_RING.
 __device__ __forceinline__ TerrainPoint recent_vertex(const RayStream& s, int k) {

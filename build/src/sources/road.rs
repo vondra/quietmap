@@ -1385,4 +1385,14 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn main_roads_are_signed_from_walking_pace_to_the_fastest_legal_limit() {
+        let tables = SourceTables::test_fixture();
+        assert!(!is_sign(tables, 3, 4), "a secondary road at 4 km/h");
+        assert!(!is_sign(tables, 2, 254), "the clamp");
+        assert!(is_sign(tables, 0, 140) && !is_sign(tables, 0, 141));
+        assert!(is_sign(tables, 4, 10) && is_sign(tables, 2, 30));
+        assert!(is_sign(tables, 6, 5), "a living street at walking pace");
+    }
 }

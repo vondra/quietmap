@@ -18,6 +18,9 @@ export interface Config {
   popupConcurrency: number
   /** Heatmap tiles: the manifest `current.json` and the pmtiles archives it names. */
   tilesDir: string
+  /** The standard base map: `planet.pmtiles`, `fonts/` and `sprites/`; without it the map's noise
+   *  is drawn on blank paper. */
+  basemapDir: string | null
   /** Every response carries `X-Robots-Tag: noindex` (a host search engines must skip). */
   noIndex: boolean
   /** The Photon geocoder that finds and names places: its base URL, the public one unless set. */
@@ -77,12 +80,19 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
     years,
     popupConcurrency: positiveInteger(env.QM_POPUP_CONCURRENCY || '2', 'QM_POPUP_CONCURRENCY', 64),
     tilesDir: directory(required(env, 'QM_TILES_DIR'), 'QM_TILES_DIR'),
+    basemapDir: env.QM_BASEMAP_DIR ? basemapDirectory(env.QM_BASEMAP_DIR) : null,
     noIndex: env.QM_NOINDEX === '1',
     photonUrl: env.QM_PHOTON_URL || 'https://photon.komoot.io',
     valhallaUrl: env.QM_VALHALLA_URL || 'https://valhalla1.openstreetmap.de',
     stay22: stay22Account(env),
     accounts: accounts(env),
   }
+}
+
+/** A base map directory named but without its planet stops the start: every tile would fail instead. */
+function basemapDirectory(path: string): string {
+  accessSync(join(directory(path, 'QM_BASEMAP_DIR'), 'planet.pmtiles'), constants.R_OK)
+  return path
 }
 
 /** The Stay22 account, both its values or neither: one alone is a typo, and stops the start. */

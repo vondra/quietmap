@@ -4,7 +4,7 @@
 import {
   PLACE_TITLES_MAX, RECENT_PLACES_MAX, TITLE_MAX, samePlace, type PlaceTitle, type RecentPlace,
 } from '../../../frontend/src/lib/place-rules.ts'
-import { wrappedLongitude } from '../routes/popup.ts'
+import { wrappedLongitude } from '../../../frontend/src/lib/coordinates.ts'
 
 /** The longest geocoded place name kept with a recent place. */
 const PLACE_NAME_MAX = 500

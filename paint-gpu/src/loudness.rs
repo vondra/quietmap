@@ -3,9 +3,11 @@
 //! groups of hours, ISO 532-1), the pixels' packed sounds in (`paint::sone::PixelSound::pack`),
 //! their Nden out.
 
-use crate::device::{Gpu, driver, read_back};
-use cudarc::driver::{LaunchAsync, LaunchConfig};
+use crate::device::{Gpu, driver};
+use crate::weather_runs::mixture_blocks;
+use cudarc::driver::LaunchConfig;
 use paint::exact::LAYERS;
+use paint::sone::PACKED_LINE_FLOATS;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS};
 use physics::loudness::{A0, DCB, DLL, LTQ, RAP, RNS, SILENT_DB, THIRD_OCTAVES, USL, ZUP};
 use physics::percentile::{
@@ -15,8 +17,8 @@ use physics::percentile::{
 use popup::distribution::{LEVEL_MIN_DB, SPAN_DB, node_probabilities};
 use popup::loudness::{CURVE_HIGH_DB, CURVE_LOW_DB};
 use popup::percentiles::{
-    HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Resolution, WEATHER_STATES, hour_factor,
-    hour_groups,
+    HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, PASSES_HOLD_MEAN, Resolution, WEATHER_STATES,
+    hour_factor, hour_groups,
 };
 
 const DISTRIBUTION: &str = include_str!("../kernels/distribution.cuh");
@@ -28,12 +30,9 @@ pub const LOUDNESS_FLOATS: usize = LAYERS + 1;
 /// The hourly profiles (`popup::percentiles` HOURLY_SHARES's rows).
 const PROFILES: usize = 3;
 
-/// The loudness kernels' source, their tables first, the mixtures' blocks of `block_states` states.
-pub(crate) fn loudness_source(block_states: usize) -> String {
-    format!(
-        "{}{DISTRIBUTION}{LOUDNESS}",
-        loudness_constants(block_states)
-    )
+/// The loudness kernels' source, their tables first.
+pub(crate) fn loudness_source() -> String {
+    format!("{}{DISTRIBUTION}{LOUDNESS}", loudness_constants())
 }
 
 /// The map's level bins (`popup::distribution`'s span at the map's resolution).
@@ -41,25 +40,17 @@ fn bins() -> usize {
     (SPAN_DB / Resolution::MAP.bin_db).round() as usize
 }
 
-/// Weather states a block of the mixtures' kernel takes on a card whose multiprocessors hold
-/// `shared_bytes` of shared memory, a warp each: all ten (a line's values made once for all) where
-/// two such blocks fit (compute capability 7.0 and 12.0, about 96 KB); two elsewhere, which keeps
-/// more warps resident (on 7.5, 64 KB, ten a block painted 2-3 % slower than a task a warp, two
-/// 2-3 % faster).
-pub(crate) fn block_states(shared_bytes: usize) -> usize {
-    // A state's warp holds four distributions (a bin's two floats each, their silence and range)
-    // and a line's values (each value, and its shares and weighted shares from it), and its bit.
+/// The bytes of one weather state's warp in a mixtures block (kernels/distribution.cuh
+/// LoudWarp, checked against the card's when the module loads): a layer's distribution in two
+/// buffers (a bin's two floats each, their silence and range) and a line's values (each value, and
+/// its shares and weighted shares from it, and their count).
+pub(crate) fn loud_warp_bytes() -> usize {
     let values = node_probabilities().len().max(bins() + 1);
-    let warp_bytes = 4 * (12 + 8 * bins()) + 4 * (1 + 3 * values + 2) + 4;
-    if 2 * WEATHER_STATES * warp_bytes <= shared_bytes {
-        WEATHER_STATES
-    } else {
-        2
-    }
+    2 * (12 + 8 * bins()) + 4 * (3 * values + 3)
 }
 
 /// A pixel's blocks on the card: each period's groups of hours (as when some line follows a
-/// profile), a block's weather states ([`block_states`]) a warp each.
+/// profile), its weather states a warp each.
 fn period_groups() -> Vec<(usize, usize)> {
     let resolution = Resolution::MAP;
     (0..PERIODS)
@@ -79,7 +70,7 @@ fn mixture_floats() -> usize {
 /// The kernels' tables at the map's resolution, in global memory (a warp's lanes read different
 /// entries, which constant memory serves one at a time: a quarter less time for the same pixels);
 /// f32's Debug is the shortest decimal that reads back as it.
-fn loudness_constants(block_states: usize) -> String {
+fn loudness_constants() -> String {
     let resolution = Resolution::MAP;
     let floats = |name: &str, values: &[f64]| {
         let values: Vec<String> = values.iter().map(|&v| format!("{:?}f", v as f32)).collect();
@@ -141,7 +132,6 @@ fn loudness_constants(block_states: usize) -> String {
         format!("#define LOUD_BIN_DB {:?}f\n", resolution.bin_db as f32),
         format!("#define LOUD_BINS {}\n", bins()),
         format!("#define LOUD_PERIOD_GROUPS {}\n", period_groups().len()),
-        format!("#define LOUD_BLOCK_STATES {block_states}\n"),
         format!("#define LOUD_LEVEL_MIN_DB ({:?}f)\n", LEVEL_MIN_DB as f32),
         format!("#define LOUD_STATES {}\n", WEATHER_STATES),
         format!("#define LOUD_NODES {}\n", nodes.len()),
@@ -163,7 +153,14 @@ fn loudness_constants(block_states: usize) -> String {
             HOLDS_MEAN_LAMBDA as f32
         ),
         format!("#define LOUD_HELD_SHARE {:?}f\n", HELD_SHARE as f32),
+        format!(
+            "#define LOUD_PASSES_HOLD_MEAN {:?}f\n",
+            PASSES_HOLD_MEAN as f32
+        ),
+        // The share of the time under which the card ends a stream's passes in progress.
+        "#define LOUD_PASS_TAIL 1e-9f\n".to_string(),
         format!("#define LOUD_LAYERS {LAYERS}\n"),
+        format!("#define LOUD_LINE_FLOATS {PACKED_LINE_FLOATS}\n"),
         format!("#define LOUD_THIRDS {THIRD_OCTAVES}\n"),
         format!("#define LOUD_CURVE_LOW_DB ({:?}f)\n", CURVE_LOW_DB as f32),
         format!(
@@ -228,28 +225,36 @@ impl Gpu {
             return Ok(Vec::new());
         }
         let device = &self.device;
-        let input = driver(device.htod_sync_copy(input))?;
-        let offsets = driver(device.htod_sync_copy(offsets))?;
-        let mixtures = driver(device.alloc_zeros::<f32>(mixture_floats() * count))?;
-        let ndens = driver(device.alloc_zeros::<f32>(LOUDNESS_FLOATS * count))?;
+        let (spans, tasks, runs) = mixture_blocks(
+            offsets.iter().map(|&at| &input[at as usize..]),
+            &period_groups(),
+        );
+        // SAFETY: each buffer is written whole on the stream below before a kernel reads it: the
+        // inputs copied, `mixtures` zeroed for `atomicAdd`, and `pixel_ndens` writes every element
+        // of `ndens`.
+        let mut device_input = driver(unsafe { device.alloc::<f32>(input.len()) })?;
+        let mut device_offsets = driver(unsafe { device.alloc::<u64>(count) })?;
+        let mut device_tasks = driver(unsafe { device.alloc(tasks.len()) })?;
+        let mut device_runs = driver(unsafe { device.alloc(runs.len()) })?;
+        let mut mixtures = driver(unsafe { device.alloc::<f32>(mixture_floats() * count) })?;
+        let ndens = driver(unsafe { device.alloc::<f32>(LOUDNESS_FLOATS * count) })?;
         let kernel = |name: &str| {
             device
                 .get_func("loudness", name)
                 .ok_or(format!("kernel {name} missing"))
         };
-        // On a stream of their own (once the buffers above are zeroed): the pairs' kernels of
-        // another pass run beside them on the card.
+        // On a stream of their own, forked once their buffers are allocated: the pairs' kernels
+        // of another pass run beside them on the card.
         let stream = self.fork()?;
-        let mixtures_config = LaunchConfig {
-            grid_dim: (
-                (count * period_groups().len() * (WEATHER_STATES / self.loudness_block_states))
-                    as u32,
-                1,
-                1,
-            ),
-            block_dim: (self.loudness_block_states as u32 * 32, 1, 1),
-            shared_mem_bytes: 0,
-        };
+        // SAFETY: `stream` is never leaked and drops before `tasks`, `runs`, the caller's arrays,
+        // and every device destination declared above.
+        unsafe {
+            stream.copy(input, &mut device_input)?;
+            stream.copy(offsets, &mut device_offsets)?;
+            stream.copy(&tasks, &mut device_tasks)?;
+            stream.copy(&runs, &mut device_runs)?;
+        }
+        stream.zero(&mut mixtures)?;
         let pixels_config = LaunchConfig {
             grid_dim: (count as u32, 1, 1),
             block_dim: (32, 1, 1),
@@ -257,40 +262,48 @@ impl Gpu {
         };
         // SAFETY: the kernels read each pixel's floats from its offset (the host packed them as
         // kernels/distribution.cuh lays them out); the first adds into `mixture_floats()` zeroed
-        // floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel.
-        driver(unsafe {
-            kernel("pixel_mixtures")?.launch_on_stream(
-                &stream,
-                mixtures_config,
-                (&input, &offsets, &mixtures),
-            )
-        })?;
-        driver(unsafe {
-            kernel("pixel_ndens")?.launch_on_stream(
-                &stream,
+        // floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel; every device
+        // buffer is declared before `stream`.
+        let state_bytes = loud_warp_bytes() + 4;
+        for (states, &(first, blocks)) in spans.iter().enumerate().filter(|(_, (_, n))| *n > 0) {
+            let config = LaunchConfig {
+                grid_dim: (blocks as u32, 1, 1),
+                block_dim: (states as u32 * 32, 1, 1),
+                shared_mem_bytes: (states * state_bytes) as u32,
+            };
+            unsafe {
+                stream.launch(
+                    kernel("pixel_mixtures")?,
+                    config,
+                    (
+                        &device_input,
+                        &device_offsets,
+                        &device_tasks,
+                        &device_runs,
+                        first as u32,
+                        &mixtures,
+                    ),
+                )?;
+            }
+        }
+        unsafe {
+            stream.launch(
+                kernel("pixel_ndens")?,
                 pixels_config,
-                (&input, &offsets, &mixtures, count as u32, &ndens),
-            )
-        })?;
-        let flat = read_back(&stream, &ndens)?;
+                (
+                    &device_input,
+                    &device_offsets,
+                    &mixtures,
+                    count as u32,
+                    &ndens,
+                ),
+            )?;
+        }
+        let flat = stream.read_back(&ndens)?;
+        stream.finish()?;
         Ok(flat
             .chunks_exact(LOUDNESS_FLOATS)
             .map(|pixel| std::array::from_fn(|k| pixel[k]))
             .collect())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Ten states a block where two blocks of ten fit (96 KB and 100 KB multiprocessors), two in a
-    /// 64 KB one; every count divides the states.
-    #[test]
-    fn a_block_takes_every_state_where_two_blocks_fit() {
-        assert_eq!(block_states(96 * 1024), WEATHER_STATES);
-        assert_eq!(block_states(100 * 1024), WEATHER_STATES);
-        assert_eq!(block_states(64 * 1024), 2);
-        assert_eq!(WEATHER_STATES % block_states(64 * 1024), 0);
     }
 }

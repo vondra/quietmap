@@ -105,20 +105,20 @@ function evictSettledTilesBeyondLimit(): void {
 export type HeatmapCellReadout =
   | { kind: 'level'; sone: number }
   | { kind: 'lden'; db: number }
-  | { kind: 'silence' }
+  | { kind: 'below-floor' }
   | { kind: 'no-level' }
   | { kind: 'unavailable' }
 
 /**
  * The level at one cell of the shown source's tile, in its quantity: the byte the renderer
  * painted. A failed tile reads unavailable (its level is unknown), an absent one has no level; a
- * cell assessed under the quantity's floor (1/16 sone, 0 dB) is silence.
+ * cell assessed under the quantity's floor (1/16 sone, 0 dB) has no encoded numeric value.
  */
 export function readHeatmapCell(tile: SampledTile, cell: HM3CellAddress): HeatmapCellReadout {
   if (tile === 'failed') return { kind: 'unavailable' }
   const byte = tile === 'absent' ? HM3_NO_LEVEL : tile.cells[cell.py * TILE_PX + cell.px]
   if (byte === HM3_NO_LEVEL) return { kind: 'no-level' }
-  if (byte === HM3_SILENCE) return { kind: 'silence' }
+  if (byte === HM3_SILENCE) return { kind: 'below-floor' }
   return (tile as SourceTile).metric === 'lden'
     ? { kind: 'lden', db: cellLevel(byte) }
     : { kind: 'level', sone: HM3_BYTE_SONE[byte] }

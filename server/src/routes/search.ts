@@ -1,15 +1,7 @@
-// GET /api/search (address suggestions) and /api/reverse (the place name of the tab title): a
-// proxy to the Photon geocoder, filtered to what a visitor looks for, cached in memory and
-// rate-limited per client.
+// GET /api/search resolves coordinates directly and names through Photon. /api/reverse names a point.
 import type { FastifyInstance } from 'fastify'
 import { EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.ts'
-
-interface SearchResult {
-  display_name: string
-  secondary: string
-  lat: number
-  lon: number
-}
+import { coordinateSuggestions, type SearchResult } from '../../../frontend/src/lib/coordinates.ts'
 
 interface PhotonFeature {
   properties: {
@@ -158,6 +150,8 @@ export async function searchRoutes(app: FastifyInstance, { photonUrl }: { photon
   }, async (request, reply) => {
     const q = request.query.q?.trim()
     if (!q || q.length < 2) return reply.send([])
+    const coordinates = coordinateSuggestions(q)
+    if (coordinates) return reply.send(coordinates)
 
     const lat = parseFloat(request.query.lat ?? '')
     const lon = parseFloat(request.query.lon ?? '')

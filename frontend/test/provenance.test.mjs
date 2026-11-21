@@ -76,3 +76,8 @@ test('rail sources distinguish the missing-day estimate from the timetable', () 
   assert.deepEqual(railDatasetLines(65535, 0, false, [0.75, 0]), ['Passenger trains: 75.0% estimated for dates without timetable data'])
   assert.deepEqual(railDatasetLines(65535, 0, false, [0.0001, 0]), ['Passenger trains: <0.1% estimated for dates without timetable data'])
 })
+
+test('a US commuter or metro line names the US timetables its trains come from', () => {
+  assert.equal(datasetCitations(built)[2079]?.[3], '/about/data-sources/north-america/us')
+  assert.deepEqual(railDatasetLines(2079, 0, false), [`Passenger trains: ${citation(2079)}`])
+})

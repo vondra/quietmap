@@ -9,7 +9,7 @@ Traffic on main roads comes from the [MLIT road traffic census of 2021](https://
 
 The census has no open geometry; section numbers resolve to a location only through the paid Digital Road Map. Counts are therefore joined by identity: expressways by name, national highways by route number. Each matched road gets the median of the observed sections on its route, so one value applies along the whole route. Publisher estimates are used only where no observed section is available, and remain marked estimated.
 
-On roads without a matching route, census road-class medians, including the publisher’s estimated sections, supply the starting estimate. The road demand model uses surrounding buildings where supported, and vehicle shares follow the selected model. These are modelled road totals.
+On roads without a matching route, census road-class medians, including the publisher’s estimated sections, supply the starting estimate. Where that median lies under what counted roads of its class and surroundings carry, the model of counted roads replaces it ([how](/about/data-preparation#roads)): a Tokyo street at its class's 3,943 vehicles a day reads 6.3 dB louder with it, an Osaka expressway at 12,038 4.0 dB louder. The road demand model uses surrounding buildings where supported, and vehicle shares follow the selected model. These are modelled road totals.
 
 On roads matched by route or name, the census large-vehicle total is retained; the selected year’s class model estimates its medium and heavy parts. Motorcycles are not counted in the census. Their missing count is estimated from the selected model’s vehicle shares and remains marked estimated; it is not a measured zero. Local streets carry the trips their buildings make.
 
@@ -19,7 +19,7 @@ Unsigned roads: a primary road 40 km/h in towns, 50 outside, a motorway 100.
 
 ## Railways
 
-No Japanese timetable is loaded; the [ODPT](https://developer.odpt.org/) feeds for Tokyo need a registered key. All lines, the Shinkansen included, use the [world railway defaults](/about/data-preparation).
+No Japanese timetable is loaded; the [ODPT](https://developer.odpt.org/) feeds for Tokyo need a registered key. All lines, the Shinkansen included, use the [world railway defaults](/about/data-preparation). City lines therefore read 5 to 10 dB too quiet: at Shibuya the Yamanote line carries 28 + 8 + 4 trains a track by day, evening and night, where about 330 run.
 
 Surface metro sections are included; see the [railway method](/about/data-preparation).
 

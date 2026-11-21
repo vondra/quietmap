@@ -40,14 +40,16 @@ pub struct RollProfile {
     pub field_altitude_m: f64,
 }
 
-/// One segment of a roll: from and to along it (m from the start of roll or from touchdown), what
-/// it emits, and at its start and end its thrust per engine (lb; `None` for a class without a
-/// thrust model) and reverse thrust's increment (dB), which a receiver reads at the segment's point
-/// nearest it (Doc 29 4.4.2).
+/// One segment of a roll: from and to along it (m from the start of roll or from touchdown), the
+/// seconds the aircraft spends rolling it at constant acceleration, what it emits, and at its
+/// start and end its thrust per engine (lb; `None` for a class without a thrust model) and reverse
+/// thrust's increment (dB), which a receiver reads at the segment's point nearest it (Doc 29
+/// 4.4.2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RollStep {
     pub from_m: f64,
     pub to_m: f64,
+    pub duration_s: f64,
     pub emission: SegmentEmission,
     pub thrust_lb: Option<[f64; 2]>,
     pub increment_db: [f64; 2],
@@ -63,23 +65,6 @@ impl RollProfile {
         }
     }
 
-    /// The seconds the roll takes from `from_m` to `to_m` along it, the part of it within the roll,
-    /// at its constant acceleration (Eq. 3-3): distance over speed at a steady speed, and finite
-    /// from the start of roll, where the aircraft sets off from rest.
-    pub fn seconds_between(&self, from_m: f64, to_m: f64) -> f64 {
-        let (from_m, to_m) = (from_m.max(0.0), to_m.min(self.length_m));
-        if to_m <= from_m {
-            return 0.0;
-        }
-        let [start_speed, end_speed] = self.end_speeds();
-        let speed_at = |at_m: f64| {
-            let squared = start_speed * start_speed
-                + (end_speed * end_speed - start_speed * start_speed) * at_m / self.length_m;
-            squared.max(0.0).sqrt()
-        };
-        2.0 * (to_m - from_m) / (speed_at(from_m) + speed_at(to_m))
-    }
-
     /// The roll's segments (Eq. 3-3a to 3-3i): a take-off's speed rises by equal steps of at most
     /// 10 m/s at constant acceleration, at its takeoff rating at each step's mean speed; a
     /// landing's falls to 15 m/s likewise, its power from the final approach's at touchdown to a
@@ -88,37 +73,62 @@ impl RollProfile {
     /// a segment ending at that tenth, where the power turns (3.6.3's "suitable segmentation").
     /// Empty for a helicopter's class or a roll without length or speed.
     pub fn steps(&self) -> Vec<RollStep> {
-        if is_helicopter_class(self.class) || self.length_m <= 0.0 || self.speed_ms <= 0.0 {
+        self.steps_by(SPEED_STEP_MS)
+    }
+
+    /// Like [`Self::steps`], with segments cut at most `speed_step_ms` apart in speed.
+    pub fn steps_by(&self, speed_step_ms: f64) -> Vec<RollStep> {
+        if is_helicopter_class(self.class)
+            || self.length_m <= 0.0
+            || self.speed_ms <= 0.0
+            || speed_step_ms <= 0.0
+        {
             return Vec::new();
         }
         let anchor = class_anchor(self.class);
         let [start_speed, end_speed] = self.end_speeds();
-        let count = (1.0 + (end_speed - start_speed).abs() / SPEED_STEP_MS).floor() as usize;
-        let step = (end_speed - start_speed) / count as f64;
-        // Constant acceleration: the distance covered goes as the change of the squared speed.
-        let span = (end_speed * end_speed - start_speed * start_speed)
-            .abs()
-            .max(1e-9);
-        let along =
-            |speed: f64| self.length_m * (speed * speed - start_speed * start_speed).abs() / span;
-        let mut speeds: Vec<f64> = (0..=count).map(|k| start_speed + k as f64 * step).collect();
-        if self.kind == RollKind::Landing {
-            let turn = (start_speed * start_speed - REVERSE_SHARE_OF_STOP * span).sqrt();
-            if let Some(k) = (speeds.windows(2)).position(|pair| pair[0] > turn && turn > pair[1]) {
-                speeds.insert(k + 1, turn);
+        let spans: Vec<(f64, f64, f64, f64)> = if start_speed == end_speed {
+            if self.kind == RollKind::Landing {
+                // Keep the reverse-thrust peak and thrust breakpoint at REVERSE_SHARE_OF_STOP.
+                let turn = REVERSE_SHARE_OF_STOP * self.length_m;
+                vec![
+                    (0.0, turn, start_speed, end_speed),
+                    (turn, self.length_m, start_speed, end_speed),
+                ]
+            } else {
+                vec![(0.0, self.length_m, start_speed, end_speed)]
             }
-        }
+        } else {
+            let count = (1.0 + (end_speed - start_speed).abs() / speed_step_ms).floor() as usize;
+            let step = (end_speed - start_speed) / count as f64;
+            // Constant acceleration: the distance covered goes as the change of the squared speed.
+            let span = (end_speed * end_speed - start_speed * start_speed).abs();
+            let along = |speed: f64| {
+                self.length_m * (speed * speed - start_speed * start_speed).abs() / span
+            };
+            let mut speeds: Vec<f64> = (0..=count).map(|k| start_speed + k as f64 * step).collect();
+            if self.kind == RollKind::Landing {
+                let turn = (start_speed * start_speed - REVERSE_SHARE_OF_STOP * span).sqrt();
+                if let Some(k) =
+                    (speeds.windows(2)).position(|pair| pair[0] > turn && turn > pair[1])
+                {
+                    speeds.insert(k + 1, turn);
+                }
+            }
+            speeds
+                .windows(2)
+                .map(|pair| (along(pair[0]), along(pair[1]), pair[0], pair[1]))
+                .collect()
+        };
         let aircraft = AircraftType {
             class: self.class,
             helicopter: None,
         };
         let landing_power = (self.kind == RollKind::Landing).then(|| self.landing_power());
-        speeds
-            .windows(2)
-            .filter_map(|pair| {
-                let (from_speed, to_speed) = (pair[0], pair[1]);
+        spans
+            .into_iter()
+            .filter_map(|(from_m, to_m, from_speed, to_speed)| {
                 let mean_kt = 0.5 * (from_speed + to_speed) / METRES_PER_SECOND_PER_KNOT;
-                let (from_m, to_m) = (along(from_speed), along(to_speed));
                 let speed_correction_db = roll_speed_correction_db(anchor.v_ref_kt, mean_kt);
                 let take_off_at = |speed_ms: f64| SegmentFlight {
                     departure: true,
@@ -158,6 +168,7 @@ impl RollProfile {
                 Some(RollStep {
                     from_m,
                     to_m,
+                    duration_s: 2.0 * (to_m - from_m) / (from_speed + to_speed),
                     emission: SegmentEmission {
                         speed_correction_db,
                         ..emission

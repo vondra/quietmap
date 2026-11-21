@@ -2,9 +2,11 @@
 //! resolution (`popup::percentiles::Resolution::MAP`). The sources evaluated exactly there, each
 //! group a line (a road, a railway) by its display fields; what the block left out of a group
 //! sounds with its passes too, joined to its line, or as a line of its own from its loudest
-//! source left out; the quiet hum held steady with its own bands; the flights one line.
+//! source left out; the quiet hum held steady with its own bands; the flights a line a stream of
+//! their passes (`crate::flight_streams`).
 
-use crate::blocks::LeftGroup;
+use crate::blocks::{LeftBin, LeftGroup, Strata};
+use crate::corner_sources::SECTORS;
 use crate::exact::{LAYERS, PairEnergy, Point, PointBands};
 use crate::flights::FlightSums;
 use crate::square::Square;
@@ -17,10 +19,33 @@ use popup::loudness::{
     Curve, FlightSound, LayerSound, PlacedLayer, curves, layer_curves, layers_loudness,
     place_layers,
 };
-use popup::percentiles::{Group, Passes, Resolution, Weather, flight_weather};
+use popup::percentiles::{
+    Group, Line, Passes, Resolution, WEATHER_STATES, Weather, merge_close_states,
+};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tiles::sources::Layer;
+
+/// Floats a packed line takes ([`PixelSound::pack`], the card's `LoudLine`): its energy per period,
+/// its mean in each weather state per period, its lambda per period, its hourly profile, its duty
+/// and its passes in progress per period.
+pub const PACKED_LINE_FLOATS: usize =
+    PERIODS + PERIODS * WEATHER_STATES + PERIODS + 1 + 2 * PERIODS;
+
+/// A line as the card reads it: [`PACKED_LINE_FLOATS`] floats, no profile -1, no duty or no passes
+/// NaN.
+pub fn pack_line(line: &Line, out: &mut Vec<f32>) {
+    let parts = line.parts();
+    out.extend(parts.energy.map(|value| value as f32));
+    for means in &parts.means {
+        out.extend(means.iter().map(|&value| value as f32));
+    }
+    out.extend(parts.lambda.map(|value| value as f32));
+    out.push(parts.profile.map_or(-1.0, |profile| profile as f32));
+    for shares in [parts.duty, parts.passing] {
+        out.extend(shares.map_or([f32::NAN; PERIODS], |share| share.map(|value| value as f32)));
+    }
+}
 
 /// How every source group a square's candidates point at sounds in time, read once from its
 /// display record: where a line's traffic and events come from.
@@ -64,15 +89,30 @@ impl Displays {
 
 /// What a pixel hears beside its exact pairs, its reflection not yet taken: per layer the energy
 /// per period not evaluated there (left out at the corners, humming) and its bands; of it the
-/// groups its block left out with the pixel's weights of the block's corners, and the share of
-/// what the block left out that reaches the pixel; the flights.
+/// groups its block left out; the flights.
 pub(crate) struct SoundBesideExactPairs<'a> {
     pub steady: [[f64; PERIODS]; LAYERS],
     pub bands: PointBands,
-    pub left_groups: (&'a [LeftGroup], [f64; 4]),
-    pub left_reach: f64,
+    pub left_out: LeftOut<'a>,
     pub flights: FlightSums,
 }
+
+/// The groups a block left out and their weather bins at its corners, with how much of each
+/// corner's layer and direction reaches the pixel: the direction's transfer times the pixel's
+/// weight of the corner (`crate::transfers::Reaching`).
+#[derive(Clone, Copy)]
+pub(crate) struct LeftOut<'a> {
+    pub groups: &'a [LeftGroup],
+    pub bins: &'a [LeftBin],
+    pub transfers: &'a [Strata<f64>; 4],
+}
+
+/// No group left out: a point that evaluates every loud source.
+pub(crate) const NOTHING_LEFT_OUT: LeftOut = LeftOut {
+    groups: &[],
+    bins: &[],
+    transfers: &[[[0.0; SECTORS]; LAYERS]; 4],
+};
 
 /// One source group's exact pairs at a pixel: its energy and binned weather, its nearest emitters'
 /// distance from the pixel's receiver, its loudest pair's display record (as a click's contributor)
@@ -113,6 +153,12 @@ pub(crate) fn pixel_ndens(
     .ndens(resolution))
 }
 
+/// The map's weather states apart only where some source's mean differs by more than this between
+/// them (`merge_close_states`): 1 dB. On the world sample (speed-2, 11 November) it took the
+/// distinct states of a 0-30 / 30-300 / 300-1500 KB pixel and period from 4.3 / 5.2 / 6.0 of ten to
+/// 2.9 / 4.1 / 4.9; 2 dB saved no more time.
+const MAP_WEATHER_SPREAD: f64 = 1.258_925_411_794_167_2; // 10^(1 / 10)
+
 /// What a pixel's loudness takes: each layer's lines over its steady energy, the layers' sounds and
 /// the curves (the place's and each layer's).
 pub struct PixelSound {
@@ -147,18 +193,7 @@ impl PixelSound {
             out.extend(steady.map(|value| value as f32));
             out.push(lines.len() as f32);
             for line in lines {
-                let parts = line.parts();
-                out.extend(parts.energy.map(|value| value as f32));
-                for means in &parts.means {
-                    out.extend(means.iter().map(|&value| value as f32));
-                }
-                out.extend(parts.lambda.map(|value| value as f32));
-                out.push(parts.profile.map_or(-1.0, |profile| profile as f32));
-                out.extend(
-                    parts
-                        .duty
-                        .map_or([f32::NAN; PERIODS], |duty| duty.map(|value| value as f32)),
-                );
+                pack_line(line, out);
             }
         }
         let place = std::iter::once(&self.curves);
@@ -224,19 +259,21 @@ pub(crate) fn pixel_sound(
     let mut steady = rest
         .steady
         .map(|layer| layer.map(|value| reflection * value));
-    let (left_groups, weights) = rest.left_groups;
+    let LeftOut {
+        groups: left_groups,
+        bins,
+        transfers,
+    } = rest.left_out;
     for group in left_groups {
-        let blend = |of: &dyn Fn(&PairEnergy) -> [f64; PERIODS]| -> [f64; PERIODS] {
-            std::array::from_fn(|p| {
-                reflection
-                    * rest.left_reach
-                    * (0..4)
-                        .map(|c| weights[c] * of(&group.at_corners[c])[p])
-                        .sum::<f64>()
-            })
-        };
-        let left = blend(&|energy| energy.mixed);
-        let states = [0, 1].map(|state| blend(&|energy| energy.states[state]));
+        let loudest = &square.candidates[group.loudest as usize];
+        let layer = loudest.layer as usize;
+        let reach =
+            |bin: &LeftBin| reflection * transfers[bin.corner as usize][layer][bin.sector as usize];
+        let bins = &bins[group.bins.start as usize..group.bins.end as usize];
+        let mut left = [0.0; PERIODS];
+        for bin in bins {
+            left[bin.period as usize] += reach(bin) * bin.values[2];
+        }
         if left.iter().all(|&value| value <= 0.0) {
             continue;
         }
@@ -244,7 +281,6 @@ pub(crate) fn pixel_sound(
             .filter(|&&index| index != u32::MAX)
             .map(|&index| square.slant_distance_m(index, point))
             .fold(f64::INFINITY, f64::min);
-        let loudest = &square.candidates[group.loudest as usize];
         let group_sound = groups.entry(group.key).or_insert_with(|| GroupSound {
             layer: loudest.layer,
             energy: [0.0; PERIODS],
@@ -253,25 +289,35 @@ pub(crate) fn pixel_sound(
             display: (loudest.display, lden_energy(&left)),
         });
         group_sound.slant_distance_m = group_sound.slant_distance_m.min(nearest_m);
-        group_sound.weather.add(&left, &states);
-        let layer = group_sound.layer as usize;
+        for bin in bins {
+            let reach = reach(bin);
+            if reach > 0.0 {
+                let values = bin.values.map(|value| reach * value);
+                (group_sound.weather).add_binned(bin.period as usize, bin.bin as usize, values);
+            }
+        }
         for p in 0..PERIODS {
             group_sound.energy[p] += left[p];
             steady[layer][p] = (steady[layer][p] - left[p]).max(0.0);
         }
     }
-    // Each layer: its steady rest and its groups, its spectrum the exact bands and the rest's.
-    let FlightSums {
-        energy: flights,
-        lambda,
-    } = rest.flights;
-    let flights_lambda = lambda.lambda();
+    // Each layer: its steady rest and its groups in key order, so a point's totals and
+    // fluctuating-line cutoff depend only on that point, never on prior scratch table capacity.
+    let mut views: Vec<Group> = (groups.iter())
+        .map(|(&key, group_sound)| Group {
+            key,
+            layer: group_sound.layer,
+            energy: group_sound.energy,
+            weather: &group_sound.weather,
+            slant_distance_m: group_sound.slant_distance_m,
+            display: group_sound.display.0,
+        })
+        .collect();
+    views.sort_unstable_by_key(|group| group.key);
+    let flights = rest.flights.energy;
     let mut energies = steady;
-    for group_sound in groups.values() {
-        for (total, value) in energies[group_sound.layer as usize]
-            .iter_mut()
-            .zip(group_sound.energy)
-        {
+    for group in &views {
+        for (total, value) in energies[group.layer as usize].iter_mut().zip(group.energy) {
             *total += value;
         }
     }
@@ -287,32 +333,155 @@ pub(crate) fn pixel_sound(
             }),
         })
         .collect();
-    let views: Vec<Group> = (groups.iter())
-        .map(|(&key, group_sound)| Group {
-            key,
-            layer: group_sound.layer,
-            energy: group_sound.energy,
-            weather: &group_sound.weather,
-            slant_distance_m: group_sound.slant_distance_m,
-            display: group_sound.display.0,
-        })
-        .collect();
-    let weather = flight_weather(&(flights, flights_lambda));
     let passes = |group: &Group| displays.of_group(group);
     let flight_sound = FlightSound {
         energy: flights,
         spectrum_db: Some(*flight_spectrum_db),
     };
-    let placed = place_layers(
-        &views,
-        &sounds,
-        (&weather, (flights, flights_lambda)),
-        &passes,
-    )?;
+    let flight_lines = Line::flight_passes(&rest.flights.passes);
+    let mut placed = place_layers(&views, &sounds, &flight_lines, &passes)?;
+    merge_close_states(&mut placed, MAP_WEATHER_SPREAD);
     Ok(PixelSound {
         placed,
         curves: curves(&sounds, &flight_sound),
         layer_curves: layer_curves(&sounds, &flight_sound),
         sounds,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::levels::cell;
+    use crate::square::Files;
+    use physics::bands::BANDS;
+    use physics::weather::{COLUMNS, ROWS, WeatherNode, WeatherTable, encode as encode_weather};
+    use popup::release::Release;
+    use tiles::Kind;
+    use tiles::geo::TileId;
+    use tiles::sources::{Attribute, Piece, encode as encode_sources};
+    use tiles::square::write_tiles;
+
+    /// A point's Nden must depend only on that point, never on how many groups an earlier pixel
+    /// put into the reused scratch table (different hash bucket counts previously changed the
+    /// rounding of the per-layer total at the fluctuating-line cutoff, cells 53 vs 79).
+    #[test]
+    fn pixel_sound_does_not_depend_on_prior_scratch_groups() {
+        let root = tempfile::tempdir().unwrap();
+        let year = root.path().join("2026");
+        std::fs::create_dir(&year).unwrap();
+        let weather_bytes = encode_weather(&vec![WeatherNode::default(); ROWS * COLUMNS]);
+        std::fs::write(year.join("weather"), &weather_bytes).unwrap();
+        tiles::mark_year_complete(&year, br#"{"year":"2026","as_of":"2027-01-01"}"#, "test")
+            .unwrap();
+        let weather = WeatherTable::parse(&weather_bytes).unwrap();
+        let tile = TileId { x: 2212, y: 1387 };
+        let keys: [u64; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 13, 14];
+        let attributes: Vec<_> = keys
+            .iter()
+            .map(|&group_key| Attribute {
+                layer: Layer::Industry,
+                height_m: 1.0,
+                ground_percent: 0,
+                platform_half_width_m: 0.0,
+                exclusion_radius_m: 0.0,
+                footprint_id: 0,
+                group_key,
+                emission: [[100.0; BANDS]; PERIODS],
+                display: Vec::new(),
+            })
+            .collect();
+        let pieces: Vec<_> = (0..keys.len() as u32)
+            .map(|attribute| Piece {
+                ends: [[0, 0]; 2],
+                attribute,
+            })
+            .collect();
+        write_tiles(
+            &year,
+            Kind::Sources,
+            &[(tile, encode_sources(&pieces, &attributes, &[]))],
+        )
+        .unwrap();
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let displays = Displays(
+            square
+                .candidates
+                .iter()
+                .map(|c| {
+                    (
+                        (c.display.tile, c.display.attribute),
+                        Passes::Steady(Some([1.0 / 1024.0; PERIODS])),
+                    )
+                })
+                .collect(),
+        );
+        let candidate_of = |key: u64| -> u32 {
+            square
+                .candidates
+                .iter()
+                .position(|c| c.group_key == key)
+                .unwrap() as u32
+        };
+        let point = Point::at(&square, [0.0, 0.0]).unwrap();
+        let target_groups: [(u64, f64); 4] = [(1, 0.05), (14, 9998.9), (4, 0.05), (13, 1.0)];
+        let target_ids: Vec<u32> = target_groups
+            .iter()
+            .map(|&(k, _)| candidate_of(k))
+            .collect();
+        let target_energies: Vec<PairEnergy> = target_groups
+            .iter()
+            .map(|&(_, relative)| {
+                let energy = relative * 1024.0;
+                PairEnergy {
+                    mixed: [energy; PERIODS],
+                    states: [[energy; PERIODS]; 2],
+                }
+            })
+            .collect();
+        let mut bands = [[[0.0; BANDS]; PERIODS]; LAYERS];
+        for period in &mut bands[Layer::Industry as usize] {
+            period[4] = 1024.0 * 10_000.0;
+        }
+        let rest = SoundBesideExactPairs {
+            steady: [[0.0; PERIODS]; LAYERS],
+            bands: [[[0.0; BANDS]; PERIODS]; LAYERS],
+            left_out: NOTHING_LEFT_OUT,
+            flights: FlightSums::default(),
+        };
+        let sound_after = |previous_groups: u64| -> (f64, u8) {
+            let mut scratch = PixelSoundScratch::default();
+            if previous_groups > 0 {
+                let prior_ids: Vec<u32> = (0..previous_groups).map(candidate_of).collect();
+                let prior_energies = vec![PairEnergy::default(); prior_ids.len()];
+                pixel_sound(
+                    &square,
+                    &displays,
+                    &mut scratch,
+                    (&point, 1.0),
+                    (&prior_ids, &prior_energies, &bands),
+                    (&rest, &[0.0; CLASS_THIRDS]),
+                )
+                .unwrap();
+            }
+            let nden = pixel_sound(
+                &square,
+                &displays,
+                &mut scratch,
+                (&point, 1.0),
+                (&target_ids, &target_energies, &bands),
+                (&rest, &[0.0; CLASS_THIRDS]),
+            )
+            .unwrap()
+            .ndens(Resolution::MAP)[LAYERS];
+            (nden, cell(nden))
+        };
+        let (nden_zero, cell_zero) = sound_after(0);
+        let (nden_eight, cell_eight) = sound_after(8);
+        assert_eq!(cell_zero, cell_eight, "Nden {nden_zero} vs {nden_eight}");
+        assert_eq!(cell_zero, 79);
+        assert_eq!(nden_zero, nden_eight);
+    }
 }

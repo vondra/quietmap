@@ -18,7 +18,7 @@ Unsigned roads: a primary road 48 km/h in towns, 97 outside (cars drive 82 on a 
 
 ## Railways
 
-No timetable is loaded; the national rail timetable requires registration. Class defaults apply: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks.
+No timetable is loaded; the national rail timetable requires registration. Class defaults apply: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks. City lines therefore read 5 to 10 dB too quiet: at Clapham Junction the South West Main Line carries 14 + 4 + 2 trains a track by day, evening and night.
 
 Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2019), 37 % of it at night as at Germany's railway monitors.
 

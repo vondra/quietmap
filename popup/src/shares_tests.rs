@@ -5,9 +5,7 @@ use super::*;
 use crate::distribution::Distribution;
 use crate::loudness::{LayerSound, NO_FLIGHTS, curves, loudness};
 use crate::percentiles::tests::{contributor, selection};
-use crate::percentiles::{
-    Group, Passes, Resolution, Weather, click_lines, distributions_of, flight_weather,
-};
+use crate::percentiles::{Group, Passes, Resolution, Weather, click_lines, distributions_of};
 use physics::bands::{BANDS, energy};
 
 /// A road's received A-weighted octave energies at 50 km/h (relative).
@@ -25,7 +23,7 @@ fn road_curves() -> [Curve; PERIODS] {
 /// A line of passes at `mean_db` with `lambda` emitters within its distance.
 fn passes(weather: &Weather, mean_db: f64, lambda: f64) -> Line {
     let mean = [energy(mean_db); PERIODS];
-    Line::flights(weather, (mean, [lambda; PERIODS]))
+    Line::at_lambda(weather, (mean, [lambda; PERIODS]))
 }
 
 fn weather_of(mean_db: f64) -> Weather {
@@ -138,10 +136,13 @@ fn every_line_and_every_steady_part_has_one_row() {
             serde_json::Value::Null
         })
     };
-    let flights = ([energy(42.0); PERIODS], [0.01; PERIODS]);
-    let weather = flight_weather(&flights);
+    let mut flights = crate::aircraft::FlightPasses::default();
+    for period in 0..PERIODS {
+        flights.add_pass(period, energy(42.0), 0.03);
+    }
+    let flight_lines = Line::flight_passes(&flights);
     let passes = |c: &Group| traffic(c).map(|fields| Passes::read(c.layer, &fields));
-    let (lines, remainder) = click_lines(&selections, (&weather, flights), &passes).unwrap();
+    let (lines, remainder) = click_lines(&selections, &flight_lines, &passes).unwrap();
     let shares = row_shares(&selections, &[&road, &site], (&lines, remainder), &curves);
     let total: f64 = shares.listed.iter().sum::<f64>() + shares.aircraft + shares.rest;
     assert!((total - 1.0).abs() < 1e-12, "{shares:?}");

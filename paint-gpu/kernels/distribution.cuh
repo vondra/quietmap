@@ -2,16 +2,17 @@
 // popup/src/distribution.rs (the level's distribution on a grid of whole decibels, a line's values
 // added in runs that share a bin) and popup/src/percentiles.rs (a layer's lines in one group of hours
 // and weather state over its steady energy). The warp's 32 lanes share each step (a line's values,
-// the source bins of a sum) and its distributions live in shared memory. The CPU (f64) is the
+// the source bins of a sum); a layer's distributions live in shared memory, the place's in the lanes'
+// registers. The CPU (f64) is the
 // reference; `qm-paint-gpu check-loudness` measures the port. The host writes the LOUD_* tables
 // (paint-gpu/src/loudness.rs) from the Rust ones.
 
 // A pixel's input (floats, the host's `pack`): per layer its steady energy per period and its line
-// count, then each line (LOUD_LINE_FLOATS: energy per period, its mean in each weather state
-// per period, lambda per period, hourly profile (-1 none), duty per period (NaN none)); then per
-// curve (the layers' and the place's) and period the spectrum's third-octave levels at 0 dB(A)
-// (the first NaN: no spectrum).
-#define LOUD_LINE_FLOATS (PERIODS + PERIODS * LOUD_STATES + PERIODS + 1 + PERIODS)
+// count, then each line (the host's LOUD_LINE_FLOATS: energy per period, its mean in each weather
+// state per period, lambda per period, hourly profile (-1 none), duty per period (NaN none), its
+// passes in progress per period (NaN none)); then per curve (the layers' and the place's) and
+// period the spectrum's third-octave levels at 0 dB(A) (the first NaN: no spectrum).
+static_assert(LOUD_LINE_FLOATS == 4 * PERIODS + PERIODS * LOUD_STATES + 1, "LoudLine reads the host's packed line");
 #define LOUD_CURVES (LOUD_LAYERS + 1)
 #define LOUD_LAST (LOUD_BINS - 1)
 // A line's values: a Kurze line's nodes, or a distribution's bins and its silence.
@@ -28,6 +29,19 @@ struct LoudDistribution {
     float silent;
     int low, high;
     float bins[LOUD_BINS][2];
+    // Bin `b`, the `k`-th that a lane reads of it (b = low + lane + LOUD_LANES * k).
+    __device__ const float* bin(int b, int k) const { return bins[b]; }
+};
+
+// The bins a lane reads of a distribution: bin `low + lane + LOUD_LANES * k` in `bins[k]`, its silence
+// and range in every lane. The place's distribution lives so in each lane's registers, which leaves a
+// warp's shared memory two distributions and a line's values.
+#define LOUD_LANE_BINS ((LOUD_BINS + LOUD_LANES - 1) / LOUD_LANES)
+struct LoudLaneBins {
+    float silent;
+    int low, high;
+    float bins[LOUD_LANE_BINS][2];
+    __device__ const float* bin(int b, int k) const { return bins[k]; }
 };
 
 // A line's values: intensities relative to a scale, ascending, each with its share of the time; and
@@ -41,10 +55,9 @@ struct LoudValues {
     float weighted_from[LOUD_VALUES_MAX + 1];
 };
 
-// One warp's working memory: a layer's distribution and the place's, each in two buffers, and a
-// line's values.
+// One warp's shared working memory: a layer's distribution in two buffers and a line's values.
 struct LoudWarp {
-    LoudDistribution layer[2], whole[2];
+    LoudDistribution layer[2];
     LoudValues values;
 };
 
@@ -142,8 +155,8 @@ __device__ void loud_add_runs(LoudDistribution& out, float intensity, float shar
 // Distribution::with_line: `d` with an independent line (`v` times `scale`) added at every moment,
 // into `out`: the bins the sums can reach cleared (one more each side for the runs' rounding), then
 // each lane adds its share of `d`'s bins, the first lane its silence too.
-__device__ void loud_with_line(const LoudDistribution& d, const LoudValues& v, float scale, LoudDistribution& out,
-                               int lane) {
+template <class Bins>
+__device__ void loud_with_line(const Bins& d, const LoudValues& v, float scale, LoudDistribution& out, int lane) {
     int low = LOUD_BINS, high = -1, count = v.count;
     if (count > 0) {
         float top = scale * v.value[count - 1];
@@ -174,14 +187,28 @@ __device__ void loud_with_line(const LoudDistribution& d, const LoudValues& v, f
     }
     __syncwarp();
     if (lane == 0 && d.silent > 0.0f) loud_add_runs(out, 0.0f, d.silent, v, scale);
-    for (int b = d.low + lane; b <= d.high; b += LOUD_LANES) {
-        float share = d.bins[b][0];
-        if (share > 0.0f) loud_add_runs(out, d.bins[b][1] / share, share, v, scale);
+#pragma unroll
+    for (int k = 0; k < LOUD_LANE_BINS; k++) {
+        int b = d.low + lane + LOUD_LANES * k;
+        if (b > d.high) break;
+        const float* bin = d.bin(b, k);
+        if (bin[0] > 0.0f) loud_add_runs(out, bin[1] / bin[0], bin[0], v, scale);
     }
     __syncwarp();
 }
 
 // Distribution::over on silence: every moment at `intensity` (silence at none).
+__device__ void loud_steady(float intensity, LoudLaneBins& out) {
+    out.silent = intensity > 0.0f ? 0.0f : 1.0f;
+    out.low = LOUD_BINS;
+    out.high = -1;
+    if (intensity > 0.0f) {
+        out.low = out.high = loud_bin(10.0f * log10f(intensity));
+        out.bins[0][0] = 1.0f;
+        out.bins[0][1] = intensity;
+    }
+}
+
 __device__ void loud_steady(float intensity, LoudDistribution& out, int lane) {
     if (lane == 0) {
         out.silent = 0.0f;
@@ -201,7 +228,7 @@ __device__ void loud_steady(float intensity, LoudDistribution& out, int lane) {
 
 // Distribution::with_distribution: `d` with an independent `other` added, its levels (and its
 // silence, a value of nothing) as a line's values in `v`, gathered in order by the lanes.
-__device__ void loud_with_distribution(const LoudDistribution& d, const LoudDistribution& other, LoudValues& v,
+__device__ void loud_with_distribution(const LoudLaneBins& d, const LoudDistribution& other, LoudValues& v,
                                        LoudDistribution& out, int lane) {
     int count = 0;
     if (other.silent > 0.0f) {
@@ -226,6 +253,21 @@ __device__ void loud_with_distribution(const LoudDistribution& d, const LoudDist
     __syncwarp();
     loud_sums_from_top(v, v.shares_from, lane);
     loud_with_line(d, v, 1.0f, out, lane);
+}
+
+// `d`'s bins into the lanes' registers; `d` may be overwritten after.
+__device__ void loud_to_lanes(const LoudDistribution& d, LoudLaneBins& out, int lane) {
+    out.silent = d.silent;
+    out.low = d.low;
+    out.high = d.high;
+#pragma unroll
+    for (int k = 0; k < LOUD_LANE_BINS; k++) {
+        int b = d.low + lane + LOUD_LANES * k;
+        if (b > d.high) break;
+        out.bins[k][0] = d.bins[b][0];
+        out.bins[k][1] = d.bins[b][1];
+    }
+    __syncwarp();
 }
 
 // Where `lambda` falls in the quantiles' table: its row and the fraction toward the next, the same at
@@ -310,6 +352,37 @@ __device__ void loud_event(float duty, LoudValues& v, int lane) {
     loud_sums_from_top(v, v.shares_from, lane);
 }
 
+// distribution.rs pass_values: a stream of passes of one level of which `mean` are in progress on
+// average, relative to its mean: the numbers in progress, Poisson, each at the mean over `mean`, up
+// to the one whose next share falls under LOUD_PASS_TAIL of the time (the cores' a moment in 1e12:
+// no f32 share sees the difference) or the values' room ends; that one takes the shares and the
+// mean of the 64 numbers from it, summed (what is left of the time, as the cores take it, is a
+// difference no f32 holds). The lanes a number each in turn, the first lane the last one.
+__device__ void loud_passes(float mean, LoudValues& v, int lane) {
+    float ln_mean = logf(mean);
+    int last = max(1, (int)ceilf(mean));
+    while (last < LOUD_VALUES_MAX - 1
+           && -mean + (float)(last + 1) * ln_mean - lgammaf((float)(last + 2)) > logf(LOUD_PASS_TAIL)) last++;
+    for (int k = lane; k < last; k += LOUD_LANES) {
+        v.value[k] = (float)k / mean;
+        v.shares_from[k] = expf(-mean + (float)k * ln_mean - lgammaf((float)(k + 1)));
+    }
+    if (lane == 0) {
+        float share = expf(-mean + (float)last * ln_mean - lgammaf((float)(last + 1)));
+        float left = 0.0f, energy = 0.0f;
+        for (int k = last; k < last + 64 && share > 0.0f; k++) {
+            left += share;
+            energy += share * (float)k / mean;
+            share *= mean / (float)(k + 1);
+        }
+        v.count = last + 1;
+        v.value[last] = left > 0.0f ? energy / left : (float)last / mean;
+        v.shares_from[last] = left;
+    }
+    __syncwarp();
+    loud_sums_from_top(v, v.shares_from, lane);
+}
+
 // One line of a packed layer.
 struct LoudLine {
     const float* f;
@@ -318,6 +391,13 @@ struct LoudLine {
     __device__ float lambda(int p) const { return f[PERIODS + PERIODS * LOUD_STATES + p]; }
     __device__ int profile() const { return (int)f[2 * PERIODS + PERIODS * LOUD_STATES]; }
     __device__ float duty(int p) const { return f[2 * PERIODS + PERIODS * LOUD_STATES + 1 + p]; }
+    __device__ float passing(int p) const { return f[3 * PERIODS + PERIODS * LOUD_STATES + 1 + p]; }
+    // percentiles.rs Line::shape of a stream of passes (`passing` not NaN): it moves the level
+    // whenever it sounds, as an event does, unless so many are in progress that it holds its mean.
+    __device__ bool passes_move(int p) const {
+        float passing = this->passing(p);
+        return passing > 0.0f && passing < LOUD_PASSES_HOLD_MEAN;
+    }
     // The line's flow in group `group` of period `p` against the period's mean (percentiles.rs
     // hour_factor over the group's hours).
     __device__ float factor(int p, int group) const {
@@ -358,6 +438,11 @@ __device__ float loud_floor(const float* lines, int count, float steady, int p, 
             *moves = *moves || duty > 0.0f;
             continue;
         }
+        if (!isnan(line.passing(p))) {
+            if (line.passes_move(p)) *moves = true;
+            else floor += mean;
+            continue;
+        }
         if (line.lambda(p) * factor >= LOUD_HOLDS_MEAN_LAMBDA) floor += mean;
         else candidates += mean;
     }
@@ -367,44 +452,44 @@ __device__ float loud_floor(const float* lines, int count, float steady, int p, 
         float factor = line.factor(p, group);
         float mean = line.mean(p, state) * factor;
         float lambda = line.lambda(p) * factor;
-        if (line.energy(p) <= 0.0f || mean <= 0.0f || !isnan(line.duty(p)) || lambda >= LOUD_HOLDS_MEAN_LAMBDA) continue;
+        if (line.energy(p) <= 0.0f || mean <= 0.0f || !isnan(line.duty(p)) || !isnan(line.passing(p))
+            || lambda >= LOUD_HOLDS_MEAN_LAMBDA) continue;
         if (mean * loud_exceeded(lambda) < LOUD_HELD_SHARE * *held) floor += mean;
         else *moves = true;
     }
     return floor;
 }
 
-// percentiles.rs layer_states, a warp a weather state of one block (`state` the warp's, `warp` its
-// place among the block's `warps`): the layer's floor (loud_floor's, with its `held` and `moves`),
-// then its moving lines added in moment()'s order (the events, then the others); returns which of the
-// warp's `layer` holds the result. A line's values hang on its duty or its lambda alone, never on the
-// state (layer_states shares the shapes alike): the lines come the block's warp count at a time, each
-// made once by one warp in its `values` for every state of the block that adds it (`adders`, a bit a
-// warp), a state skipped (`skip`) adding none. Every warp of the block calls this alike: its barriers
-// are the block's.
+// percentiles.rs layer_states, a warp a weather state (`state`; the warp's place among the block's
+// `warps` is its warp index): the layer's floor (loud_floor's, with its `held` and `moves`), then its
+// moving lines added in moment()'s order (the events and the streams of passes, then the others); returns which of the warp's
+// `layer` holds the result. A line's values hang on its duty or its lambda alone, never on the state
+// (layer_states shares the shapes alike): the lines come the block's warp count at a time, each made
+// once by one warp in its `values` for every warp that adds it (`adders`, a bit a warp). Every warp of
+// the block calls this alike: its barriers are the block's.
 __device__ int loud_layer(const float* lines, int count, float floor, float held, bool moves, int p, int group, int state,
-                          bool skip, LoudWarp* warps, u32* adders, int lane) {
-    int warp = threadIdx.x / LOUD_LANES;
+                          LoudWarp* warps, u32* adders, int lane) {
+    int warp = threadIdx.x / LOUD_LANES, block_states = blockDim.x / LOUD_LANES;
     LoudWarp& w = warps[warp];
-    bool active = !skip && moves;
-    if (!skip) loud_steady(floor, w.layer[0], lane);
+    loud_steady(floor, w.layer[0], lane);
     int now = 0;
-    if (!__syncthreads_or(active)) return now;
+    if (!__syncthreads_or(moves)) return now;
     for (int pass = 0; pass < 2; pass++) {
-        for (int first = 0; first < count; first += LOUD_BLOCK_STATES) {
-            if (threadIdx.x < LOUD_BLOCK_STATES) adders[threadIdx.x] = 0u;
+        for (int first = 0; first < count; first += block_states) {
+            if (threadIdx.x < block_states) adders[threadIdx.x] = 0u;
             __syncthreads();
-            for (int k = 0; k < LOUD_BLOCK_STATES && first + k < count; k++) {
+            for (int k = 0; k < block_states && first + k < count; k++) {
                 LoudLine line{lines + (first + k) * LOUD_LINE_FLOATS};
                 float factor = line.factor(p, group);
                 float mean = line.mean(p, state) * factor;
                 float duty = line.duty(p), lambda = line.lambda(p) * factor;
                 // The one-state loop's tests as they were, negated (a NaN skips alike).
-                bool adds = active && !(line.energy(p) <= 0.0f || mean <= 0.0f);
+                bool adds = moves && !(line.energy(p) <= 0.0f || mean <= 0.0f);
+                bool passes = !isnan(line.passing(p));
                 if (pass == 0) {
-                    adds = adds && !(isnan(duty) || duty <= 0.0f);
+                    adds = adds && (passes ? line.passes_move(p) : !(isnan(duty) || duty <= 0.0f));
                 } else {
-                    adds = adds && !(!isnan(duty) || lambda >= LOUD_HOLDS_MEAN_LAMBDA)
+                    adds = adds && !(!isnan(duty) || passes || lambda >= LOUD_HOLDS_MEAN_LAMBDA)
                         && !(mean * loud_exceeded(lambda) < LOUD_HELD_SHARE * held);
                 }
                 if (adds && lane == 0) atomicOr(&adders[k], 1u << warp);
@@ -413,11 +498,12 @@ __device__ int loud_layer(const float* lines, int count, float floor, float held
             // This warp's line of the run: its values for the states that add it.
             if (adders[warp] != 0u) {
                 LoudLine line{lines + (first + warp) * LOUD_LINE_FLOATS};
-                if (pass == 0) loud_event(line.duty(p), w.values, lane);
-                else loud_kurze(line.lambda(p) * line.factor(p, group), w.values, lane);
+                if (pass == 1) loud_kurze(line.lambda(p) * line.factor(p, group), w.values, lane);
+                else if (isnan(line.passing(p))) loud_event(line.duty(p), w.values, lane);
+                else loud_passes(line.passing(p), w.values, lane);
             }
             __syncthreads();
-            for (int k = 0; k < LOUD_BLOCK_STATES && first + k < count; k++) {
+            for (int k = 0; k < block_states && first + k < count; k++) {
                 if (!((adders[k] >> warp) & 1u)) continue;
                 LoudLine line{lines + (first + k) * LOUD_LINE_FLOATS};
                 float mean = line.mean(p, state) * line.factor(p, group);

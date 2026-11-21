@@ -15,6 +15,7 @@ import {
   popupRequests,
   openPoint,
   sendPopupLine,
+  swipeDown,
 } from './support'
 
 test.use(PHONE)
@@ -28,31 +29,38 @@ test('map tap opens the real mobile sheet and layer controls', async ({ page }) 
   await page.goto(mapUrl(POINT))
   await tileLoaded
   const { x, y } = await canvasCenter(page)
-  await page.touchscreen.tap(x, y)
+  // Below the centre, where the opened sheet will lie.
+  await page.touchscreen.tap(x, y + 150)
   await expect.poll(() => popupRequests(page)).toHaveLength(1)
+  const [tapped] = await popupRequests(page)
   const sheet = page.getByTestId('mobile-detail-sheet')
   await expect(sheet).toBeVisible()
   await expect(sheet.getByTestId('detail-popup-skeleton')).toBeVisible()
 
-  await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
+  await sendPopupLine(page, withAircraft(popupUpdate(1, false, tapped.lat, tapped.lng, SOURCE_DB), FIXTURE_FLIGHTS))
   await expect(sheet.getByTestId('lden')).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
-  // Required basemap credits stay below the sheet, away from the search and its addresses.
+  // The sheet reaches the screen's edge, nothing under it; the basemap's required credit stays in sight
+  // in the map's corner, on the sheet's top edge.
   const credits = page.locator('.maplibregl-ctrl-attrib')
   const box = async (element: typeof credits) => (await element.boundingBox())!
   await expect(credits).toContainText('OpenStreetMap contributors')
-  expect((await box(credits)).y).toBeGreaterThanOrEqual((await box(sheet)).y + (await box(sheet)).height - 1)
-  // The sheet would cover the tapped point (the map's centre): the map moves it up, the view's
-  // centre south of it. A finger leaves no hover readout beside the popup.
+  const viewport = page.viewportSize()!
+  expect((await box(sheet)).y + (await box(sheet)).height).toBeCloseTo(viewport.height, 0)
+  await expect.poll(async () => Math.round((await box(credits)).y + (await box(credits)).height)).toBe(Math.round((await box(sheet)).y))
+  await expect(credits).toBeInViewport({ ratio: 1 })
+  // The sheet would cover the tapped point: the map moves it up, the view's centre south of it. A
+  // finger leaves no hover readout beside the popup.
   const viewLat = () => page.evaluate(() => Number(new URLSearchParams(location.hash.slice(1)).get('lat')))
-  await expect.poll(viewLat).toBeLessThan(POINT.lat)
+  await expect.poll(viewLat).toBeLessThan(tapped.lat)
   await expect(page.getByTestId('heatmap-hover')).toHaveCount(0)
   // The loudest flights fit the phone: the whole table is on screen, nothing clipped or scrolled.
   await sheet.getByRole('button', { name: /^Aircraft/ }).tap()
   const flights = sheet.getByRole('table', { name: 'Loudest flights' })
   await expect(flights.locator('tbody tr')).toHaveCount(2)
   await expect(flights).toBeInViewport({ ratio: 1 })
-  // The sheet closes from its corner as well as by a swipe.
-  await sheet.getByRole('button', { name: 'Close' }).tap()
+  // The handle is the sheet's only control: a swipe down on it closes the sheet.
+  await expect(sheet.getByRole('button', { name: 'Share this place' })).toHaveCount(0)
+  await swipeDown(sheet.getByRole('button', { name: /^(Collapse|Expand)$/ }))
   await expect(sheet).toHaveCount(0)
 
   // A detail sheet deliberately covers the layers button. Start a clean map
@@ -77,7 +85,8 @@ test('map tap opens the real mobile sheet and layer controls', async ({ page }) 
   const panel = page.locator('[data-testid="layers-panel"]:visible')
   await expect(panel).toBeVisible()
   const layersSheet = page.getByRole('button', { name: 'Drag to close', exact: true }).locator('..')
-  expect((await box(credits)).y).toBeGreaterThanOrEqual((await box(layersSheet)).y + (await box(layersSheet)).height - 1)
+  expect((await box(layersSheet)).y + (await box(layersSheet)).height).toBeCloseTo(viewport.height, 0)
+  await expect.poll(async () => Math.round((await box(credits)).y + (await box(credits)).height)).toBe(Math.round((await box(layersSheet)).y))
   // Each switch turns its own layer over.
   const road = panel.getByTestId('layer-road')
   const rail = panel.getByTestId('layer-railway')
@@ -109,9 +118,14 @@ test('the locate button opens the popup where the visitor stands, again from a m
   await expect.poll(() => popupRequests(page)).toEqual([here])
   const sheet = page.getByTestId('mobile-detail-sheet')
   await expect(sheet).toBeVisible()
-  // The sheet moved the map off the visitor, which stops following them: a press takes the map
-  // back to the last position found and opens its popup again.
-  await sheet.getByRole('button', { name: 'Close' }).tap()
+  // A map moved off the visitor stops following them: a press takes the map back to the last
+  // position found and opens its popup again.
+  await swipeDown(sheet.getByRole('button', { name: /^(Collapse|Expand)$/ }))
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x, y - 150, { steps: 5 })
+  await page.mouse.up()
   await page.getByRole('button', { name: 'Show my location' }).tap()
   await expect.poll(() => popupRequests(page)).toEqual([here, here])
   await expect(sheet).toBeVisible()

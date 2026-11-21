@@ -17,22 +17,35 @@ const SHARE_BINS: usize = 10;
 pub struct Weather(pub(super) [[[f64; PERIODS]; 3]; 2 * SHARE_BINS]);
 
 impl Weather {
-    /// Adds a piece of `energy` per period, the mix of its `states`; a piece without states
+    /// Where a piece's `energy` of one period falls, the mix of its `states` (homogeneous,
+    /// favourable): its bin, and its energy in either state and mixed; a piece without states
     /// (none computed) holds its mean in either.
+    pub fn binned(energy: f64, states: [f64; 2]) -> (usize, [f64; 3]) {
+        let [homogeneous, favourable] = if states[0] > 0.0 || states[1] > 0.0 {
+            states
+        } else {
+            [energy; 2]
+        };
+        let share = favourable_share(energy, homogeneous, favourable);
+        let calm_louder = usize::from(favourable < homogeneous);
+        let bin =
+            calm_louder * SHARE_BINS + ((share * SHARE_BINS as f64) as usize).min(SHARE_BINS - 1);
+        (bin, [homogeneous, favourable, energy])
+    }
+
+    /// Adds energy (homogeneous, favourable, mixed) to `bin` of `period` ([`Weather::binned`]).
+    pub fn add_binned(&mut self, period: usize, bin: usize, values: [f64; 3]) {
+        for (state, value) in self.0[bin].iter_mut().zip(values) {
+            state[period] += value;
+        }
+    }
+
+    /// Adds a piece of `energy` per period, the mix of its `states`.
     pub fn add(&mut self, energy: &[f64; PERIODS], states: &[[f64; PERIODS]; 2]) {
         for period in 0..PERIODS {
-            let [homogeneous, favourable] = if states[0][period] > 0.0 || states[1][period] > 0.0 {
-                [states[0][period], states[1][period]]
-            } else {
-                [energy[period]; 2]
-            };
-            let share = favourable_share(energy[period], homogeneous, favourable);
-            let calm_louder = usize::from(favourable < homogeneous);
-            let bin = &mut self.0[calm_louder * SHARE_BINS
-                + ((share * SHARE_BINS as f64) as usize).min(SHARE_BINS - 1)];
-            bin[0][period] += homogeneous;
-            bin[1][period] += favourable;
-            bin[2][period] += energy[period];
+            let (bin, values) =
+                Self::binned(energy[period], [states[0][period], states[1][period]]);
+            self.add_binned(period, bin, values);
         }
     }
 }
@@ -85,9 +98,44 @@ pub(super) fn weather_means(
 /// Equally likely weather states of the place, one for every ray of it (a night's inversion bends
 /// them alike).
 pub const WEATHER_STATES: usize = 10;
-/// The flights' weather: their mean in either state.
-pub fn flight_weather(flights: &([f64; PERIODS], [f64; PERIODS])) -> Weather {
-    let mut weather = Weather::default();
-    weather.add(&flights.0, &[flights.0; 2]);
-    weather
+/// The weather states merged where their difference cannot show: per period, each run of
+/// consecutive states in which every line's mean stays finite and within `spread` (its largest
+/// over its smallest) takes each line's mean over the run in all its states. The energy stays; the
+/// distributions compute a state equal to the one before once (`layer_states`, the card's blocks
+/// of distinct states), so a run costs one state. A moment's intensity moves by no more than
+/// `spread` where the run's states hold and move the same lines; a line held steady in one state and
+/// moving in another can change its rare loud moments by more.
+pub fn merge_close_states(layers: &mut [(Vec<Line>, [f64; PERIODS])], spread: f64) {
+    let within = |means: &[f64]| {
+        let (mut low, mut high) = (f64::INFINITY, 0.0f64);
+        for &mean in means {
+            if !mean.is_finite() {
+                return false;
+            }
+            (low, high) = (low.min(mean), high.max(mean));
+        }
+        high <= spread * low
+    };
+    for period in 0..PERIODS {
+        let mut start = 0;
+        while start < WEATHER_STATES {
+            let mut end = start + 1;
+            while end < WEATHER_STATES
+                && (layers.iter().flat_map(|(lines, _)| lines))
+                    .all(|line| within(&line.means[period][start..=end]))
+            {
+                end += 1;
+            }
+            if end - start > 1 {
+                for line in layers.iter_mut().flat_map(|(lines, _)| lines) {
+                    let run = &mut line.means[period][start..end];
+                    if run.iter().any(|&mean| mean != run[0]) {
+                        let mean = run.iter().sum::<f64>() / run.len() as f64;
+                        run.fill(mean);
+                    }
+                }
+            }
+            start = end;
+        }
+    }
 }

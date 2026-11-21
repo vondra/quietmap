@@ -65,7 +65,7 @@ fn a_roof_across_two_tiles_pairs_its_entry_and_exit_under_one_id() {
 }
 
 #[test]
-fn a_footprint_whose_parts_lie_in_two_tiles_keeps_every_part() {
+fn separate_buildings_in_one_record_have_their_own_facades() {
     let mut stock = Stock::new();
     let edge = north_tile_edge_m(&stock);
     stock.building(9, 10.0, &[rectangle(0.0, edge - 30.0, 10.0, edge - 20.0)]);
@@ -86,10 +86,13 @@ fn a_footprint_whose_parts_lie_in_two_tiles_keeps_every_part() {
             .enclosing_building([5.0, edge + 25.0])
             .unwrap()
             .unwrap();
-        assert_eq!(south, north, "one footprint, whichever part is clicked");
-        assert_eq!(south.rings.len(), 2);
-        assert!(south.rings.iter().all(|ring| !ring.hole));
-        assert_eq!(scene.facade_receivers(&south).unwrap().len(), 2 * 8);
+        assert_eq!(south.id, north.id);
+        for (building, above) in [(south, false), (north, true)] {
+            assert_eq!(building.rings.len(), 1);
+            let receivers = scene.facade_receivers(&building).unwrap();
+            assert_eq!(receivers.len(), 8);
+            assert!(receivers.iter().all(|r| (r.position[1] > edge) == above));
+        }
     });
 }
 

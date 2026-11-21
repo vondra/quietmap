@@ -1,12 +1,12 @@
 //! Aircraft boxes assigned once to the finest distance lattice any receiver in the square requires.
 
 use crate::exact::{Batch, Point};
-use crate::flights::{FlightSums, HeardTile, heard_parts, part_sums, tiles_heard};
+use crate::flights::{FlightSums, HeardTile, tiles_heard};
 use crate::paint::Grid;
 use crate::square::{Square, gap_to_tile};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{
-    AircraftReceiver, ReceiverArea, minimum_box_slant_m, tile_flight_sums,
+    AircraftReceiver, ReceiverArea, minimum_box_slant_m, tile_flight_passes,
 };
 use popup::aircraft::horizons::Horizons;
 use rayon::prelude::*;
@@ -102,8 +102,7 @@ impl FlightBoxes {
         }
     }
 
-    /// The flights of `request` on the cores: per band its boxes' energy and what the lambda is
-    /// weighted from (the far boxes', also of the tiles heard in their fine ones).
+    /// The flights of `request` on the cores: per band its boxes' energy and passes.
     pub fn sums(
         &self,
         square: &Square,
@@ -127,36 +126,31 @@ impl FlightBoxes {
             altitude_m: point.altitude_m,
         };
         for tile in heard {
-            for (file, boxes, heard, weighs) in heard_parts(&tile) {
-                let lists = &self.lists[tile.number][file];
-                for ((band_total, weight), list) in total.iter_mut().zip(request.weights).zip(lists)
-                {
-                    let Some(weight) = weight else {
-                        continue;
-                    };
-                    let weight = |distance_m: f64| weight.at(distance_m, self.coarse_m);
-                    let sums = tile_flight_sums(
-                        &boxes,
-                        tile.tile,
-                        &square.frame,
-                        receiver,
-                        &horizons,
-                        (list.iter().copied(), &weight, request.within_m),
-                    );
-                    band_total.add(part_sums(sums, heard, weighs));
-                }
+            let lists = &self.lists[tile.number][tile.file];
+            for ((band_total, weight), list) in total.iter_mut().zip(request.weights).zip(lists) {
+                let Some(weight) = weight else {
+                    continue;
+                };
+                let weight = |distance_m: f64| weight.at(distance_m, self.coarse_m);
+                let sums = tile_flight_passes(
+                    &tile.boxes,
+                    tile.tile,
+                    &square.frame,
+                    receiver,
+                    &horizons,
+                    (list.iter().copied(), &weight, request.within_m),
+                );
+                band_total.add(sums.into());
             }
         }
         Ok(total)
     }
 
-    /// Whether any part of `heard` (`heard_parts`) holds boxes of a band `weights` sums.
+    /// Whether any tile of `heard` holds boxes of a band `weights` sums.
     pub fn hears_any(&self, heard: &[HeardTile], weights: [Option<FlightWeight>; 2]) -> bool {
         heard.iter().any(|tile| {
-            heard_parts(tile).any(|(file, ..)| {
-                (0..2).any(|band| {
-                    weights[band].is_some() && !self.lists[tile.number][file][band].is_empty()
-                })
+            (0..2).any(|band| {
+                weights[band].is_some() && !self.lists[tile.number][tile.file][band].is_empty()
             })
         })
     }

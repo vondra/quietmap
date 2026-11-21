@@ -11,19 +11,24 @@
 //! For visitors, down to this code: the About page The noise map
 //! (`frontend/src/about/the-noise-map.md`).
 
+mod block_samples;
 mod blocks;
 mod boundary_facades;
 mod buildings;
+mod corner_sources;
 pub mod etalon;
 pub mod exact;
 pub mod flight_boxes;
 pub mod flight_spectra;
+mod flight_streams;
 pub mod flights;
+mod free_field;
 pub mod hm3;
 mod hm3_square;
 pub mod hum;
 mod hum_samples;
 pub mod inputs;
+mod lattice_blend;
 pub mod levels;
 mod loudest;
 pub mod merge;
@@ -38,3 +43,6 @@ mod quiet_samples;
 mod region;
 pub mod sone;
 pub mod square;
+mod traced;
+mod transfers;
+mod visible;

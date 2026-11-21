@@ -8,25 +8,7 @@ import { PassThrough } from 'node:stream'
 import type { FastifyInstance } from 'fastify'
 import { EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.ts'
 import type { PopupRequest, PopupRunner } from '../popup-runner.ts'
-
-/** The web-map (EPSG:3857) latitude limit, rounded inwards. */
-export const MAX_LATITUDE = 85.05
-
-const DECIMAL = /^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$/
-
-/** A query's decimal number, or null for anything else (`Number` alone reads '' as 0). */
-export function coordinate(text: unknown): number | null {
-  if (typeof text !== 'string' || !DECIMAL.test(text)) return null
-  const value = Number(text)
-  return Number.isFinite(value) ? value : null
-}
-
-/** A longitude within [-180, 180): a click on a repeated world copy of the map leaves it outside.
- *  Only a longitude outside it moves: the arithmetic moves an in-range one by 1e-14, enough to change
- *  the click's sampling seed against the same point asked of the popup directly. */
-export function wrappedLongitude(lon: number): number {
-  return lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180
-}
+import { coordinate, MAX_LATITUDE, wrappedLongitude } from '../../../frontend/src/lib/coordinates.ts'
 
 /** An opened row's parts: one to 32 group ids of 16 hex digits. */
 const SOURCE = /^[0-9a-f]{16}(,[0-9a-f]{16}){0,31}$/
