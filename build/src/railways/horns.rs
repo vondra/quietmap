@@ -4,10 +4,20 @@ use arrow_array::RecordBatch;
 use arrow_select::concat::concat_batches;
 
 pub fn append(base: &RecordBatch, crossings: &[Crossing]) -> Result<RecordBatch, String> {
+    let sounding_count = crossings
+        .iter()
+        .filter(|crossing| crossing.soundings.iter().any(|&s| s > 0.0))
+        .count();
+    if sounding_count == 0 {
+        return Ok(base.clone());
+    }
     let (rows, types) = horn_geometry::base_rows(base)?;
     let mut approaches = Vec::new();
     let mut unmatched = 0;
     for (index, crossing) in crossings.iter().enumerate() {
+        if crossing.soundings.iter().all(|&s| s <= 0.0) {
+            continue;
+        }
         if let Some((row, latitude, longitude)) =
             horn_geometry::match_crossing(crossing, &rows, &types)
         {
@@ -28,8 +38,7 @@ pub fn append(base: &RecordBatch, crossings: &[Crossing]) -> Result<RecordBatch,
     let horns =
         horn_write::build_horn_batch(&base.schema(), base, crossings, &approaches, &pieces)?;
     eprintln!(
-        "railways: {} crossings, {unmatched} unmatched, {} horn pieces",
-        crossings.len(),
+        "railways: {sounding_count} sounding crossings, {unmatched} unmatched, {} horn pieces",
         pieces.len()
     );
     concat_batches(&base.schema(), &[base.clone(), horns]).map_err(|error| error.to_string())

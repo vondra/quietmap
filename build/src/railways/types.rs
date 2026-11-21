@@ -26,4 +26,17 @@ pub struct Crossing {
     pub speed_kmh: Option<f64>,
     pub source_id: u16,
     pub synth_osm: i64,
+    /// Through trains across END [day, evening, night] over all main tracks;
+    /// `None` when the inventory carries no usable through-train count.
+    #[serde(default)]
+    pub total_periods: Option<[f64; 3]>,
+    /// Daily passenger trains over all main tracks; `None` when unknown.
+    #[serde(default)]
+    pub passenger_daily: Option<f64>,
+    /// Main tracks reported at the crossing (`> 0` when present).
+    #[serde(default)]
+    pub main_tracks: Option<u8>,
+    /// True when the inventory explicitly declares freight-only train service.
+    #[serde(default)]
+    pub freight_only: bool,
 }
