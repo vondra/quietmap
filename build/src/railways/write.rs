@@ -119,10 +119,9 @@ fn expand_rows(
     let rail_type = col_u8(merged, "rail_type")?;
     let usage = col_u8(merged, "usage")?;
     let service = col_u8(merged, "service")?;
-    // Extracts before the traffic_mode column read as unknown (mixed priors).
-    let traffic_mode = merged
-        .column_by_name("traffic_mode")
-        .and_then(|column| column.as_any().downcast_ref::<UInt8Array>());
+    // The sources read the mode too (`sources::rail`): an extract without it is refused here, before it
+    // is finalized into a table they would refuse.
+    let traffic_mode = col_u8(merged, "traffic_mode")?;
     let mut expanded = Vec::new();
     for row in 0..merged.num_rows() {
         let id = osm_id.value(row);
@@ -163,7 +162,7 @@ fn expand_rows(
         } else {
             ref_token
         };
-        let mode = traffic_mode.map(|column| column.value(row)).unwrap_or(0);
+        let mode = traffic_mode.value(row);
         let prior = class_prior(
             model,
             rail_type.value(row),
