@@ -304,8 +304,10 @@ feeds and national timetables, every train routed along the track network and ev
 metro counted at its stops, averaged over the year's observation window. Freight comes from
 defaults calibrated in 28 European countries and Turkey against official goods
 train-kilometres ([Eurostat](https://ec.europa.eu/eurostat/web/transport/database) 2024; the United
-Kingdom 2019). At public level crossings in the United States and Canada, locomotives sound their
-horns.
+Kingdom 2019), and in the United States from
+[<abbr title="US Federal Railroad Administration">FRA</abbr>](https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6)
+level-crossing counts after subtracting passenger trains. At public level crossings in the United
+States and Canada, locomotives sound their horns.
 
 <details>
 <summary>How timetables become annual train counts</summary>
@@ -408,9 +410,12 @@ the one its trains run on is counted as that track's (St. Louis files MetroLink 
   runs at its line's posted speed, else at 250 km/h, the median of the world's posted high-speed
   lines.
 - **Metro and crossings.** Above-ground metro uses the light-rail model; track underground emits
-  nothing outdoors. At a level crossing, horns sound over up to a quarter mile before the crossing,
-  for half the crossing's trains in each direction; US quiet zones stay silent, and partial ones at
-  night.
+  nothing outdoors. In the United States, open at-grade crossings in FRA Form 6180.71 also supply
+  through-train counts (daylight, nighttime and weekly trains) along junction-free heavy-rail runs,
+  shared across physical main tracks; passenger trains from timetables or the crossing record are
+  subtracted per period to leave freight. At a level crossing, horns sound over up to a quarter mile
+  before the crossing, for half the crossing's trains in each direction; US quiet zones stay silent,
+  and partial ones at night.
 
 </details>
 
