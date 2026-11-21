@@ -13,7 +13,8 @@ function publisherGroup(sources: SourceInput[]): string {
   const shared = publishers[0].split('; ').filter(part => publishers.every(publisher => publisher.split('; ').includes(part)))
   if (shared.length) return shared.join('; ')
   const kinds = new Set(sources.map(source => source.kind))
-  if (kinds.size === 1 && kinds.has('prepare-timetable')) return 'Public timetables'
+  // Many operators' timetables under one code: how many, as no one name stands for them.
+  if (kinds.size === 1 && kinds.has('prepare-timetable')) return `${new Set(sources.map(source => source.id)).size} public timetables`
   return publishers.join('; ')
 }
 export function datasetCitations(manifest: YearManifest): Record<number, Dataset> {

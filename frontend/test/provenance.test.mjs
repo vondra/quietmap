@@ -77,7 +77,13 @@ test('rail sources distinguish the missing-day estimate from the timetable', () 
   assert.deepEqual(railDatasetLines(65535, 0, false, [0.0001, 0]), ['Passenger trains: <0.1% estimated for dates without timetable data'])
 })
 
-test('a US commuter or metro line names the US timetables its trains come from', () => {
-  assert.equal(datasetCitations(built)[2079]?.[3], '/about/data-sources/north-america/us')
-  assert.deepEqual(railDatasetLines(2079, 0, false), [`Passenger trains: ${citation(2079)}`])
+// The United States' admitted rail timetables: 55 archives for 2024, 54 feeds for 2026 (their manifests).
+test('a US commuter or metro line names how many US timetables its trains come from', () => {
+  const timetables = { 2024: 55, 2026: 54 }
+  for (const year of readYears()) {
+    const [name, , , url] = datasetCitations(year.manifest)[2079]
+    assert.equal(name, `${timetables[year.name]} public timetables`, year.name)
+    assert.equal(url, '/about/data-sources/north-america/us', year.name)
+  }
+  assert.match(railDatasetLines(2079, 0, false)[0], /^Passenger trains: 5[45] public timetables, 20\d\d( to 20\d\d)?$/)
 })
