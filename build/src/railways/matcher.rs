@@ -42,6 +42,7 @@ pub(super) fn interval(
         matching,
         missing_calendar_estimate: movement.missing_calendar_estimate,
         stop: 0,
+        crossing: None,
     }
 }
 
@@ -62,6 +63,7 @@ pub fn read(
     squares: &HashSet<[u16; 2]>,
 ) -> Result<MatchedInputs, String> {
     let mut groups = BTreeMap::<(u16, String), Vec<Movement>>::new();
+    let mut crossing_groups = BTreeMap::<u16, Vec<Crossing>>::new();
     let mut result = MatchedInputs {
         claims: HashMap::new(),
         crossings: HashMap::new(),
@@ -119,12 +121,20 @@ pub fn read(
                         crossing.source_id
                     ));
                 }
-                let square = crate::osm::geometry::square_of(crossing.lat, crossing.lon);
-                result
-                    .crossings
-                    .entry([square.x, square.y])
-                    .or_default()
-                    .push(crossing);
+                if crossing.soundings.iter().any(|&soundings| soundings > 0.0) {
+                    let square = crate::osm::geometry::square_of(crossing.lat, crossing.lon);
+                    result
+                        .crossings
+                        .entry([square.x, square.y])
+                        .or_default()
+                        .push(crossing.clone());
+                }
+                if crossing.total_periods.is_some() {
+                    crossing_groups
+                        .entry(crossing.source_id)
+                        .or_default()
+                        .push(crossing);
+                }
             }
             Record::Window { .. } => unreachable!(),
         }
@@ -268,6 +278,34 @@ pub fn read(
             &mut result.claims,
             stops,
         )?;
+    }
+    for (source_id, crossings) in crossing_groups {
+        let source = model
+            .source(source_id)
+            .ok_or_else(|| format!("unknown rail crossing source {source_id}"))?;
+        let country: [u8; 2] = source
+            .owner
+            .as_bytes()
+            .try_into()
+            .map_err(|_| format!("rail crossing source {source_id} lacks a 2-letter owner"))?;
+        let scope = format!("{source_id}:{}", source.owner);
+        let bounds = *model
+            .network_bounds
+            .get(&scope)
+            .ok_or_else(|| format!("rail model lacks network bounds for {scope}"))?;
+        if !intersects(bounds, squares) {
+            continue;
+        }
+        eprintln!(
+            "railways: match {scope}: {} flow crossings",
+            crossings.len()
+        );
+        let graph = Network::read(geography, bounds)?;
+        for (square, claim) in
+            super::crossings::match_crossings(&graph, &crossings, source_id, country, squares)
+        {
+            result.claims.entry(square).or_default().push((claim, 0));
+        }
     }
     Ok(result)
 }

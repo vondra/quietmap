@@ -1,4 +1,26 @@
 //! Explicit passenger and freight evidence, with zero distinct from unknown.
+
+/// Per-track crossing count carried by a crossing-inventory interval.
+/// Values are already divided by `matched_tracks` (the physical main tracks
+/// that shared the crossing on the global rail graph).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CrossingTotal {
+    pub periods_per_track: [f64; 3],
+    /// Inventory's own per-track passenger trains/day (`None` when unknown).
+    pub passenger_per_track: Option<f64>,
+    /// Physical main tracks that shared the crossing (`>= 1`).
+    pub matched_tracks: u8,
+}
+
+/// Marks a crossing-derived freight `CategoryFlow` whose `periods` hold total
+/// per-track through trains until the track's resolved passenger flow is
+/// subtracted in parallel-track finalization.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CrossingFreight {
+    /// Crossing inventory's own per-track passenger trains/day (`None` when unknown).
+    pub inventory_passenger: Option<f64>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CategoryFlow {
     pub periods: [f64; 3],
@@ -9,6 +31,10 @@ pub struct CategoryFlow {
     /// The stop whose departures stamp this flow (`local_match`), so a line counts each stop
     /// once however many of its tracks the stop stamps; 0 for a routed or modelled flow.
     pub stop: u32,
+    /// Physical tracks sharing a crossing observation (`0` for non-crossing flows).
+    pub matched_tracks: u8,
+    /// Set on crossing-derived freight flows until passenger trains are subtracted.
+    pub crossing_freight: Option<CrossingFreight>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RowTraffic {

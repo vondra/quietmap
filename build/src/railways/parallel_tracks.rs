@@ -3,6 +3,7 @@ use super::encode::Expanded;
 use super::merge::{CategoryFlow, RowTraffic, STATUS_ESTIMATED, STATUS_KNOWN, STATUS_UNKNOWN};
 use super::model::RailModel;
 use super::parallel_geometry::{cross_sections, project_tracks};
+use super::types::CrossingFreight;
 fn scope_winner(
     model: &RailModel,
     own_iso: [u8; 2],
@@ -30,6 +31,57 @@ fn scope_winner(
     winner
 }
 
+fn crossing_scope_value(members: &[usize], carriers: &[CategoryFlow], winner: u16) -> CategoryFlow {
+    let all_covered = carriers.len() == members.len();
+    let max_tracks = carriers
+        .iter()
+        .map(|flow| flow.matched_tracks.max(1))
+        .max()
+        .unwrap_or(1);
+    let denom = if all_covered {
+        carriers.len() as f64
+    } else {
+        (carriers.len() as f64) * (members.len() as f64).max(f64::from(max_tracks))
+    };
+    let mut periods = [0.0; 3];
+    let mut pax_sum = 0.0;
+    let mut pax_all_known = true;
+    let mut has_freight = false;
+    for flow in carriers {
+        let weight = if all_covered {
+            1.0
+        } else {
+            f64::from(flow.matched_tracks.max(1))
+        };
+        for (total, value) in periods.iter_mut().zip(flow.periods) {
+            *total += value * weight / denom;
+        }
+        if let Some(cf) = flow.crossing_freight {
+            has_freight = true;
+            match cf.inventory_passenger {
+                Some(pax) => pax_sum += pax * weight / denom,
+                None => pax_all_known = false,
+            }
+        }
+    }
+    CategoryFlow {
+        periods,
+        missing_calendar_estimate: [0.0; 3],
+        status: if carriers.iter().any(|flow| flow.status == STATUS_KNOWN) {
+            STATUS_KNOWN
+        } else {
+            STATUS_ESTIMATED
+        },
+        source_id: winner,
+        matching: carriers.iter().fold(0, |mask, flow| mask | flow.matching),
+        stop: 0,
+        matched_tracks: max_tracks,
+        crossing_freight: has_freight.then_some(CrossingFreight {
+            inventory_passenger: pax_all_known.then_some(pax_sum),
+        }),
+    }
+}
+
 fn scope_value(
     model: &RailModel,
     members: &[usize],
@@ -48,6 +100,9 @@ fn scope_value(
         .filter(|flow| flow.status != STATUS_UNKNOWN && flow.source_id == winner)
         .filter(|flow| flow.stop == 0 || stops.insert(flow.stop))
         .collect();
+    if carriers.iter().any(|flow| flow.matched_tracks > 0) {
+        return crossing_scope_value(members, &carriers, winner);
+    }
     let divisor = if model.stamps_whole_line(winner) {
         carriers.len() as f64
     } else {
@@ -77,6 +132,8 @@ fn scope_value(
         source_id: winner,
         matching: carriers.iter().fold(0, |mask, flow| mask | flow.matching),
         stop: 0,
+        matched_tracks: 0,
+        crossing_freight: None,
     }
 }
 
@@ -154,7 +211,10 @@ fn track_share(
     let winner = scope_winner(model, own_iso, members, domestic, line_ranked, category);
     let (line, divisor, from_prior) = if winner != 0 && !model.is_residual(winner) {
         let value = scope_value(model, members, domestic, winner, category);
-        if model.stamps_whole_line(winner) {
+        if value.matched_tracks > 0 {
+            // Crossing observations are already normalised to per-track rates.
+            (value, 1.0, false)
+        } else if model.stamps_whole_line(winner) {
             // A proxy estimates the line itself, not the tracks it stamps.
             (value, tracks, false)
         } else {
@@ -194,12 +254,68 @@ fn track_share(
             source_id: 0,
             matching: 0,
             stop: 0,
+            matched_tracks: 0,
+            crossing_freight: None,
         };
     }
     CategoryFlow {
         periods: line.periods.map(|value| value / divisor),
         missing_calendar_estimate: line.missing_calendar_estimate.map(|value| value / divisor),
         ..line
+    }
+}
+
+/// Subtract per-period passenger trains from a crossing's measured END totals,
+/// conserving `target_daily` without creating phantom daytime or night freight.
+pub(super) fn subtract_passenger_periods(
+    total: [f64; 3],
+    passenger: [f64; 3],
+    target_daily: f64,
+) -> [f64; 3] {
+    if target_daily <= 0.0 {
+        return [0.0; 3];
+    }
+    let raw = [
+        (total[0] - passenger[0]).max(0.0),
+        (total[1] - passenger[1]).max(0.0),
+        (total[2] - passenger[2]).max(0.0),
+    ];
+    let raw_sum: f64 = raw.iter().sum();
+    if raw_sum <= 1e-12 {
+        return [0.0; 3];
+    }
+    let scale = target_daily / raw_sum;
+    [raw[0] * scale, raw[1] * scale, raw[2] * scale]
+}
+
+fn prior_freight_share(
+    evidence: &TrackEvidence<'_>,
+    members: &[usize],
+    own: usize,
+) -> CategoryFlow {
+    if !carries_freight(evidence.modes[own]) {
+        return CategoryFlow {
+            periods: [0.0; 3],
+            missing_calendar_estimate: [0.0; 3],
+            status: STATUS_ESTIMATED,
+            source_id: 0,
+            matching: 0,
+            stop: 0,
+            matched_tracks: 0,
+            crossing_freight: None,
+        };
+    }
+    let capable: Vec<usize> = members
+        .iter()
+        .copied()
+        .filter(|&member| carries_freight(evidence.modes[member]))
+        .collect();
+    let prior = line_prior(&capable, evidence.priors, |t| t.freight);
+    let divisor = capable.len().max(1) as f64;
+    CategoryFlow {
+        periods: prior.periods.map(|value| value / divisor),
+        missing_calendar_estimate: prior.missing_calendar_estimate.map(|value| value / divisor),
+        ..prior
     }
 }
 
@@ -226,24 +342,40 @@ pub(crate) fn allocate_over_parallel_tracks(
             continue;
         }
         let members = &sections[index];
-        row.child.traffic = RowTraffic {
-            passenger: track_share(
-                &evidence,
-                row.country_iso,
-                members,
-                |t| t.passenger,
-                index,
-                carries_passengers,
-            ),
-            freight: track_share(
-                &evidence,
-                row.country_iso,
-                members,
-                |t| t.freight,
-                index,
-                carries_freight,
-            ),
-        };
+        let passenger = track_share(
+            &evidence,
+            row.country_iso,
+            members,
+            |t| t.passenger,
+            index,
+            carries_passengers,
+        );
+        let mut freight = track_share(
+            &evidence,
+            row.country_iso,
+            members,
+            |t| t.freight,
+            index,
+            carries_freight,
+        );
+        if let Some(cf) = freight.crossing_freight {
+            if passenger.source_id != 0 {
+                let total_daily = daily_total(&freight);
+                let pax_daily = daily_total(&passenger);
+                let effective_pax = cf
+                    .inventory_passenger
+                    .map_or(pax_daily, |inv| pax_daily.max(inv));
+                let target_daily = (total_daily - effective_pax).max(0.0);
+                freight.periods =
+                    subtract_passenger_periods(freight.periods, passenger.periods, target_daily);
+                freight.crossing_freight = None;
+            } else {
+                // Unknown passenger split without a timetable: keep the class freight prior
+                // rather than subtracting a guessed passenger prior or stamping all-freight.
+                freight = prior_freight_share(&evidence, members, index);
+            }
+        }
+        row.child.traffic = RowTraffic { passenger, freight };
     }
 }
 
