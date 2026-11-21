@@ -123,6 +123,7 @@ fn service_tracks_keep_the_same_calendar_estimate_as_running_tracks() {
             },
             traffic,
             foreign,
+            resolved_section: None,
         },
         prior: RowTraffic::default(),
         osm_id: 1,

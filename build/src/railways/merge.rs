@@ -2,7 +2,6 @@
 
 use super::model::RailModel;
 use super::square_intervals::Interval;
-use super::types::{CrossingFreight, CrossingTotal};
 
 pub const STATUS_UNKNOWN: u8 = 0;
 pub const STATUS_KNOWN: u8 = 1;
@@ -18,7 +17,6 @@ struct Claim {
     status: u8,
     matching: u8,
     stop: u32,
-    crossing: Option<CrossingTotal>,
 }
 
 pub fn overlapping(
@@ -52,12 +50,6 @@ fn pick_winner(model: &RailModel, mut claims: Vec<Claim>, row_iso: [u8; 2]) -> O
     let mut matching = 0u8;
     let mut status = STATUS_ESTIMATED;
     let mut stops = Vec::new();
-    let mut crossing_count = 0usize;
-    let mut crossing_periods = [0.0; 3];
-    let mut crossing_pax_sum = 0.0;
-    let mut crossing_pax_all_known = true;
-    let mut crossing_measured = true;
-    let mut crossing_tracks = 0u8;
     for claim in claims.iter().filter(|claim| claim.source_id == winner_id) {
         trains += claim.trains;
         missing_calendar_estimate += claim.missing_calendar_estimate;
@@ -66,29 +58,7 @@ fn pick_winner(model: &RailModel, mut claims: Vec<Claim>, row_iso: [u8; 2]) -> O
         if claim.status == STATUS_KNOWN {
             status = STATUS_KNOWN;
         }
-        if let Some(crossing) = claim.crossing {
-            crossing_count += 1;
-            for (sum, value) in crossing_periods.iter_mut().zip(crossing.periods_per_track) {
-                *sum += value;
-            }
-            match crossing.passenger_per_track {
-                Some(pax) => crossing_pax_sum += pax,
-                None => crossing_pax_all_known = false,
-            }
-            crossing_measured = crossing_measured && crossing.measured_periods;
-            crossing_tracks = crossing_tracks.max(crossing.matched_tracks);
-        }
     }
-    let crossing = (crossing_count > 0).then(|| {
-        let count = crossing_count as f64;
-        trains /= count;
-        CrossingTotal {
-            periods_per_track: crossing_periods.map(|v| v / count),
-            passenger_per_track: crossing_pax_all_known.then_some(crossing_pax_sum / count),
-            measured_periods: crossing_measured,
-            matched_tracks: crossing_tracks.max(1),
-        }
-    });
     // A row stamped by one stop alone keeps it, so its line counts the stop once.
     let stop = if stops.windows(2).all(|pair| pair[0] == pair[1]) {
         stops[0]
@@ -102,7 +72,6 @@ fn pick_winner(model: &RailModel, mut claims: Vec<Claim>, row_iso: [u8; 2]) -> O
         status,
         matching,
         stop,
-        crossing,
     })
 }
 
@@ -118,8 +87,6 @@ fn estimated_flow(daily: f64, shares: [f64; 3], source_id: u16, matching: u8) ->
         status: STATUS_ESTIMATED,
         source_id,
         matching,
-        matched_tracks: 0,
-        crossing_freight: None,
     }
 }
 
@@ -147,7 +114,6 @@ pub fn row_evidence(
                     status,
                     matching: interval.matching,
                     stop: interval.stop,
-                    crossing: interval.crossing,
                 }
             })
             .collect()
@@ -174,17 +140,6 @@ pub fn row_evidence(
             scope.passenger.missing_calendar_estimate =
                 to_periods(winner.missing_calendar_estimate, shares.pax);
             scope.passenger.stop = winner.stop;
-            if let Some(crossing) = winner.crossing {
-                let total_daily: f64 = crossing.periods_per_track.iter().sum();
-                if crossing.measured_periods
-                    && total_daily > 0.0
-                    && (winner.trains - total_daily).abs() <= 1e-6
-                {
-                    // Passenger-only crossing with measured day/night blocks.
-                    scope.passenger.periods = crossing.periods_per_track;
-                }
-                scope.passenger.matched_tracks = crossing.matched_tracks;
-            }
         }
         if let Some(winner) = pick_winner(
             model,
@@ -199,14 +154,6 @@ pub fn row_evidence(
             scope.freight.missing_calendar_estimate =
                 to_periods(winner.missing_calendar_estimate, shares.frt);
             scope.freight.stop = winner.stop;
-            if let Some(crossing) = winner.crossing {
-                scope.freight.periods = crossing.periods_per_track;
-                scope.freight.matched_tracks = crossing.matched_tracks;
-                scope.freight.crossing_freight = Some(CrossingFreight {
-                    inventory_passenger: crossing.passenger_per_track,
-                    measured_periods: crossing.measured_periods,
-                });
-            }
         }
     }
     traffic

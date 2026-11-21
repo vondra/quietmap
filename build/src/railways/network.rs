@@ -1,5 +1,5 @@
 //! A connected railway graph keyed by original OSM node identity and source-way cuts.
-use super::write::{col_f32, col_i16, col_i32, col_i64, col_u8};
+use super::write::{col_f32, col_i16, col_i32, col_i64, col_u8, col_u16};
 use crate::osm::geometry;
 use arrow_array::{Array, Float64Array, RecordBatch, StringArray, UInt16Array};
 use std::{
@@ -18,6 +18,7 @@ pub struct Edge {
     pub extent: [f64; 2],
     pub rail_type: u8,
     pub usage: u8,
+    pub country: [u8; 2],
     pub corridor: String,
     pub traversal_only: bool,
 }
@@ -162,6 +163,7 @@ impl Network {
                 let kind = col_u8(batch, "rail_type")?;
                 let usage = col_u8(batch, "usage")?;
                 let service = col_u8(batch, "service")?;
+                let country = col_u16(batch, "country_iso")?;
                 let length = col_f32(batch, "length_m")?;
                 let ref_col = batch
                     .column_by_name("ref")
@@ -219,6 +221,7 @@ impl Network {
                         square,
                         rail_type: kind.value(row),
                         usage: usage.value(row),
+                        country: country.value(row).to_le_bytes(),
                         corridor,
                         traversal_only,
                     });

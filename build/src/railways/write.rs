@@ -47,7 +47,7 @@ pub fn finalize_square(
     let children = expand_rows(model, &merged, intervals, &pieces, square)?;
     let mut batch = encode_children(&merged, &children)?;
     if !crossings.is_empty() {
-        batch = super::horns::append(&batch, crossings)?;
+        batch = super::horns::append(&batch, model, crossings)?;
     }
     let ipc = super::encode::encode(&batch)?;
     write_atomically(output, &ipc)?;
@@ -102,7 +102,7 @@ fn row_country(batch: &RecordBatch, row: usize) -> Result<[u8; 2], String> {
     Ok(col_u16(batch, "country_iso")?.value(row).to_le_bytes())
 }
 
-fn expand_rows(
+pub(super) fn expand_rows(
     model: &super::model::RailModel,
     merged: &RecordBatch,
     intervals: &HashMap<(i64, i16), Vec<Interval>>,
@@ -141,6 +141,27 @@ fn expand_rows(
             length_m: length.value(row),
         };
         let country = row_country(merged, row)?;
+        let raw_intervals = intervals
+            .get(&(id, idx))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        // Service tracks (including those newly stamped as yard infrastructure) carry no
+        // crossing-allocated running-line traffic; only direct timetable claims remain.
+        let filtered: Vec<Interval>;
+        let row_intervals = if service.value(row) != 0
+            && raw_intervals
+                .iter()
+                .any(|interval| interval.resolved_section.is_some())
+        {
+            filtered = raw_intervals
+                .iter()
+                .filter(|interval| interval.resolved_section.is_none())
+                .cloned()
+                .collect();
+            filtered.as_slice()
+        } else {
+            raw_intervals
+        };
         let children = split_parent(
             model,
             super::split::ParentRow {
@@ -151,10 +172,7 @@ fn expand_rows(
                 country,
             },
             pieces.get(&(id, idx)),
-            intervals
-                .get(&(id, idx))
-                .map(Vec::as_slice)
-                .unwrap_or_default(),
+            row_intervals,
         )?;
         let ref_token = utf8_at(merged, "ref", row);
         let name = utf8_at(merged, "name", row);

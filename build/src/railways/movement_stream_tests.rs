@@ -67,7 +67,6 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
         total_periods: Some([10.0, 2.0, 6.0]),
         passenger_daily: Some(4.0),
         main_tracks: Some(2),
-        freight_only: false,
         measured_periods: true,
     };
     check(base.clone()).unwrap();
@@ -83,7 +82,6 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
         total_periods: None,
         passenger_daily: None,
         main_tracks: None,
-        freight_only: false,
         measured_periods: false,
         ..base.clone()
     };
@@ -95,7 +93,6 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
         total_periods: None,
         passenger_daily: None,
         main_tracks: None,
-        freight_only: false,
         measured_periods: true,
         ..base.clone()
     };
@@ -115,11 +112,6 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
     let mut bad_pax = base.clone();
     bad_pax.passenger_daily = Some(20.0);
     assert!(check(bad_pax).is_err());
-
-    // Freight-only with positive passenger is rejected.
-    let mut bad_freight_only = base.clone();
-    bad_freight_only.freight_only = true;
-    assert!(check(bad_freight_only).is_err());
 
     // Empty crossing (neither soundings nor through-train counts) is rejected.
     let mut empty = base.clone();

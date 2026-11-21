@@ -1,5 +1,5 @@
 //! Construct crossing approaches and merge their shared same-direction soundings.
-use super::types::Crossing;
+use super::{model::RailModel, types::Crossing};
 use arrow_array::RecordBatch;
 const HORN_RAIL_TYPE: u8 = 6;
 const MATCH_GATE_M: f64 = 60.0;
@@ -27,16 +27,18 @@ pub(super) struct BaseRow {
     pub start_lat: f64,
     pub end_lon: f64,
     pub end_lat: f64,
+    pub rail_type: u8,
+    pub country: [u8; 2],
 }
 
-pub(super) fn base_rows(base: &RecordBatch) -> Result<(Vec<BaseRow>, Vec<u8>), String> {
+pub(super) fn base_rows(base: &RecordBatch) -> Result<Vec<BaseRow>, String> {
     let start_gx = super::write::col_i32(base, "start_gx")?;
     let start_gy = super::write::col_i32(base, "start_gy")?;
     let end_gx = super::write::col_i32(base, "end_gx")?;
     let end_gy = super::write::col_i32(base, "end_gy")?;
     let rail_type = super::write::col_u8(base, "rail_type")?;
+    let country_iso = super::write::col_u16(base, "country_iso")?;
     let mut rows = Vec::with_capacity(base.num_rows());
-    let mut types = Vec::with_capacity(base.num_rows());
     for row in 0..base.num_rows() {
         let (s_lon, s_lat) =
             crate::osm::geometry::grid_cell_lonlat(start_gx.value(row), start_gy.value(row));
@@ -47,20 +49,23 @@ pub(super) fn base_rows(base: &RecordBatch) -> Result<(Vec<BaseRow>, Vec<u8>), S
             start_lat: s_lat,
             end_lon: e_lon,
             end_lat: e_lat,
+            rail_type: rail_type.value(row),
+            country: country_iso.value(row).to_le_bytes(),
         });
-        types.push(rail_type.value(row));
     }
-    Ok((rows, types))
+    Ok(rows)
 }
 
 pub(super) fn match_crossing(
+    model: &RailModel,
     crossing: &Crossing,
     rows: &[BaseRow],
-    types: &[u8],
 ) -> Option<(u32, f64, f64)> {
     let mut best: Option<(f64, u32, f64, f64)> = None;
     for (row, base) in rows.iter().enumerate() {
-        if types[row] == HORN_RAIL_TYPE {
+        if base.rail_type == HORN_RAIL_TYPE
+            || !model.source_applies_to_row(crossing.source_id, base.country)
+        {
             continue;
         }
         let (dist, cp_lat, cp_lon, _) = crate::osm::geometry::point_to_segment(
@@ -211,4 +216,64 @@ pub(super) struct MergedPiece {
     pub frac0: f64,
     pub frac1: f64,
     pub soundings: [f64; 3],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn horn_matching_respects_source_country_at_border() {
+        let model: RailModel = serde_json::from_value(serde_json::json!({
+            "network_bounds": {},
+            "residuals": {},
+            "spatial_priors": {},
+            "sources": [
+                {"id": 111, "rank": 4, "edition": 2024, "owner": "US", "countries": ["US"], "residual": false, "whole_line": true}
+            ],
+            "type_priors": [[80.0, 20.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            "usage_priors": [[80.0, 20.0], [30.0, 5.0], [0.0, 15.0], [40.0, 10.0]],
+            "mainline_freight": {},
+            "passenger_periods": [0.7, 0.2, 0.1],
+            "freight_periods": [0.4, 0.2, 0.4],
+            "urban_periods": [0.6, 0.25, 0.15],
+            "regional_freight_periods": []
+        }))
+        .unwrap();
+        // Sweetgrass border geometry (088159P): CA segment 12 m north, US segment 15 m south.
+        let crossing = Crossing {
+            id: "088159P".into(),
+            lat: 48.998_058,
+            lon: -111.958_884,
+            soundings: [2.0, 1.0, 1.0],
+            speed_kmh: Some(60.0),
+            source_id: 111,
+            synth_osm: -1,
+            total_periods: None,
+            passenger_daily: None,
+            main_tracks: None,
+            measured_periods: false,
+        };
+        let rows = [
+            BaseRow {
+                start_lon: -111.9590,
+                start_lat: 48.998_170,
+                end_lon: -111.9587,
+                end_lat: 48.998_170,
+                rail_type: 0,
+                country: *b"CA",
+            },
+            BaseRow {
+                start_lon: -111.9590,
+                start_lat: 48.997_920,
+                end_lon: -111.9587,
+                end_lat: 48.997_920,
+                rail_type: 0,
+                country: *b"US",
+            },
+        ];
+        let matched = match_crossing(&model, &crossing, &rows);
+        assert_eq!(matched.map(|(row, _, _)| row), Some(1));
+        assert_eq!(match_crossing(&model, &crossing, &rows[..1]), None);
+    }
 }

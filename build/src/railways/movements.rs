@@ -277,9 +277,6 @@ pub fn read(
                     _ => false,
                 };
                 let bad_tracks = crossing.main_tracks.is_some_and(|tracks| tracks == 0);
-                let bad_freight_only = crossing.freight_only
-                    && (crossing.total_periods.is_none()
-                        || crossing.passenger_daily.is_some_and(|pax| pax > 0.0));
                 let bad_measured = crossing.measured_periods && crossing.total_periods.is_none();
                 let bad_empty = crossing.total_periods.is_none()
                     && crossing.soundings.iter().all(|&soundings| soundings <= 0.0);
@@ -296,7 +293,6 @@ pub fn read(
                     || bad_total
                     || bad_pax
                     || bad_tracks
-                    || bad_freight_only
                     || bad_measured
                     || bad_empty
                     || crossing.synth_osm >= 0

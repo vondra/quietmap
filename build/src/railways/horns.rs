@@ -1,9 +1,13 @@
 //! Append the two directed sounding approaches of each crossing, merging shared soundings.
-use super::{horn_geometry, horn_write, types::Crossing};
+use super::{horn_geometry, horn_write, model::RailModel, types::Crossing};
 use arrow_array::RecordBatch;
 use arrow_select::concat::concat_batches;
 
-pub fn append(base: &RecordBatch, crossings: &[Crossing]) -> Result<RecordBatch, String> {
+pub fn append(
+    base: &RecordBatch,
+    model: &RailModel,
+    crossings: &[Crossing],
+) -> Result<RecordBatch, String> {
     let sounding_count = crossings
         .iter()
         .filter(|crossing| crossing.soundings.iter().any(|&s| s > 0.0))
@@ -11,7 +15,7 @@ pub fn append(base: &RecordBatch, crossings: &[Crossing]) -> Result<RecordBatch,
     if sounding_count == 0 {
         return Ok(base.clone());
     }
-    let (rows, types) = horn_geometry::base_rows(base)?;
+    let rows = horn_geometry::base_rows(base)?;
     let mut approaches = Vec::new();
     let mut unmatched = 0;
     for (index, crossing) in crossings.iter().enumerate() {
@@ -19,7 +23,7 @@ pub fn append(base: &RecordBatch, crossings: &[Crossing]) -> Result<RecordBatch,
             continue;
         }
         if let Some((row, latitude, longitude)) =
-            horn_geometry::match_crossing(crossing, &rows, &types)
+            horn_geometry::match_crossing(model, crossing, &rows)
         {
             approaches.extend(horn_geometry::build_approaches(
                 index, crossing, row, latitude, longitude, &rows,

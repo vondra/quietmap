@@ -1,6 +1,6 @@
 //! Split a parent acoustic piece at every distinct evidence boundary.
 
-use super::merge::{RowTraffic, row_evidence};
+use super::merge::{RowTraffic, overlapping, row_evidence};
 use super::square_intervals::Interval;
 use super::topology::Piece;
 use crate::osm::geometry::lonlat_to_grid;
@@ -19,6 +19,7 @@ pub struct ChildRow {
     pub geom: ChildGeom,
     pub traffic: RowTraffic,
     pub foreign: RowTraffic,
+    pub resolved_section: Option<RowTraffic>,
 }
 
 const CUT_EPS_M: f64 = 1e-4;
@@ -46,10 +47,13 @@ pub fn split_parent(
     } = parent;
     let child = |geom: ChildGeom, from_m: f64, to_m: f64| {
         let (traffic, foreign) = row_evidence(model, intervals, from_m, to_m, rail_type, country);
+        let resolved_section =
+            overlapping(intervals, from_m, to_m).find_map(|interval| interval.resolved_section);
         ChildRow {
             geom,
             traffic,
             foreign,
+            resolved_section,
         }
     };
     let Some(piece) = piece else {

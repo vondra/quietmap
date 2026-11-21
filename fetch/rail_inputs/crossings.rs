@@ -118,6 +118,7 @@ struct FraColumns {
     switching: usize,
     transit: usize,
     weekly: usize,
+    movement_code: usize,
     passenger: usize,
     lt1_passenger: usize,
     main_tracks: usize,
@@ -144,6 +145,7 @@ impl FraColumns {
             switching: column(headers, "Total Switching Trains", path)?,
             transit: column(headers, "Total Transit Trains", path)?,
             weekly: column(headers, "Trains Per Week", path)?,
+            movement_code: column(headers, "Movements Per Day Code", path)?,
             passenger: column(headers, "Number Passenger Train Per Day", path)?,
             lt1_passenger: column(headers, "Less Than One Passenger Train Per Day", path)?,
             main_tracks: column(headers, "Number Of Main Tracks", path)?,
@@ -156,19 +158,76 @@ impl FraColumns {
     }
 }
 
+/// Shared movement fields parsed once per open at-grade FRA row for both flows and horns.
+struct FraCounts {
+    /// Non-negative `(day, night)` thru trains when both half-days are explicitly present.
+    complete_dn: Option<(f64, f64)>,
+    /// Daily rate from `Trains Per Week` when valid (`< 7` trains/week, no daily/switching/transit
+    /// movements, and not marked "1 or more per day").
+    weekly_daily: Option<f64>,
+    switching: f64,
+    transit: f64,
+    corrupt_dn: bool,
+}
+
+impl FraCounts {
+    fn parse(record: &csv::StringRecord, cols: &FraColumns) -> Self {
+        let day_raw = num(record, cols.day);
+        let night_raw = num(record, cols.night);
+        let negative_dn = day_raw.is_some_and(|v| v < 0.0) || night_raw.is_some_and(|v| v < 0.0);
+        let one_half_blank = day_raw.is_some() != night_raw.is_some();
+        let corrupt_dn = negative_dn || one_half_blank;
+        let complete_dn = match (day_raw, night_raw) {
+            (Some(d), Some(n)) if d >= 0.0 && n >= 0.0 => Some((d, n)),
+            _ => None,
+        };
+        let switching = non_neg_num(record, cols.switching).unwrap_or(0.0);
+        let transit = non_neg_num(record, cols.transit).unwrap_or(0.0);
+        let movement_code = record.get(cols.movement_code).map(str::trim).unwrap_or("");
+        let dn = complete_dn.map_or(0.0, |(d, n)| d + n);
+        // FRA Part II Item 1.E: `Trains Per Week` applies only when Movements Per Day Code is
+        // "Less Than One Movement Per Day" (strictly `< 7` trains/week, no daily/switching/transit).
+        let weekly_daily = if !corrupt_dn
+            && dn == 0.0
+            && switching == 0.0
+            && transit == 0.0
+            && movement_code != "2"
+        {
+            non_neg_num(record, cols.weekly)
+                .filter(|&w| w > 0.0 && w < 7.0)
+                .map(|w| w / 7.0)
+        } else {
+            None
+        };
+        Self {
+            complete_dn,
+            weekly_daily,
+            switching,
+            transit,
+            corrupt_dn,
+        }
+    }
+}
+
 struct FraFlow {
     total_periods: [f64; 3],
     passenger_daily: Option<f64>,
     main_tracks: u8,
-    freight_only: bool,
     measured_periods: bool,
 }
 
 /// Extract heavy-rail through-train counts from an open at-grade FRA row.
 /// Returns `None` when the row carries no usable main-track through count
-/// (missing/blank, negative half-day, zero main tracks, transit-only, or
-/// switching/transit only).
-fn parse_fra_flow(record: &csv::StringRecord, cols: &FraColumns) -> Option<FraFlow> {
+/// (missing/blank, half-blank or negative day/night, zero main tracks,
+/// transit-only, or switching/transit only).
+fn parse_fra_flow(
+    record: &csv::StringRecord,
+    cols: &FraColumns,
+    counts: &FraCounts,
+) -> Option<FraFlow> {
+    if counts.corrupt_dn {
+        return None;
+    }
     let mt_raw = non_neg_num(record, cols.main_tracks)?;
     let mt_rounded = mt_raw.round();
     if !(1.0..=255.0).contains(&mt_rounded) || (mt_raw - mt_rounded).abs() > 1e-6 {
@@ -187,10 +246,11 @@ fn parse_fra_flow(record: &csv::StringRecord, cols: &FraColumns) -> Option<FraFl
         .filter(|token| !token.is_empty())
         .collect();
     let has_freight_svc = services.contains(&"11");
-    let has_pax_svc = services
+    let has_heavy_pax_svc = services
         .iter()
-        .any(|code| matches!(*code, "12" | "13" | "15" | "16"));
+        .any(|code| matches!(*code, "12" | "13" | "16"));
     let has_transit_svc = services.iter().any(|code| matches!(*code, "14" | "15"));
+    let has_pax_svc = has_heavy_pax_svc || services.contains(&"15");
     let transit_only = !services.is_empty() && services.iter().all(|code| *code == "14");
     if transit_only {
         return None;
@@ -198,36 +258,41 @@ fn parse_fra_flow(record: &csv::StringRecord, cols: &FraColumns) -> Option<FraFl
     let passenger_only_svc = !services.is_empty() && !has_freight_svc && has_pax_svc;
     let freight_only_svc = has_freight_svc && !has_pax_svc;
 
-    // Reject corrupt negative half-day entries rather than treating them as zero.
-    let day_raw = num(record, cols.day);
-    let night_raw = num(record, cols.night);
-    if day_raw.is_some_and(|v| v < 0.0) || night_raw.is_some_and(|v| v < 0.0) {
-        return None;
-    }
-    let dn = day_raw.unwrap_or(0.0) + night_raw.unwrap_or(0.0);
-    let weekly = non_neg_num(record, cols.weekly).unwrap_or(0.0);
+    let dn = counts.complete_dn.map_or(0.0, |(d, n)| d + n);
     let raw_pax_opt = non_neg_num(record, cols.passenger);
-    let switching = non_neg_num(record, cols.switching).unwrap_or(0.0);
-    let transit = non_neg_num(record, cols.transit).unwrap_or(0.0);
     let lt1_pax = record.get(cols.lt1_passenger) == Some("Yes");
     let reason = record.get(cols.reason).unwrap_or("");
 
+    // When a mixed freight+transit crossing (no heavy-rail passenger service) duplicates its
+    // transit count into both through and passenger fields (e.g. San Diego Trolley 661798L),
+    // the row supplies no heavy-rail train count.
+    if counts.transit > 0.0
+        && has_transit_svc
+        && !has_heavy_pax_svc
+        && dn > 0.0
+        && (dn - counts.transit).abs() <= 1e-6
+        && raw_pax_opt.is_some_and(|p| (p - counts.transit).abs() <= 1e-6)
+    {
+        return None;
+    }
+
     // FRA Part I Item 22 passenger counts include urban transit trains, while
     // daylight/nighttime through counts exclude separately reported transit.
-    // Reconcile mixed transit crossings before applying any passenger floor.
+    // Reconcile any positive transit count regardless of whether service 14/15 was ticked.
     let (pax_opt, pax_irreconcilable) =
-        if transit > 0.0 && has_transit_svc && raw_pax_opt.is_some_and(|p| p > dn + 1e-6) {
+        if counts.transit > 0.0 && raw_pax_opt.is_some_and(|p| p > 0.0) {
             let p = raw_pax_opt.unwrap();
-            if transit > dn {
-                let non_transit = (p - transit).max(0.0);
-                if dn > 0.0 {
-                    if non_transit <= dn + 1e-6 {
-                        (Some(non_transit), false)
+            if has_transit_svc && counts.transit > dn {
+                let non_transit = p - counts.transit;
+                if non_transit >= -1e-6 && non_transit <= dn + 1e-6 {
+                    let clean = non_transit.max(0.0);
+                    if dn > 0.0 {
+                        (Some(clean), false)
                     } else {
-                        (None, true)
+                        ((clean > 0.0).then_some(clean), false)
                     }
                 } else {
-                    ((non_transit > 0.0).then_some(non_transit), false)
+                    (None, true)
                 }
             } else {
                 (None, true)
@@ -236,36 +301,28 @@ fn parse_fra_flow(record: &csv::StringRecord, cols: &FraColumns) -> Option<FraFl
             (raw_pax_opt, false)
         };
 
-    // FRA Part II Item 1.E: Trains Per Week applies only to crossings averaging
-    // under one movement/day (no daily through, switching, or transit movements).
-    let (raw_periods, raw_daily, measured_periods) = if dn > 0.0 {
-        (
-            fra_end_periods(day_raw.unwrap_or(0.0), night_raw.unwrap_or(0.0)),
-            dn,
-            true,
-        )
-    } else if weekly > 0.0 && switching == 0.0 && transit == 0.0 {
-        let daily = weekly / 7.0;
-        (flat_end_periods(daily), daily, false)
-    } else if let Some(pax) = pax_opt.filter(|value| *value > 0.0) {
-        (flat_end_periods(pax), pax, false)
-    } else if day_raw == Some(0.0)
-        && night_raw == Some(0.0)
-        && switching == 0.0
-        && transit == 0.0
-        && reason == "No Train Traffic"
-    {
-        ([0.0; 3], 0.0, true)
-    } else {
-        return None;
-    };
+    let (raw_periods, raw_daily, measured_periods) =
+        if let Some((day, night)) = counts.complete_dn.filter(|&(d, n)| d + n > 0.0) {
+            (fra_end_periods(day, night), day + night, true)
+        } else if let Some(daily) = counts.weekly_daily {
+            (flat_end_periods(daily), daily, false)
+        } else if let Some(pax) = pax_opt.filter(|value| *value > 0.0) {
+            (flat_end_periods(pax), pax, false)
+        } else if counts.complete_dn == Some((0.0, 0.0))
+            && counts.switching == 0.0
+            && counts.transit == 0.0
+            && reason == "No Train Traffic"
+        {
+            ([0.0; 3], 0.0, true)
+        } else {
+            return None;
+        };
 
     if raw_daily == 0.0 {
         return Some(FraFlow {
             total_periods: [0.0; 3],
             passenger_daily: Some(0.0),
             main_tracks,
-            freight_only: freight_only_svc,
             measured_periods,
         });
     }
@@ -274,7 +331,6 @@ fn parse_fra_flow(record: &csv::StringRecord, cols: &FraColumns) -> Option<FraFl
             total_periods: raw_periods,
             passenger_daily: None,
             main_tracks,
-            freight_only: false,
             measured_periods,
         });
     }
@@ -284,7 +340,6 @@ fn parse_fra_flow(record: &csv::StringRecord, cols: &FraColumns) -> Option<FraFl
             total_periods: scale_periods(raw_periods, total),
             passenger_daily: Some(total),
             main_tracks,
-            freight_only: false,
             measured_periods,
         });
     }
@@ -294,16 +349,6 @@ fn parse_fra_flow(record: &csv::StringRecord, cols: &FraColumns) -> Option<FraFl
             total_periods: scale_periods(raw_periods, total),
             passenger_daily: Some(pax),
             main_tracks,
-            freight_only: false,
-            measured_periods,
-        });
-    }
-    if lt1_pax && has_pax_svc {
-        return Some(FraFlow {
-            total_periods: raw_periods,
-            passenger_daily: Some(0.5_f64.min(raw_daily)),
-            main_tracks,
-            freight_only: false,
             measured_periods,
         });
     }
@@ -312,16 +357,15 @@ fn parse_fra_flow(record: &csv::StringRecord, cols: &FraColumns) -> Option<FraFl
             total_periods: raw_periods,
             passenger_daily: Some(0.0),
             main_tracks,
-            freight_only: true,
             measured_periods,
         });
     }
+    // `Less Than One Passenger Train Per Day` is an upper bound, not a measured split: leave unknown.
     let passenger_daily = (pax_opt == Some(0.0) && !lt1_pax).then_some(0.0);
     Some(FraFlow {
         total_periods: raw_periods,
         passenger_daily,
         main_tracks,
-        freight_only: false,
         measured_periods,
     })
 }
@@ -344,32 +388,20 @@ fn parse_fra_row(
     {
         return None;
     }
-    let day_raw = num(record, cols.day);
-    let night_raw = num(record, cols.night);
-    let bad_dn = day_raw.is_some_and(|v| v < 0.0) || night_raw.is_some_and(|v| v < 0.0);
-    let day_horn = if bad_dn { 0.0 } else { day_raw.unwrap_or(0.0) };
-    let night_horn = if bad_dn {
-        0.0
-    } else {
-        night_raw.unwrap_or(0.0)
-    };
-    let weekly = non_neg_num(record, cols.weekly).unwrap_or(0.0);
-    let switching = non_neg_num(record, cols.switching).unwrap_or(0.0);
-    let transit = non_neg_num(record, cols.transit).unwrap_or(0.0);
+    let counts = FraCounts::parse(record, cols);
     let is_public_highway =
         record.get(cols.kind) == Some("3") && record.get(cols.purpose) == Some("1");
     // Whistleban: 1 = 24 hr and 3 = Chicago excused are silent all day;
     // 2 = partial sounds 07–22; 0/empty sounds around the clock.
-    let soundings = if !is_public_highway || bad_dn {
+    let soundings = if !is_public_highway || counts.corrupt_dn {
         [0.0; 3]
-    } else if day_horn + night_horn > 0.0 {
+    } else if let Some((day, night)) = counts.complete_dn.filter(|&(d, n)| d + n > 0.0) {
         match record.get(cols.ban) {
             Some("1") | Some("3") => [0.0; 3],
-            Some("2") => fra_partial_periods(day_horn, night_horn),
-            _ => fra_end_periods(day_horn, night_horn),
+            Some("2") => fra_partial_periods(day, night),
+            _ => fra_end_periods(day, night),
         }
-    } else if weekly > 0.0 && switching == 0.0 && transit == 0.0 {
-        let daily = weekly / 7.0;
+    } else if let Some(daily) = counts.weekly_daily {
         match record.get(cols.ban) {
             Some("1") | Some("3") => [0.0; 3],
             Some("2") => [daily * 12.0 / 24.0, daily * 3.0 / 24.0, 0.0],
@@ -378,22 +410,21 @@ fn parse_fra_row(
     } else {
         [0.0; 3]
     };
-    let flow = parse_fra_flow(record, cols);
+    let flow = parse_fra_flow(record, cols, &counts);
     if soundings.iter().all(|&s| s <= 0.0) && flow.is_none() {
         return None;
     }
     let mph = non_neg_num(record, cols.typical)
         .filter(|v| *v > 0.0)
         .or_else(|| non_neg_num(record, cols.timetable).filter(|v| *v > 0.0));
-    let (total_periods, passenger_daily, main_tracks, freight_only, measured_periods) = match flow {
+    let (total_periods, passenger_daily, main_tracks, measured_periods) = match flow {
         Some(flow) => (
             Some(flow.total_periods),
             flow.passenger_daily,
             Some(flow.main_tracks),
-            flow.freight_only,
             flow.measured_periods,
         ),
-        None => (None, None, None, false, false),
+        None => (None, None, None, false),
     };
     Some(Crossing {
         id: record.get(cols.id).unwrap_or("").to_string(),
@@ -406,7 +437,6 @@ fn parse_fra_row(
         total_periods,
         passenger_daily,
         main_tracks,
-        freight_only,
         measured_periods,
     })
 }
@@ -556,7 +586,6 @@ pub fn parse_tc(path: &Path, source_id: u16) -> Result<Vec<Crossing>, String> {
             total_periods: None,
             passenger_daily: None,
             main_tracks: None,
-            freight_only: false,
             measured_periods: false,
         });
     }

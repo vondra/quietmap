@@ -3,8 +3,8 @@ use super::encode::Expanded;
 use super::merge::{CategoryFlow, RowTraffic, STATUS_ESTIMATED, STATUS_KNOWN, STATUS_UNKNOWN};
 use super::model::RailModel;
 use super::parallel_geometry::{cross_sections, project_tracks};
-use super::types::CrossingFreight;
-fn scope_winner(
+
+pub(super) fn scope_winner(
     model: &RailModel,
     own_iso: [u8; 2],
     members: &[usize],
@@ -31,65 +31,10 @@ fn scope_winner(
     winner
 }
 
-fn crossing_scope_value(
-    members: &[usize],
-    carriers: &[CategoryFlow],
-    own_flow: CategoryFlow,
-    winner: u16,
-) -> CategoryFlow {
-    // When global cross-section sharing already stamped every track in the section,
-    // keep this track's own globally-balanced claim directly to avoid double-averaging
-    // across mismatched segment splits. Otherwise divide carrier sums across members.
-    if carriers.len() == members.len()
-        && own_flow.status != STATUS_UNKNOWN
-        && own_flow.source_id == winner
-        && own_flow.matched_tracks > 0
-    {
-        return own_flow;
-    }
-    let denom = members.len() as f64;
-    let mut periods = [0.0; 3];
-    let mut pax_sum = 0.0;
-    let mut pax_all_known = true;
-    let mut measured = true;
-    let mut has_freight = false;
-    for flow in carriers {
-        for (total, value) in periods.iter_mut().zip(flow.periods) {
-            *total += value / denom;
-        }
-        if let Some(cf) = flow.crossing_freight {
-            has_freight = true;
-            measured = measured && cf.measured_periods;
-            match cf.inventory_passenger {
-                Some(pax) => pax_sum += pax / denom,
-                None => pax_all_known = false,
-            }
-        }
-    }
-    CategoryFlow {
-        periods,
-        missing_calendar_estimate: [0.0; 3],
-        status: if carriers.iter().any(|flow| flow.status == STATUS_KNOWN) {
-            STATUS_KNOWN
-        } else {
-            STATUS_ESTIMATED
-        },
-        source_id: winner,
-        matching: carriers.iter().fold(0, |mask, flow| mask | flow.matching),
-        stop: 0,
-        matched_tracks: 1,
-        crossing_freight: has_freight.then_some(CrossingFreight {
-            inventory_passenger: pax_all_known.then_some(pax_sum),
-            measured_periods: measured,
-        }),
-    }
-}
-
-fn scope_value(
+pub(super) fn scope_value(
     model: &RailModel,
     members: &[usize],
     flows: &[RowTraffic],
-    own: usize,
     winner: u16,
     category: fn(&RowTraffic) -> CategoryFlow,
 ) -> CategoryFlow {
@@ -104,9 +49,6 @@ fn scope_value(
         .filter(|flow| flow.status != STATUS_UNKNOWN && flow.source_id == winner)
         .filter(|flow| flow.stop == 0 || stops.insert(flow.stop))
         .collect();
-    if carriers.iter().any(|flow| flow.matched_tracks > 0) {
-        return crossing_scope_value(members, &carriers, category(&flows[own]), winner);
-    }
     let divisor = if model.stamps_whole_line(winner) {
         carriers.len() as f64
     } else {
@@ -136,8 +78,6 @@ fn scope_value(
         source_id: winner,
         matching: carriers.iter().fold(0, |mask, flow| mask | flow.matching),
         stop: 0,
-        matched_tracks: 0,
-        crossing_freight: None,
     }
 }
 
@@ -214,11 +154,8 @@ fn track_share(
     let prior = line_prior(&capable, priors, category);
     let winner = scope_winner(model, own_iso, members, domestic, line_ranked, category);
     let (line, divisor, from_prior) = if winner != 0 && !model.is_residual(winner) {
-        let value = scope_value(model, members, domestic, own, winner, category);
-        if value.matched_tracks > 0 {
-            // Crossing observations are already normalised to per-track rates.
-            (value, 1.0, false)
-        } else if model.stamps_whole_line(winner) {
+        let value = scope_value(model, members, domestic, winner, category);
+        if model.stamps_whole_line(winner) {
             // A proxy estimates the line itself, not the tracks it stamps.
             (value, tracks, false)
         } else {
@@ -233,7 +170,7 @@ fn track_share(
         }
     } else if model.is_residual(winner) {
         (
-            scope_value(model, members, domestic, own, winner, category),
+            scope_value(model, members, domestic, winner, category),
             tracks,
             false,
         )
@@ -242,7 +179,7 @@ fn track_share(
         let value = if abroad == 0 {
             CategoryFlow::default()
         } else {
-            scope_value(model, members, foreign, own, abroad, category)
+            scope_value(model, members, foreign, abroad, category)
         };
         if daily_total(&value) > daily_total(&prior) {
             (value, tracks, false)
@@ -258,8 +195,6 @@ fn track_share(
             source_id: 0,
             matching: 0,
             stop: 0,
-            matched_tracks: 0,
-            crossing_freight: None,
         };
     }
     CategoryFlow {
@@ -292,37 +227,6 @@ pub(super) fn subtract_passenger_periods(
     [raw[0] * scale, raw[1] * scale, raw[2] * scale]
 }
 
-fn prior_freight_share(
-    evidence: &TrackEvidence<'_>,
-    members: &[usize],
-    own: usize,
-) -> CategoryFlow {
-    if !carries_freight(evidence.modes[own]) {
-        return CategoryFlow {
-            periods: [0.0; 3],
-            missing_calendar_estimate: [0.0; 3],
-            status: STATUS_ESTIMATED,
-            source_id: 0,
-            matching: 0,
-            stop: 0,
-            matched_tracks: 0,
-            crossing_freight: None,
-        };
-    }
-    let capable: Vec<usize> = members
-        .iter()
-        .copied()
-        .filter(|&member| carries_freight(evidence.modes[member]))
-        .collect();
-    let prior = line_prior(&capable, evidence.priors, |t| t.freight);
-    let divisor = capable.len().max(1) as f64;
-    CategoryFlow {
-        periods: prior.periods.map(|value| value / divisor),
-        missing_calendar_estimate: prior.missing_calendar_estimate.map(|value| value / divisor),
-        ..prior
-    }
-}
-
 pub(crate) fn allocate_over_parallel_tracks(
     model: &RailModel,
     rows: &mut [Expanded],
@@ -345,8 +249,12 @@ pub(crate) fn allocate_over_parallel_tracks(
         if row.service != 0 {
             continue;
         }
+        if let Some(resolved) = row.child.resolved_section {
+            row.child.traffic = resolved;
+            continue;
+        }
         let members = &sections[index];
-        let mut passenger = track_share(
+        let passenger = track_share(
             &evidence,
             row.country_iso,
             members,
@@ -354,7 +262,7 @@ pub(crate) fn allocate_over_parallel_tracks(
             index,
             carries_passengers,
         );
-        let mut freight = track_share(
+        let freight = track_share(
             &evidence,
             row.country_iso,
             members,
@@ -362,57 +270,6 @@ pub(crate) fn allocate_over_parallel_tracks(
             index,
             carries_freight,
         );
-        if let Some(cf) = freight.crossing_freight {
-            let shares = model.period_shares(row.country_iso, row.rail_type);
-            if passenger.source_id != 0 {
-                let total_daily = daily_total(&freight);
-                let pax_daily = daily_total(&passenger);
-                let effective_pax = cf
-                    .inventory_passenger
-                    .map_or(pax_daily, |inv| pax_daily.max(inv));
-                let target_daily = (total_daily - effective_pax).max(0.0);
-                freight.periods = if cf.measured_periods {
-                    subtract_passenger_periods(freight.periods, passenger.periods, target_daily)
-                } else {
-                    shares.frt.map(|share| target_daily * share)
-                };
-                freight.crossing_freight = None;
-            } else if let Some(inv_pax) = cf.inventory_passenger {
-                // Passenger fell back to source 0 (e.g. a below-prior timetable on an
-                // incomplete cross-section), while the crossing inventory provides a
-                // complete passenger/freight split for the corridor: keep both.
-                let total_daily = daily_total(&freight);
-                let pax_periods = if cf.measured_periods
-                    && total_daily > 0.0
-                    && (inv_pax - total_daily).abs() <= 1e-6
-                {
-                    freight.periods
-                } else {
-                    shares.pax.map(|share| inv_pax * share)
-                };
-                let target_daily = (total_daily - inv_pax).max(0.0);
-                freight.periods = if cf.measured_periods {
-                    subtract_passenger_periods(freight.periods, pax_periods, target_daily)
-                } else {
-                    shares.frt.map(|share| target_daily * share)
-                };
-                freight.crossing_freight = None;
-                passenger = CategoryFlow {
-                    periods: pax_periods,
-                    missing_calendar_estimate: [0.0; 3],
-                    status: freight.status,
-                    source_id: freight.source_id,
-                    matching: freight.matching,
-                    stop: 0,
-                    matched_tracks: freight.matched_tracks,
-                    crossing_freight: None,
-                };
-            } else {
-                // Unknown passenger split without a timetable: keep the class freight prior
-                // rather than subtracting a guessed passenger prior or stamping all-freight.
-                freight = prior_freight_share(&evidence, members, index);
-            }
-        }
         row.child.traffic = RowTraffic { passenger, freight };
     }
 }

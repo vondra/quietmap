@@ -1,30 +1,5 @@
 //! Explicit passenger and freight evidence, with zero distinct from unknown.
 
-/// Per-track crossing count carried by a crossing-inventory interval.
-/// Values are already divided by the physical main tracks sharing the crossing.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CrossingTotal {
-    pub periods_per_track: [f64; 3],
-    /// Inventory's own per-track passenger trains/day (`None` when unknown).
-    pub passenger_per_track: Option<f64>,
-    /// True when `periods_per_track` comes from measured daylight/nighttime blocks,
-    /// false when spread from an unsplit weekly or daily total.
-    pub measured_periods: bool,
-    /// Physical main tracks that shared the crossing (`>= 1`).
-    pub matched_tracks: u8,
-}
-
-/// Marks a crossing-derived freight `CategoryFlow` whose `periods` hold total
-/// per-track through trains until the track's resolved passenger flow is
-/// subtracted in parallel-track finalization.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CrossingFreight {
-    /// Crossing inventory's own per-track passenger trains/day (`None` when unknown).
-    pub inventory_passenger: Option<f64>,
-    /// True when `CategoryFlow.periods` comes from measured daylight/nighttime blocks.
-    pub measured_periods: bool,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CategoryFlow {
     pub periods: [f64; 3],
@@ -35,10 +10,6 @@ pub struct CategoryFlow {
     /// The stop whose departures stamp this flow (`local_match`), so a line counts each stop
     /// once however many of its tracks the stop stamps; 0 for a routed or modelled flow.
     pub stop: u32,
-    /// Physical tracks sharing a crossing observation (`0` for non-crossing flows).
-    pub matched_tracks: u8,
-    /// Set on crossing-derived freight flows until passenger trains are subtracted.
-    pub crossing_freight: Option<CrossingFreight>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RowTraffic {
@@ -66,9 +37,6 @@ pub struct Crossing {
     /// Main tracks reported at the crossing (`> 0` when present).
     #[serde(default)]
     pub main_tracks: Option<u8>,
-    /// True when the inventory explicitly declares freight-only train service.
-    #[serde(default)]
-    pub freight_only: bool,
     /// True when `total_periods` reflects measured daylight/nighttime blocks rather
     /// than an unsplit weekly or daily count.
     #[serde(default)]

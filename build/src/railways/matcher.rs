@@ -42,8 +42,23 @@ pub(super) fn interval(
         matching,
         missing_calendar_estimate: movement.missing_calendar_estimate,
         stop: 0,
-        crossing: None,
+        resolved_section: None,
     }
+}
+
+fn expand_halo(squares: &HashSet<[u16; 2]>) -> HashSet<[u16; 2]> {
+    let mut expanded = HashSet::with_capacity(squares.len());
+    for &[x, y] in squares {
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                let (nx, ny) = (i32::from(x) + dx, i32::from(y) + dy);
+                if (0..512).contains(&nx) && (0..512).contains(&ny) {
+                    expanded.insert([nx as u16, ny as u16]);
+                }
+            }
+        }
+    }
+    expanded
 }
 
 fn intersects(bounds: [f64; 4], squares: &HashSet<[u16; 2]>) -> bool {
@@ -68,6 +83,7 @@ pub fn read(
         claims: HashMap::new(),
         crossings: HashMap::new(),
     };
+    let halo_squares = expand_halo(squares);
     let mut unlocated = (0usize, 0.0, 0.0);
     let mut incomplete_zeros = 0;
     let mut stops = 0;
@@ -101,7 +117,7 @@ pub fn read(
                     occurrence,
                 } = movement.location
                 {
-                    if squares.contains(&square) {
+                    if halo_squares.contains(&square) {
                         result.claims.entry(square).or_default().push((
                             interval(&movement, way, segment, from_m, to_m, movement.matching),
                             occurrence,
@@ -140,6 +156,13 @@ pub fn read(
         }
         Ok(())
     })?;
+    // When crossing inventories allocate across global cross-sections, keep 1-ring neighbour
+    // timetable claims so boundary tracks see their parallel sibling's timetable across cuts.
+    let claim_squares = if crossing_groups.is_empty() {
+        squares
+    } else {
+        &halo_squares
+    };
     if unlocated.0 > 0 {
         eprintln!(
             "railways: {} unlocated observations: {} observed and {} calendar-estimated daily departures remain spatially unknown",
@@ -163,7 +186,7 @@ pub fn read(
         .flatten()
         .any(super::local_match::observed_locally)
     {
-        super::local_match::rail_squares(geography, squares)?
+        super::local_match::rail_squares(geography, claim_squares)?
     } else {
         Vec::new()
     };
@@ -173,7 +196,7 @@ pub fn read(
             .network_bounds
             .get(&scope)
             .ok_or_else(|| format!("rail model lacks network bounds for {scope}"))?;
-        if !intersects(bounds, squares) {
+        if !intersects(bounds, claim_squares) {
             continue;
         }
         eprintln!("railways: match {scope}: {} observations", movements.len());
@@ -196,7 +219,7 @@ pub fn read(
                 let offset = occurrence;
                 for passage in matched.passages {
                     occurrence = occurrence.max(offset + passage.occurrence + 1);
-                    if squares.contains(&passage.square) {
+                    if claim_squares.contains(&passage.square) {
                         result.claims.entry(passage.square).or_default().push((
                             interval(
                                 movement,
@@ -234,7 +257,7 @@ pub fn read(
                 .find(|movement| matches!(movement.location, Location::StationPair { .. }))
                 .unwrap();
             for (index, edge) in graph.edges.iter().enumerate() {
-                if !squares.contains(&edge.square) || edge.traversal_only {
+                if !claim_squares.contains(&edge.square) || edge.traversal_only {
                     continue;
                 }
                 let observed = pairs.edges.get(&index);
@@ -301,11 +324,18 @@ pub fn read(
             crossings.len()
         );
         let graph = Network::read(geography, bounds)?;
-        for (square, claim) in
-            super::crossings::match_crossings(&graph, &crossings, source_id, country, squares)
-        {
+        for (square, claim) in super::crossings::match_crossings(
+            model,
+            &graph,
+            &crossings,
+            source_id,
+            country,
+            squares,
+            &result.claims,
+        ) {
             result.claims.entry(square).or_default().push((claim, 0));
         }
     }
+    result.claims.retain(|square, _| squares.contains(square));
     Ok(result)
 }
