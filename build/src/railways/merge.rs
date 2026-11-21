@@ -56,6 +56,7 @@ fn pick_winner(model: &RailModel, mut claims: Vec<Claim>, row_iso: [u8; 2]) -> O
     let mut crossing_periods = [0.0; 3];
     let mut crossing_pax_sum = 0.0;
     let mut crossing_pax_all_known = true;
+    let mut crossing_measured = true;
     let mut crossing_tracks = 0u8;
     for claim in claims.iter().filter(|claim| claim.source_id == winner_id) {
         trains += claim.trains;
@@ -74,6 +75,7 @@ fn pick_winner(model: &RailModel, mut claims: Vec<Claim>, row_iso: [u8; 2]) -> O
                 Some(pax) => crossing_pax_sum += pax,
                 None => crossing_pax_all_known = false,
             }
+            crossing_measured = crossing_measured && crossing.measured_periods;
             crossing_tracks = crossing_tracks.max(crossing.matched_tracks);
         }
     }
@@ -83,6 +85,7 @@ fn pick_winner(model: &RailModel, mut claims: Vec<Claim>, row_iso: [u8; 2]) -> O
         CrossingTotal {
             periods_per_track: crossing_periods.map(|v| v / count),
             passenger_per_track: crossing_pax_all_known.then_some(crossing_pax_sum / count),
+            measured_periods: crossing_measured,
             matched_tracks: crossing_tracks.max(1),
         }
     });
@@ -173,8 +176,11 @@ pub fn row_evidence(
             scope.passenger.stop = winner.stop;
             if let Some(crossing) = winner.crossing {
                 let total_daily: f64 = crossing.periods_per_track.iter().sum();
-                if total_daily > 0.0 && (winner.trains - total_daily).abs() <= 1e-6 {
-                    // Passenger-only crossing: keep the measured day/night split.
+                if crossing.measured_periods
+                    && total_daily > 0.0
+                    && (winner.trains - total_daily).abs() <= 1e-6
+                {
+                    // Passenger-only crossing with measured day/night blocks.
                     scope.passenger.periods = crossing.periods_per_track;
                 }
                 scope.passenger.matched_tracks = crossing.matched_tracks;
@@ -198,6 +204,7 @@ pub fn row_evidence(
                 scope.freight.matched_tracks = crossing.matched_tracks;
                 scope.freight.crossing_freight = Some(CrossingFreight {
                     inventory_passenger: crossing.passenger_per_track,
+                    measured_periods: crossing.measured_periods,
                 });
             }
         }

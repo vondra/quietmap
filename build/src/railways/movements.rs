@@ -280,6 +280,7 @@ pub fn read(
                 let bad_freight_only = crossing.freight_only
                     && (crossing.total_periods.is_none()
                         || crossing.passenger_daily.is_some_and(|pax| pax > 0.0));
+                let bad_measured = crossing.measured_periods && crossing.total_periods.is_none();
                 let bad_empty = crossing.total_periods.is_none()
                     && crossing.soundings.iter().all(|&soundings| soundings <= 0.0);
                 if !(-90.0..=90.0).contains(&crossing.lat)
@@ -296,6 +297,7 @@ pub fn read(
                     || bad_pax
                     || bad_tracks
                     || bad_freight_only
+                    || bad_measured
                     || bad_empty
                     || crossing.synth_osm >= 0
                     || crossing.source_id == 0

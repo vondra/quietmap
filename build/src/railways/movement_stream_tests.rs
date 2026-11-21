@@ -68,6 +68,7 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
         passenger_daily: Some(4.0),
         main_tracks: Some(2),
         freight_only: false,
+        measured_periods: true,
     };
     check(base.clone()).unwrap();
 
@@ -83,9 +84,22 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
         passenger_daily: None,
         main_tracks: None,
         freight_only: false,
+        measured_periods: false,
         ..base.clone()
     };
     check(horn_only).unwrap();
+
+    // measured_periods without total_periods is rejected.
+    let bad_measured = Crossing {
+        soundings: [6.0, 2.0, 4.0],
+        total_periods: None,
+        passenger_daily: None,
+        main_tracks: None,
+        freight_only: false,
+        measured_periods: true,
+        ..base.clone()
+    };
+    assert!(check(bad_measured).is_err());
 
     // Missing main_tracks alongside total_periods is rejected.
     let mut no_tracks = base.clone();

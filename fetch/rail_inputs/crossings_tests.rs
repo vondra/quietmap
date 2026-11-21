@@ -12,7 +12,7 @@ Number Passenger Train Per Day,Less Than One Passenger Train Per Day,Number Of M
 Type Of Train Service IDs,Maximum Timetable Speed,Typical Maximum Speed Over Crossing,\
 Reason Description,Movements Per Day Code\n";
 
-fn parse_fra_rows(rows: &[&str]) -> Vec<Crossing> {
+fn parse_fra_rows(rows: &[&str]) -> BTreeMap<String, Crossing> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fra.csv");
     let mut file = File::create(&path).unwrap();
@@ -21,14 +21,20 @@ fn parse_fra_rows(rows: &[&str]) -> Vec<Crossing> {
         file.write_all(row.as_bytes()).unwrap();
         file.write_all(b"\n").unwrap();
     }
-    parse_fra(&path, 111).unwrap()
+    parse_fra(&path, 111)
+        .unwrap()
+        .into_iter()
+        .map(|crossing| (crossing.id.clone(), crossing))
+        .collect()
 }
 
 #[test]
 fn fra_input_verification_rejects_bad_checksum_and_future_revision() {
     let dir = tempfile::tempdir().unwrap();
     let csv_path = dir.path().join("fra.csv");
-    let body = "Revision Date,Crossing ID\n2024-12-31,100001A\n";
+    let body = format!(
+        "{FRA_HEADER}2024-12-31,100001A,3,1,1,No,0,41.0,-87.0,10,4,0,0,0,0,No,1,11,50,50,Change in Data,2\n"
+    );
     let mut f = File::create(&csv_path).unwrap();
     f.write_all(body.as_bytes()).unwrap();
     let sha = format!("{:x}", Sha256::digest(body.as_bytes()));
@@ -49,21 +55,22 @@ fn fra_input_verification_rejects_bad_checksum_and_future_revision() {
         }))
         .unwrap()
     };
-    verify_fra_input(&csv_path, &make_spec(&sha, "2024-12-31")).unwrap();
+    let rows = parse_verified_fra(&csv_path, &make_spec(&sha, "2024-12-31"), 111).unwrap();
+    assert_eq!(rows.len(), 1);
     assert!(
-        verify_fra_input(&csv_path, &make_spec(&"0".repeat(64), "2024-12-31"))
+        parse_verified_fra(&csv_path, &make_spec(&"0".repeat(64), "2024-12-31"), 111)
             .unwrap_err()
             .contains("checksum")
     );
     assert!(
-        verify_fra_input(&csv_path, &make_spec(&sha, "2024-12-30"))
+        parse_verified_fra(&csv_path, &make_spec(&sha, "2024-12-30"), 111)
             .unwrap_err()
             .contains("exceeds manifest cutoff")
     );
 }
 
 #[test]
-fn fra_parser_keeps_blanks_grade_separated_and_closed_out_of_zero_counts() {
+fn fra_parser_keeps_blanks_grade_separated_closed_and_negative_half_day_out_of_zero() {
     let parsed = parse_fra_rows(&[
         // Defect 1: grade-separated (position 2) with blank/zero counts must never emit.
         "2024-06-01,GRADE2A,3,1,2,No,0,41.0,-87.0,0,0,0,0,0,0,No,2,11,60,60,No Train Traffic,1",
@@ -75,100 +82,131 @@ fn fra_parser_keeps_blanks_grade_separated_and_closed_out_of_zero_counts() {
         "2022-06-01,807808Y,2,1,1,Yes,0,46.752819,-117.212256,0,0,0,,,0,,1,11,0,0,Change in Primary Operating RR,",
         // Defect 5: switching-only row must not become zero through traffic.
         "2024-06-01,SWONLY1,3,1,1,No,0,41.0,-87.0,0,0,6,0,0,0,No,1,11,25,25,No Train Traffic,1",
+        // Real 020355F: switching + weekly count is switching traffic, never through freight.
+        "2024-06-01,020355F,3,1,1,No,0,34.0,-118.0,0,0,10,0,50,0,No,1,11,25,25,Change in Data,2",
+        // Real 807483S: corrupt negative nighttime (-4) must not fabricate 4/day with 0 night.
+        "2024-06-01,807483S,3,1,1,No,0,41.0,-87.0,4,-4,0,0,0,0,No,1,11,40,40,Change in Data,2",
         // Explicit zero: open at-grade with 0 day, 0 night, 0 switching, 0 transit, No Train Traffic.
         "2024-06-01,ZERO01A,3,1,1,No,0,41.0,-87.0,0,0,0,0,0,0,No,1,11,25,25,No Train Traffic,1",
     ]);
     assert_eq!(parsed.len(), 1);
-    let zero = &parsed[0];
-    assert_eq!(zero.id, "ZERO01A");
+    let zero = &parsed["ZERO01A"];
     assert_eq!(zero.soundings, [0.0; 3]);
     assert_eq!(zero.total_periods, Some([0.0; 3]));
     assert_eq!(zero.passenger_daily, Some(0.0));
     assert_eq!(zero.main_tracks, Some(1));
     assert!(zero.freight_only);
+    assert!(zero.measured_periods);
 }
 
 #[test]
-fn fra_parser_reads_weekly_trains_and_passenger_only_and_pax_exceeding_thru() {
+fn fra_parser_reads_weekly_trains_horns_passenger_only_and_mixed_transit() {
     let parsed = parse_fra_rows(&[
-        // Defect 2: real weekly-only private crossing 155954B (2 trains/week, no horn).
+        // Defect 2: real weekly-only private crossing 155954B (2 trains/week, no horn, unsplit).
         "2023-10-24,155954B,2,1,1,No,0,36.699367,-83.287722,0,0,0,0,2,0,No,1,11,20,20,Change in Data,1",
+        // Real weekly-only public crossing 004896S: sounds weekly horn + unsplit weekly flow.
+        "2024-05-01,004896S,3,1,1,No,0,38.0,-90.0,0,0,0,0,4,0,No,1,11,25,25,Change in Data,1",
         // Defect 4: real Amtrak row 545244R (thru=0, pax=10, intercity service 12).
         "2015-12-25,545244R,2,1,1,No,0,42.294903,-84.084198,0,0,0,,,10,,1,12,79,79,Change in Primary Operating RR,",
         // Defect 4: pax exceeds daylight+nighttime thru (1 day thru, 2 pax, mixed 11+12).
         "2024-05-01,003260D,3,1,1,No,0,38.0,-90.0,1,0,0,0,0,2,No,1,\"11,12\",79,79,Change in Data,1",
         // Passenger-only service (Metro-North Harlem 500532J: svc 13, no freight 11, dn=52, pax=41).
-        "2024-05-01,500532J,3,1,1,No,0,41.4,-73.6,28,24,0,0,0,41,No,1,13,60,60,Change in Data,1",
+        "2024-05-01,500532J,3,1,1,No,0,41.07,-73.52,28,24,0,0,0,41,No,1,13,60,60,Change in Data,2",
+        // Real San Diego 026852D: 53 heavy thru + 150 transit, pax=196 -> 46 heavy pax, 7 freight.
+        "2024-05-01,026852D,3,1,1,No,0,32.755,-117.200,30,23,0,150,0,196,No,2,\"11,12,13,14\",79,79,Change in Data,2",
+        // Real Utah 255374L: 4 night freight + 140 transit, pax=140 -> 0 heavy pax, 4 freight.
+        "2024-05-01,255374L,3,1,1,No,0,40.573,-112.021,0,4,0,140,0,140,No,1,\"11,14\",40,40,Change in Data,2",
+        // Real San Diego 967101J: 44 thru + 132 transit, pax=182 (182-132=50 > 44) -> unknown split.
+        "2024-05-01,967101J,3,1,1,No,0,32.717,-117.170,24,20,0,132,0,182,No,2,\"11,12,13,14\",60,60,Change in Data,2",
     ]);
-    assert_eq!(parsed.len(), 4);
+    assert_eq!(parsed.len(), 8);
 
-    let weekly = &parsed[0];
-    assert_eq!(weekly.id, "155954B");
+    let weekly = &parsed["155954B"];
     assert_eq!(weekly.soundings, [0.0; 3]);
-    let weekly_total: f64 = weekly.total_periods.unwrap().iter().sum();
-    assert!((weekly_total - 2.0 / 7.0).abs() < 1e-9);
+    assert!((weekly.total_periods.unwrap().iter().sum::<f64>() - 2.0 / 7.0).abs() < 1e-9);
     assert_eq!(weekly.passenger_daily, Some(0.0));
     assert!(weekly.freight_only);
+    assert!(!weekly.measured_periods);
 
-    let amtrak = &parsed[1];
-    assert_eq!(amtrak.id, "545244R");
+    let pub_wk = &parsed["004896S"];
+    assert!((pub_wk.soundings.iter().sum::<f64>() - 4.0 / 7.0).abs() < 1e-9);
+    assert!((pub_wk.total_periods.unwrap().iter().sum::<f64>() - 4.0 / 7.0).abs() < 1e-9);
+    assert!(!pub_wk.measured_periods);
+
+    let amtrak = &parsed["545244R"];
     assert_eq!(amtrak.soundings, [0.0; 3]);
-    let amtrak_total: f64 = amtrak.total_periods.unwrap().iter().sum();
-    assert!((amtrak_total - 10.0).abs() < 1e-9);
+    assert!((amtrak.total_periods.unwrap().iter().sum::<f64>() - 10.0).abs() < 1e-9);
     assert_eq!(amtrak.passenger_daily, Some(10.0));
-    assert!(!amtrak.freight_only);
+    assert!(!amtrak.measured_periods);
 
-    let pax_gt_dn = &parsed[2];
-    assert_eq!(pax_gt_dn.id, "003260D");
-    let gt_sum: f64 = pax_gt_dn.total_periods.unwrap().iter().sum();
-    assert!((gt_sum - 2.0).abs() < 1e-9);
+    let pax_gt_dn = &parsed["003260D"];
+    assert!((pax_gt_dn.total_periods.unwrap().iter().sum::<f64>() - 2.0).abs() < 1e-9);
     assert_eq!(pax_gt_dn.passenger_daily, Some(2.0));
-    assert!(!pax_gt_dn.freight_only);
+    assert!(pax_gt_dn.measured_periods);
 
-    let mnr = &parsed[3];
-    assert_eq!(mnr.id, "500532J");
-    let mnr_sum: f64 = mnr.total_periods.unwrap().iter().sum();
-    assert!((mnr_sum - 52.0).abs() < 1e-9);
+    let mnr = &parsed["500532J"];
+    assert!((mnr.total_periods.unwrap().iter().sum::<f64>() - 52.0).abs() < 1e-9);
     assert_eq!(mnr.passenger_daily, Some(52.0));
-    assert!(!mnr.freight_only);
+
+    let sd = &parsed["026852D"];
+    assert!((sd.total_periods.unwrap().iter().sum::<f64>() - 53.0).abs() < 1e-9);
+    assert_eq!(sd.passenger_daily, Some(46.0));
+    assert!(!sd.freight_only);
+    assert!(sd.measured_periods);
+
+    let ut = &parsed["255374L"];
+    assert!((ut.total_periods.unwrap().iter().sum::<f64>() - 4.0).abs() < 1e-9);
+    assert_eq!(ut.passenger_daily, Some(0.0));
+    assert!(ut.freight_only);
+
+    let irrec = &parsed["967101J"];
+    assert!((irrec.total_periods.unwrap().iter().sum::<f64>() - 44.0).abs() < 1e-9);
+    assert_eq!(irrec.passenger_daily, None);
 }
 
 #[test]
-fn fra_parser_separates_horns_from_flows_for_quiet_zones_transit_zero_tracks_and_lt1() {
+fn fra_parser_deduplicates_repeated_ids_and_separates_horns_from_flows() {
     let parsed = parse_fra_rows(&[
+        // Duplicate ID (as 022128G in 2026 snapshot): newer revision replaces older, votes once.
+        "2023-01-01,022128G,3,1,1,No,0,41.0,-87.0,4,2,0,0,0,0,No,1,11,50,50,Change in Data,2",
+        "2024-08-01,022128G,3,1,1,No,0,41.0,-87.0,10,8,0,0,0,0,No,1,11,50,50,Change in Data,2",
+        // Newer closed duplicate overrides earlier open row.
+        "2023-01-01,CLSDUP1,3,1,1,No,0,41.0,-87.0,10,4,0,0,0,0,No,1,11,50,50,Change in Data,2",
+        "2024-09-01,CLSDUP1,3,1,1,Yes,0,41.0,-87.0,0,0,0,0,0,0,No,0,11,0,0,Closed,1",
         // Quiet zone: silent horn, keeps full freight flow.
-        "2024-05-01,QUIET01,3,1,1,No,1,41.8,-87.9,12,6,0,0,0,0,No,2,11,50,50,Change in Data,1",
+        "2024-05-01,QUIET01,3,1,1,No,1,41.8,-87.9,12,6,0,0,0,0,No,2,11,50,50,Change in Data,2",
         // Transit-only (svc 14): keeps public highway horn, emits no heavy-rail flow.
-        "2024-05-01,TRAN01A,3,1,1,No,0,34.0,-118.2,40,20,0,60,0,0,No,2,14,45,45,Change in Data,1",
+        "2024-05-01,TRAN01A,3,1,1,No,0,34.0,-118.2,40,20,0,60,0,0,No,2,14,45,45,Change in Data,2",
         // Zero main tracks (siding): keeps public highway horn, emits no main-track flow.
-        "2024-05-01,SIDE01A,3,1,1,No,0,41.0,-87.0,4,2,4,0,0,0,No,0,11,15,15,Change in Data,1",
+        "2024-05-01,SIDE01A,3,1,1,No,0,41.0,-87.0,4,2,4,0,0,0,No,0,11,15,15,Change in Data,2",
         // LT1=Yes ticked on freight-only (svc 11) means 0 passenger, not 0.5.
-        "2024-05-01,FRTLT1A,3,1,1,No,0,41.0,-87.0,10,6,0,0,0,,Yes,1,11,50,50,Change in Data,1",
+        "2024-05-01,FRTLT1A,3,1,1,No,0,41.0,-87.0,10,6,0,0,0,,Yes,1,11,50,50,Change in Data,2",
         // LT1=Yes on mixed freight+intercity (11,12) sets 0.5 passenger/day.
-        "2024-05-01,MIXLT1A,3,1,1,No,0,41.0,-87.0,10,6,0,0,0,,Yes,1,\"11,12\",60,60,Change in Data,1",
-        // Negative nighttime field (corrupt FRA entry) is treated as missing, not negative.
-        "2024-05-01,NEGN01A,3,1,1,No,0,41.0,-87.0,6,-4,0,0,0,0,No,1,11,40,40,Change in Data,1",
+        "2024-05-01,MIXLT1A,3,1,1,No,0,41.0,-87.0,10,6,0,0,0,,Yes,1,\"11,12\",60,60,Change in Data,2",
     ]);
     assert_eq!(parsed.len(), 6);
+    assert!(!parsed.contains_key("CLSDUP1"));
+    assert!((parsed["022128G"].total_periods.unwrap().iter().sum::<f64>() - 18.0).abs() < 1e-9);
 
-    assert_eq!(parsed[0].soundings, [0.0; 3]);
-    assert_eq!(parsed[0].total_periods, Some(fra_end_periods(12.0, 6.0)));
-    assert_eq!(parsed[0].main_tracks, Some(2));
-    assert!(parsed[0].freight_only);
+    assert_eq!(parsed["QUIET01"].soundings, [0.0; 3]);
+    assert_eq!(
+        parsed["QUIET01"].total_periods,
+        Some(fra_end_periods(12.0, 6.0))
+    );
+    assert_eq!(parsed["QUIET01"].main_tracks, Some(2));
+    assert!(parsed["QUIET01"].freight_only);
 
-    assert!(parsed[1].soundings.iter().sum::<f64>() > 59.9);
-    assert_eq!(parsed[1].total_periods, None);
+    assert!(parsed["TRAN01A"].soundings.iter().sum::<f64>() > 59.9);
+    assert_eq!(parsed["TRAN01A"].total_periods, None);
 
-    assert!(parsed[2].soundings.iter().sum::<f64>() > 5.9);
-    assert_eq!(parsed[2].total_periods, None);
+    assert!(parsed["SIDE01A"].soundings.iter().sum::<f64>() > 5.9);
+    assert_eq!(parsed["SIDE01A"].total_periods, None);
 
-    assert_eq!(parsed[3].passenger_daily, Some(0.0));
-    assert!(parsed[3].freight_only);
+    assert_eq!(parsed["FRTLT1A"].passenger_daily, Some(0.0));
+    assert!(parsed["FRTLT1A"].freight_only);
 
-    assert_eq!(parsed[4].passenger_daily, Some(0.5));
-    assert!(!parsed[4].freight_only);
-
-    assert_eq!(parsed[5].total_periods, Some(fra_end_periods(6.0, 0.0)));
+    assert_eq!(parsed["MIXLT1A"].passenger_daily, Some(0.5));
+    assert!(!parsed["MIXLT1A"].freight_only);
 }
 
 #[test]
@@ -192,4 +230,5 @@ TC002,Public,43.65,-79.38,12,60
     assert_eq!(parsed[0].passenger_daily, None);
     assert_eq!(parsed[0].main_tracks, None);
     assert!(!parsed[0].freight_only);
+    assert!(!parsed[0].measured_periods);
 }

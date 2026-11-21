@@ -1,13 +1,15 @@
 //! Explicit passenger and freight evidence, with zero distinct from unknown.
 
 /// Per-track crossing count carried by a crossing-inventory interval.
-/// Values are already divided by `matched_tracks` (the physical main tracks
-/// that shared the crossing on the global rail graph).
+/// Values are already divided by the physical main tracks sharing the crossing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CrossingTotal {
     pub periods_per_track: [f64; 3],
     /// Inventory's own per-track passenger trains/day (`None` when unknown).
     pub passenger_per_track: Option<f64>,
+    /// True when `periods_per_track` comes from measured daylight/nighttime blocks,
+    /// false when spread from an unsplit weekly or daily total.
+    pub measured_periods: bool,
     /// Physical main tracks that shared the crossing (`>= 1`).
     pub matched_tracks: u8,
 }
@@ -19,6 +21,8 @@ pub struct CrossingTotal {
 pub struct CrossingFreight {
     /// Crossing inventory's own per-track passenger trains/day (`None` when unknown).
     pub inventory_passenger: Option<f64>,
+    /// True when `CategoryFlow.periods` comes from measured daylight/nighttime blocks.
+    pub measured_periods: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -65,4 +69,8 @@ pub struct Crossing {
     /// True when the inventory explicitly declares freight-only train service.
     #[serde(default)]
     pub freight_only: bool,
+    /// True when `total_periods` reflects measured daylight/nighttime blocks rather
+    /// than an unsplit weekly or daily count.
+    #[serde(default)]
+    pub measured_periods: bool,
 }

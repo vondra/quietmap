@@ -183,8 +183,7 @@ fn convert_object(
                 .iter()
                 .find(|entry| entry.id == id)
                 .ok_or_else(|| format!("missing manifest entry for {id}"))?;
-            crossings::verify_fra_input(&input, spec)?;
-            for crossing in crossings::parse_fra(&input, *source_id)? {
+            for crossing in crossings::parse_verified_fra(&input, spec, *source_id)? {
                 write_record(writer, &Record::Crossing(crossing))?;
             }
         }

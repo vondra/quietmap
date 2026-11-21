@@ -76,7 +76,7 @@ pub fn stamp_yard_service(
             || !corridor_at(merged, row).is_empty()
             || intervals
                 .get(&(osm_id.value(row), segment_idx.value(row)))
-                .is_some_and(|list| !list.is_empty())
+                .is_some_and(|list| list.iter().any(|interval| interval.crossing.is_none()))
         {
             continue;
         }

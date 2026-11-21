@@ -1,7 +1,7 @@
 //! A connected railway graph keyed by original OSM node identity and source-way cuts.
 use super::write::{col_f32, col_i16, col_i32, col_i64, col_u8};
 use crate::osm::geometry;
-use arrow_array::{Array, Float64Array, RecordBatch, UInt16Array};
+use arrow_array::{Array, Float64Array, RecordBatch, StringArray, UInt16Array};
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
@@ -17,6 +17,8 @@ pub struct Edge {
     pub square: [u16; 2],
     pub extent: [f64; 2],
     pub rail_type: u8,
+    pub usage: u8,
+    pub corridor: String,
     pub traversal_only: bool,
 }
 
@@ -158,8 +160,15 @@ impl Network {
                 let way = col_i64(batch, "osm_id")?;
                 let segment = col_i16(batch, "segment_idx")?;
                 let kind = col_u8(batch, "rail_type")?;
+                let usage = col_u8(batch, "usage")?;
                 let service = col_u8(batch, "service")?;
                 let length = col_f32(batch, "length_m")?;
+                let ref_col = batch
+                    .column_by_name("ref")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+                let name_col = batch
+                    .column_by_name("name")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>());
                 for row in 0..batch.num_rows() {
                     let key = (way.value(row), segment.value(row));
                     let Some(&(keys, points, extent)) = topology.get(&key) else {
@@ -188,6 +197,18 @@ impl Network {
                             id
                         })
                     });
+                    let ref_text = ref_col
+                        .filter(|col| !col.is_null(row))
+                        .map(|col| col.value(row).trim())
+                        .unwrap_or("");
+                    let corridor = if !ref_text.is_empty() {
+                        ref_text.to_owned()
+                    } else {
+                        name_col
+                            .filter(|col| !col.is_null(row))
+                            .map(|col| col.value(row).trim().to_owned())
+                            .unwrap_or_default()
+                    };
                     network.edges.push(Edge {
                         nodes,
                         points,
@@ -197,6 +218,8 @@ impl Network {
                         segment: key.1,
                         square,
                         rail_type: kind.value(row),
+                        usage: usage.value(row),
+                        corridor,
                         traversal_only,
                     });
                 }
