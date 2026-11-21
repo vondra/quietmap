@@ -9,9 +9,9 @@ use std::collections::HashMap;
 /// this group and an end), whether and as what it joins a run (`joins`: rows of one value join;
 /// `None` meets but never joins), its ends (z30), its length (m) and its traffic.
 #[derive(Clone, Copy, Debug)]
-pub struct RunRow {
+pub struct RunRow<J = u8> {
     pub meets: u8,
-    pub joins: Option<u8>,
+    pub joins: Option<J>,
     pub ends: [(i32, i32); 2],
     pub length_m: f64,
     pub value: f64,
@@ -20,7 +20,7 @@ pub struct RunRow {
 /// For every row the index of its run's length-weighted median row by value (a row that joins no
 /// run is its own). Rows join where exactly two rows of their `meets` group share an end and both
 /// join as the same value. Runs stop at the square's edge.
-pub fn run_medians(rows: &[RunRow]) -> Vec<usize> {
+pub fn run_medians<J: Copy + Eq>(rows: &[RunRow<J>]) -> Vec<usize> {
     fn root(parent: &mut [usize], mut index: usize) -> usize {
         while parent[index] != index {
             parent[index] = parent[parent[index]];

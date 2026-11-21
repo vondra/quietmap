@@ -121,3 +121,106 @@ fn guessed_freight_preserves_legacy_scaling_before_period_redistribution() {
     );
     assert_eq!(actual, expected);
 }
+
+/// Cross-border and cross-source rows keep their own country and timetable rank in `run_trains`,
+/// while a short piece with the same country, source and status still takes its run's median.
+#[test]
+fn run_trains_preserves_country_border_and_timetable_provenance() {
+    use arrow_array::{ArrayRef, Float64Array, Int32Array, UInt8Array, UInt16Array};
+    use arrow_schema::{Field, Schema};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let us = u16::from_le_bytes(*b"US");
+    let ca = u16::from_le_bytes(*b"CA");
+    // Row 0-2: US FRA (0/2) meets CA prior (30/5) at x=2000 (Swanton border).
+    // Row 3-5: US Amtrak+FRA (1.5/2.5, source 2079/111) meets US FRA-only (0/4, source 111/111)
+    //          at x=4000 (Shore Line), plus a uniform-provenance bridge spike at row 6-8.
+    let columns: Vec<(&str, ArrayRef)> = vec![
+        (
+            "start_gx",
+            Arc::new(Int32Array::from(vec![
+                0, 1000, 2000, 3000, 4000, 5000, 10000, 11000, 11100,
+            ])),
+        ),
+        ("start_gy", Arc::new(Int32Array::from(vec![0; 9]))),
+        (
+            "end_gx",
+            Arc::new(Int32Array::from(vec![
+                1000, 2000, 3000, 4000, 5000, 6000, 11000, 11100, 12100,
+            ])),
+        ),
+        ("end_gy", Arc::new(Int32Array::from(vec![0; 9]))),
+        ("rail_type", Arc::new(UInt8Array::from(vec![0u8; 9]))),
+        (
+            "country_iso",
+            Arc::new(UInt16Array::from(vec![us, us, ca, us, us, us, us, us, us])),
+        ),
+        ("passenger_status", Arc::new(UInt8Array::from(vec![2u8; 9]))),
+        ("freight_status", Arc::new(UInt8Array::from(vec![2u8; 9]))),
+        (
+            "passenger_source_id",
+            Arc::new(UInt16Array::from(vec![
+                111, 111, 0, 2079, 111, 111, 2079, 2079, 2079,
+            ])),
+        ),
+        (
+            "freight_source_id",
+            Arc::new(UInt16Array::from(vec![
+                111, 111, 0, 111, 111, 111, 111, 111, 111,
+            ])),
+        ),
+        (
+            "trains_passenger_day",
+            Arc::new(Float64Array::from(vec![
+                0.0, 0.0, 30.0, 1.5, 0.0, 0.0, 10.0, 30.0, 10.0,
+            ])),
+        ),
+        (
+            "trains_passenger_evening",
+            Arc::new(Float64Array::from(vec![0.0; 9])),
+        ),
+        (
+            "trains_passenger_night",
+            Arc::new(Float64Array::from(vec![0.0; 9])),
+        ),
+        (
+            "trains_freight_day",
+            Arc::new(Float64Array::from(vec![
+                2.0, 2.0, 5.0, 2.5, 4.0, 4.0, 2.0, 2.0, 2.0,
+            ])),
+        ),
+        (
+            "trains_freight_evening",
+            Arc::new(Float64Array::from(vec![0.0; 9])),
+        ),
+        (
+            "trains_freight_night",
+            Arc::new(Float64Array::from(vec![0.0; 9])),
+        ),
+    ];
+    let fields: Vec<Field> = columns
+        .iter()
+        .map(|(name, arr)| Field::new(*name, arr.data_type().clone(), false))
+        .collect();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(fields)),
+        columns.into_iter().map(|(_, arr)| arr).collect(),
+    )
+    .unwrap();
+    let table = Table {
+        batches: vec![batch],
+        metadata: HashMap::new(),
+    };
+    let resolved = run_trains(&table).unwrap();
+    // Swanton: CA row keeps 30/5 and source 0 instead of inheriting US FRA 0/2.
+    assert_eq!(resolved[2].source, [0, 0]);
+    assert_eq!(resolved[2].passenger[0], 30.0);
+    assert_eq!(resolved[2].freight[0], 5.0);
+    // Shore Line: Amtrak row keeps 1.5/2.5 and source [2079, 111] instead of FRA-only 0/4.
+    assert_eq!(resolved[3].source, [2079, 111]);
+    assert_eq!(resolved[3].passenger[0], 1.5);
+    assert_eq!(resolved[3].freight[0], 2.5);
+    // Uniform-provenance bridge spike (row 7) still takes its run's median (10.0).
+    assert_eq!(resolved[7].passenger[0], 10.0);
+}

@@ -67,6 +67,7 @@ pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
         let u8s = |name| column(batch, name).map(|a| a.as_primitive::<UInt8Type>());
         let u16s = |name| column(batch, name).map(|a| a.as_primitive::<UInt16Type>());
         let kind = u8s("rail_type")?;
+        let country = u16s("country_iso")?;
         let status = [u8s("passenger_status")?, u8s("freight_status")?];
         let source = [u16s("passenger_source_id")?, u16s("freight_source_id")?];
         let passenger = [
@@ -89,9 +90,16 @@ pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
                 status: status.map(|column| column.value(row)),
                 source: source.map(|column| column.value(row)),
             };
+            // Never merge across a country border or a source/status change: a US FRA row must not
+            // overwrite Canadian track or a timetabled passenger corridor with its own record.
             rows.push(RunRow {
                 meets: kind.value(row),
-                joins: Some(kind.value(row)),
+                joins: Some((
+                    kind.value(row),
+                    country.value(row),
+                    row_trains.source,
+                    row_trains.status,
+                )),
                 ends,
                 length_m: (a[0] - b[0]).hypot(a[1] - b[1]),
                 value: row_trains.passenger.iter().chain(&row_trains.freight).sum(),
