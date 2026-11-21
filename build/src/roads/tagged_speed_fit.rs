@@ -40,6 +40,15 @@ fn medians(histograms: &Histogram) -> BTreeMap<u16, [[u8; 2]; 8]> {
     countries
 }
 
+/// Whether a road's posted speed counts in its cell: a main or local class the reader takes a median
+/// for, a sign ([`super::signs::signed_speed`], derestricted roads out), in a known country.
+fn counts_as_signed(road: &super::input::Road, fastest_legal_kmh: u8) -> bool {
+    (2..=9).contains(&road.class)
+        && super::signs::signed_speed(usize::from(road.class), road.speed_limit, fastest_legal_kmh)
+            .is_some_and(|speed| speed != super::signs::DERESTRICTED_CODE)
+        && road.country.0 != 0
+}
+
 pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
     ensure!(
         !output.exists(),
@@ -51,6 +60,10 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
     let structures = inputs
         .required(Kind::Structures)
         .map_err(anyhow::Error::msg)?;
+    let fastest_legal = super::signs::fastest_legal_kmh(
+        &crate::source_tables::CountryTable::read(inputs, Kind::LegalSpeeds)
+            .map_err(anyhow::Error::msg)?,
+    );
     let squares = super::topology::squares(mapped)?
         .into_iter()
         .collect::<Vec<_>>();
@@ -64,12 +77,7 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .flatten()
-                .filter(|road| {
-                    (2..=9).contains(&road.class)
-                        && road.speed_limit > 0
-                        && road.speed_limit < 255
-                        && road.country.0 != 0
-                })
+                .filter(|road| counts_as_signed(road, fastest_legal))
                 .collect::<Vec<_>>();
             super::settlement::classify(structures, &mut roads)?;
             let mut histogram = Histogram::new();
@@ -137,5 +145,22 @@ mod tests {
             ((country, 9, 2, 30), 29),
         ]);
         assert_eq!(medians(&values)[&country][7], [50, 0]);
+    }
+
+    /// A primary posted 5 km/h is no sign and counts in no cell (Comoros' rural tertiary roads
+    /// took their 6 km/h median from such rows in 2024); posted 50 it counts, derestricted it does not.
+    #[test]
+    fn a_posted_value_that_is_no_sign_counts_in_no_cell() {
+        let mut road = crate::roads::tests::road(1);
+        road.country.0 = u16::from_le_bytes(*b"KM");
+        road.class = 2;
+        let mut counts = |speed: u8| {
+            road.speed_limit = speed;
+            counts_as_signed(&road, 140)
+        };
+        assert!(counts(50));
+        assert!(!counts(5));
+        assert!(!counts(super::super::signs::DERESTRICTED_CODE));
+        assert!(!counts(0));
     }
 }

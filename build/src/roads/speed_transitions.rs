@@ -1,6 +1,7 @@
 //! Grade implicit speeds along junction-free chains using the manifest's legal limits and calibrated distances.
 
 use super::input::Road;
+use super::signs::{DERESTRICTED_CODE, signed_speed};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -44,18 +45,18 @@ impl Parameters {
         Ok(())
     }
 
-    fn eligible(&self, road: &Road) -> bool {
+    fn eligible(&self, road: &Road, fastest_legal_kmh: u8) -> bool {
         self.classes.contains(&road.class)
-            && road.speed_limit == 0
+            && signed_speed(usize::from(road.class), road.speed_limit, fastest_legal_kmh).is_none()
             && [0, 5].contains(&road.access)
             && !road.roundabout
     }
 
-    fn speed(&self, road: &Road, country: [f64; 4]) -> f64 {
-        match road.speed_limit {
-            255 => return self.unrestricted,
-            1..=254 => return f64::from(road.speed_limit),
-            _ => (),
+    fn speed(&self, road: &Road, country: [f64; 4], fastest_legal_kmh: u8) -> f64 {
+        match signed_speed(usize::from(road.class), road.speed_limit, fastest_legal_kmh) {
+            Some(DERESTRICTED_CODE) => return self.unrestricted,
+            Some(posted) => return f64::from(posted),
+            None => (),
         }
         let [urban, rural, motorway, motorroad] = country;
         let legal = match road.class {
@@ -170,6 +171,7 @@ struct Planner<'a> {
     graph: TransitionGraph,
     parameters: &'a Parameters,
     country: [f64; 4],
+    fastest_legal_kmh: u8,
     result: Vec<Option<(f64, u8)>>,
 }
 
@@ -179,11 +181,13 @@ impl Planner<'_> {
         let mut seen = BTreeSet::new();
         while distance < window && seen.insert(current) {
             let road = &self.roads[current];
-            if !self.parameters.eligible(road) {
+            if !self.parameters.eligible(road, self.fastest_legal_kmh) {
                 return;
             }
             let midpoint = distance + road.length_m / 2.0;
-            let own = self.parameters.speed(road, self.country);
+            let own = self
+                .parameters
+                .speed(road, self.country, self.fastest_legal_kmh);
             let speed = (anchor + (own - anchor) * (midpoint / window).min(1.0)).round();
             if (speed - own).abs() >= self.parameters.minimum_speed_difference
                 && self.result[current].is_none_or(|(old, _)| old > midpoint)
@@ -206,7 +210,7 @@ impl Planner<'_> {
     }
 }
 
-pub fn apply(roads: &mut [Road], parameters: &Parameters) {
+pub fn apply(roads: &mut [Road], parameters: &Parameters, fastest_legal_kmh: u8) {
     for (&country, &limits) in &parameters.countries {
         let selected = roads
             .iter()
@@ -229,6 +233,7 @@ pub fn apply(roads: &mut [Road], parameters: &Parameters) {
             graph,
             parameters,
             country: limits,
+            fastest_legal_kmh,
             result: vec![None; roads.len()],
         };
         for (first, second, point) in boundaries {
@@ -241,10 +246,10 @@ pub fn apply(roads: &mut [Road], parameters: &Parameters) {
             {
                 continue;
             }
-            let eligible_a = parameters.eligible(a);
-            let eligible_b = parameters.eligible(b);
-            let speed_a = parameters.speed(a, limits);
-            let speed_b = parameters.speed(b, limits);
+            let eligible_a = parameters.eligible(a, fastest_legal_kmh);
+            let eligible_b = parameters.eligible(b, fastest_legal_kmh);
+            let speed_a = parameters.speed(a, limits, fastest_legal_kmh);
+            let speed_b = parameters.speed(b, limits, fastest_legal_kmh);
             // Dev1's trigger is the CNOSSOS category-1 rolling coefficient, 30 log10(v).
             if (speed_a - speed_b).abs() < parameters.minimum_speed_difference
                 || (30.0 * (speed_b / speed_a).log10()).abs() < parameters.minimum_level_difference

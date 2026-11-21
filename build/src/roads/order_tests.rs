@@ -154,7 +154,7 @@ fn equal_distance_speed_anchors_follow_the_original_piece_order() {
     }
     roads[0].speed_limit = 130;
     roads[2].speed_limit = 40;
-    super::speed_transitions::apply(&mut roads, &super::tests::model().speed_transitions);
+    super::speed_transitions::apply(&mut roads, &super::tests::model().speed_transitions, 140);
     assert_eq!(roads[1].speed_taper, 122);
 }
 

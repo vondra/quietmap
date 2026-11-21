@@ -34,6 +34,7 @@ pub(crate) mod observation_target;
 #[cfg(test)]
 mod order_tests;
 mod settlement;
+pub(crate) mod signs;
 mod spatial;
 mod speed_transitions;
 pub(crate) mod speed_validity;
@@ -89,6 +90,7 @@ fn inferred_roads(
     square: Square,
     roads: &mut [input::Road],
     model: &model::Model,
+    fastest_legal_kmh: u8,
 ) -> Result<()> {
     settlement::classify(structures, roads)?;
     let structure_path = structures
@@ -97,7 +99,7 @@ fn inferred_roads(
         .join(square.y.to_string())
         .join("structures.arrow");
     crate::traffic::preparation::apply(roads, &structure_path, &model.demand)?;
-    speed_transitions::apply(roads, &model.speed_transitions);
+    speed_transitions::apply(roads, &model.speed_transitions, fastest_legal_kmh);
     Ok(())
 }
 
@@ -122,6 +124,8 @@ struct Preparation<'a> {
     matcher: &'a matching::Matcher,
     continuity: &'a continuity::Plan,
     model: &'a model::Model,
+    /// [`signs::fastest_legal_kmh`] of the year's legal speeds.
+    fastest_legal_kmh: u8,
 }
 
 impl Preparation<'_> {
@@ -147,7 +151,13 @@ impl Preparation<'_> {
             return Ok(Vec::new());
         };
         if roads.iter().any(|r| r.direction != 0) {
-            inferred_roads(self.structures, square, &mut roads, self.model)?;
+            inferred_roads(
+                self.structures,
+                square,
+                &mut roads,
+                self.model,
+                self.fastest_legal_kmh,
+            )?;
         }
         roads.retain(|r| r.direction != 0);
         // Three rows of these are kept; without this they would keep every piece's room.
@@ -166,7 +176,13 @@ impl Preparation<'_> {
         let Some((batches, mut roads)) = self.matched(square)? else {
             return Ok(());
         };
-        inferred_roads(self.structures, square, &mut roads, self.model)?;
+        inferred_roads(
+            self.structures,
+            square,
+            &mut roads,
+            self.model,
+            self.fastest_legal_kmh,
+        )?;
         let mut alternatives = roads
             .iter()
             .filter(|r| r.direction != 0)
@@ -220,6 +236,10 @@ pub fn build(inputs: &YearInputs, squares: &[Square], output: &Path) -> Result<(
         matcher: &matcher,
         continuity: &continuity,
         model: &model,
+        fastest_legal_kmh: signs::fastest_legal_kmh(
+            &crate::source_tables::CountryTable::read(inputs, Kind::LegalSpeeds)
+                .map_err(anyhow::Error::msg)?,
+        ),
     };
     let mut rows = BTreeMap::<u32, Vec<Square>>::new();
     for square in selected

@@ -239,9 +239,18 @@ fn transitions_change_only_implicit_speed_and_stop_at_a_junction() {
     third.segment_idx = 2;
     third.ends = [(2, 0), (3, 0)];
     let mut rows = vec![first.clone(), second.clone(), third];
-    speed_transitions::apply(&mut rows, &model.speed_transitions);
+    speed_transitions::apply(&mut rows, &model.speed_transitions, 140);
     assert_eq!(
         rows.iter().map(|r| r.speed_taper).collect::<Vec<_>>(),
+        [0, 54, 62]
+    );
+    // A middle piece posted 5, no sign (`signs::signed_speed`), is untagged: it takes its taper and
+    // passes the grading on, as unposted.
+    let mut typo = rows.clone();
+    typo[1].speed_limit = 5;
+    speed_transitions::apply(&mut typo, &model.speed_transitions, 140);
+    assert_eq!(
+        typo.iter().map(|r| r.speed_taper).collect::<Vec<_>>(),
         [0, 54, 62]
     );
     assert!(
@@ -252,6 +261,27 @@ fn transitions_change_only_implicit_speed_and_stop_at_a_junction() {
     side.way_id = 2;
     side.ends = [(1, 0), (1, 1)];
     let mut junction = vec![first, second, side];
-    speed_transitions::apply(&mut junction, &model.speed_transitions);
+    speed_transitions::apply(&mut junction, &model.speed_transitions, 140);
     assert!(junction.iter().all(|r| r.speed_taper == 0));
+}
+
+/// A main road posted 5, no sign (`signs::signed_speed`), anchors no transition: its untagged
+/// neighbour is not graded down towards 5 km/h but read as beside another untagged road, no taper.
+#[test]
+fn a_posted_value_that_is_no_sign_anchors_no_transition() {
+    let model = model();
+    let mut typo = road(1);
+    typo.country.0 = u16::from_le_bytes(*b"CZ");
+    typo.length_m = 50.0;
+    typo.speed_limit = 5;
+    let mut untagged = typo.clone();
+    untagged.segment_idx = 1;
+    untagged.ends = [(1, 0), (2, 0)];
+    untagged.speed_limit = 0;
+    let mut rows = vec![typo, untagged];
+    speed_transitions::apply(&mut rows, &model.speed_transitions, 140);
+    assert_eq!(
+        rows.iter().map(|r| r.speed_taper).collect::<Vec<_>>(),
+        [0, 0]
+    );
 }

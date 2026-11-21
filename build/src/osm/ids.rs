@@ -13,7 +13,7 @@ pub use physics::emission::settlement::{
 };
 
 pub const SETTLEMENT_PARKING_STRUCTURE: u8 = 7;
-pub(crate) use crate::sources::road::DERESTRICTED_CODE as SPEED_LIMIT_DERESTRICTED;
+pub(crate) use crate::roads::signs::DERESTRICTED_CODE as SPEED_LIMIT_DERESTRICTED;
 
 // Retain the source classifier's ordering; sound powers belong only to physics.
 pub fn leisure_sport_precedence(class: u8) -> u8 {

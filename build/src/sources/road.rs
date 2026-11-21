@@ -13,6 +13,7 @@ use super::tagged_speeds::tagged_speed_kmh;
 use super::{Converted, Reach, fields, group_key, metres, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
+use crate::roads::signs::{DERESTRICTED_CODE, fastest_legal_kmh, signed_speed};
 use crate::source_tables::SourceTables;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
@@ -34,8 +35,7 @@ const ROAD_SOURCE_HEIGHT_M: f64 = 0.05;
 const PLATFORM_HALF_LANE_M: f64 = 1.75;
 const PLATFORM_SHOULDER_M: f64 = 1.5;
 pub(super) const DEFAULT_LANES: u8 = 2;
-/// dev4 `speed_limit` code of `maxspeed=none`, driven at 130 km/h.
-pub(crate) const DERESTRICTED_CODE: u8 = 255;
+/// The speed of a derestricted road (`maxspeed=none`).
 pub(crate) const DERESTRICTED_SPEED_KMH: f64 = 130.0;
 /// dev4's `junction` code of a roundabout row.
 const ROUNDABOUT_CODE: u8 = 1;
@@ -421,24 +421,6 @@ fn legal_speed(tables: &SourceTables, class: usize, country_iso: u16, built_up: 
     })
 }
 
-/// Walking pace (OpenStreetMap's `maxspeed=walk`): no main road is signed slower.
-const WALKING_PACE_KMH: u8 = 10;
-
-/// Whether a posted speed on a row of dev4 `class` is a sign: on a main road, link or unclassified
-/// road from walking pace to the fastest legal default of any country (Bulgaria's 140 on
-/// motorways in 2026). Barcelona's Passeig de Maragall, a secondary road, was posted 4 (40 typed
-/// short; 79 dB at 15 m where 40-50 km/h give 67), Riyadh's secondary roads 2; 254 is the
-/// extractor's clamp of a longer number. Local streets may post walking pace or less.
-fn is_sign(tables: &SourceTables, class: usize, posted: u8) -> bool {
-    let fastest = tables
-        .legal_speeds
-        .values()
-        .flat_map(|speeds| speeds.iter().copied())
-        .max()
-        .unwrap_or(u8::MAX);
-    !matches!(class, 0..=4 | 9..=12) || (WALKING_PACE_KMH..=fastest).contains(&posted)
-}
-
 /// The speed of an untagged road: the country's legal limit ([`legal_speed`]), else the class
 /// default, or the country's median signed speed of the class where it is lower. A main class whose
 /// limit the country's table lacks (the United States, Canada, Brazil's towns) takes the median
@@ -607,6 +589,7 @@ pub fn convert(
     let chains = chains(&mut ways);
     let slopes = row_slopes(&chains, &heights, rows);
     let row_stops = row_junctions(&chains, &junctions, rows);
+    let fastest_legal = fastest_legal_kmh(&tables.legal_speeds);
     let mut first_row = 0;
     for batch in &table.batches {
         let batch_first_row = first_row;
@@ -827,12 +810,9 @@ pub fn convert(
                 continue;
             }
             let taper = speed_taper.map_or(0, |taper| taper.value(row));
-            // A posted value no main road is signed at is a typo, no sign (`is_sign`).
-            let sign = Some(speed_limit.value(row))
-                .filter(|&posted| {
-                    posted == DERESTRICTED_CODE || is_sign(tables, class_index, posted)
-                })
-                .unwrap_or(0);
+            // A posted value no main road is signed at is a typo, no sign.
+            let sign =
+                signed_speed(class_index, speed_limit.value(row), fastest_legal).unwrap_or(0);
             let (base_speed, base_source, posted) = match sign {
                 DERESTRICTED_CODE => (DERESTRICTED_SPEED_KMH, "derestricted", None),
                 0 if taper > 0 => (f64::from(taper), "graded_transition", None),
@@ -1384,15 +1364,5 @@ mod tests {
                 "band {band}: {actual} vs {expected}"
             );
         }
-    }
-
-    #[test]
-    fn main_roads_are_signed_from_walking_pace_to_the_fastest_legal_limit() {
-        let tables = SourceTables::test_fixture();
-        assert!(!is_sign(tables, 3, 4), "a secondary road at 4 km/h");
-        assert!(!is_sign(tables, 2, 254), "the clamp");
-        assert!(is_sign(tables, 0, 140) && !is_sign(tables, 0, 141));
-        assert!(is_sign(tables, 4, 10) && is_sign(tables, 2, 30));
-        assert!(is_sign(tables, 6, 5), "a living street at walking pace");
     }
 }
