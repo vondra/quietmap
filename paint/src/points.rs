@@ -84,47 +84,46 @@ impl PointPainter<'_> {
     /// around: a block without one is a background block where no obstacle crosses it, decided
     /// without building its admission twice.
     pub fn block_has_sources(&self, near: &mut Vec<u32>, at: usize) -> bool {
-        let (square, grid) = (self.square, self.grid);
-        let blocks = grid.pixels / grid.block;
-        let (i, j) = (at % blocks, at / blocks);
-        let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
-            .map(|(di, dj)| &self.corners.corners[(j + dj) * (blocks + 1) + i + di]);
-        if around
-            .iter()
+        (self.block_corners(at).iter())
             .any(|corner| corner.ranked.iter().any(|layer| !layer.is_empty()))
-        {
-            return true;
-        }
-        let b = grid.block as f64;
-        let (x, y) = (i as f64 * b, j as f64 * b);
-        let (low, high) = rectangle_at(square, grid.pixels, x - b, y - b, x + 2.0 * b, y + 2.0 * b);
-        square.index.within(low, high, 0.0, near);
-        near.iter().any(|&index| {
-            let [a, b] = square.candidates[index as usize].ends_m;
-            meets(a, b, low, high)
-        })
+            || self.block_pieces(near, at).next().is_some()
     }
 
     /// Block `at`'s own sources (crossing it or the eight around) and its four corners.
     fn block_sources(&self, near: &mut Vec<u32>, at: usize) -> (Vec<u32>, [&Corner; 4]) {
+        (
+            self.block_pieces(near, at).collect(),
+            self.block_corners(at),
+        )
+    }
+
+    /// Block `at`'s four corners.
+    fn block_corners(&self, at: usize) -> [&Corner; 4] {
+        let blocks = self.grid.pixels / self.grid.block;
+        let (i, j) = (at % blocks, at / blocks);
+        [(0, 0), (1, 0), (0, 1), (1, 1)]
+            .map(|(di, dj)| &self.corners.corners[(j + dj) * (blocks + 1) + i + di])
+    }
+
+    /// The pieces crossing block `at` or the eight around: those the index holds within the
+    /// rectangle (listed into `near`) that meet it, not every one whose reach covers it, in the
+    /// index's order.
+    fn block_pieces<'a>(
+        &'a self,
+        near: &'a mut Vec<u32>,
+        at: usize,
+    ) -> impl Iterator<Item = u32> + 'a {
         let (square, grid) = (self.square, self.grid);
         let blocks = grid.pixels / grid.block;
         let (i, j) = (at % blocks, at / blocks);
         let b = grid.block as f64;
         let (x, y) = (i as f64 * b, j as f64 * b);
         let (low, high) = rectangle_at(square, grid.pixels, x - b, y - b, x + 2.0 * b, y + 2.0 * b);
-        // The pieces that may lie within the rectangle, not every one whose reach covers it: the same
-        // crossing pieces in the same order.
         square.index.within(low, high, 0.0, near);
-        let local: Vec<u32> = (near.iter().copied())
-            .filter(|&index| {
-                let [a, b] = square.candidates[index as usize].ends_m;
-                meets(a, b, low, high)
-            })
-            .collect();
-        let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
-            .map(|(di, dj)| &self.corners.corners[(j + dj) * (blocks + 1) + i + di]);
-        (local, around)
+        near.iter().copied().filter(move |&index| {
+            let [a, b] = square.candidates[index as usize].ends_m;
+            meets(a, b, low, high)
+        })
     }
 
     /// The paint of the outdoor points `chosen` keeps, `None` for the others: every point is

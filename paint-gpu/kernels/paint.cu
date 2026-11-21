@@ -157,8 +157,7 @@ extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, RAY_BLOCKS_PER_M
     bool single = (ray.obstacles_on_ray & PAIR_RAY_SINGLE) != 0u;
     u32 status = ray_received(square.ground, square.obstacles, receiver, square.attributes[candidate.attribute], ray, s, out, ray_bands);
     if (status) {
-        if (single) failed[pair] = status;
-        else atomicOr(&failed[pair], status);
+        atomicOr(&failed[pair], status);
         return;
     }
     if (single) {

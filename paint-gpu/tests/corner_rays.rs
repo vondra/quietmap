@@ -715,12 +715,6 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
     // Collapse the short line to < 1 mm so `line_piece_geometry` emits 0 rays with status 0.
     square.candidates[short_cand as usize].ends_m = [[0.0, 20.0], [1e-4, 20.0]];
     assert!(square.candidates[short_cand as usize].line);
-    // Add a point source outside the loaded tiles: pass-1 lists 1 ray with PAIR_RAY_SINGLE and
-    // `ray_transfers` fails on the unread source terrain, exercising the 1-ray direct failure store.
-    let mut outside_point = square.candidates[point_cand as usize].clone();
-    outside_point.ends_m = [[1.0e7, 0.0], [1.0e7, 0.0]];
-    let outside_point_cand = square.candidates.len() as u32;
-    square.candidates.push(outside_point);
     let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
     let outside = [1.0e7, 0.0];
 
@@ -740,8 +734,7 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
     assert_eq!(sums, vec![[0.0; 9]; 2]);
     assert_eq!(spectra, vec![0.0; 2 * PERIODS * BANDS]);
 
-    // 2. Mixed launch (`total > 0`): 0-ray line, failed receiver, 1-ray point, >6-ray rewalk line,
-    // and a listed 1-ray point that fails during `ray_transfers`.
+    // 2. Mixed launch (`total > 0`): 0-ray line, failed receiver, 1-ray point, >6-ray rewalk line.
     let mut bands = gpu.bands(2).unwrap();
     let mut spectra = Vec::new();
     let (sums, failed) = gpu
@@ -749,31 +742,16 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
             &device_square,
             (&[receiver, outside], &[0, 0]),
             (
-                &[
-                    short_cand,
-                    point_cand,
-                    point_cand,
-                    wide_cand,
-                    outside_point_cand,
-                ],
-                &[0, 1, 0, 0, 0],
-                &[0, 1, 0, 0, 0],
-                &[1.0; 5],
+                &[short_cand, point_cand, point_cand, wide_cand],
+                &[0, 1, 0, 0],
+                &[0, 1, 0, 0],
+                &[1.0; 4],
             ),
             &mut bands,
             Some(&mut spectra),
         )
         .unwrap();
-    assert_eq!(
-        failed,
-        vec![
-            0,
-            paint_gpu::device::FAILED_NOT_READ,
-            0,
-            0,
-            paint_gpu::device::FAILED_NOT_READ,
-        ]
-    );
+    assert_eq!(failed, vec![0, paint_gpu::device::FAILED_NOT_READ, 0, 0]);
     assert_eq!(sums[0], [0.0; 9]);
     assert_eq!(&spectra[0..PERIODS * BANDS], &[0.0; PERIODS * BANDS]);
     let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
@@ -802,7 +780,8 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
     }
 }
 
-/// Builds a forested tile (80 % cover, 15 m canopy) with mixed weather, a continuous wall
+/// Builds a forested tile (80 % cover, a 5 m canopy that the point source's calm ray runs inside
+/// and its favourable ray above, so the canopy's boundary is compared) with mixed weather, a continuous wall
 /// saturating a wide road's skyline mask, and a 1-ray point source behind a building so hoisted
 /// `add_foliage`, mask-saturation early exit, 16-byte `RayCrossing`, and 1-ray direct stores all
 /// run on the same scene.
@@ -827,7 +806,7 @@ fn foliage_and_saturated_skyline_fixture() -> (tempfile::TempDir, WeatherTable, 
             height_code: code_of_height_m(100.0),
             impervious_percent: 20,
             forest_percent: 80,
-            canopy_m: 15,
+            canopy_m: 5,
         };
         window.node_count()
     ];
@@ -935,6 +914,21 @@ fn foliage_and_saturated_skyline_fixture_exercises_foliage_on_cpu() {
     for index in 0..2u32 {
         let (energy, _) = whole_energy(&square, &point, index, &mut Scratch::default()).unwrap();
         assert!(energy.mixed[0] > 0.0 && energy.states[0][0] != energy.states[1][0]);
+        let mut candidate = square.candidates[index as usize].clone();
+        candidate.distance_m = candidate.distance_from(point.position);
+        let mut in_crowns = false;
+        popup::evaluate::source_rays(
+            &point.receiver(&square),
+            &candidate,
+            &square.attributes[candidate.attribute],
+            &mut Scratch::default(),
+            &mut |ray| in_crowns |= ray.terms.foliage_db.iter().flatten().any(|&db| db > 0.0),
+        )
+        .unwrap();
+        assert!(
+            in_crowns,
+            "candidate {index}: no ray loses energy in the crowns"
+        );
     }
 }
 

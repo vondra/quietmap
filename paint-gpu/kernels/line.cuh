@@ -355,9 +355,10 @@ __device__ void mask_wide_buckets(const ObstacleScene& scene, float origin_x, fl
                             const WideSpan& w = b.span[k];
                             if ((walking >> k & 1u) && nearest_m <= w.need_radius) {
                                 mark_blocked_bins(b.g, arc_lo, arc_hi, nearest_m, w.need_radius, w.span_lo, w.span_hi, w.bin_width, b.mask[k]);
-                                if ((b.mask[k][0] & b.mask[k][1] & b.mask[k][2] & b.mask[k][3]) == 0xffffffffu) {
-                                    saturated |= 1u << k;
-                                }
+                                u32 all = 0xffffffffu;
+#pragma unroll
+                                for (int word = 0; word < WIDE_BUCKET_MASK_WORDS; word++) all &= b.mask[k][word];
+                                if (all == 0xffffffffu) saturated |= 1u << k;
                             }
                         }
                         if (saturated) {

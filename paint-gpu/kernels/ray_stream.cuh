@@ -160,7 +160,7 @@ struct RayStream {
     // crest carried in. Its bytes a multiple of 16 keep the hulls after it aligned for wide loads (65
     // entries cost a dense city square's rays 7 % on compute capability 7.5, 2026-10-20).
     u16 candidates[2 * CHUNK_VERTICES];
-    alignas(16) StateStream states[2];
+    StateStream states[2];
 };
 static_assert(alignof(RayStream) >= 16, "RayStream keeps 16-byte hull alignment");
 
