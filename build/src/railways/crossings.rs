@@ -1,8 +1,8 @@
 //! Match crossing through-train counts to physical corridor sections and aggregate per section/run.
 use super::{
     corridor::CorridorLayout,
-    crossing_resolve::{AggregatedFlow, resolve_section},
-    matcher::Claims,
+    crossing_resolve::{AggregatedFlow, recover_failed_service_gaps, resolve_section},
+    matcher::{Claims, FailedServiceLeg},
     model::RailModel,
     network::Network,
     square_intervals::Interval,
@@ -103,7 +103,7 @@ fn aggregate_obs(mut obs: Vec<CrossingObs<'_>>) -> AggregatedFlow {
         total: chosen.total,
         measured_passenger: chosen.passenger,
         passenger_cap: chosen.passenger_cap,
-        obs_tracks: timing.obs_tracks,
+        obs_tracks: chosen.obs_tracks,
     }
 }
 
@@ -181,11 +181,13 @@ pub fn match_crossings(
     country: [u8; 2],
     squares: &HashSet<[u16; 2]>,
     existing_claims: &Claims,
+    failed_legs: &[FailedServiceLeg],
     yard_keys: &HashSet<([u16; 2], i64, i16)>,
 ) -> Vec<([u16; 2], Interval)> {
     let layout = CorridorLayout::build(network, country, yard_keys);
     let mut direct_obs: Vec<Vec<CrossingObs<'_>>> = vec![Vec::new(); layout.sections.len()];
     let mut per_track_obs: Vec<Vec<CrossingObs<'_>>> = vec![Vec::new(); layout.runs.len()];
+    let mut section_prop: Vec<Option<(Vec<usize>, usize)>> = vec![None; layout.sections.len()];
     let mut matched_crossings = 0usize;
     let mut unmatched_crossings = 0usize;
 
@@ -234,33 +236,46 @@ pub fn match_crossings(
             has_measured: crossing.measured_periods,
             obs_tracks: k_phys,
         });
-        let mut seen_runs: Vec<usize> = Vec::with_capacity(section.legs.len());
-        for leg in &section.legs {
-            if !seen_runs.contains(&leg.run_id) {
-                seen_runs.push(leg.run_id);
+        let (prop_runs, prop_tracks) = section_prop[sec_idx].get_or_insert_with(|| {
+            let mut seen_runs: Vec<usize> = Vec::with_capacity(section.legs.len());
+            for leg in &section.legs {
+                if !seen_runs.contains(&leg.run_id) {
+                    seen_runs.push(leg.run_id);
+                }
             }
-        }
-        let cont_phys_f: f64 = if seen_runs.len() > 1 {
-            section
-                .legs
+            let bounded: Vec<bool> = seen_runs
                 .iter()
-                .filter(|leg| !is_bounded_siding(leg.run_id, sec_idx, &layout, network))
-                .map(|leg| leg.slot_weight)
-                .sum()
-        } else {
-            0.0
-        };
-        let cont_phys = cont_phys_f.round() as usize;
-        let (prop_tracks, skip_bounded) = if cont_phys > 0 {
-            (cont_phys, true)
-        } else {
-            (k_phys, false)
-        };
-        let k = prop_tracks as f64;
-        for &rid in &seen_runs {
-            if skip_bounded && is_bounded_siding(rid, sec_idx, &layout, network) {
-                continue;
+                .map(|&rid| {
+                    seen_runs.len() > 1 && is_bounded_siding(rid, sec_idx, &layout, network)
+                })
+                .collect();
+            let cont_phys_f: f64 = if seen_runs.len() > 1 {
+                section
+                    .legs
+                    .iter()
+                    .filter(|leg| {
+                        let pos = seen_runs.iter().position(|&r| r == leg.run_id).unwrap();
+                        !bounded[pos]
+                    })
+                    .map(|leg| leg.slot_weight)
+                    .sum()
+            } else {
+                0.0
+            };
+            let cont_phys = cont_phys_f.round() as usize;
+            if cont_phys > 0 {
+                let runs = seen_runs
+                    .into_iter()
+                    .zip(bounded)
+                    .filter_map(|(rid, is_b)| (!is_b).then_some(rid))
+                    .collect();
+                (runs, cont_phys)
+            } else {
+                (seen_runs, k_phys)
             }
+        });
+        let k = *prop_tracks as f64;
+        for &rid in prop_runs.iter() {
             per_track_obs[rid].push(CrossingObs {
                 crossing_id: &crossing.id,
                 measured_periods: measured_periods.map(|v| v / k),
@@ -269,7 +284,7 @@ pub fn match_crossings(
                 passenger: crossing.passenger_daily.map(|p| p / k),
                 passenger_cap: cap.map(|c| c / k),
                 has_measured: crossing.measured_periods,
-                obs_tracks: prop_tracks,
+                obs_tracks: *prop_tracks,
             });
         }
     }
@@ -285,6 +300,30 @@ pub fn match_crossings(
     let active_runs = run_per_track.iter().filter(|r| r.is_some()).count();
 
     let piece_claims = index_piece_claims(existing_claims);
+    let recovered = recover_failed_service_gaps(
+        model,
+        network,
+        &layout,
+        &piece_claims,
+        failed_legs,
+        source_id,
+        country,
+    );
+    let mut gap_claims: HashMap<([u16; 2], i64, i16), Vec<&Interval>> = HashMap::new();
+    for (sq, iv) in &recovered {
+        gap_claims
+            .entry((*sq, iv.osm_id, iv.segment_idx))
+            .or_default()
+            .push(iv);
+    }
+    for list in gap_claims.values_mut() {
+        list.sort_by(|a, b| {
+            (a.source_id, a.country)
+                .cmp(&(b.source_id, b.country))
+                .then_with(|| a.from_m.total_cmp(&b.from_m))
+                .then_with(|| a.to_m.total_cmp(&b.to_m))
+        });
+    }
     let claims: Vec<([u16; 2], Interval)> = layout
         .sections
         .par_iter()
@@ -327,6 +366,7 @@ pub fn match_crossings(
                 network,
                 &layout.runs,
                 &piece_claims,
+                &gap_claims,
                 source_id,
                 country,
                 squares,

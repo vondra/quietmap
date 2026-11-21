@@ -332,7 +332,6 @@ fn partition_sections(
 
     for r_ref in 0..runs.len() {
         if run_spans[r_ref].is_empty() {
-            let sec_idx = sections.len();
             sections.push(Section {
                 legs: vec![SectionLeg {
                     run_id: r_ref,
@@ -344,7 +343,6 @@ fn partition_sections(
                 }],
                 phys_tracks: 1,
             });
-            run_sections[r_ref].push((0.0, runs[r_ref].total_len, sec_idx));
             continue;
         }
         while let Some((ua, ub)) = uncovered[r_ref].first().copied() {

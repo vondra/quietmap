@@ -125,6 +125,16 @@ impl EdgeGrid {
     }
 
     pub(super) fn nearest_edge(&self, origin: [f64; 2], network: &Network) -> Option<(usize, f64)> {
+        self.nearest_aligned_edge(origin, None, network)
+            .map(|(edge_idx, frac, _)| (edge_idx, frac))
+    }
+
+    pub(super) fn nearest_aligned_edge(
+        &self,
+        origin: [f64; 2],
+        align: Option<[f64; 2]>,
+        network: &Network,
+    ) -> Option<(usize, f64, f64)> {
         let (cy, cx) = grid_cell(origin);
         let cos_lat = origin[0].to_radians().cos().max(0.05);
         let dy = (MATCH_GATE_M / (GRID_CELL_DEG * 110_540.0)).ceil().max(1.0) as i32;
@@ -134,7 +144,8 @@ impl EdgeGrid {
         let mut seen = HashSet::new();
         struct Nearest {
             dist: f64,
-            key: (i64, i16, usize),
+            dist_mm: i64,
+            key: (i64, i16, [u16; 2], usize),
             edge_idx: usize,
             frac: f64,
         }
@@ -158,18 +169,29 @@ impl EdgeGrid {
                     if len < 1e-3 {
                         continue;
                     }
+                    if let Some([ux, uy]) = align
+                        && ((dx * ux + dy * uy).abs() / len) < 0.7
+                    {
+                        continue;
+                    }
                     let frac = (-(a[0] * dx + a[1] * dy) / (len * len)).clamp(0.0, 1.0);
                     let dist = (a[0] + frac * dx).hypot(a[1] + frac * dy);
                     if dist > MATCH_GATE_M {
                         continue;
                     }
-                    let key = (edge.way, edge.segment, edge_idx);
-                    if best
-                        .as_ref()
-                        .is_none_or(|b| dist < b.dist || (dist == b.dist && key < b.key))
-                    {
+                    let dist_mm = (dist * 1000.0).round() as i64;
+                    let key = (edge.way, edge.segment, edge.square, edge_idx);
+                    let better = best.as_ref().is_none_or(|b| {
+                        if align.is_some() {
+                            (dist_mm, key.0, key.1, key.2) < (b.dist_mm, b.key.0, b.key.1, b.key.2)
+                        } else {
+                            dist < b.dist || (dist == b.dist && key < b.key)
+                        }
+                    });
+                    if better {
                         best = Some(Nearest {
                             dist,
+                            dist_mm,
                             key,
                             edge_idx,
                             frac,
@@ -178,7 +200,7 @@ impl EdgeGrid {
                 }
             }
         }
-        best.map(|b| (b.edge_idx, b.frac))
+        best.map(|b| (b.edge_idx, b.frac, b.dist))
     }
 }
 

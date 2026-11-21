@@ -31,6 +31,7 @@ pub struct Itinerary {
     pub points: Vec<[f64; 2]>,
     pub metres: Vec<f64>,
 }
+#[derive(Default)]
 pub struct Routes {
     routes: Vec<Itinerary>,
     cells: HashMap<(i32, i32), Vec<usize>>,
