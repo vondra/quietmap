@@ -87,5 +87,30 @@ fn us_commuter_and_metro_timetables_feed_every_years_movements() {
             model.should_overwrite(100, 2079),
             "{year}: the US feeds outrank the continental one"
         );
+        let fra_object = plan
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                RailObject::FraCrossings { input, source_id } => Some((input.as_str(), *source_id)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{year}: missing FRA crossings object"));
+        assert_eq!(fra_object.1, 111, "{year}: FRA source id");
+        assert!(
+            manifest.admitted(fra_object.0).unwrap(),
+            "{year}: FRA crossings must be admitted"
+        );
+        assert!(model.network_bounds.contains_key("111:US"), "{year}");
+        assert!(model.source_applies_to_row(111, *b"US"), "{year}");
+        assert!(!model.source_applies_to_row(111, *b"CA"), "{year}");
+        assert!(model.stamps_whole_line(111), "{year}: whole-line sharing");
+        assert!(
+            model.should_overwrite(0, 111),
+            "{year}: FRA outranks class priors"
+        );
+        assert!(
+            model.should_overwrite(111, 100) && model.should_overwrite(111, 2079),
+            "{year}: timetables outrank FRA crossings"
+        );
     }
 }

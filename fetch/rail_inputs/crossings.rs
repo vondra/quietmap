@@ -1,7 +1,82 @@
 //! Normalize FRA and Transport Canada publisher fields to the shared crossing movement.
-use crate::railways::types::Crossing;
-use std::path::Path;
+use crate::{
+    railways::{config::FraConversion, types::Crossing},
+    year::Input,
+};
+use sha2::{Digest, Sha256};
+use std::{fs::File, io::Read, path::Path};
 const TC_OSM_OFFSET: i64 = 1_000_000_000;
+
+fn parse_fra_date(text: &str) -> Result<chrono::NaiveDate, String> {
+    let text = text.trim();
+    if let Ok(day) = chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        return Ok(day);
+    }
+    if text.len() >= 10
+        && let Ok(day) = chrono::NaiveDate::parse_from_str(&text[..10], "%Y-%m-%d")
+    {
+        return Ok(day);
+    }
+    chrono::NaiveDate::parse_from_str(text, "%m/%d/%Y")
+        .map_err(|err| format!("invalid FRA revision date {text:?}: {err}"))
+}
+
+pub fn verify_fra_input(path: &Path, spec: &Input) -> Result<(), String> {
+    let conversion: FraConversion = serde_json::from_value(
+        spec.conversion
+            .clone()
+            .ok_or_else(|| format!("{}: FRA crossings must pin sha256 and cutoff", spec.id))?,
+    )
+    .map_err(|err| format!("{}: invalid FRA conversion: {err}", spec.id))?;
+    let mut file = File::open(path).map_err(|err| format!("opens {}: {err}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 20];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|err| format!("reads {}: {err}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let actual = format!("{:x}", digest.finalize());
+    if actual != conversion.sha256 {
+        return Err(format!(
+            "{}: FRA crossing inventory checksum {actual} differs from manifest {}",
+            spec.id, conversion.sha256
+        ));
+    }
+    let cutoff = chrono::NaiveDate::parse_from_str(&conversion.cutoff, "%Y-%m-%d")
+        .map_err(|err| format!("{}: invalid FRA cutoff: {err}", spec.id))?;
+    let mut reader = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_path(path)
+        .map_err(|err| format!("opens {}: {err}", path.display()))?;
+    let headers: Vec<String> = reader
+        .headers()
+        .map_err(|err| format!("reads {} headers: {err}", path.display()))?
+        .iter()
+        .map(|h| h.trim().to_string())
+        .collect();
+    let c_rev = column(&headers, "Revision Date", path)?;
+    for (row, record) in reader.records().enumerate() {
+        let record = record.map_err(|err| format!("reads {}: {err}", path.display()))?;
+        let text = record.get(c_rev).unwrap_or("").trim();
+        if text.is_empty() {
+            continue;
+        }
+        let rev = parse_fra_date(text)?;
+        if rev > cutoff {
+            return Err(format!(
+                "{}: row {} revision {rev} exceeds manifest cutoff {cutoff}",
+                path.display(),
+                row + 2
+            ));
+        }
+    }
+    Ok(())
+}
 fn csv_records(path: &Path) -> Result<(Vec<String>, Vec<csv::StringRecord>), String> {
     let mut reader = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
@@ -143,3 +218,7 @@ pub fn parse_tc(path: &Path, source_id: u16) -> Result<Vec<Crossing>, String> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "crossings_tests.rs"]
+mod tests;

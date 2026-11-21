@@ -22,14 +22,14 @@
     },
     {
       "id": 111,
-      "rank": 6,
+      "rank": 4,
       "edition": 2026,
       "owner": "US",
       "countries": [
         "US"
       ],
       "residual": false,
-      "whole_line": false
+      "whole_line": true
     },
     {
       "id": 112,
@@ -741,6 +741,12 @@
       -141.5,
       84.5,
       -51.5
+    ],
+    "111:US": [
+      17.5,
+      -161.0,
+      66.0,
+      -65.0
     ],
     "2079:US": [
       18.5,

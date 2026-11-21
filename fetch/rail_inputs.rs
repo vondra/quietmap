@@ -177,6 +177,13 @@ fn convert_object(
             }
         }
         RailObject::FraCrossings { source_id, .. } => {
+            let spec = inputs
+                .manifest
+                .inputs
+                .iter()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| format!("missing manifest entry for {id}"))?;
+            crossings::verify_fra_input(&input, spec)?;
             for crossing in crossings::parse_fra(&input, *source_id)? {
                 write_record(writer, &Record::Crossing(crossing))?;
             }

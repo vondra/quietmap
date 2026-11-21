@@ -2450,7 +2450,11 @@
       "licence": "Public Domain (US DOT open data; dataset metadata license=Public Domain)",
       "public_ok": true,
       "depends_on": [],
-      "description": "FRA Highway-Rail Crossing Inventory (horns)."
+      "description": "FRA Highway-Rail Crossing Inventory (horns and train counts).",
+      "conversion": {
+        "sha256": "ae9075231df4ae06201772a3807d867c5602ad85059765136011e7b38151e13a",
+        "cutoff": "2026-09-24"
+      }
     },
     {
       "id": "ca-transport-canada-grade-crossings-inventory",
