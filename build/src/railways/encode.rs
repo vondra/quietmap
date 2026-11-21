@@ -11,6 +11,9 @@ use arrow_select::take::take;
 use std::sync::Arc;
 
 pub const CONTRACT_KEY: &str = "rail_traffic_contract";
+/// Bit set on emitted `freight_matching` for rows whose cross-section was already resolved
+/// globally, telling the source writer not to re-smooth them across end-to-end runs.
+pub(crate) const MATCHING_GLOBAL_SECTION: u8 = 8;
 const DROPPED: &[&str] = &["source_id"];
 const TRAFFIC: &[&str] = &[
     "trains_passenger_day",
@@ -138,7 +141,12 @@ fn append_traffic(fields: &mut Vec<Field>, columns: &mut Vec<ArrayRef>, children
         pax_source.push(p.source_id);
         frt_source.push(f.source_id);
         pax_match.push(p.matching);
-        frt_match.push(f.matching);
+        let frt_matching = if child.child.resolved_section.is_some() {
+            f.matching | MATCHING_GLOBAL_SECTION
+        } else {
+            f.matching
+        };
+        frt_match.push(frt_matching);
     }
     let mut traffic_arrays: Vec<ArrayRef> = vec![
         Arc::new(Float64Array::from(pax_day)),

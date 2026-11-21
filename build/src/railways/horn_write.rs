@@ -131,9 +131,12 @@ pub(super) fn build_horn_batch(
                     .collect::<Vec<_>>(),
             )),
             "freight_source_id" => Arc::new(UInt16Array::from(vec![0u16; pieces.len()])),
-            "passenger_matching" | "freight_matching" => {
-                Arc::new(UInt8Array::from(vec![0u8; pieces.len()]))
-            }
+            "passenger_matching" => Arc::new(UInt8Array::from(vec![0u8; pieces.len()])),
+            // Horn pieces already resolved their per-approach overlaps; keep their exact rate in `sources`.
+            "freight_matching" => Arc::new(UInt8Array::from(vec![
+                super::encode::MATCHING_GLOBAL_SECTION;
+                pieces.len()
+            ])),
             // Tags + baked identity follow the matched track, as does the
             // retained OSM evidence: the approach runs along the track, and
             // the way extent describes the parent way, not the piece.

@@ -3,7 +3,7 @@ mod alignment;
 pub(crate) mod config;
 pub(crate) mod coverage;
 mod crossings;
-mod encode;
+pub(crate) mod encode;
 mod horn_geometry;
 mod horn_write;
 mod horns;
