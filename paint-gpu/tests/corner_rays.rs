@@ -715,6 +715,12 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
     // Collapse the short line to < 1 mm so `line_piece_geometry` emits 0 rays with status 0.
     square.candidates[short_cand as usize].ends_m = [[0.0, 20.0], [1e-4, 20.0]];
     assert!(square.candidates[short_cand as usize].line);
+    // Add a point source outside the loaded tiles: pass-1 lists 1 ray with PAIR_RAY_SINGLE and
+    // `ray_transfers` fails on the unread source terrain, exercising the 1-ray direct failure store.
+    let mut outside_point = square.candidates[point_cand as usize].clone();
+    outside_point.ends_m = [[1.0e7, 0.0], [1.0e7, 0.0]];
+    let outside_point_cand = square.candidates.len() as u32;
+    square.candidates.push(outside_point);
     let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
     let outside = [1.0e7, 0.0];
 
@@ -734,7 +740,8 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
     assert_eq!(sums, vec![[0.0; 9]; 2]);
     assert_eq!(spectra, vec![0.0; 2 * PERIODS * BANDS]);
 
-    // 2. Mixed launch (`total > 0`): 0-ray line, failed receiver, 1-ray point, >6-ray rewalk line.
+    // 2. Mixed launch (`total > 0`): 0-ray line, failed receiver, 1-ray point, >6-ray rewalk line,
+    // and a listed 1-ray point that fails during `ray_transfers`.
     let mut bands = gpu.bands(2).unwrap();
     let mut spectra = Vec::new();
     let (sums, failed) = gpu
@@ -742,16 +749,31 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
             &device_square,
             (&[receiver, outside], &[0, 0]),
             (
-                &[short_cand, point_cand, point_cand, wide_cand],
-                &[0, 1, 0, 0],
-                &[0, 1, 0, 0],
-                &[1.0; 4],
+                &[
+                    short_cand,
+                    point_cand,
+                    point_cand,
+                    wide_cand,
+                    outside_point_cand,
+                ],
+                &[0, 1, 0, 0, 0],
+                &[0, 1, 0, 0, 0],
+                &[1.0; 5],
             ),
             &mut bands,
             Some(&mut spectra),
         )
         .unwrap();
-    assert_eq!(failed, vec![0, paint_gpu::device::FAILED_NOT_READ, 0, 0]);
+    assert_eq!(
+        failed,
+        vec![
+            0,
+            paint_gpu::device::FAILED_NOT_READ,
+            0,
+            0,
+            paint_gpu::device::FAILED_NOT_READ,
+        ]
+    );
     assert_eq!(sums[0], [0.0; 9]);
     assert_eq!(&spectra[0..PERIODS * BANDS], &[0.0; PERIODS * BANDS]);
     let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();

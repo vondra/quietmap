@@ -334,12 +334,9 @@ __device__ void mask_wide_buckets(const ObstacleScene& scene, float origin_x, fl
             const u8* runs = tile_runs(scene, *tile);
             for (u32 run_index = run_begin; run_index < run_end && walking; run_index++) {
                 const u8* run = runs + (u64)RUN_BYTES * run_index;
-                u32 outline_first_vertex;
-                float outline_height_m;
-                int outline_kind;
-                tile_outline_skyline(scene, *tile, read_u32(run), &outline_first_vertex, &outline_height_m, &outline_kind);
-                if (outline_kind == OUTLINE_KIND_WALL && outline_height_m <= los_floor_m) continue;
-                u32 first = outline_first_vertex + read_u16(run + 4);
+                OutlineMeta outline = tile_outline_meta(scene, *tile, read_u32(run));
+                if (outline.kind == OUTLINE_KIND_WALL && (float)outline.height_dm * 0.1f <= los_floor_m) continue;
+                u32 first = outline.first_vertex + read_u16(run + 4);
                 u32 edge_count = read_u16(run + 6);
                 int lx, ly;
                 tile_vertex_local(scene, *tile, first, &lx, &ly);

@@ -437,11 +437,12 @@ impl Gpu {
         let device = &self.device;
         let receiver_count = receivers.len();
         // SAFETY (the buffers): each is written whole on the pairs' stream below before a kernel
-        // reads it: the inputs copied; `sums` zeroed (read back unwritten when `total == 0`, and
-        // `atomicAdd`ed by `ray_transfers`); `point_receivers` writes every receiver's failure and
-        // every receiver that does not fail, which alone are read; pass-1 `pair_rays` writes every
-        // pair's `ray_counts` and `failed` and only the slots pass-2 reads (`0..4*count`), then
-        // `pair_bands` is zeroed before `ray_transfers` `atomicAdd`s into it.
+        // reads it: the inputs copied; `sums` zeroed (read back unwritten when `total == 0` or a
+        // pair emits zero rays, then stored by 1-ray pairs or `atomicAdd`ed by multi-ray pairs);
+        // `point_receivers` writes every receiver's failure and every receiver that does not
+        // fail, which alone are read; pass-1 `pair_rays` writes every pair's `ray_counts` and
+        // `failed` and only the slots pass-2 reads (`0..4*count`), then `pair_bands` is zeroed
+        // before `ray_transfers` stores (1-ray pairs) or `atomicAdd`s (multi-ray pairs) into it.
         let mut device_xy = driver(unsafe { device.alloc::<f32>(xy.len()) })?;
         let mut device_own = driver(unsafe { device.alloc::<u64>(receiver_count) })?;
         let point_receivers =

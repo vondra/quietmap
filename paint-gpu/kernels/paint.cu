@@ -86,7 +86,7 @@ struct RayLister {
             float* slot = slots + 4 * count;
             slot[0] = ray.px;
             slot[1] = ray.py;
-            slot[2] = ray.obstacles_on_ray ? ray.weight : -ray.weight;
+            slot[2] = (ray.obstacles_on_ray & PAIR_RAY_OBSTACLES) ? ray.weight : -ray.weight;
             slot[3] = ray.source_ground_m;
         }
         count++;

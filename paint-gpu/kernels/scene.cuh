@@ -42,11 +42,9 @@ __device__ __forceinline__ u16 read_u16(const u8* bytes) {
     return (u16)(bytes[0] | (bytes[1] << 8));
 }
 
-struct Outline {
-    u64 footprint_id;
+struct OutlineMeta {
     u32 first_vertex;
     u16 height_dm;
-    float height_m;
     int kind;
 };
 
@@ -95,25 +93,10 @@ __device__ __forceinline__ u64 tile_outline_footprint_id(const ObstacleScene& sc
     return (square << 32) | (u64)read_u32(record + 4);
 }
 
-// The fields of an outline read by skyline masking (no tile_squares indirection for footprint_id).
-__device__ __forceinline__ void tile_outline_skyline(const ObstacleScene& scene, const ObstacleTile& tile, u32 index,
-                                                     u32* first_vertex, float* height_m, int* kind) {
+// An outline's geometry metadata without reading tile_squares for footprint_id.
+__device__ __forceinline__ OutlineMeta tile_outline_meta(const ObstacleScene& scene, const ObstacleTile& tile, u32 index) {
     const u8* record = tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index;
-    *first_vertex = read_u32(record);
-    *height_m = (float)read_u16(record + 8) * 0.1f;
-    *kind = record[11] & 3;
-}
-
-__device__ Outline tile_outline(const ObstacleScene& scene, const ObstacleTile& tile, u32 index) {
-    const u8* record = tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index;
-    Outline outline;
-    u64 square = read_u32(tile_squares(scene, tile) + 4 * (u32)record[10]);
-    outline.footprint_id = (square << 32) | (u64)read_u32(record + 4);
-    outline.first_vertex = read_u32(record);
-    outline.height_dm = read_u16(record + 8);
-    outline.height_m = (float)outline.height_dm * 0.1f;
-    outline.kind = record[11] & 3;
-    return outline;
+    return OutlineMeta{read_u32(record), read_u16(record + 8), record[11] & 3};
 }
 
 // A stored vertex: tile-local int16 steps.
@@ -258,7 +241,7 @@ __device__ int vertex_side_sign(const ObstacleScene& scene, const ObstacleTile& 
 
 // crossings::edge_bounds_roof: a tangent vertex screens as a top but does not enter its ring.
 __device__ bool edge_bounds_roof(const ObstacleScene& scene, const ObstacleTile& tile, u32 outline_index,
-                                 const Outline& outline, u32 edge, float sx, float sy, float dx, float dy) {
+                                 const OutlineMeta& outline, u32 edge, float sx, float sy, float dx, float dy) {
     if (outline.kind == OUTLINE_KIND_WALL) return false;
     int a = vertex_side_sign(scene, tile, edge, sx, sy, dx, dy);
     int b = vertex_side_sign(scene, tile, edge + 1, sx, sy, dx, dy);
@@ -428,7 +411,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                     }
                     for (int k = 0; k < count; k++) {
                         const CellHit& h = hits[order[k]];
-                        Outline outline = tile_outline(scene, *tile, h.outline_index);
+                        OutlineMeta outline = tile_outline_meta(scene, *tile, h.outline_index);
                         Crossing crossing;
                         crossing.t = h.t;
                         crossing.height_dm = outline.height_dm;

@@ -63,7 +63,7 @@ struct Roof {
 // above the state's chord after the monotone chain; `pending` holds the highest blocking candidate
 // at the current distance until x advances; while no candidate blocks, `best` is the one nearest
 // to blocking. Each point's terrain moments from the source beside it.
-struct StateStream {
+struct alignas(16) StateStream {
     HullEntry hull[HULL_CAPACITY];
     Moments hull_prefix[HULL_CAPACITY];
     HullEntry pending;
@@ -71,6 +71,7 @@ struct StateStream {
     HullEntry best;
     Moments best_prefix;
 };
+static_assert(sizeof(StateStream) % 16 == 0, "both StateStream hulls stay 16-byte aligned");
 
 // What a state's band is while the walk streams, in the walk's registers: its hull's depth, whether a
 // candidate has blocked it, whether a blocking candidate is pending at the current distance, and the
