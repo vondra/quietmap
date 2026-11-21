@@ -102,11 +102,11 @@ fn daily_total(flow: &CategoryFlow) -> f64 {
     flow.periods.iter().sum()
 }
 
-fn carries_passengers(mode: u8) -> bool {
+pub(super) fn carries_passengers(mode: u8) -> bool {
     mode != 2
 }
 
-fn carries_freight(mode: u8) -> bool {
+pub(super) fn carries_freight(mode: u8) -> bool {
     mode != 1
 }
 
@@ -232,6 +232,19 @@ pub(crate) fn allocate_over_parallel_tracks(
     rows: &mut [Expanded],
     square: crate::osm::geometry::Square,
 ) {
+    if !rows
+        .iter()
+        .any(|row| row.service == 0 && row.child.resolved_section.is_none())
+    {
+        for row in rows.iter_mut() {
+            if row.service == 0
+                && let Some(resolved) = row.child.resolved_section
+            {
+                row.child.traffic = resolved;
+            }
+        }
+        return;
+    }
     let tracks = project_tracks(rows, square);
     let sections = cross_sections(rows, &tracks);
     let domestic: Vec<RowTraffic> = rows.iter().map(|row| row.child.traffic).collect();

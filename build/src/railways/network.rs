@@ -18,8 +18,12 @@ pub struct Edge {
     pub extent: [f64; 2],
     pub rail_type: u8,
     pub usage: u8,
+    pub traffic_mode: u8,
     pub country: [u8; 2],
     pub corridor: String,
+    /// Trimmed `name` when `ref` is also present and differs, so a track tagged only with `name`
+    /// still pairs with its `ref`+`name` twin (e.g. `LEHL` / `Lehigh Line`).
+    pub corridor_name: String,
     pub traversal_only: bool,
 }
 
@@ -163,6 +167,9 @@ impl Network {
                 let kind = col_u8(batch, "rail_type")?;
                 let usage = col_u8(batch, "usage")?;
                 let service = col_u8(batch, "service")?;
+                let traffic_mode = batch
+                    .column_by_name("traffic_mode")
+                    .and_then(|c| c.as_any().downcast_ref::<arrow_array::UInt8Array>());
                 let country = col_u16(batch, "country_iso")?;
                 let length = col_f32(batch, "length_m")?;
                 let ref_col = batch
@@ -203,13 +210,21 @@ impl Network {
                         .filter(|col| !col.is_null(row))
                         .map(|col| col.value(row).trim())
                         .unwrap_or("");
-                    let corridor = if !ref_text.is_empty() {
-                        ref_text.to_owned()
+                    let name_text = name_col
+                        .filter(|col| !col.is_null(row))
+                        .map(|col| col.value(row).trim())
+                        .unwrap_or("");
+                    let (corridor, corridor_name) = if !ref_text.is_empty() {
+                        (
+                            ref_text.to_owned(),
+                            if !name_text.is_empty() && name_text != ref_text {
+                                name_text.to_owned()
+                            } else {
+                                String::new()
+                            },
+                        )
                     } else {
-                        name_col
-                            .filter(|col| !col.is_null(row))
-                            .map(|col| col.value(row).trim().to_owned())
-                            .unwrap_or_default()
+                        (name_text.to_owned(), String::new())
                     };
                     network.edges.push(Edge {
                         nodes,
@@ -221,8 +236,10 @@ impl Network {
                         square,
                         rail_type: kind.value(row),
                         usage: usage.value(row),
+                        traffic_mode: traffic_mode.map_or(0, |col| col.value(row)),
                         country: country.value(row).to_le_bytes(),
                         corridor,
+                        corridor_name,
                         traversal_only,
                     });
                 }

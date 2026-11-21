@@ -66,8 +66,10 @@ fn add_edge_full(
         extent,
         rail_type: 0,
         usage,
+        traffic_mode: 0,
         country,
         corridor: corridor.to_owned(),
+        corridor_name: String::new(),
         traversal_only: false,
     });
 }
@@ -96,6 +98,27 @@ fn add_edge(
     extent: [f64; 2],
 ) {
     add_edge_named(net, [a, b], way, segment, square, extent, "Main");
+}
+
+fn match_no_yards(
+    model: &RailModel,
+    network: &Network,
+    crossings: &[Crossing],
+    source_id: u16,
+    country: [u8; 2],
+    squares: &HashSet<[u16; 2]>,
+    existing_claims: &Claims,
+) -> Vec<([u16; 2], Interval)> {
+    match_crossings(
+        model,
+        network,
+        crossings,
+        source_id,
+        country,
+        squares,
+        existing_claims,
+        &HashSet::new(),
+    )
 }
 
 fn crossing_at(
@@ -254,7 +277,7 @@ fn switch_turnout_and_unrelated_railroad_are_excluded_from_crossing_section() {
 
     let squares = HashSet::from([sq]);
     let crossing = crossing_at("SW01", [lat, lon], [37.0, 10.0, 27.0], Some(0.0), 2);
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing],
@@ -294,7 +317,7 @@ fn switch_turnout_and_unrelated_railroad_are_excluded_from_crossing_section() {
     add_edge(&mut sw24, s_sw, s_n, 102, 0, sq, [0.0, 53.0]);
     add_edge(&mut sw24, t2_0, t2_1, 200, 0, sq, [0.0, 110.0]);
     sw24.index();
-    let sw24_claims = match_crossings(
+    let sw24_claims = match_no_yards(
         &model,
         &sw24,
         &[crossing_at(
@@ -335,7 +358,7 @@ fn switch_turnout_and_unrelated_railroad_are_excluded_from_crossing_section() {
     add_edge_named(&mut close_rr, [u0, u1], 2, 0, sq, [0.0, 110.0], "UP");
     add_edge_named(&mut close_rr, [b2a, b2b], 3, 0, sq, [0.0, 110.0], "BNSF");
     close_rr.index();
-    let close_claims = match_crossings(
+    let close_claims = match_no_yards(
         &model,
         &close_rr,
         &[crossing_at(
@@ -382,7 +405,7 @@ fn same_name_twins_20m_apart_and_balloon_loop_mt1_conserve_corridor_totals() {
     add_edge_named(&mut wide, [a0, a1], 1, 0, sq, [0.0, 200.0], "SubA");
     add_edge_named(&mut wide, [b0, b1], 2, 0, sq, [0.0, 200.0], "SubA");
     wide.index();
-    let wide_claims = match_crossings(
+    let wide_claims = match_no_yards(
         &model,
         &wide,
         &[
@@ -429,10 +452,10 @@ fn same_name_twins_20m_apart_and_balloon_loop_mt1_conserve_corridor_totals() {
     add_edge(&mut loop_net, n2, n3, 3, 0, sq, [0.0, 100.0]);
     add_edge(&mut loop_net, n3, n0, 4, 0, sq, [0.0, 5.0]);
     loop_net.index();
-    let runs = build_runs(&loop_net, *b"US");
-    assert_eq!(runs[0], runs[2]);
+    let layout = CorridorLayout::build(&loop_net, *b"US", &HashSet::new());
+    assert_eq!(layout.edge_run[0].unwrap().0, layout.edge_run[2].unwrap().0);
     for mt in [1u8, 2u8] {
-        let claims = match_crossings(
+        let claims = match_no_yards(
             &model,
             &loop_net,
             &[crossing_at(
@@ -511,7 +534,7 @@ fn usage_branch_beside_main_never_steals_mainline_crossing_slot() {
     );
     net.index();
 
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing_at(
@@ -552,7 +575,7 @@ fn converging_tracks_ahead_of_switch_share_crossing() {
     add_edge_named(&mut net, [t2_s, sw], 2, 0, sq, [0.0, 100.2], "");
     net.index();
 
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing_at(
@@ -592,7 +615,7 @@ fn three_unnamed_parallel_tracks_conserve_total_through_global_matching() {
     }
     net.index();
 
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing_at(
@@ -690,7 +713,7 @@ fn raritan_valley_square_cut_keeps_timetable_and_freight_constant_across_boundar
         Some(49.0),
         2,
     );
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing],
@@ -740,7 +763,7 @@ fn below_prior_timetable_outranks_inventory_passenger_split() {
         .or_default()
         .push((timetable_iv(1, 0, [0.0, 200.0], 100, 6.0), 0));
 
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing_at(
@@ -810,7 +833,7 @@ fn measured_sibling_keeps_daylight_shape_when_shared_with_weekly_sibling() {
     );
     c_weekly.measured_periods = false;
 
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[c_measured, c_weekly],
@@ -856,7 +879,7 @@ fn double_track_across_square_boundary_does_not_double_and_propagates_across_cut
 
     let squares = HashSet::from([sq_a, sq_b, sq_c]);
     let crossing = crossing_at("GIBBON", [lat, lon], [34.0, 10.0, 30.0], Some(0.0), 2);
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing],
@@ -964,7 +987,7 @@ fn jonesboro_cross_square_passing_siding_conserves_total_across_boundary() {
         Some(0.0),
         1,
     );
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing],
@@ -1034,7 +1057,7 @@ fn long_straight_rural_segment_matches_crossing_far_from_its_endpoints() {
     add_edge(&mut net, n0, n1, 50, 0, sq, [0.0, 6000.0]);
     net.index();
 
-    let claims = match_crossings(
+    let claims = match_no_yards(
         &model,
         &net,
         &[crossing_at(
@@ -1068,7 +1091,7 @@ fn active_run_median_prefers_positive_known_split_and_measured_periods() {
     let squares = HashSet::from([sq]);
 
     // [0, 14] -> 14.
-    let active = match_crossings(
+    let active = match_no_yards(
         &model,
         &net,
         &[
@@ -1095,7 +1118,7 @@ fn active_run_median_prefers_positive_known_split_and_measured_periods() {
     assert!((claim_freight(&active[0].1) - 14.0).abs() < 1e-9);
 
     // [10, 14] -> upper-middle (14).
-    let even = match_crossings(
+    let even = match_no_yards(
         &model,
         &net,
         &[
@@ -1123,7 +1146,7 @@ fn active_run_median_prefers_positive_known_split_and_measured_periods() {
 
     // Astra Other #2: tie at total=10 between known passenger split (Some(2)) and missing (None)
     // must pick the known split (2 passenger + 8 freight), never dropping to class prior.
-    let tied = match_crossings(
+    let tied = match_no_yards(
         &model,
         &net,
         &[
@@ -1152,7 +1175,7 @@ fn active_run_median_prefers_positive_known_split_and_measured_periods() {
     assert!((claim_freight(&tied[0].1) - 8.0).abs() < 1e-9);
 
     // All-zero run remains explicit zero.
-    let zero = match_crossings(
+    let zero = match_no_yards(
         &model,
         &net,
         &[crossing_at("Z0", [lat, lon], [0.0; 3], Some(0.0), 1)],
@@ -1197,7 +1220,7 @@ fn period_subtraction_and_unsplit_weekly_preserve_expected_period_shares() {
         .push((timetable_iv(1, 0, [0.0, 200.0], 100, 12.0), 0));
 
     // Measured [12, 4, 8] minus 12 GTFS ([8.4, 2.4, 1.2]) -> [3.6, 1.6, 6.8].
-    let measured = match_crossings(
+    let measured = match_no_yards(
         &model,
         &net,
         &[crossing_at(
@@ -1226,7 +1249,7 @@ fn period_subtraction_and_unsplit_weekly_preserve_expected_period_shares() {
         1,
     );
     weekly_crossing.measured_periods = false;
-    let weekly = match_crossings(
+    let weekly = match_no_yards(
         &model,
         &net,
         &[weekly_crossing],
@@ -1261,7 +1284,7 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
         .entry(sq)
         .or_default()
         .push((timetable_iv(1, 0, [0.0, 200.0], 100, 41.0), 0));
-    let commuter = match_crossings(
+    let commuter = match_no_yards(
         &model,
         &net,
         &[crossing_at(
@@ -1302,14 +1325,14 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
         },
         0,
     ));
-    let ranked = match_crossings(
+    let ranked = match_no_yards(
         &model,
         &net,
         &[crossing_at(
             "RANK",
             [lat, lon],
             [10.0, 2.0, 4.0],
-            Some(0.0),
+            Some(4.0),
             1,
         )],
         111,
@@ -1317,13 +1340,22 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
         &squares,
         &high_frt,
     );
-    assert!(
-        ranked.is_empty(),
-        "higher-rank freight suppresses FRA claim"
+    assert_eq!(ranked.len(), 1);
+    let ranked_rt = ranked[0].1.resolved_section.unwrap();
+    assert_eq!(
+        ranked_rt.freight.source_id, 2079,
+        "higher-rank freight is preserved"
     );
+    assert!((claim_freight(&ranked[0].1) - 50.0).abs() < 1e-6);
+    assert_eq!(
+        ranked_rt.passenger.source_id, 111,
+        "valid FRA passenger evidence is kept alongside higher-rank freight"
+    );
+    assert!((claim_passenger(&ranked[0].1) - 4.0).abs() < 1e-6);
 
-    // 3. Unknown passenger_daily (None) without timetable emits no claim -> class prior stays.
-    let ambig = match_crossings(
+    // 3. Unknown passenger_daily (None) without timetable keeps the measured total (16) split
+    //    by the line's class-prior ratio (80/20 on main -> 12.8 pax + 3.2 freight), never 80+20.
+    let ambig = match_no_yards(
         &model,
         &net,
         &[crossing_at("AMB", [lat, lon], [10.0, 2.0, 4.0], None, 1)],
@@ -1332,7 +1364,9 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
         &squares,
         &Claims::new(),
     );
-    assert!(ambig.is_empty());
+    assert_eq!(ambig.len(), 1);
+    assert!((claim_passenger(&ambig[0].1) - 12.8).abs() < 1e-6);
+    assert!((claim_freight(&ambig[0].1) - 3.2).abs() < 1e-6);
 
     // 4. Canadian edge never receives US source-111 claims.
     let mut ca_net = Network::default();
@@ -1352,7 +1386,7 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
         "Main",
     );
     ca_net.index();
-    let ca = match_crossings(
+    let ca = match_no_yards(
         &model,
         &ca_net,
         &[crossing_at(
@@ -1370,7 +1404,7 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
     assert!(ca.is_empty());
 
     // 5. Astra Other #5: newly stamped yard track drops crossing traffic cleanly (0 pax, 0 frt).
-    let yard_claims = match_crossings(
+    let yard_claims = match_no_yards(
         &model,
         &net,
         &[crossing_at(
@@ -1437,4 +1471,1348 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
     assert_eq!(expanded[0].child.traffic.passenger.periods, [0.0; 3]);
     assert_eq!(expanded[0].child.traffic.freight.periods, [0.0; 3]);
     assert_eq!(expanded[0].child.traffic.freight.source_id, 0);
+}
+
+#[test]
+fn lirr_close_twins_and_lehigh_ref_name_match_pair_cleanly() {
+    let model = test_model();
+    let (lat, lon) = (40.70, -73.80);
+    let sq = [151, 192];
+    let squares = HashSet::from([sq]);
+
+    // LIRR: two same-name tracks 2.36 m apart with 95.125 timetable pax and 62 FRA total ->
+    // 47.5625 pax (source 2079) + 0 freight on BOTH tracks, never 95.125 + 62.
+    let mut lirr = Network::default();
+    let a0 = lirr.nodes.len();
+    lirr.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let a1 = lirr.nodes.len();
+    lirr.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    let b0 = lirr.nodes.len();
+    lirr.nodes.push(meters_to_latlon(lat, lon, 2.36, 0.0));
+    let b1 = lirr.nodes.len();
+    lirr.nodes.push(meters_to_latlon(lat, lon, 2.36, 200.0));
+    add_edge_named(&mut lirr, [a0, a1], 227618293, 24, sq, [0.0, 200.0], "LIRR");
+    add_edge_named(&mut lirr, [b0, b1], 29469598, 18, sq, [0.0, 200.0], "LIRR");
+    lirr.index();
+    let mut existing = Claims::new();
+    existing
+        .entry(sq)
+        .or_default()
+        .push((timetable_iv(227618293, 24, [0.0, 200.0], 2079, 95.125), 0));
+    let lirr_claims = match_no_yards(
+        &model,
+        &lirr,
+        &[crossing_at(
+            "LIRR",
+            meters_to_latlon(lat, lon, 0.0, 100.0),
+            [36.0, 12.0, 14.0],
+            Some(62.0),
+            2,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &existing,
+    );
+    assert_eq!(lirr_claims.len(), 2);
+    for (_, iv) in &lirr_claims {
+        let rt = iv.resolved_section.unwrap();
+        assert_eq!(rt.passenger.source_id, 2079);
+        assert!((claim_passenger(iv) - 47.5625).abs() < 1e-6);
+        assert_eq!(claim_freight(iv), 0.0);
+    }
+
+    // Lehigh Line: bridge 150705682 has ref="LEHL", name="Lehigh Line"; twin 150705659 (4.5 m
+    // away) has ref="", name="Lehigh Line". They must pair into one 2-track section.
+    let mut lehigh = Network::default();
+    let c0 = lehigh.nodes.len();
+    lehigh.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let c1 = lehigh.nodes.len();
+    lehigh.nodes.push(meters_to_latlon(lat, lon, 0.0, 80.0));
+    let d0 = lehigh.nodes.len();
+    lehigh.nodes.push(meters_to_latlon(lat, lon, 4.5, 0.0));
+    let d1 = lehigh.nodes.len();
+    lehigh.nodes.push(meters_to_latlon(lat, lon, 4.5, 80.0));
+    add_edge_named(&mut lehigh, [c0, c1], 150705682, 0, sq, [0.0, 80.0], "LEHL");
+    lehigh.edges[0].corridor_name = "Lehigh Line".into();
+    add_edge_named(
+        &mut lehigh,
+        [d0, d1],
+        150705659,
+        0,
+        sq,
+        [0.0, 80.0],
+        "Lehigh Line",
+    );
+    lehigh.index();
+    let mut lh_claims = Claims::new();
+    lh_claims
+        .entry(sq)
+        .or_default()
+        .push((timetable_iv(150705659, 0, [0.0, 80.0], 2079, 47.27), 0));
+    let lh_out = match_no_yards(
+        &model,
+        &lehigh,
+        &[crossing_at(
+            "LEHL",
+            meters_to_latlon(lat, lon, 4.5, 40.0),
+            [20.0, 10.0, 10.0],
+            Some(40.0),
+            2,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &lh_claims,
+    );
+    assert_eq!(lh_out.len(), 2);
+    for (_, iv) in &lh_out {
+        assert!((claim_passenger(iv) - 23.635).abs() < 1e-6);
+        assert_eq!(claim_freight(iv), 0.0);
+    }
+}
+
+#[test]
+fn partial_overlap_cut_invariance_12deg_turnout_and_disconnected_16m() {
+    let model = test_model();
+    let (lat, lon) = (41.5, -93.6);
+    let sq = [100, 100];
+    let squares = HashSet::from([sq]);
+
+    // 1. 200 m + 80 m overlap: uncut vs cut right through the middle of the overlap must match.
+    let build_200_80 = |cut: bool| {
+        let mut net = Network::default();
+        let a0 = net.nodes.len();
+        net.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+        let a2 = net.nodes.len();
+        net.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+        let b0 = net.nodes.len();
+        net.nodes.push(meters_to_latlon(lat, lon, 5.0, 60.0));
+        let b2 = net.nodes.len();
+        net.nodes.push(meters_to_latlon(lat, lon, 5.0, 140.0));
+        if cut {
+            let a1 = net.nodes.len();
+            net.nodes.push(meters_to_latlon(lat, lon, 0.0, 100.0));
+            let b1 = net.nodes.len();
+            net.nodes.push(meters_to_latlon(lat, lon, 5.0, 100.0));
+            add_edge(&mut net, a0, a1, 1, 0, sq, [0.0, 100.0]);
+            add_edge(&mut net, a1, a2, 1, 1, sq, [100.0, 200.0]);
+            add_edge(&mut net, b0, b1, 2, 0, sq, [0.0, 40.0]);
+            add_edge(&mut net, b1, b2, 2, 1, sq, [40.0, 80.0]);
+        } else {
+            add_edge(&mut net, a0, a2, 1, 0, sq, [0.0, 200.0]);
+            add_edge(&mut net, b0, b2, 2, 0, sq, [0.0, 80.0]);
+        }
+        net.index();
+        // Crossing 40 on the 1-track west approach: 40 on 0..60 and 140..200, 20+20=40 on 60..140.
+        match_no_yards(
+            &model,
+            &net,
+            &[crossing_at(
+                "P40",
+                meters_to_latlon(lat, lon, 0.0, 20.0),
+                [20.0, 8.0, 12.0],
+                Some(0.0),
+                1,
+            )],
+            111,
+            *b"US",
+            &squares,
+            &Claims::new(),
+        )
+    };
+    let frt_at = |claims: &[([u16; 2], Interval)], way: i64, m: f64| -> f64 {
+        claims
+            .iter()
+            .find(|(_, iv)| iv.osm_id == way && iv.from_m <= m && m <= iv.to_m)
+            .map(|(_, iv)| claim_freight(iv))
+            .unwrap()
+    };
+    let uncut = build_200_80(false);
+    let cut = build_200_80(true);
+    for (way, m, expected) in [
+        (1, 30.0, 40.0),
+        (1, 80.0, 20.0),
+        (1, 120.0, 20.0),
+        (1, 170.0, 40.0),
+        (2, 20.0, 20.0),
+        (2, 60.0, 20.0),
+    ] {
+        assert!((frt_at(&uncut, way, m) - expected).abs() < 1e-6);
+        assert!((frt_at(&cut, way, m) - expected).abs() < 1e-6);
+    }
+
+    // 2. 12-degree named turnout split into two fragments still triggers the run-level 10-deg gate.
+    let mut turn = Network::default();
+    let t0 = turn.nodes.len();
+    turn.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let t1 = turn.nodes.len();
+    turn.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    let rad = 12.0_f64.to_radians();
+    let br_mid = turn.nodes.len();
+    turn.nodes.push(meters_to_latlon(
+        lat,
+        lon,
+        50.0 * rad.sin(),
+        50.0 * rad.cos(),
+    ));
+    let br_end = turn.nodes.len();
+    turn.nodes.push(meters_to_latlon(
+        lat,
+        lon,
+        150.0 * rad.sin(),
+        150.0 * rad.cos(),
+    ));
+    add_edge_named(&mut turn, [t0, t1], 10, 0, sq, [0.0, 200.0], "Main");
+    add_edge_named(&mut turn, [t0, br_mid], 11, 0, sq, [0.0, 50.0], "Main");
+    add_edge_named(
+        &mut turn,
+        [br_mid, br_end],
+        11,
+        1,
+        sq,
+        [50.0, 150.0],
+        "Main",
+    );
+    turn.index();
+    let turn_claims = match_no_yards(
+        &model,
+        &turn,
+        &[crossing_at(
+            "T12",
+            meters_to_latlon(lat, lon, 0.0, 100.0),
+            [20.0, 0.0, 0.0],
+            Some(0.0),
+            1,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert_eq!(turn_claims.len(), 1);
+    assert_eq!(turn_claims[0].1.osm_id, 10);
+    assert!((claim_freight(&turn_claims[0].1) - 20.0).abs() < 1e-6);
+
+    // 3. Two disconnected 16 m overlaps (50 m apart) on long runs must NOT pass the 30 m bar.
+    let mut scraps = Network::default();
+    let m0 = scraps.nodes.len();
+    scraps.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let m1 = scraps.nodes.len();
+    scraps.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    // Track 2 comes within 10 m on y=0..16, swings out to 30 m on y=16..100, returns on y=100..116.
+    let s0 = scraps.nodes.len();
+    scraps.nodes.push(meters_to_latlon(lat, lon, 10.0, 0.0));
+    let s1 = scraps.nodes.len();
+    scraps.nodes.push(meters_to_latlon(lat, lon, 10.0, 16.0));
+    let s2 = scraps.nodes.len();
+    scraps.nodes.push(meters_to_latlon(lat, lon, 30.0, 50.0));
+    let s3 = scraps.nodes.len();
+    scraps.nodes.push(meters_to_latlon(lat, lon, 30.0, 80.0));
+    let s4 = scraps.nodes.len();
+    scraps.nodes.push(meters_to_latlon(lat, lon, 10.0, 100.0));
+    let s5 = scraps.nodes.len();
+    scraps.nodes.push(meters_to_latlon(lat, lon, 10.0, 116.0));
+    add_edge_named(&mut scraps, [m0, m1], 1, 0, sq, [0.0, 200.0], "");
+    add_edge_named(&mut scraps, [s0, s1], 2, 0, sq, [0.0, 16.0], "");
+    add_edge_named(&mut scraps, [s1, s2], 2, 1, sq, [16.0, 56.0], "");
+    add_edge_named(&mut scraps, [s2, s3], 2, 2, sq, [56.0, 86.0], "");
+    add_edge_named(&mut scraps, [s3, s4], 2, 3, sq, [86.0, 114.0], "");
+    add_edge_named(&mut scraps, [s4, s5], 2, 4, sq, [114.0, 130.0], "");
+    scraps.index();
+    let scrap_claims = match_no_yards(
+        &model,
+        &scraps,
+        &[crossing_at(
+            "SCRAP",
+            meters_to_latlon(lat, lon, 0.0, 10.0),
+            [20.0, 0.0, 0.0],
+            Some(0.0),
+            1,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert_eq!(scrap_claims.len(), 1);
+    assert!((claim_freight(&scrap_claims[0].1) - 20.0).abs() < 1e-6);
+}
+
+#[test]
+fn inclined_middle_track_and_sibling_timetable_cut_resolve_consistently() {
+    let model = test_model();
+    let (lat, lon) = (41.4, -87.6);
+    let sq = [131, 191];
+    let squares = HashSet::from([sq]);
+
+    // Astra #1: two horizontal 80 m tracks at y=0 and y=12 m, middle track inclined 5 deg through
+    // midpoint (40, 6). Timetable cut at x=39.75 on Track 3 splits ALL THREE tracks identically.
+    let mut net = Network::default();
+    let a0 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let a1 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 80.0, 0.0));
+    let dy = 40.0 * 5.0_f64.to_radians().tan();
+    let b0 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 0.0, 6.0 - dy));
+    let b1 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 80.0, 6.0 + dy));
+    let c0 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 0.0, 12.0));
+    let c1 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 80.0, 12.0));
+    add_edge_named(&mut net, [a0, a1], 1, 0, sq, [0.0, 80.0], "");
+    add_edge_named(
+        &mut net,
+        [b0, b1],
+        2,
+        0,
+        sq,
+        [0.0, (80.0_f64).hypot(2.0 * dy)],
+        "",
+    );
+    add_edge_named(&mut net, [c0, c1], 3, 0, sq, [0.0, 80.0], "");
+    net.index();
+
+    let mut existing = Claims::new();
+    existing
+        .entry(sq)
+        .or_default()
+        .push((timetable_iv(3, 0, [0.0, 39.75], 2079, 30.0), 0));
+    let claims = match_no_yards(
+        &model,
+        &net,
+        &[crossing_at(
+            "INC5",
+            meters_to_latlon(lat, lon, 20.0, 0.0),
+            [30.0, 15.0, 15.0],
+            Some(0.0),
+            3,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &existing,
+    );
+    for way in [1i64, 2, 3] {
+        let mut w_claims: Vec<&Interval> = claims
+            .iter()
+            .filter(|(_, iv)| iv.osm_id == way)
+            .map(|(_, iv)| iv)
+            .collect();
+        w_claims.sort_by(|a, b| a.from_m.total_cmp(&b.from_m));
+        assert_eq!(w_claims.len(), 2, "way {way} must split once at 39.75");
+        assert!((claim_passenger(w_claims[0]) - 10.0).abs() < 1e-6);
+        assert!((claim_freight(w_claims[0]) - 10.0).abs() < 1e-6);
+        assert_eq!(claim_passenger(w_claims[1]), 0.0);
+        assert!((claim_freight(w_claims[1]) - 20.0).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn section_first_direct_totals_and_single_way_balloon_loop_conserve() {
+    let model = test_model();
+    let (lat, lon) = (41.5, -93.6);
+    let sq = [100, 100];
+    let squares = HashSet::from([sq]);
+
+    // Astra #2: A alone reports 30, B alone reports 10, shared A+B reports 40 ->
+    // A alone = 30, B alone = 10, shared A+B = 20 + 20 = 40 (never 25 + 25 = 50).
+    let mut net = Network::default();
+    let a0 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let a1 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    let b0 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 5.0, 100.0));
+    let b1 = net.nodes.len();
+    net.nodes.push(meters_to_latlon(lat, lon, 5.0, 300.0));
+    add_edge(&mut net, a0, a1, 1, 0, sq, [0.0, 200.0]);
+    add_edge(&mut net, b0, b1, 2, 0, sq, [0.0, 200.0]);
+    net.index();
+    let claims = match_no_yards(
+        &model,
+        &net,
+        &[
+            crossing_at(
+                "A30",
+                meters_to_latlon(lat, lon, 0.0, 50.0),
+                [15.0, 5.0, 10.0],
+                Some(0.0),
+                1,
+            ),
+            crossing_at(
+                "B10",
+                meters_to_latlon(lat, lon, 5.0, 250.0),
+                [5.0, 2.0, 3.0],
+                Some(0.0),
+                1,
+            ),
+            crossing_at(
+                "AB40",
+                meters_to_latlon(lat, lon, 0.0, 150.0),
+                [20.0, 8.0, 12.0],
+                Some(0.0),
+                2,
+            ),
+        ],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    let at = |way: i64, m: f64| {
+        claims
+            .iter()
+            .find(|(_, iv)| iv.osm_id == way && iv.from_m <= m && m <= iv.to_m)
+            .map(|(_, iv)| claim_freight(iv))
+            .unwrap()
+    };
+    assert!((at(1, 50.0) - 30.0).abs() < 1e-6);
+    assert!((at(1, 150.0) - 20.0).abs() < 1e-6);
+    assert!((at(2, 50.0) - 20.0).abs() < 1e-6);
+    assert!((at(2, 150.0) - 10.0).abs() < 1e-6);
+
+    // Single-way balloon loop: one way (osm_id=99) folding back 5 m apart over a 100 m neck
+    // joined by rounded 90-degree-per-step end loops (one continuous degree-2 closed run).
+    let mut bl = Network::default();
+    let pts = [(0.0, 0.0), (0.0, 100.0), (5.0, 100.0), (5.0, 0.0)];
+    let nodes: Vec<usize> = pts
+        .iter()
+        .map(|&(x, y)| {
+            let id = bl.nodes.len();
+            bl.nodes.push(meters_to_latlon(lat, lon, x, y));
+            id
+        })
+        .collect();
+    let seg_lens = [100.0, 5.0, 100.0, 5.0];
+    let mut cum = 0.0;
+    for (seg, &len) in seg_lens.iter().enumerate() {
+        add_edge(
+            &mut bl,
+            nodes[seg],
+            nodes[(seg + 1) % nodes.len()],
+            99,
+            seg as i16,
+            sq,
+            [cum, cum + len],
+        );
+        cum += len;
+    }
+    bl.index();
+    let bl_layout = CorridorLayout::build(&bl, *b"US", &HashSet::new());
+    assert_eq!(
+        bl_layout.runs.len(),
+        1,
+        "balloon loop must stay one closed run"
+    );
+
+    // Case A: crossing 20 on neck only -> 10 on each leg AND 10 on the curve.
+    let neck_only = match_no_yards(
+        &model,
+        &bl,
+        &[crossing_at(
+            "NECK",
+            meters_to_latlon(lat, lon, 0.0, 50.0),
+            [10.0, 4.0, 6.0],
+            Some(0.0),
+            1,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    for (_, iv) in &neck_only {
+        assert!(
+            (claim_freight(iv) - 10.0).abs() < 1e-6,
+            "seg {}",
+            iv.segment_idx
+        );
+    }
+    assert_eq!(neck_only.len(), 4);
+
+    // Case B: crossing 10 on curve only -> 10 on curve AND 10+10=20 on neck.
+    let curve_only = match_no_yards(
+        &model,
+        &bl,
+        &[crossing_at(
+            "CURVE",
+            meters_to_latlon(lat, lon, 2.5, 100.0),
+            [5.0, 2.0, 3.0],
+            Some(0.0),
+            1,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    for (_, iv) in &curve_only {
+        assert!(
+            (claim_freight(iv) - 10.0).abs() < 1e-6,
+            "seg {}",
+            iv.segment_idx
+        );
+    }
+    assert_eq!(curve_only.len(), 4);
+
+    // Case C: crossing 20 on neck AND crossing 10 on curve -> 10 everywhere.
+    let both = match_no_yards(
+        &model,
+        &bl,
+        &[
+            crossing_at(
+                "NECK",
+                meters_to_latlon(lat, lon, 0.0, 50.0),
+                [10.0, 4.0, 6.0],
+                Some(0.0),
+                1,
+            ),
+            crossing_at(
+                "CURVE",
+                meters_to_latlon(lat, lon, 2.5, 100.0),
+                [5.0, 2.0, 3.0],
+                Some(0.0),
+                1,
+            ),
+        ],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    for (_, iv) in &both {
+        assert!(
+            (claim_freight(iv) - 10.0).abs() < 1e-6,
+            "seg {}",
+            iv.segment_idx
+        );
+    }
+    assert_eq!(both.len(), 4);
+}
+
+#[test]
+fn competing_names_resolve_locally_and_yard_prepass_excludes_yard_tracks() {
+    let model = test_model();
+    let (lat, lon) = (41.4, -87.6);
+    let sq = [131, 191];
+    let squares = HashSet::from([sq]);
+
+    // 1. Concurrent A (0 m) / unnamed U (8 m) / C (20 m): U joins nearer A ({A, U} gets 30+30=60; C untouched).
+    let mut conc = Network::default();
+    for (way, x, name) in [(1i64, 0.0, "A"), (2, 8.0, ""), (3, 20.0, "C")] {
+        let n0 = conc.nodes.len();
+        conc.nodes.push(meters_to_latlon(lat, lon, x, 0.0));
+        let n1 = conc.nodes.len();
+        conc.nodes.push(meters_to_latlon(lat, lon, x, 100.0));
+        add_edge_named(&mut conc, [n0, n1], way, 0, sq, [0.0, 100.0], name);
+    }
+    conc.index();
+    let conc_claims = match_no_yards(
+        &model,
+        &conc,
+        &[crossing_at(
+            "AUC",
+            meters_to_latlon(lat, lon, 0.0, 50.0),
+            [30.0, 10.0, 20.0],
+            Some(0.0),
+            2,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    let by_way: HashMap<i64, f64> = conc_claims
+        .iter()
+        .map(|(_, iv)| (iv.osm_id, claim_freight(iv)))
+        .collect();
+    assert!((by_way[&1] - 30.0).abs() < 1e-6);
+    assert!((by_way[&2] - 30.0).abs() < 1e-6);
+    assert!(!by_way.contains_key(&3));
+
+    // 2. Unnamed U runs beside A in the west (y=0..100) and beside C in the east (y=100..200).
+    let mut we = Network::default();
+    let u0 = we.nodes.len();
+    we.nodes.push(meters_to_latlon(lat, lon, 8.0, 0.0));
+    let u1 = we.nodes.len();
+    we.nodes.push(meters_to_latlon(lat, lon, 8.0, 200.0));
+    let a0 = we.nodes.len();
+    we.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let a1 = we.nodes.len();
+    we.nodes.push(meters_to_latlon(lat, lon, 0.0, 100.0));
+    let c0 = we.nodes.len();
+    we.nodes.push(meters_to_latlon(lat, lon, 16.0, 100.0));
+    let c1 = we.nodes.len();
+    we.nodes.push(meters_to_latlon(lat, lon, 16.0, 200.0));
+    add_edge_named(&mut we, [u0, u1], 1, 0, sq, [0.0, 200.0], "");
+    add_edge_named(&mut we, [a0, a1], 2, 0, sq, [0.0, 100.0], "A");
+    add_edge_named(&mut we, [c0, c1], 3, 0, sq, [0.0, 100.0], "C");
+    we.index();
+    let we_claims = match_no_yards(
+        &model,
+        &we,
+        &[
+            crossing_at(
+                "WEST",
+                meters_to_latlon(lat, lon, 0.0, 50.0),
+                [20.0, 0.0, 0.0],
+                Some(0.0),
+                2,
+            ),
+            crossing_at(
+                "EAST",
+                meters_to_latlon(lat, lon, 16.0, 150.0),
+                [40.0, 0.0, 0.0],
+                Some(0.0),
+                2,
+            ),
+        ],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    let we_at = |way: i64, m: f64| {
+        we_claims
+            .iter()
+            .find(|(_, iv)| iv.osm_id == way && iv.from_m <= m && m <= iv.to_m)
+            .map(|(_, iv)| claim_freight(iv))
+            .unwrap()
+    };
+    assert!((we_at(2, 50.0) - 10.0).abs() < 1e-6);
+    assert!((we_at(1, 50.0) - 10.0).abs() < 1e-6);
+    assert!((we_at(1, 150.0) - 20.0).abs() < 1e-6);
+    assert!((we_at(3, 50.0) - 20.0).abs() < 1e-6);
+
+    // 3. Yard track excluded before allocation: main keeps full 40, yard track gets nothing.
+    let mut yd = Network::default();
+    let m0 = yd.nodes.len();
+    yd.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let m1 = yd.nodes.len();
+    yd.nodes.push(meters_to_latlon(lat, lon, 0.0, 100.0));
+    let y0 = yd.nodes.len();
+    yd.nodes.push(meters_to_latlon(lat, lon, 4.0, 0.0));
+    let y1 = yd.nodes.len();
+    yd.nodes.push(meters_to_latlon(lat, lon, 4.0, 100.0));
+    add_edge_full(
+        &mut yd,
+        [m0, m1],
+        10,
+        0,
+        sq,
+        [0.0, 100.0],
+        0,
+        *b"US",
+        "Main",
+    );
+    add_edge_full(&mut yd, [y0, y1], 11, 0, sq, [0.0, 100.0], 3, *b"US", "");
+    yd.index();
+    let yard_keys = HashSet::from([(sq, 11i64, 0i16)]);
+    let yd_claims = match_crossings(
+        &model,
+        &yd,
+        &[crossing_at(
+            "YD40",
+            meters_to_latlon(lat, lon, 0.0, 50.0),
+            [20.0, 8.0, 12.0],
+            Some(0.0),
+            1,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+        &yard_keys,
+    );
+    assert_eq!(yd_claims.len(), 1);
+    assert_eq!(yd_claims[0].1.osm_id, 10);
+    assert!((claim_freight(&yd_claims[0].1) - 40.0).abs() < 1e-6);
+}
+
+#[test]
+fn unknown_split_lt1_cap_same_total_borrowing_known_floor_and_period_waterfilling() {
+    let model = test_model();
+    let (lat, lon) = (35.6, -106.0);
+    let sq = [105, 201];
+    let squares = HashSet::from([sq]);
+
+    // 1. Period water-filling: 719605C [1.8333, 0, 0.1667] with 1 pax -> [0.875, 0, 0.125] (zero eve)
+    //    and overflow cap [1.95, 0, 0.05] with 1 pax -> [0.95, 0, 0.05].
+    let p719 = allocate_passenger_in_periods([11.0 / 6.0, 0.0, 1.0 / 6.0], 1.0, [0.7, 0.2, 0.1]);
+    assert!((p719[0] - 0.875).abs() < 1e-9);
+    assert_eq!(p719[1], 0.0);
+    assert!((p719[2] - 0.125).abs() < 1e-9);
+    let pov = allocate_passenger_in_periods([1.95, 0.0, 0.05], 1.0, [0.7, 0.2, 0.1]);
+    assert!((pov[0] - 0.95).abs() < 1e-9);
+    assert_eq!(pov[1], 0.0);
+    assert!((pov[2] - 0.05).abs() < 1e-9);
+
+    // 2. 013800Y: 1/7 weekly branch + LT1 -> ~0.1224 pax + ~0.0204 freight (never 30+5).
+    let mut branch = Network::default();
+    let b0 = branch.nodes.len();
+    branch.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let b1 = branch.nodes.len();
+    branch.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    add_edge_full(
+        &mut branch,
+        [b0, b1],
+        14605191,
+        0,
+        sq,
+        [0.0, 200.0],
+        1,
+        *b"US",
+        "",
+    );
+    branch.index();
+    let mut c_sfs = crossing_at(
+        "013800Y",
+        meters_to_latlon(lat, lon, 0.0, 100.0),
+        [0.5 / 7.0, 1.0 / 42.0, 2.0 / 42.0],
+        None,
+        1,
+    );
+    c_sfs.measured_periods = false;
+    c_sfs.passenger_lt1 = true;
+    let sfs_claims = match_no_yards(
+        &model,
+        &branch,
+        &[c_sfs],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert_eq!(sfs_claims.len(), 1);
+    assert!((claim_passenger(&sfs_claims[0].1) - (1.0 / 7.0) * (30.0 / 35.0)).abs() < 1e-6);
+    assert!((claim_freight(&sfs_claims[0].1) - (1.0 / 7.0) * (5.0 / 35.0)).abs() < 1e-6);
+
+    // 3. 028285V: 18/day on 2-track main + LT1=Yes -> crossing pax < 1 (0.80 pax + 17.20 frt),
+    //    so each track gets 0.40 pax (< 0.5) + 8.60 frt.
+    let mut main2 = Network::default();
+    for (way, x) in [(1i64, 0.0), (2, 5.0)] {
+        let n0 = main2.nodes.len();
+        main2.nodes.push(meters_to_latlon(lat, lon, x, 0.0));
+        let n1 = main2.nodes.len();
+        main2.nodes.push(meters_to_latlon(lat, lon, x, 200.0));
+        add_edge(&mut main2, n0, n1, way, 0, sq, [0.0, 200.0]);
+    }
+    main2.index();
+    let mut c_lt1 = crossing_at(
+        "028285V",
+        meters_to_latlon(lat, lon, 0.0, 100.0),
+        [9.0, 3.0, 6.0],
+        None,
+        2,
+    );
+    c_lt1.passenger_lt1 = true;
+    let lt1_claims = match_no_yards(
+        &model,
+        &main2,
+        &[c_lt1],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert_eq!(lt1_claims.len(), 2);
+    for (_, iv) in &lt1_claims {
+        assert!((claim_passenger(iv) - 0.4).abs() < 1e-6);
+        assert!((claim_freight(iv) - 8.6).abs() < 1e-6);
+    }
+
+    // 4. Same-total borrowing: [unk, unk, Some(2)] at total=10 -> 2 pax + 8 frt;
+    //    unequal totals [Some(2) at tot=2, unk at tot=18] must NOT borrow 100% onto 18!
+    let mut single = Network::default();
+    let s0 = single.nodes.len();
+    single.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let s1 = single.nodes.len();
+    single.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    add_edge(&mut single, s0, s1, 5, 0, sq, [0.0, 200.0]);
+    single.index();
+    let eq_claims = match_no_yards(
+        &model,
+        &single,
+        &[
+            crossing_at(
+                "U1",
+                meters_to_latlon(lat, lon, 0.0, 40.0),
+                [6.0, 1.0, 3.0],
+                None,
+                1,
+            ),
+            crossing_at(
+                "U2",
+                meters_to_latlon(lat, lon, 0.0, 80.0),
+                [6.0, 1.0, 3.0],
+                None,
+                1,
+            ),
+            crossing_at(
+                "K2",
+                meters_to_latlon(lat, lon, 0.0, 120.0),
+                [6.0, 1.0, 3.0],
+                Some(2.0),
+                1,
+            ),
+        ],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert!((claim_passenger(&eq_claims[0].1) - 2.0).abs() < 1e-6);
+    assert!((claim_freight(&eq_claims[0].1) - 8.0).abs() < 1e-6);
+
+    let mut c_lt1_18 = crossing_at(
+        "U18",
+        meters_to_latlon(lat, lon, 0.0, 120.0),
+        [9.0, 3.0, 6.0],
+        None,
+        1,
+    );
+    c_lt1_18.passenger_lt1 = true;
+    let uneq_claims = match_no_yards(
+        &model,
+        &single,
+        &[
+            crossing_at(
+                "P2",
+                meters_to_latlon(lat, lon, 0.0, 40.0),
+                [2.0, 0.0, 0.0],
+                Some(2.0),
+                1,
+            ),
+            c_lt1_18,
+        ],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert!((claim_passenger(&uneq_claims[0].1) - 0.8).abs() < 1e-6);
+    assert!((claim_freight(&uneq_claims[0].1) - 17.2).abs() < 1e-6);
+
+    // 5. Known passenger floor without `all_carriers_known`:
+    //    R1 alone carries 10 (8 known pax), R2 alone carries 10 (unknown pax), shared R1+R2 has
+    //    timetable 2 pax -> freight on R1+R2 is capped at 20 - max(2, 8) = 12 (6/track), never 18.
+    let mut fl = Network::default();
+    let r1a = fl.nodes.len();
+    fl.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let r1b = fl.nodes.len();
+    fl.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    let r2a = fl.nodes.len();
+    fl.nodes.push(meters_to_latlon(lat, lon, 5.0, 100.0));
+    let r2b = fl.nodes.len();
+    fl.nodes.push(meters_to_latlon(lat, lon, 5.0, 300.0));
+    add_edge(&mut fl, r1a, r1b, 1, 0, sq, [0.0, 200.0]);
+    add_edge(&mut fl, r2a, r2b, 2, 0, sq, [0.0, 200.0]);
+    fl.index();
+    let mut tt2 = Claims::new();
+    tt2.entry(sq)
+        .or_default()
+        .push((timetable_iv(1, 0, [100.0, 200.0], 2079, 2.0), 0));
+    let fl_claims = match_no_yards(
+        &model,
+        &fl,
+        &[
+            crossing_at(
+                "R1",
+                meters_to_latlon(lat, lon, 0.0, 50.0),
+                [6.0, 2.0, 2.0],
+                Some(8.0),
+                1,
+            ),
+            crossing_at(
+                "R2",
+                meters_to_latlon(lat, lon, 5.0, 250.0),
+                [6.0, 2.0, 2.0],
+                None,
+                1,
+            ),
+        ],
+        111,
+        *b"US",
+        &squares,
+        &tt2,
+    );
+    let shared_frt: f64 = fl_claims
+        .iter()
+        .filter(|(_, iv)| {
+            (iv.osm_id == 1 && iv.from_m >= 99.0) || (iv.osm_id == 2 && iv.to_m <= 101.0)
+        })
+        .map(|(_, iv)| claim_freight(iv))
+        .sum();
+    assert!((shared_frt - 12.0).abs() < 1e-6, "shared_frt={shared_frt}");
+}
+
+#[test]
+fn final_review_allocator_and_corridor_regressions() {
+    let model = test_model();
+    let (lat, lon) = (40.0, -74.0);
+    let sq = [150, 193];
+    let squares = HashSet::from([sq]);
+
+    // 1. Oblique sibling timetable cut stays at its exact originating coordinate (no round-trip shift).
+    let mut obl = Network::default();
+    let angle = 5.0_f64.to_radians();
+    let a0 = obl.nodes.len();
+    obl.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let a1 = obl.nodes.len();
+    obl.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    let b0 = obl.nodes.len();
+    obl.nodes.push(meters_to_latlon(lat, lon, 10.0, 0.0));
+    let b1 = obl.nodes.len();
+    obl.nodes.push(meters_to_latlon(
+        lat,
+        lon,
+        10.0 + 200.0 * angle.sin(),
+        200.0 * angle.cos(),
+    ));
+    add_edge(&mut obl, a0, a1, 1, 0, sq, [0.0, 200.0]);
+    add_edge(&mut obl, b0, b1, 2, 0, sq, [0.0, 200.0]);
+    obl.index();
+    let mut obl_tt = Claims::new();
+    obl_tt
+        .entry(sq)
+        .or_default()
+        .push((timetable_iv(2, 0, [0.0, 100.0], 2079, 10.0), 0));
+    let obl_claims = match_no_yards(
+        &model,
+        &obl,
+        &[crossing_at(
+            "OBL",
+            meters_to_latlon(lat, lon, 0.0, 50.0),
+            [12.0, 4.0, 4.0],
+            Some(0.0),
+            2,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &obl_tt,
+    );
+    let leg2_tt = obl_claims
+        .iter()
+        .find(|(_, iv)| iv.osm_id == 2 && iv.resolved_section.unwrap().passenger.source_id == 2079)
+        .expect("leg 2 timetable interval");
+    assert!(
+        (leg2_tt.1.to_m - 100.0).abs() < 1e-4,
+        "sibling cut drifted to {}",
+        leg2_tt.1.to_m
+    );
+
+    // 2. Equal-total ties sort by passenger count (not crossing ID), and LT1 never borrows >= 1.
+    let mut single = Network::default();
+    let s0 = single.nodes.len();
+    single.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let s1 = single.nodes.len();
+    single.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    add_edge(&mut single, s0, s1, 1, 0, sq, [0.0, 200.0]);
+    single.index();
+    let id_order = match_no_yards(
+        &model,
+        &single,
+        &[
+            crossing_at(
+                "A",
+                meters_to_latlon(lat, lon, 0.0, 40.0),
+                [9.0, 3.0, 6.0],
+                Some(0.0),
+                1,
+            ),
+            crossing_at(
+                "B",
+                meters_to_latlon(lat, lon, 0.0, 100.0),
+                [9.0, 3.0, 6.0],
+                Some(12.0),
+                1,
+            ),
+            crossing_at(
+                "C",
+                meters_to_latlon(lat, lon, 0.0, 160.0),
+                [9.0, 3.0, 6.0],
+                Some(0.0),
+                1,
+            ),
+        ],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert!(claim_passenger(&id_order[0].1).abs() < 1e-6);
+    assert!((claim_freight(&id_order[0].1) - 18.0).abs() < 1e-6);
+
+    let mut lt1_a = crossing_at(
+        "L1",
+        meters_to_latlon(lat, lon, 0.0, 40.0),
+        [9.0, 3.0, 6.0],
+        None,
+        1,
+    );
+    lt1_a.passenger_lt1 = true;
+    let mut lt1_b = crossing_at(
+        "L2",
+        meters_to_latlon(lat, lon, 0.0, 100.0),
+        [9.0, 3.0, 6.0],
+        None,
+        1,
+    );
+    lt1_b.passenger_lt1 = true;
+    let lt1_claims = match_no_yards(
+        &model,
+        &single,
+        &[
+            lt1_a,
+            lt1_b,
+            crossing_at(
+                "P2",
+                meters_to_latlon(lat, lon, 0.0, 160.0),
+                [9.0, 3.0, 6.0],
+                Some(2.0),
+                1,
+            ),
+        ],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert!(claim_passenger(&lt1_claims[0].1) < 1.0);
+    assert!((claim_passenger(&lt1_claims[0].1) - 0.8).abs() < 1e-6);
+
+    // Skewed-total Swanton case: 5x(2,0) + 2x(2,2) + 3x(4,0) -> median total is 2 and median
+    // within total==2 is pax=0 (must not pick the minority pax=2 pushed to the upper boundary).
+    let mut skewed = Vec::new();
+    for i in 0..5 {
+        skewed.push(crossing_at(
+            &format!("F{i}"),
+            meters_to_latlon(lat, lon, 0.0, 20.0 + i as f64 * 10.0),
+            [1.0, 0.0, 1.0],
+            Some(0.0),
+            1,
+        ));
+    }
+    for i in 0..2 {
+        skewed.push(crossing_at(
+            &format!("P{i}"),
+            meters_to_latlon(lat, lon, 0.0, 80.0 + i as f64 * 10.0),
+            [1.0, 0.0, 1.0],
+            Some(2.0),
+            1,
+        ));
+    }
+    for i in 0..3 {
+        skewed.push(crossing_at(
+            &format!("H{i}"),
+            meters_to_latlon(lat, lon, 0.0, 110.0 + i as f64 * 10.0),
+            [2.0, 0.0, 2.0],
+            Some(0.0),
+            1,
+        ));
+    }
+    let skewed_claims = match_no_yards(
+        &model,
+        &single,
+        &skewed,
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    assert!(claim_passenger(&skewed_claims[0].1).abs() < 1e-6);
+    assert!((claim_freight(&skewed_claims[0].1) - 2.0).abs() < 1e-6);
+
+    // 3. Coincident duplicate OSM ways (UP Gila 98/207) share one physical track slot while a 5 m
+    //    parallel track gets its full physical share (15.5 + (7.75 + 7.75) = 31.0).
+    let mut dup = Network::default();
+    for (way, x) in [(1i64, 0.0), (2, 0.0), (3, 5.0)] {
+        let n0 = dup.nodes.len();
+        dup.nodes.push(meters_to_latlon(lat, lon, x, 0.0));
+        let n1 = dup.nodes.len();
+        dup.nodes.push(meters_to_latlon(lat, lon, x, 200.0));
+        add_edge(&mut dup, n0, n1, way, 0, sq, [0.0, 200.0]);
+    }
+    dup.index();
+    let dup_claims = match_no_yards(
+        &model,
+        &dup,
+        &[crossing_at(
+            "GILA",
+            meters_to_latlon(lat, lon, 0.0, 100.0),
+            [15.0, 6.0, 10.0],
+            Some(0.0),
+            2,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    let frt_way = |way: i64| {
+        dup_claims
+            .iter()
+            .find(|(_, iv)| iv.osm_id == way)
+            .map(|(_, iv)| claim_freight(iv))
+            .unwrap()
+    };
+    assert!((frt_way(1) - 7.75).abs() < 1e-6);
+    assert!((frt_way(2) - 7.75).abs() < 1e-6);
+    assert!((frt_way(3) - 15.5).abs() < 1e-6);
+
+    // 4. Passing siding (200 m + 80 m) with sole 40-train crossing INSIDE overlap conserves 40 on
+    //    both single-track tails; river split (both legs continuing) still emits 20 on each tail.
+    let mut sid = Network::default();
+    let m0 = sid.nodes.len();
+    sid.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let m1 = sid.nodes.len();
+    sid.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    let p0 = sid.nodes.len();
+    sid.nodes.push(meters_to_latlon(lat, lon, 5.0, 60.0));
+    let p1 = sid.nodes.len();
+    sid.nodes.push(meters_to_latlon(lat, lon, 5.0, 140.0));
+    add_edge(&mut sid, m0, m1, 1, 0, sq, [0.0, 200.0]);
+    add_edge(&mut sid, p0, p1, 2, 0, sq, [0.0, 80.0]);
+    sid.index();
+    let sid_claims = match_no_yards(
+        &model,
+        &sid,
+        &[crossing_at(
+            "IN",
+            meters_to_latlon(lat, lon, 0.0, 100.0),
+            [20.0, 8.0, 12.0],
+            Some(0.0),
+            2,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    let sid_at = |way: i64, m: f64| {
+        sid_claims
+            .iter()
+            .find(|(_, iv)| iv.osm_id == way && iv.from_m <= m && m <= iv.to_m)
+            .map(|(_, iv)| claim_freight(iv))
+            .unwrap()
+    };
+    assert!((sid_at(1, 30.0) - 40.0).abs() < 1e-6);
+    assert!((sid_at(1, 100.0) - 20.0).abs() < 1e-6);
+    assert!((sid_at(2, 40.0) - 20.0).abs() < 1e-6);
+    assert!((sid_at(1, 170.0) - 40.0).abs() < 1e-6);
+
+    // 5. Closed 40 m x 5 m rectangle with mid-side origin wraps seam on s_b -> 10 per leg.
+    let mut rect = Network::default();
+    let pts = [
+        (0.0, 20.0),
+        (0.0, 40.0),
+        (5.0, 40.0),
+        (5.0, 0.0),
+        (0.0, 0.0),
+    ];
+    let rnodes: Vec<usize> = pts
+        .iter()
+        .map(|&(x, y)| {
+            let id = rect.nodes.len();
+            rect.nodes.push(meters_to_latlon(lat, lon, x, y));
+            id
+        })
+        .collect();
+    let mut off = 0.0;
+    for (seg, &(i, j, len)) in [
+        (0usize, 1usize, 20.0),
+        (1, 2, 5.0),
+        (2, 3, 40.0),
+        (3, 4, 5.0),
+        (4, 0, 20.0),
+    ]
+    .iter()
+    .enumerate()
+    {
+        add_edge(
+            &mut rect,
+            rnodes[i],
+            rnodes[j],
+            1,
+            seg as i16,
+            sq,
+            [off, off + len],
+        );
+        off += len;
+    }
+    rect.index();
+    let rect_claims = match_no_yards(
+        &model,
+        &rect,
+        &[crossing_at(
+            "LP",
+            meters_to_latlon(lat, lon, 0.0, 30.0),
+            [10.0, 4.0, 6.0],
+            Some(0.0),
+            1,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    for seg in [0i16, 2, 4] {
+        let frt = rect_claims
+            .iter()
+            .find(|(_, iv)| iv.segment_idx == seg)
+            .map(|(_, iv)| claim_freight(iv))
+            .unwrap();
+        assert!(
+            (frt - 10.0).abs() < 1e-6,
+            "mid-side rect seg={seg} frt={frt}"
+        );
+    }
+
+    // 6. Mixed freight-only (mode=2) + mixed (mode=0) tracks with unknown split keep 0 pax on
+    //    freight-only track and conserve total; higher-rank freight keeps measured FRA remainder.
+    let mut tm = Network::default();
+    let t0 = tm.nodes.len();
+    tm.nodes.push(meters_to_latlon(lat, lon, 0.0, 0.0));
+    let t1 = tm.nodes.len();
+    tm.nodes.push(meters_to_latlon(lat, lon, 0.0, 200.0));
+    let f0 = tm.nodes.len();
+    tm.nodes.push(meters_to_latlon(lat, lon, 5.0, 0.0));
+    let f1 = tm.nodes.len();
+    tm.nodes.push(meters_to_latlon(lat, lon, 5.0, 200.0));
+    add_edge(&mut tm, t0, t1, 1, 0, sq, [0.0, 200.0]);
+    add_edge(&mut tm, f0, f1, 2, 0, sq, [0.0, 200.0]);
+    tm.edges[1].traffic_mode = 2; // freight-only
+    tm.index();
+    let tm_claims = match_no_yards(
+        &model,
+        &tm,
+        &[crossing_at(
+            "TRN",
+            meters_to_latlon(lat, lon, 0.0, 100.0),
+            [12.0, 4.0, 4.0],
+            None,
+            2,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &Claims::new(),
+    );
+    let leg1 = tm_claims
+        .iter()
+        .find(|(_, iv)| iv.osm_id == 1)
+        .unwrap()
+        .1
+        .clone();
+    let leg2 = tm_claims
+        .iter()
+        .find(|(_, iv)| iv.osm_id == 2)
+        .unwrap()
+        .1
+        .clone();
+    assert!(
+        claim_passenger(&leg2).abs() < 1e-6,
+        "freight-only leg got pax={}",
+        claim_passenger(&leg2)
+    );
+    assert!((claim_passenger(&leg1) - 16.0).abs() < 1e-6);
+    assert!((claim_freight(&leg1) - 2.0).abs() < 1e-6);
+    assert!((claim_freight(&leg2) - 2.0).abs() < 1e-6);
+
+    let mut hf = Claims::new();
+    hf.entry(sq).or_default().push((
+        Interval {
+            missing_calendar_estimate: [0.0; 2],
+            osm_id: 1,
+            segment_idx: 0,
+            from_m: 0.0,
+            to_m: 200.0,
+            country: *b"US",
+            source_id: 2079,
+            passenger: 0.0,
+            freight: 12.0,
+            passenger_status: STATUS_UNKNOWN,
+            freight_status: STATUS_ESTIMATED,
+            matching: 2,
+            stop: 0,
+            resolved_section: None,
+        },
+        0,
+    ));
+    let hf_claims = match_no_yards(
+        &model,
+        &single,
+        &[crossing_at(
+            "HF",
+            meters_to_latlon(lat, lon, 0.0, 100.0),
+            [12.0, 4.0, 4.0],
+            None,
+            1,
+        )],
+        111,
+        *b"US",
+        &squares,
+        &hf,
+    );
+    assert_eq!(hf_claims.len(), 1);
+    assert!((claim_freight(&hf_claims[0].1) - 12.0).abs() < 1e-6);
+    assert!((claim_passenger(&hf_claims[0].1) - 8.0).abs() < 1e-6);
+
+    // 7. Competing-name symmetry: (R1/Main, Main, R2/Main) produces the same partition regardless
+    //    of which way sorts first.
+    let run_perm = |ids: [i64; 3]| -> (f64, f64, f64) {
+        let mut net = Network::default();
+        let specs = [
+            (ids[0], 0.0, "R1", "Main"),
+            (ids[1], 5.0, "Main", ""),
+            (ids[2], 10.0, "R2", "Main"),
+        ];
+        for (way, x, corr, corr_name) in specs {
+            let n0 = net.nodes.len();
+            net.nodes.push(meters_to_latlon(lat, lon, x, 0.0));
+            let n1 = net.nodes.len();
+            net.nodes.push(meters_to_latlon(lat, lon, x, 200.0));
+            add_edge(&mut net, n0, n1, way, 0, sq, [0.0, 200.0]);
+            let e = net.edges.last_mut().unwrap();
+            e.corridor = corr.into();
+            e.corridor_name = corr_name.into();
+        }
+        net.index();
+        let cl = match_no_yards(
+            &model,
+            &net,
+            &[crossing_at(
+                "C1",
+                meters_to_latlon(lat, lon, 0.0, 100.0),
+                [10.0, 4.0, 6.0],
+                Some(0.0),
+                1,
+            )],
+            111,
+            *b"US",
+            &squares,
+            &Claims::new(),
+        );
+        let get = |w: i64| {
+            cl.iter()
+                .find(|(_, iv)| iv.osm_id == w)
+                .map_or(0.0, |(_, iv)| claim_freight(iv))
+        };
+        (get(ids[0]), get(ids[1]), get(ids[2]))
+    };
+    let expected = (10.0, 10.0, 0.0);
+    for perm in [
+        [1, 2, 3],
+        [2, 1, 3],
+        [3, 1, 2],
+        [3, 2, 1],
+        [1, 3, 2],
+        [2, 3, 1],
+    ] {
+        assert_eq!(run_perm(perm), expected, "perm={perm:?}");
+    }
 }

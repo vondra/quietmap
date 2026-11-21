@@ -2,6 +2,7 @@
 
 use super::model::RailModel;
 use super::square_intervals::Interval;
+use std::borrow::Borrow;
 
 pub const STATUS_UNKNOWN: u8 = 0;
 pub const STATUS_KNOWN: u8 = 1;
@@ -19,13 +20,14 @@ struct Claim {
     stop: u32,
 }
 
-pub fn overlapping(
-    intervals: &[Interval],
+pub fn overlapping<T: Borrow<Interval>>(
+    intervals: &[T],
     from_m: f64,
     to_m: f64,
 ) -> impl Iterator<Item = &Interval> {
     intervals
         .iter()
+        .map(Borrow::borrow)
         .filter(move |interval| interval.from_m < to_m && interval.to_m > from_m)
 }
 
@@ -93,9 +95,9 @@ fn estimated_flow(daily: f64, shares: [f64; 3], source_id: u16, matching: u8) ->
 /// Per-track evidence of one child, split by timetable ownership: the winning source per
 /// category among the track's own country files (domestic) and among neighbour files
 /// (foreign cross-border services), no priors yet.
-pub fn row_evidence(
+pub fn row_evidence<T: Borrow<Interval>>(
     model: &RailModel,
-    intervals: &[Interval],
+    intervals: &[T],
     from_m: f64,
     to_m: f64,
     rail_type: u8,

@@ -1,7 +1,11 @@
 //! Match normalized rail movements to original topology, then finalize traffic and crossing approaches.
 mod alignment;
 pub(crate) mod config;
+mod corridor;
+mod corridor_runs;
+mod corridor_spans;
 pub(crate) mod coverage;
+mod crossing_resolve;
 mod crossings;
 pub(crate) mod encode;
 mod horn_geometry;

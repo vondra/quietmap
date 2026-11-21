@@ -61,12 +61,17 @@ fn expand_halo(squares: &HashSet<[u16; 2]>) -> HashSet<[u16; 2]> {
     expanded
 }
 
-fn intersects(bounds: [f64; 4], squares: &HashSet<[u16; 2]>) -> bool {
+fn bounds_squares(bounds: [f64; 4]) -> [u16; 4] {
     let nw = crate::osm::geometry::square_of(bounds[2], bounds[1]);
     let se = crate::osm::geometry::square_of(bounds[0], bounds[3]);
+    [nw.x, se.x, nw.y, se.y]
+}
+
+fn intersects(bounds: [f64; 4], squares: &HashSet<[u16; 2]>) -> bool {
+    let [x0, x1, y0, y1] = bounds_squares(bounds);
     squares
         .iter()
-        .any(|square| (nw.x..=se.x).contains(&square[0]) && (nw.y..=se.y).contains(&square[1]))
+        .any(|square| (x0..=x1).contains(&square[0]) && (y0..=y1).contains(&square[1]))
 }
 
 pub fn read(
@@ -84,6 +89,7 @@ pub fn read(
         crossings: HashMap::new(),
     };
     let halo_squares = expand_halo(squares);
+    let mut interval_keys: Vec<super::yards::YardEdgeKey> = Vec::new();
     let mut unlocated = (0usize, 0.0, 0.0);
     let mut incomplete_zeros = 0;
     let mut stops = 0;
@@ -117,6 +123,7 @@ pub fn read(
                     occurrence,
                 } = movement.location
                 {
+                    interval_keys.push((square, way, segment));
                     if halo_squares.contains(&square) {
                         result.claims.entry(square).or_default().push((
                             interval(&movement, way, segment, from_m, to_m, movement.matching),
@@ -157,12 +164,34 @@ pub fn read(
         Ok(())
     })?;
     // When crossing inventories allocate across global cross-sections, keep 1-ring neighbour
-    // timetable claims so boundary tracks see their parallel sibling's timetable across cuts.
+    // timetable claims so boundary tracks see their parallel sibling's timetable across cuts,
+    // and track direct-claim keys across the full crossing graph bounds for yard exemptions.
     let claim_squares = if crossing_groups.is_empty() {
         squares
     } else {
         &halo_squares
     };
+    let mut yard_bounds: Vec<[u16; 4]> = Vec::new();
+    for &source_id in crossing_groups.keys() {
+        let source = model
+            .source(source_id)
+            .ok_or_else(|| format!("unknown rail crossing source {source_id}"))?;
+        let scope = format!("{source_id}:{}", source.owner);
+        if let Some(&bounds) = model.network_bounds.get(&scope)
+            && intersects(bounds, squares)
+        {
+            yard_bounds.push(bounds_squares(bounds));
+        }
+    }
+    let in_yard_bounds = |sq: [u16; 2]| {
+        yard_bounds
+            .iter()
+            .any(|b| sq[0] >= b[0] && sq[0] <= b[1] && sq[1] >= b[2] && sq[1] <= b[3])
+    };
+    let mut yard_direct_claims: HashSet<super::yards::YardEdgeKey> = interval_keys
+        .into_iter()
+        .filter(|&(sq, _, _)| in_yard_bounds(sq))
+        .collect();
     if unlocated.0 > 0 {
         eprintln!(
             "railways: {} unlocated observations: {} observed and {} calendar-estimated daily departures remain spatially unknown",
@@ -219,6 +248,9 @@ pub fn read(
                 let offset = occurrence;
                 for passage in matched.passages {
                     occurrence = occurrence.max(offset + passage.occurrence + 1);
+                    if in_yard_bounds(passage.square) {
+                        yard_direct_claims.insert((passage.square, passage.way, passage.segment));
+                    }
                     if claim_squares.contains(&passage.square) {
                         result.claims.entry(passage.square).or_default().push((
                             interval(
@@ -257,7 +289,7 @@ pub fn read(
                 .find(|movement| matches!(movement.location, Location::StationPair { .. }))
                 .unwrap();
             for (index, edge) in graph.edges.iter().enumerate() {
-                if !claim_squares.contains(&edge.square) || edge.traversal_only {
+                if edge.traversal_only {
                     continue;
                 }
                 let observed = pairs.edges.get(&index);
@@ -265,9 +297,19 @@ pub fn read(
                     .residuals
                     .get(&scope)
                     .filter(|_| !pairs.quarantine.contains(&index));
+                if observed.is_none() && residual.is_none() {
+                    continue;
+                }
+                if in_yard_bounds(edge.square) {
+                    yard_direct_claims.insert((edge.square, edge.way, edge.segment));
+                }
+                if !claim_squares.contains(&edge.square) {
+                    continue;
+                }
                 let movement = if let Some(observed) = observed {
                     observed.clone()
-                } else if let Some(residual) = residual {
+                } else {
+                    let residual = residual.unwrap();
                     let mut row = template.clone();
                     row.source_id = residual.source_id;
                     row.passenger = Some(residual.passenger);
@@ -277,8 +319,6 @@ pub fn read(
                     row.coverage = Default::default();
                     row.estimate_missing_calendar();
                     row
-                } else {
-                    continue;
                 };
                 result.claims.entry(edge.square).or_default().push((
                     interval(
@@ -302,6 +342,17 @@ pub fn read(
             stops,
         )?;
     }
+    if !yard_bounds.is_empty() {
+        for (&square, list) in &result.claims {
+            if in_yard_bounds(square) {
+                for (iv, _) in list {
+                    if iv.resolved_section.is_none() {
+                        yard_direct_claims.insert((square, iv.osm_id, iv.segment_idx));
+                    }
+                }
+            }
+        }
+    }
     for (source_id, crossings) in crossing_groups {
         let source = model
             .source(source_id)
@@ -324,6 +375,14 @@ pub fn read(
             crossings.len()
         );
         let graph = Network::read(geography, bounds)?;
+        let graph_squares: HashSet<[u16; 2]> = graph
+            .edges
+            .iter()
+            .filter(|edge| !edge.traversal_only && edge.rail_type == 0 && edge.country == country)
+            .map(|edge| edge.square)
+            .collect();
+        let yard_keys =
+            super::yards::yard_stamped_keys(geography, &graph_squares, &yard_direct_claims)?;
         for (square, claim) in super::crossings::match_crossings(
             model,
             &graph,
@@ -332,6 +391,7 @@ pub fn read(
             country,
             squares,
             &result.claims,
+            &yard_keys,
         ) {
             result.claims.entry(square).or_default().push((claim, 0));
         }
