@@ -1,4 +1,4 @@
-// Heatmap cell readouts: the painted cell's loudness, silence, no level and failed tiles, the tile cache.
+// Heatmap cell readouts and the shared tile cache.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -29,11 +29,11 @@ test('the readout is the cell loudness: twice its loudness level in phon, 80 one
 
 test('an Lden cell reads its decibels: twice its level in half-dB steps', () => {
   assert.deepEqual(readHeatmapCell(tileWith(121, 'lden'), CELL), { kind: 'lden', db: 60.5 })
-  assert.deepEqual(readHeatmapCell(tileWith(HM3_SILENCE, 'lden'), CELL), { kind: 'silence' })
+  assert.deepEqual(readHeatmapCell(tileWith(HM3_SILENCE, 'lden'), CELL), { kind: 'below-floor' })
 })
 
-test('a cell assessed under 1/16 sone reads silence, one not assessed no level, a failed tile unavailable', () => {
-  assert.deepEqual(readHeatmapCell(tileWith(HM3_SILENCE), CELL), { kind: 'silence' })
+test('the readout distinguishes a level below 1/16 sone, a missing assessment and a failed tile', () => {
+  assert.deepEqual(readHeatmapCell(tileWith(HM3_SILENCE), CELL), { kind: 'below-floor' })
   assert.deepEqual(readHeatmapCell(tileWith(HM3_NO_LEVEL), CELL), { kind: 'no-level' })
   assert.deepEqual(readHeatmapCell('absent', CELL), { kind: 'no-level' })
   assert.deepEqual(readHeatmapCell('failed', CELL), { kind: 'unavailable' })

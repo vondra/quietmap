@@ -27,8 +27,11 @@ The colours blend smoothly in between. A quiet place stays clear on every base m
 terrain too; the loud ones grow dark and opaque. The swatches show them over a white map. What a sone is, and how it
 differs from a decibel, is on [Noise at a point](/about/noise-at-a-point#what-the-numbers-mean).
 
-A place not yet painted is clear too, without the quiet zones' green, and its hover reads "—". The
-popup computes it all the same.
+The hover reads “Below map range” when the selected sources fall below the map's scale,
+which starts at 1/16 sone or 0 dB Lden.
+An occasional plane can still be audible, and voices or running water can be much louder.
+An unassessed cell shows “—” and
+stays clear when quiet zones are switched on. Click or tap either place for the point calculation.
 
 ### Lden
 
@@ -337,13 +340,13 @@ the hum
 building's façade `paint/src/buildings.rs`, a pixel's loudness `paint/src/sone.rs` at
 `popup::percentiles::Resolution::MAP`, and the tiles `paint/src/hm3.rs` and `hm3_square.rs`: per layer and the total,
 four tiles of zoom 13 of 512 × 512 cells of 80 + 20 log₂ of the loudness in sone, twice the loudness
-level in phon from 1 sone up (80 one sone, a doubling 20; 254 silence under 1/16 sone, 255 not
-assessed). Each tile is compressed when painted: PNG's Paeth predictor uses
+level in phon from 1 sone up (80 at one sone, a doubling 20). Code 254 means below 1/16 sone,
+and 255 means the cell has no assessment. Each tile is compressed when painted: PNG's Paeth predictor uses
 the left, above and upper-left cells (zero outside the tile), and the cell minus that prediction,
 modulo 256, enters one lossless Brotli stream with a 512 KiB window. The painter uses quality 10
 for new tiles; existing streams at other quality settings decode in the same way.
-The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` restores the same prediction in place;
-every cell, including silence and not assessed, returns exactly.
+The browser's HTTP stack decompresses, and `frontend/src/lib/hm3-decoder.ts` restores the
+original byte for every cell.
 
 The square format supports one atomic bundle containing these Nden streams and Lden
 in decibels for each layer and the total. Lden comes from the same propagated energies, summed before taking

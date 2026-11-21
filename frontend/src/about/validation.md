@@ -56,10 +56,27 @@ typical train, which limits this comparison as an independent check.
 
 ## Quiet places
 
-Nearly all these microphones stand in loud places; the quiet places the map is for are hardly
-checked yet. The only set so far is [Silenzi in Quota](https://zenodo.org/records/20719737)'s 73
-recordings of a few daytime minutes in quiet mountains (CC BY 4.0). It hears everything, nature
-included, so it should read above the map, and it does: by 13.6 dB at the typical point. But at 14
-points the map is louder than everything measured, at 13 of them because of a road.
+A place can have little human-made noise and still sound loud. On the
+[North Fork Skokomish River Trail](/#lat=47.525142&lng=-123.339283&z=15&d=47.525142,-123.339283&calc=1),
+the sources we map average 23.4 dB over 24 hours, calculated from the day, evening and night
+levels shown at that point. A microphone recording all sound averaged 51.7 dB in summer 2011.
+Park staff heard mostly flowing water. [Skokomish field observations, p. 43](https://irma.nps.gov/DataStore/FileSource/Get/2287637?filename=2021_OLYM_Acoustic_Report.pdf#page=63).
+
+At six sites in Olympic National Park, Washington, the National Park Service ran 13 seasonal
+deployments in 2010–11. At five sites every campaign's 24-hour A-weighted average exceeded our
+annual estimate for 2026. The microphones heard natural and human sounds together. At Hurricane Ridge the model gave
+40.4 dB, higher than even the total sound measured in winter (37.8 dB) and summer (35.5 dB).
+The map may overstate transport noise there. The popup attributes it to both roads and aircraft.
+[Olympic acoustic report, tables 6 and 28](https://irma.nps.gov/DataStore/Reference/Profile/2287637).
+
+In Europe, the Silenzi in Quota soundwalks recorded all sounds at 73 mountain stops. At the
+typical stop the short recording was about 14 dB above the map's annual daytime level. At 14 stops
+the map was higher. A road was the loudest modelled source at 13, aircraft at the other.
+A short recording can fall between passing vehicles. In the
+[woods at Linn of Dee](/#lat=56.990667&lng=-3.544250&z=15&d=56.990667,-3.544250&calc=1)
+in Scotland, the recording gave 31.3 dB on 28 May 2023. The map gives 30.5 dB by day at the forest
+microphone and 24.1 dB at the peat-bog stop just 206 m away.
+[Soundwalk data (CC BY 4.0)](https://zenodo.org/records/20719737) and
+[Oberman and colleagues’ field study](https://doi.org/10.1038/s41598-025-08524-y).
 
 Measured a quiet place? [Tell us](mailto:info@quietmap.org): it is the measurement we need most.

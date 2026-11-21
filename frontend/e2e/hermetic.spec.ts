@@ -78,6 +78,11 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await page.goto(mapUrl(POINT, ALL_LAYERS, TILE_Z + 2))
   await tileLoaded
   const { canvas, x, y } = await canvasCenter(page)
+  // At two zooms above the tile a cell is four screen pixels wide.
+  await page.mouse.move(x + 8, y)
+  await expect(page.getByTestId('heatmap-hover')).toHaveText('—')
+  await page.mouse.move(x + 4, y)
+  await expect(page.getByTestId('heatmap-hover')).toHaveText('Below map range')
   await page.mouse.move(x, y)
   await expect(page.getByTestId('heatmap-hover')).toHaveText(`${TOTAL_SONE} sone`)
   let combinedPixel: number[] = []
@@ -175,6 +180,8 @@ test('desktop: the Lden switch shows the Lden tiles in dB, adds layers as energy
   await expect(page).toHaveURL(/m=lden/)
   const { x, y } = await canvasCenter(page)
   const hover = page.getByTestId('heatmap-hover')
+  await page.mouse.move(x + 4, y)
+  await expect(hover).toHaveText('Below map range')
   await page.mouse.move(x, y)
   await expect(hover).toHaveText(`${TOTAL_LDEN.toFixed(1)} dB`)
   const layer = (id: string) => page.getByTestId(`layer-${id}`).filter({ visible: true })

@@ -54,7 +54,7 @@ export function useStayNoise(pins: Stay[], view: ViewBox | null, metric: Metric,
     return {
       pins: threshold == null ? pins : pins.filter((_, at) => {
         const sample = readouts[at]
-        return sample?.kind === 'silence'
+        return sample?.kind === 'below-floor'
           || (metric === 'nden' && sample?.kind === 'level' && sample.sone <= threshold)
           || (metric === 'lden' && sample?.kind === 'lden' && sample.db <= threshold)
       }),
