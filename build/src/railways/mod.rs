@@ -62,7 +62,15 @@ pub fn build(
         &selected,
     )?;
     let mut rows = matched.claims;
-    let mut crossings = matched.crossings;
+    let crossings = matched.crossings;
+    let regions = if crossings.values().any(|list| !list.is_empty()) {
+        Some(
+            crate::osm::geography::Regions::read(inputs.required(Kind::PrepareRegions)?)
+                .map_err(|error| error.to_string())?,
+        )
+    } else {
+        None
+    };
     let mut squares = squares.to_vec();
     squares.sort_unstable();
     squares.dedup();
@@ -70,10 +78,16 @@ pub fn build(
         let relative = format!("z9/{}/{}", square.x, square.y);
         let key = [square.x as u16, square.y as u16];
         let intervals = square_intervals::grouped(rows.remove(&key).unwrap_or_default());
+        let own_crossings = crossings.get(&key).map(Vec::as_slice).unwrap_or_default();
         let rows = write::finalize_square(
             &model,
             &geography.join(&relative),
-            &crossings.remove(&key).unwrap_or_default(),
+            own_crossings,
+            regions.as_ref(),
+            Some(horns::NeighborHorns {
+                geography,
+                all_crossings: &crossings,
+            }),
             &intervals,
             &output.join(&relative),
             crate::osm::geometry::Square {

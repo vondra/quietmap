@@ -66,22 +66,27 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
         synth_osm: -1,
         total_periods: Some([10.0, 2.0, 6.0]),
         passenger_daily: Some(4.0),
-        main_tracks: Some(2),
+        passenger_lt1: false,
         measured_periods: true,
     };
     check(base.clone()).unwrap();
 
-    // Explicit zero with main_tracks is valid; horn-only with None total_periods is valid.
+    // Explicit zero and LT1-bounded unknown passenger split are valid; horn-only is valid.
     let mut explicit_zero = base.clone();
     explicit_zero.total_periods = Some([0.0; 3]);
     explicit_zero.passenger_daily = Some(0.0);
     check(explicit_zero).unwrap();
 
+    let mut lt1_unknown = base.clone();
+    lt1_unknown.passenger_daily = None;
+    lt1_unknown.passenger_lt1 = true;
+    check(lt1_unknown).unwrap();
+
     let horn_only = Crossing {
         soundings: [6.0, 2.0, 4.0],
         total_periods: None,
         passenger_daily: None,
-        main_tracks: None,
+        passenger_lt1: false,
         measured_periods: false,
         ..base.clone()
     };
@@ -92,21 +97,26 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
         soundings: [6.0, 2.0, 4.0],
         total_periods: None,
         passenger_daily: None,
-        main_tracks: None,
+        passenger_lt1: false,
         measured_periods: true,
         ..base.clone()
     };
     assert!(check(bad_measured).is_err());
 
-    // Missing main_tracks alongside total_periods is rejected.
-    let mut no_tracks = base.clone();
-    no_tracks.main_tracks = None;
-    assert!(check(no_tracks).is_err());
+    // passenger_lt1 alongside a known passenger count or without total_periods is rejected.
+    let mut bad_lt1_known = base.clone();
+    bad_lt1_known.passenger_lt1 = true;
+    assert!(check(bad_lt1_known).is_err());
 
-    // Zero main_tracks is rejected.
-    let mut zero_tracks = base.clone();
-    zero_tracks.main_tracks = Some(0);
-    assert!(check(zero_tracks).is_err());
+    let bad_lt1_empty = Crossing {
+        soundings: [6.0, 2.0, 4.0],
+        total_periods: None,
+        passenger_daily: None,
+        passenger_lt1: true,
+        measured_periods: false,
+        ..base.clone()
+    };
+    assert!(check(bad_lt1_empty).is_err());
 
     // Passenger exceeding total is rejected.
     let mut bad_pax = base.clone();
@@ -117,7 +127,7 @@ fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
     let mut empty = base.clone();
     empty.total_periods = None;
     empty.passenger_daily = None;
-    empty.main_tracks = None;
+    empty.measured_periods = false;
     assert!(check(empty).is_err());
 
     // Null Island (0, 0) is rejected.

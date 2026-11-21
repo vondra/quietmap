@@ -1,17 +1,23 @@
 //! Construct crossing approaches and merge their shared same-direction soundings.
 use super::{model::RailModel, types::Crossing};
+use crate::osm::geography::Regions;
 use arrow_array::RecordBatch;
 const HORN_RAIL_TYPE: u8 = 6;
 const MATCH_GATE_M: f64 = 60.0;
 // 49 CFR 222.21: twenty seconds, bounded by one quarter mile.
 const SOUNDING_LEAD_S: f64 = 20.0;
 const HORN_ZONE_M: f64 = 402.336;
+const MIN_APPROACH_M: f64 = 1.0;
 const MERGE_DIR_DOT: f64 = 0.9;
 const MERGE_LATERAL_M: f64 = 5.0;
+pub(super) const CROSS_SQUARE_HORN_REACH_M: f64 = 2.0 * HORN_ZONE_M + 2.0 * MATCH_GATE_M;
 pub(super) struct Approach {
     pub crossing: usize,
+    pub synth_osm: i64,
+    pub owned: bool,
     pub approach_idx: usize,
     pub matched_row: u32,
+    pub country: [u8; 2],
     pub start_lon: f64,
     pub start_lat: f64,
     pub end_lon: f64,
@@ -83,6 +89,7 @@ pub(super) fn match_crossing(
     best.map(|(_, row, cp_lat, cp_lon)| (row, cp_lat, cp_lon))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_approaches(
     crossing_idx: usize,
     crossing: &Crossing,
@@ -90,8 +97,11 @@ pub(super) fn build_approaches(
     cp_lat: f64,
     cp_lon: f64,
     rows: &[BaseRow],
-) -> [Approach; 2] {
+    regions: Option<&Regions>,
+    owned: bool,
+) -> Vec<Approach> {
     let base = &rows[matched_row as usize];
+    let base_code = u16::from_le_bytes(base.country);
     // Local-metre direction of the matched row at the crossing.
     let m_lon = crate::osm::geometry::m_per_deg_lon(cp_lat.to_radians());
     let dx = crate::osm::geometry::wrapped_longitude_delta(base.start_lon, base.end_lon) * m_lon;
@@ -107,22 +117,40 @@ pub(super) fn build_approaches(
         crossing.soundings[1] / 2.0,
         crossing.soundings[2] / 2.0,
     ];
-    [1.0, -1.0].map(|sign| {
+    let mut out = Vec::with_capacity(2);
+    for sign in [1.0, -1.0] {
         let (sx, sy) = (-sign * ux * zone, -sign * uy * zone);
-        Approach {
+        let full_start_lon = cp_lon + sx / m_lon;
+        let full_start_lat = cp_lat + sy / crate::osm::geometry::M_PER_DEG_LAT;
+        let frac = regions.map_or(1.0, |regions| {
+            regions.ray_exit_fraction(
+                [cp_lat, cp_lon],
+                [full_start_lat, full_start_lon],
+                base_code,
+            )
+        });
+        let length_m = zone * frac;
+        if length_m < MIN_APPROACH_M {
+            continue;
+        }
+        out.push(Approach {
             crossing: crossing_idx,
+            synth_osm: crossing.synth_osm,
+            owned,
             approach_idx: if sign > 0.0 { 0 } else { 1 },
             matched_row,
-            start_lon: cp_lon + sx / m_lon,
-            start_lat: cp_lat + sy / crate::osm::geometry::M_PER_DEG_LAT,
+            country: base.country,
+            start_lon: cp_lon + frac * sx / m_lon,
+            start_lat: cp_lat + frac * sy / crate::osm::geometry::M_PER_DEG_LAT,
             end_lon: cp_lon,
             end_lat: cp_lat,
             dir_x: sign * ux,
             dir_y: sign * uy,
-            length_m: zone,
+            length_m,
             soundings: half,
-        }
-    })
+        });
+    }
+    out
 }
 
 pub(super) fn merge_overlaps(approaches: &[Approach]) -> Vec<MergedPiece> {
@@ -132,11 +160,14 @@ pub(super) fn merge_overlaps(approaches: &[Approach]) -> Vec<MergedPiece> {
         .collect();
     let mut pieces = Vec::new();
     for (idx, approach) in approaches.iter().enumerate() {
+        if !approach.owned {
+            continue;
+        }
         // Split fractions along this approach from overlapping neighbours.
         let mut splits = vec![0.0, 1.0];
         let mut neighbours: Vec<(f64, f64, [f64; 3], usize)> = Vec::new();
         for (other_idx, other) in approaches.iter().enumerate() {
-            if other_idx == idx {
+            if other_idx == idx || approach.country != other.country {
                 continue;
             }
             if approach.dir_x * other.dir_x + approach.dir_y * other.dir_y < MERGE_DIR_DOT {
@@ -251,7 +282,7 @@ mod tests {
             synth_osm: -1,
             total_periods: None,
             passenger_daily: None,
-            main_tracks: None,
+            passenger_lt1: false,
             measured_periods: false,
         };
         let rows = [
@@ -275,5 +306,167 @@ mod tests {
         let matched = match_crossing(&model, &crossing, &rows);
         assert_eq!(matched.map(|(row, _, _)| row), Some(1));
         assert_eq!(match_crossing(&model, &crossing, &rows[..1]), None);
+    }
+
+    #[test]
+    fn border_horn_clips_at_country_boundary_and_never_merges_across_countries() {
+        use crate::osm::region_input::{RegionFile, RegionInput};
+        let border_lat = 48.998_144;
+        let regions = Regions::from_input(RegionFile {
+            regions: vec![
+                RegionInput {
+                    country: Some("US".into()),
+                    continent: 1,
+                    disputed: false,
+                    polygons: vec![vec![vec![
+                        [-112.5, 48.5],
+                        [-111.5, 48.5],
+                        [-111.5, border_lat],
+                        [-112.5, border_lat],
+                        [-112.5, 48.5],
+                    ]]],
+                },
+                RegionInput {
+                    country: Some("CA".into()),
+                    continent: 1,
+                    disputed: false,
+                    polygons: vec![vec![vec![
+                        [-112.5, border_lat],
+                        [-111.5, border_lat],
+                        [-111.5, 49.5],
+                        [-112.5, 49.5],
+                        [-112.5, border_lat],
+                    ]]],
+                },
+            ],
+        })
+        .unwrap();
+        // Sweetgrass 088159P: north-south US segment ending 10.6 m south of the boundary.
+        let rows = [BaseRow {
+            start_lon: -111.958_932,
+            start_lat: 48.997_872,
+            end_lon: -111.958_932,
+            end_lat: 48.998_048,
+            rail_type: 0,
+            country: *b"US",
+        }];
+        let crossing = Crossing {
+            id: "088159P".into(),
+            lat: 48.998_048,
+            lon: -111.958_932,
+            soundings: [1.0, 0.3, 0.7],
+            speed_kmh: Some(64.37), // 40 mph -> 357.6 m full approach
+            source_id: 111,
+            synth_osm: -1,
+            total_periods: None,
+            passenger_daily: None,
+            passenger_lt1: false,
+            measured_periods: false,
+        };
+        let approaches = build_approaches(
+            0,
+            &crossing,
+            0,
+            48.998_048,
+            -111.958_932,
+            &rows,
+            Some(&regions),
+            true,
+        );
+        assert_eq!(approaches.len(), 2);
+        let south = approaches
+            .iter()
+            .find(|a| a.start_lat < a.end_lat)
+            .expect("south approach");
+        let north = approaches
+            .iter()
+            .find(|a| a.start_lat > a.end_lat)
+            .expect("north approach");
+        assert!(
+            (south.length_m - 357.61).abs() < 0.2,
+            "south={}",
+            south.length_m
+        );
+        assert!(
+            north.length_m > 9.5 && north.length_m < 12.0,
+            "retained domestic north={}",
+            north.length_m
+        );
+        assert!(
+            north.start_lat <= border_lat + 1e-7,
+            "north start {} must not cross boundary {border_lat}",
+            north.start_lat
+        );
+
+        // Two coincident approaches of different countries must never merge.
+        let us_approach = Approach {
+            crossing: 0,
+            synth_osm: -1,
+            owned: true,
+            approach_idx: 0,
+            matched_row: 0,
+            country: *b"US",
+            start_lon: -111.958_932,
+            start_lat: 48.997_0,
+            end_lon: -111.958_932,
+            end_lat: 48.998_0,
+            dir_x: 0.0,
+            dir_y: 1.0,
+            length_m: 110.54,
+            soundings: [2.0, 0.0, 0.0],
+        };
+        let ca_approach = Approach {
+            crossing: 1,
+            synth_osm: -2,
+            country: *b"CA",
+            soundings: [5.0, 0.0, 0.0],
+            ..us_approach
+        };
+        let pieces = merge_overlaps(&[us_approach, ca_approach]);
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[0].soundings, [2.0, 0.0, 0.0]);
+        assert_eq!(pieces[1].soundings, [5.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn cross_square_neighbor_approaches_deduplicate_without_double_emission() {
+        // Two equal-rate crossings 80 m apart across a square edge (as 350914N / 350915V):
+        // sorting by (synth_osm, approach_idx) gives one deterministic owner for the 320 m overlap.
+        let make = |synth_osm, owned, lat0, lat1| Approach {
+            crossing: 0,
+            synth_osm,
+            owned,
+            approach_idx: 0,
+            matched_row: 0,
+            country: *b"US",
+            start_lon: -88.35,
+            start_lat: lat0,
+            end_lon: -88.35,
+            end_lat: lat1,
+            dir_x: 0.0,
+            dir_y: 1.0,
+            length_m: 400.0,
+            soundings: [1.0, 0.0, 0.0],
+        };
+        let deg_80 = 80.0 / crate::osm::geometry::M_PER_DEG_LAT;
+        let deg_400 = 400.0 / crate::osm::geometry::M_PER_DEG_LAT;
+        // Square A owns -160224 and sees neighbor -160225 (earlier synth_osm -> wins overlap).
+        let sq_a = [
+            make(-160225, false, 36.0, 36.0 + deg_400),
+            make(-160224, true, 36.0 + deg_80, 36.0 + deg_80 + deg_400),
+        ];
+        // Square B owns -160225 and sees neighbor -160224.
+        let sq_b = [
+            make(-160225, true, 36.0, 36.0 + deg_400),
+            make(-160224, false, 36.0 + deg_80, 36.0 + deg_80 + deg_400),
+        ];
+        let pa = merge_overlaps(&sq_a);
+        let pb = merge_overlaps(&sq_b);
+        assert_eq!(pa.len(), 1);
+        assert_eq!(pb.len(), 2);
+        let len_a: f64 = pa.iter().map(|p| (p.frac1 - p.frac0) * 400.0).sum();
+        let len_b: f64 = pb.iter().map(|p| (p.frac1 - p.frac0) * 400.0).sum();
+        assert!((len_a - 80.0).abs() < 1e-3, "sq_a emitted {len_a} m");
+        assert!((len_b - 400.0).abs() < 1e-3, "sq_b emitted {len_b} m");
     }
 }

@@ -121,3 +121,21 @@ fn polar_polygon_uses_its_polar_holes_and_original_latitude_extent() {
     );
     assert_eq!(regions.resolve(-70.0, 0.0, false).country, 0);
 }
+
+#[test]
+fn ray_exit_fraction_clips_at_unassigned_interior_hole() {
+    let outer = rectangle(0.0, 0.0, 2.0, 2.0);
+    let hole = rectangle(0.5, 0.5, 1.5, 1.5);
+    let regions = Regions::from_input(RegionFile {
+        regions: vec![region("XY", vec![vec![outer, hole]], false)],
+    })
+    .unwrap();
+    let xy = u16::from_le_bytes(*b"XY");
+    // Both endpoints lie inside XY while the ray crosses the unassigned interior hole [0.5..1.5].
+    let frac = regions.ray_exit_fraction([1.0, 0.25], [1.0, 1.75], xy);
+    let expected = (0.5 - 0.25) / (1.75 - 0.25);
+    assert!(
+        (frac - expected).abs() < 1e-4,
+        "frac={frac} expected={expected}"
+    );
+}

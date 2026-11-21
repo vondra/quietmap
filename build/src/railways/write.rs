@@ -17,10 +17,13 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
+#[allow(clippy::too_many_arguments)]
 pub fn finalize_square(
     model: &super::model::RailModel,
     source_dir: &Path,
     crossings: &[super::types::Crossing],
+    regions: Option<&crate::osm::geography::Regions>,
+    neighbor_horns: Option<super::horns::NeighborHorns<'_>>,
     intervals: &HashMap<(i64, i16), Vec<Interval>>,
     output: &Path,
     square: crate::osm::geometry::Square,
@@ -47,7 +50,7 @@ pub fn finalize_square(
     let children = expand_rows(model, &merged, intervals, &pieces, square)?;
     let mut batch = encode_children(&merged, &children)?;
     if !crossings.is_empty() {
-        batch = super::horns::append(&batch, model, crossings)?;
+        batch = super::horns::append(&batch, model, crossings, regions, square, neighbor_horns)?;
     }
     let ipc = super::encode::encode(&batch)?;
     write_atomically(output, &ipc)?;

@@ -103,7 +103,7 @@ fn crossing_at(
     point: [f64; 2],
     total_periods: [f64; 3],
     passenger_daily: Option<f64>,
-    main_tracks: u8,
+    _main_tracks: u8,
 ) -> Crossing {
     Crossing {
         id: id.into(),
@@ -115,7 +115,7 @@ fn crossing_at(
         synth_osm: -1,
         total_periods: Some(total_periods),
         passenger_daily,
-        main_tracks: Some(main_tracks),
+        passenger_lt1: false,
         measured_periods: true,
     }
 }
