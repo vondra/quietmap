@@ -188,15 +188,20 @@ junctions and the place's yearly air temperature.
   them, no vehicle can enter or leave: a counted road carries one count there, the one most of its
   length carries (on Argentina's Ruta 40 in La Rioja consecutive pieces carried 17,400, 58,222 and
   200 vehicles a day from three stations). No lane carries more than the busiest counted lanes do,
-  29,400 vehicles a day on a one-way carriageway and 14,000 on a two-way road (a road that tags no
-  lanes has two): a count above that takes the model of its class, bounded by it, and a national
+  29,400 vehicles a day on a one-way carriageway and 14,000 on a two-way road (for this, a road that
+  tags no lanes takes those of the piece whose count it carries; where that tags none either, a
+  two-way road has two and a one-way carriageway carries at most 72,900, as the counted untagged ones
+  do): a count
+  above that takes the model of its class, bounded by it, and a national
   table's or a country's default value is cut to it (India's national table put 70,000 vehicles a
   day on two-lane trunk roads). A count under a
   fortieth of what the major roads' model predicts for its class, lanes and surroundings is not the
   road's (Warsaw's Trasa Łazienkowska carried 32 vehicles a carriageway a day, another road's count
-  joined by its route number), nor is a national table's value or a country's default under the
-  lowest counts of its class and surroundings there (Riyadh's King Fahd Road 7,346 a carriageway):
-  those take the model too.
+  joined by its route number), nor is a national table's value or a country's default far under
+  where the counts of its class and surroundings lie around that model (Riyadh's King Fahd Road 7,346
+  a carriageway): those take the model too. The lane capacities and these fractions of the model were
+  measured on the counts of the 2026 map and hold for every year; the model they are held against is
+  each year's own.
 - **Vehicle mix.** A count's own mix where it gives one; otherwise a main road takes the counted
   median of its class, a local street 1 % medium and 2 % heavy vehicles, a US road its state's mix
   ([<abbr title="the US Federal Highway Administration">FHWA</abbr>](https://www.fhwa.dot.gov/policyinformation/statistics.cfm),
@@ -615,7 +620,8 @@ deliveries, building sites, garden machinery, music and festivals.
   country (Czechia 10 %, Spain 73 %; Europe's other countries their region's middle, Norway 8 %;
   the rest of the world where cooling saturates, 85 %), at the sound power manufacturers declare
   for units of that capacity. A shop's ground mapped without a building counts at most a large
-  store's floor, 6,190 m² (the 99th percentile footprint of the mapped shops and offices). It runs
+  store's floor, 6,190 m² (the 99th percentile footprint of the commercial and hospitality buildings
+  mapped in 2026, for every year). It runs
   in business hours, Monday to Saturday 09-20, for the hours
   of full load the climate asks, and is heard while it runs, silent at night: in Czechia, where
   summers are cool, about 30 hours a year.
@@ -630,7 +636,7 @@ deliveries, building sites, garden machinery, music and festivals.
   (58 dB LAeq,1h at 10 m) for their hours of play, a grass pitch 4 hours a week by day for 40
   weeks; courts, playgrounds, pools and terraces their active level for about an eighth of the day,
   stadiums on match days. A pitch counts at most 10 ha, a court, playground, pool or terrace at
-  most the largest of its kind (the 99th percentile of the mapped ones: a playground 6,280 m², a
+  most the 99th percentile of its kind mapped in 2026 (for every year: a playground 6,280 m², a
   terrace 760 m²): a 46 ha dog run mapped as a playground is a large playground. Each is heard while in use, not as a steady hum at its mean. Outdoor
   shooting ranges fire 20,000 shots a year by day.
 - **Car parks** follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
