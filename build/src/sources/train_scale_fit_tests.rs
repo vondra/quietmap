@@ -204,3 +204,81 @@ fn the_timetable_spread_is_measured_where_timetables_cover_the_country() {
         None
     );
 }
+
+/// A square of two 1 km heavy-rail rows, 10 guessed freight trains a day on each: an ordinary line
+/// and a line posted 300 km/h, mapped passenger-only by its speed. The sources emit the first row's
+/// freight only, so the fit counts 10 train-km a day, not 20: against a national 10 the factor is 1,
+/// where counting the high-speed row made it 0.5.
+#[test]
+fn the_fit_counts_only_the_guessed_freight_the_sources_emit() {
+    use arrow_array::{
+        ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+        UInt8Array, UInt16Array,
+    };
+    use std::sync::Arc;
+    let rows: [(u16, bool, &str, i32); 2] = [(160, false, "", 0), (300, true, "LGV", 50_000)];
+    let u8s = |value: u8| Arc::new(UInt8Array::from(vec![value; 2])) as ArrayRef;
+    let u16s = |value: u16| Arc::new(UInt16Array::from(vec![value; 2])) as ArrayRef;
+    let f64s = |value: f64| Arc::new(Float64Array::from(vec![value; 2])) as ArrayRef;
+    let starts: Vec<i32> = rows.iter().map(|row| row.3).collect();
+    let batch = RecordBatch::try_from_iter([
+        (
+            "start_gx",
+            Arc::new(Int32Array::from(starts.clone())) as ArrayRef,
+        ),
+        ("start_gy", Arc::new(Int32Array::from(vec![0; 2]))),
+        (
+            "end_gx",
+            Arc::new(Int32Array::from(
+                starts.iter().map(|x| x + 20_000).collect::<Vec<_>>(),
+            )),
+        ),
+        ("end_gy", Arc::new(Int32Array::from(vec![0; 2]))),
+        ("length_m", Arc::new(Float32Array::from(vec![1000.0; 2]))),
+        ("rail_type", u8s(0)),
+        ("country_iso", u16s(u16::from_le_bytes(*b"DE"))),
+        ("passenger_status", u8s(0)),
+        ("freight_status", u8s(0)),
+        ("passenger_source_id", u16s(GUESSED)),
+        ("freight_source_id", u16s(GUESSED)),
+        ("trains_passenger_day", f64s(0.0)),
+        ("trains_passenger_evening", f64s(0.0)),
+        ("trains_passenger_night", f64s(0.0)),
+        ("trains_freight_day", f64s(10.0)),
+        ("trains_freight_evening", f64s(0.0)),
+        ("trains_freight_night", f64s(0.0)),
+        (
+            "maxspeed",
+            Arc::new(UInt16Array::from_iter_values(rows.map(|row| row.0))),
+        ),
+        (
+            "highspeed",
+            Arc::new(BooleanArray::from(rows.map(|row| row.1).to_vec())),
+        ),
+        (
+            "name",
+            Arc::new(StringArray::from(rows.map(|row| row.2).to_vec())),
+        ),
+        ("ref", Arc::new(StringArray::from(vec![""; 2]))),
+        ("traffic_mode", u8s(0)),
+    ])
+    .unwrap();
+    let table = Table {
+        metadata: [
+            ("grid", "z30"),
+            ("railways_contract", "country_baked_v1"),
+            ("rail_traffic_contract", "1"),
+        ]
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .into(),
+        batches: vec![batch],
+    };
+    let countries = table_train_km(&table, &FreightNetwork::default()).unwrap();
+    let mapped = countries[b"DE"];
+    assert_eq!(mapped.freight_guessed.iter().sum::<f64>(), 10.0);
+    let national = NationalTrainKm {
+        passenger: None,
+        freight: Some((2024, 10.0)),
+    };
+    assert_eq!(fitted(&mapped, &national, [1.0; 3], SPREAD).scales[0], 1.0);
+}

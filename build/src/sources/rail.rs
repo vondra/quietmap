@@ -47,9 +47,46 @@ fn takes_guessed_freight(speed_kmh: f64, traffic_mode: u8) -> bool {
     speed_kmh < HIGH_SPEED_LINE_KMH || MAPPED_FREIGHT_MODES.contains(&traffic_mode)
 }
 
+/// Whether each row of a square's railways, in table order, takes guessed freight
+/// ([`takes_guessed_freight`]) at the speed its line is built for: the row's posted speed or its
+/// high-speed line's, the higher, never the default (a Shinkansen's station approach is posted 120 on
+/// a line run at 285; `line_speeds` from [`high_speed_line_speeds`]). The emitter zeroes the others'
+/// guessed freight and the national fit leaves it out, so the fitted factors bring the emitted
+/// freight to the national train-km.
+pub(super) fn guessed_freight_rows(
+    table: &Table,
+    line_speeds: &HashMap<(String, String), f64>,
+) -> Result<Vec<bool>, String> {
+    let mut rows = Vec::new();
+    for batch in &table.batches {
+        let maxspeed = column(batch, "maxspeed")?.as_primitive::<UInt16Type>();
+        let traffic_mode = column(batch, "traffic_mode")?.as_primitive::<UInt8Type>();
+        let high_speed = column(batch, "highspeed")?.as_boolean();
+        let (names, refs) = (
+            column(batch, "name")?.as_string::<i32>(),
+            column(batch, "ref")?.as_string::<i32>(),
+        );
+        for row in 0..batch.num_rows() {
+            let line = (high_speed.value(row))
+                .then(|| {
+                    line_speeds.get(&(names.value(row).to_string(), refs.value(row).to_string()))
+                })
+                .flatten();
+            let built_for = line
+                .copied()
+                .unwrap_or(0.0)
+                .max(f64::from(maxspeed.value(row)));
+            rows.push(takes_guessed_freight(built_for, traffic_mode.value(row)));
+        }
+    }
+    Ok(rows)
+}
+
 /// The posted speed of each named high-speed line in the square, `(name, ref)` to the km-weighted
 /// median of its high-speed rows that post one: a row of the line that posts none runs at it.
-fn high_speed_line_speeds(table: &Table) -> Result<HashMap<(String, String), f64>, String> {
+pub(super) fn high_speed_line_speeds(
+    table: &Table,
+) -> Result<HashMap<(String, String), f64>, String> {
     let mut posted: HashMap<(String, String), Vec<(f64, f64)>> = HashMap::new();
     for batch in &table.batches {
         let i32s = |name| column(batch, name).map(|a| a.as_primitive::<Int32Type>());
@@ -108,6 +145,7 @@ pub fn convert(
     require_rail_stamps(&table)?;
     let run = run_trains(&table)?;
     let line_speeds = high_speed_line_speeds(&table)?;
+    let takes_freight = guessed_freight_rows(&table, &line_speeds)?;
     let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {
@@ -122,8 +160,7 @@ pub fn convert(
             i32s("end_gx")?,
             i32s("end_gy")?,
         );
-        let (rail_type, usage, traffic_mode) =
-            (u8s("rail_type")?, u8s("usage")?, u8s("traffic_mode")?);
+        let (rail_type, usage) = (u8s("rail_type")?, u8s("usage")?);
         let (maxspeed, country) = (u16s("maxspeed")?, u16s("country_iso")?);
         let (tunnel, bridge, high_speed) = (
             column(batch, "tunnel")?.as_boolean(),
@@ -182,12 +219,9 @@ pub fn convert(
                 (None, None) => (kind.default_speed_kmh(), "default_by_type"),
             };
             // A line built for high speed takes no guessed freight unless it is mapped as carrying
-            // freight (Germany's mixed lines are: Hannover-Würzburg, Mannheim-Stuttgart); its speed
-            // is a posted one, the row's or its line's (a Shinkansen's station approach is posted
-            // 120 on a line run at 285), never the default.
-            let built_for = posted.into_iter().chain(line_speed).fold(0.0, f64::max);
+            // freight (Germany's mixed lines are: Hannover-Würzburg, Mannheim-Stuttgart).
             if GUESSED_TRAIN_SOURCES.contains(&freight_source)
-                && !takes_guessed_freight(built_for, traffic_mode.value(row))
+                && !takes_freight[batch_first_row + row]
             {
                 freight_trains = [0.0; PERIODS];
                 calendar_estimated_shares[1] = 0.0;
@@ -329,5 +363,73 @@ mod tests {
         assert!(takes_guessed_freight(280.0, 3));
         assert!(takes_guessed_freight(280.0, 2));
         assert!(takes_guessed_freight(160.0, 0));
+    }
+
+    /// The rows the emitter and the national fit both take guessed freight on: an ordinary line; not
+    /// a high-speed line posted 300, nor its short station approach posted 120, nor its piece that
+    /// posts nothing (each runs at its line's km-weighted 300); a high-speed line mapped mixed; a
+    /// high-speed piece of no named line (its 250 is a default, not a speed it was built for).
+    #[test]
+    fn the_fit_and_the_emitter_share_which_rows_take_guessed_freight() {
+        use arrow_array::{
+            BooleanArray, Int32Array, RecordBatch, StringArray, UInt8Array, UInt16Array,
+        };
+        use std::sync::Arc;
+        let rows = [
+            (160, false, "", 0, 900),
+            (300, true, "LGV", 0, 900),
+            (120, true, "LGV", 0, 100),
+            (0, true, "LGV", 0, 900),
+            (280, true, "Mixed", 3, 900),
+            (0, true, "", 0, 900),
+        ];
+        let x: Vec<i32> = (0..rows.len() as i32).map(|i| i * 1000).collect();
+        let batch = RecordBatch::try_from_iter([
+            ("start_gx", Arc::new(Int32Array::from(x.clone())) as _),
+            (
+                "start_gy",
+                Arc::new(Int32Array::from(vec![0; rows.len()])) as _,
+            ),
+            (
+                "end_gx",
+                Arc::new(Int32Array::from(
+                    x.iter().zip(rows).map(|(x, r)| x + r.4).collect::<Vec<_>>(),
+                )) as _,
+            ),
+            (
+                "end_gy",
+                Arc::new(Int32Array::from(vec![0; rows.len()])) as _,
+            ),
+            (
+                "maxspeed",
+                Arc::new(UInt16Array::from_iter_values(rows.map(|r| r.0))) as _,
+            ),
+            (
+                "highspeed",
+                Arc::new(BooleanArray::from(rows.map(|r| r.1).to_vec())) as _,
+            ),
+            (
+                "name",
+                Arc::new(StringArray::from(rows.map(|r| r.2).to_vec())) as _,
+            ),
+            (
+                "ref",
+                Arc::new(StringArray::from(vec![""; rows.len()])) as _,
+            ),
+            (
+                "traffic_mode",
+                Arc::new(UInt8Array::from_iter_values(rows.map(|r| r.3))) as _,
+            ),
+        ])
+        .unwrap();
+        let table = Table {
+            metadata: HashMap::new(),
+            batches: vec![batch],
+        };
+        let line_speeds = high_speed_line_speeds(&table).unwrap();
+        assert_eq!(
+            guessed_freight_rows(&table, &line_speeds).unwrap(),
+            [true, false, false, false, true, true]
+        );
     }
 }
