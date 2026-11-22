@@ -2957,5 +2957,5 @@ fn higher_rank_freight_period_subtraction_and_explicit_passenger_caps() {
         1.0,
         [1.0, 0.0, 0.0],
     );
-    assert!((sub_eps[1] - 1.0).abs() < 1e-12);
+    assert_eq!(sub_eps, [0.0, 1.0, 0.0]);
 }

@@ -405,30 +405,35 @@ mod tests {
     #[test]
     fn corridor_fallback_connects_parallel_tracks_with_distant_crossover_and_isolated_families() {
         // Two parallel heavy-rail tracks 10 m apart running east from x=0 to x=0.02 (~2.2 km),
-        // split at x=0.01 so no single edge spans both pins, and linked only by a crossover at
-        // x=-0.005 (550 m west, outside the 250 m leg corridor). A family-0 stub (rail_type=5)
-        // sits closer to `from` and must not poison family-1 traversal.
+        // split into three segments each so the start and end edges share no node and force
+        // neighbour expansion, and linked only by a crossover at x=-0.005 (550 m west, outside
+        // the 250 m leg corridor). A family-0 stub sits closer to `from` and must not poison
+        // family-1 traversal.
         let mut net = Network::default();
         net.nodes = vec![
             [0.0, -0.005],      // 0: west crossover north
             [0.0001, -0.005],   // 1: west crossover south
             [0.0, 0.0],         // 2: track 1 start
-            [0.0, 0.01],        // 3: track 1 mid
-            [0.0, 0.02],        // 4: track 1 end
-            [0.0001, 0.0],      // 5: track 2 start
-            [0.0001, 0.01],     // 6: track 2 mid
-            [0.0001, 0.02],     // 7: track 2 end
-            [-0.00001, 0.0],    // 8: family-0 stub start
-            [-0.00001, 0.0005], // 9: family-0 stub end
+            [0.0, 0.007],       // 3: track 1 mid-1
+            [0.0, 0.014],       // 4: track 1 mid-2
+            [0.0, 0.02],        // 5: track 1 end
+            [0.0001, 0.0],      // 6: track 2 start
+            [0.0001, 0.007],    // 7: track 2 mid-1
+            [0.0001, 0.014],    // 8: track 2 mid-2
+            [0.0001, 0.02],     // 9: track 2 end
+            [-0.00001, 0.0],    // 10: family-0 stub start
+            [-0.00001, 0.0005], // 11: family-0 stub end
         ];
         push_edge(&mut net, 0, 1, 1, 0);
         push_edge(&mut net, 0, 2, 2, 0);
-        push_edge(&mut net, 1, 5, 3, 0);
+        push_edge(&mut net, 1, 6, 3, 0);
         push_edge(&mut net, 2, 3, 10, 0); // Track 1 west
-        push_edge(&mut net, 3, 4, 11, 0); // Track 1 east
-        push_edge(&mut net, 5, 6, 20, 0); // Track 2 west
-        push_edge(&mut net, 6, 7, 21, 0); // Track 2 east
-        push_edge(&mut net, 8, 9, 30, 5); // family 0 stub
+        push_edge(&mut net, 3, 4, 11, 0); // Track 1 mid
+        push_edge(&mut net, 4, 5, 12, 0); // Track 1 east
+        push_edge(&mut net, 6, 7, 20, 0); // Track 2 west
+        push_edge(&mut net, 7, 8, 21, 0); // Track 2 mid
+        push_edge(&mut net, 8, 9, 22, 0); // Track 2 east
+        push_edge(&mut net, 10, 11, 30, 5); // family 0 stub
         net.index();
 
         // Start pin sits 2 m south of Track 1 (and 1 m from family-0 stub); end pin sits 2 m
@@ -439,9 +444,12 @@ mod tests {
         let shape = [[0.00005, 0.0], [0.00005, 0.02]];
         let mut search = Search::new(net.nodes.len());
         let visits = walk(&net, &mut search, from, to, &shape).expect("parallel track fallback");
-        assert_eq!(visits.len(), 2);
+        assert_eq!(visits.len(), 3);
         let ways: Vec<i64> = visits.iter().map(|v| net.edges[v.edge].way).collect();
-        assert!(ways == [10, 11] || ways == [20, 21], "ways={ways:?}");
+        assert!(
+            ways == [10, 11, 12] || ways == [20, 21, 22],
+            "ways={ways:?}"
+        );
         // Closest start sharing the only end's edge at equal fraction must not block a second
         // start in the same component from pairing with that end.
         let mut net2 = Network::default();
