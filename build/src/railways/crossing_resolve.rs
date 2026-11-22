@@ -43,7 +43,7 @@ pub(super) fn allocate_passenger_in_periods(
     let mut out = [0.0; 3];
     for _ in 0..3 {
         let rooms = [0, 1, 2].map(|p| (cap[p] - out[p]).max(0.0));
-        let headroom: f64 = rooms.iter().sum();
+        let headroom: f64 = rooms.iter().copied().filter(|&r| r > 1e-12).sum();
         if remaining <= 1e-12 || headroom <= 1e-12 {
             break;
         }

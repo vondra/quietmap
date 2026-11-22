@@ -149,7 +149,8 @@ fn corridor_fallback_pair(
         let allowed = |edge: &Edge| {
             (edge.traversal_only || fam == 0 || edge.family() == fam) && corridor(edge)
         };
-        let mut seen: HashSet<usize> = HashSet::new();
+        let mut comp_of: HashMap<usize, usize> = HashMap::new();
+        let mut comp_ends: Vec<[Option<Snap>; 2]> = Vec::new();
         for &s in &starts {
             if network.edges[s.edge].family() != fam {
                 continue;
@@ -158,47 +159,62 @@ fn corridor_fallback_pair(
                 break;
             }
             let se = &network.edges[s.edge];
-            if seen.contains(&se.nodes[0]) && seen.contains(&se.nodes[1]) {
-                continue;
-            }
-            let mut stack = Vec::new();
-            for node in se.nodes {
-                if seen.insert(node) {
-                    stack.push(node);
+            let comp = if let Some(&c) = comp_of.get(&se.nodes[0]) {
+                c
+            } else {
+                let c = comp_ends.len();
+                let mut stack = Vec::new();
+                for node in se.nodes {
+                    if comp_of.insert(node, c).is_none() {
+                        stack.push(node);
+                    }
                 }
-            }
-            let mut best_end: Option<Snap> = None;
-            while let Some(u) = stack.pop() {
-                if let Some(candidates) = end_by_node.get(&u) {
-                    for &e in candidates {
-                        if e.edge != s.edge
-                            && best_end.is_none_or(|be| {
-                                e.distance
-                                    .total_cmp(&be.distance)
-                                    .then(e.edge.cmp(&be.edge))
-                                    .is_lt()
-                            })
-                        {
-                            best_end = Some(e);
+                let mut top: [Option<Snap>; 2] = [None; 2];
+                while let Some(u) = stack.pop() {
+                    if let Some(candidates) = end_by_node.get(&u) {
+                        for &e in candidates {
+                            if top.iter().flatten().any(|b| b.edge == e.edge) {
+                                continue;
+                            }
+                            let better = |slot: Option<Snap>| {
+                                slot.is_none_or(|b| {
+                                    e.distance
+                                        .total_cmp(&b.distance)
+                                        .then(e.edge.cmp(&b.edge))
+                                        .is_lt()
+                                })
+                            };
+                            if better(top[0]) {
+                                top[1] = top[0];
+                                top[0] = Some(e);
+                            } else if better(top[1]) {
+                                top[1] = Some(e);
+                            }
+                        }
+                    }
+                    for &edge_idx in &network.adjacency[u] {
+                        let edge = &network.edges[edge_idx];
+                        if !allowed(edge) {
+                            continue;
+                        }
+                        let v = if edge.nodes[0] == u {
+                            edge.nodes[1]
+                        } else {
+                            edge.nodes[0]
+                        };
+                        if comp_of.insert(v, c).is_none() {
+                            stack.push(v);
                         }
                     }
                 }
-                for &edge_idx in &network.adjacency[u] {
-                    let edge = &network.edges[edge_idx];
-                    if !allowed(edge) {
-                        continue;
-                    }
-                    let v = if edge.nodes[0] == u {
-                        edge.nodes[1]
-                    } else {
-                        edge.nodes[0]
-                    };
-                    if seen.insert(v) {
-                        stack.push(v);
-                    }
-                }
-            }
-            if let Some(e) = best_end {
+                comp_ends.push(top);
+                c
+            };
+            if let Some(e) = comp_ends[comp]
+                .into_iter()
+                .flatten()
+                .find(|e| e.edge != s.edge)
+            {
                 consider(&mut best, s, e);
             }
         }
@@ -389,36 +405,55 @@ mod tests {
     #[test]
     fn corridor_fallback_connects_parallel_tracks_with_distant_crossover_and_isolated_families() {
         // Two parallel heavy-rail tracks 10 m apart running east from x=0 to x=0.02 (~2.2 km),
-        // linked only by a crossover at x=-0.005 (550 m west, outside the 250 m leg corridor).
-        // A family-0 track (rail_type=5) sits even closer to `from` and must not poison family-1.
+        // split at x=0.01 so no single edge spans both pins, and linked only by a crossover at
+        // x=-0.005 (550 m west, outside the 250 m leg corridor). A family-0 stub (rail_type=5)
+        // sits closer to `from` and must not poison family-1 traversal.
         let mut net = Network::default();
         net.nodes = vec![
             [0.0, -0.005],      // 0: west crossover north
             [0.0001, -0.005],   // 1: west crossover south
             [0.0, 0.0],         // 2: track 1 start
-            [0.0, 0.02],        // 3: track 1 end
-            [0.0001, 0.0],      // 4: track 2 start
-            [0.0001, 0.02],     // 5: track 2 end
-            [-0.00001, 0.0],    // 6: family-0 stub start
-            [-0.00001, 0.0005], // 7: family-0 stub end
+            [0.0, 0.01],        // 3: track 1 mid
+            [0.0, 0.02],        // 4: track 1 end
+            [0.0001, 0.0],      // 5: track 2 start
+            [0.0001, 0.01],     // 6: track 2 mid
+            [0.0001, 0.02],     // 7: track 2 end
+            [-0.00001, 0.0],    // 8: family-0 stub start
+            [-0.00001, 0.0005], // 9: family-0 stub end
         ];
         push_edge(&mut net, 0, 1, 1, 0);
         push_edge(&mut net, 0, 2, 2, 0);
-        push_edge(&mut net, 1, 4, 3, 0);
-        push_edge(&mut net, 2, 3, 10, 0); // Track 1
-        push_edge(&mut net, 4, 5, 20, 0); // Track 2
-        push_edge(&mut net, 6, 7, 30, 5); // family 0 stub
+        push_edge(&mut net, 1, 5, 3, 0);
+        push_edge(&mut net, 2, 3, 10, 0); // Track 1 west
+        push_edge(&mut net, 3, 4, 11, 0); // Track 1 east
+        push_edge(&mut net, 5, 6, 20, 0); // Track 2 west
+        push_edge(&mut net, 6, 7, 21, 0); // Track 2 east
+        push_edge(&mut net, 8, 9, 30, 5); // family 0 stub
         net.index();
 
         // Start pin sits 2 m south of Track 1 (and 1 m from family-0 stub); end pin sits 2 m
         // north of Track 2. Primary single-snap lands on Track 1 -> Track 2 (disconnected inside
-        // the 250 m corridor), while corridor_fallback_pair connects along Track 1 or Track 2.
+        // the 250 m corridor), while corridor_fallback_pair traverses Track 1 or Track 2.
         let from = [0.00002, 0.0];
         let to = [0.00008, 0.02];
         let shape = [[0.00005, 0.0], [0.00005, 0.02]];
         let mut search = Search::new(net.nodes.len());
         let visits = walk(&net, &mut search, from, to, &shape).expect("parallel track fallback");
-        assert_eq!(visits.len(), 1);
-        assert!(matches!(net.edges[visits[0].edge].way, 10 | 20));
+        assert_eq!(visits.len(), 2);
+        let ways: Vec<i64> = visits.iter().map(|v| net.edges[v.edge].way).collect();
+        assert!(ways == [10, 11] || ways == [20, 21], "ways={ways:?}");
+        // Closest start sharing the only end's edge at equal fraction must not block a second
+        // start in the same component from pairing with that end.
+        let mut net2 = Network::default();
+        net2.nodes = vec![[0.0, 0.0], [0.005, 0.0], [0.0025, 0.0005]];
+        push_edge(&mut net2, 0, 1, 40, 0);
+        push_edge(&mut net2, 1, 2, 41, 0);
+        net2.index();
+        let pair = corridor_fallback_pair(&net2, [0.0025, 0.0002], [0.0025, -0.0025], &|_| true)
+            .expect("second start in same component");
+        assert_eq!(
+            (net2.edges[pair.0.edge].way, net2.edges[pair.1.edge].way),
+            (41, 40)
+        );
     }
 }

@@ -403,16 +403,14 @@ mod tests {
 
     #[test]
     fn reversed_shape_orients_to_stops_and_walks_curving_track() {
-        // Track curves 500 m north of the straight chord between A and C, so a collapsed reversed
-        // shape fails the 250 m corridor while the oriented shape walks every edge cleanly.
-        let pts = [[0.0, 0.0], [0.0045, 0.005], [0.0, 0.010]];
+        // Track bends 556 m north of the A-C chord so both edge midpoints lie 278 m off the chord
+        // (> 250 m corridor gate); with only terminal stops C -> A, geometry() retains the shape,
+        // unoriented slicing collapses to the chord and fails, and orient_shape walks both edges.
+        let pts = [[0.0, 0.0], [0.005, 0.005], [0.0, 0.010]];
         let net = straight_net(&pts);
         let mut matcher = LegMatcher::new(&net);
-        let stops = [
-            mk_stop("C", pts[2]),
-            mk_stop("B", pts[1]),
-            mk_stop("A", pts[0]),
-        ];
+        let stops = [mk_stop("C", pts[2]), mk_stop("A", pts[0])];
+        assert!(!geometry(&stops, &pts).is_empty());
         let matched = match_service(&Routes::default(), &mut matcher, &stops, &pts);
         assert_eq!(matched.failed, 0);
         assert_eq!(matched.passages.len(), 2);
