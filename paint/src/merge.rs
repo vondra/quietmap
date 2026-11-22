@@ -20,12 +20,16 @@ fn verify_identical(source_path: &Path, destination_path: &Path) -> Result<(), S
 }
 
 pub fn merge(source: &Path, destination: &Path, zoom: u32) -> Result<(), String> {
-    let year = read_year(source)?;
-    bind_painted_dir(destination, &year)?;
-    for square in squares(source, zoom)? {
-        PaintedSquare::open(source, zoom, square)?;
-        let source_path = square_path(source, zoom, square);
-        let destination_path = square_path(destination, zoom, square);
+    let source = std::fs::canonicalize(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let year = read_year(&source)?;
+    std::fs::create_dir_all(destination).map_err(|e| format!("{}: {e}", destination.display()))?;
+    let destination = std::fs::canonicalize(destination)
+        .map_err(|e| format!("{}: {e}", destination.display()))?;
+    bind_painted_dir(&destination, &year)?;
+    for square in squares(&source, zoom)? {
+        PaintedSquare::open(&source, zoom, square)?;
+        let source_path = square_path(&source, zoom, square);
+        let destination_path = square_path(&destination, zoom, square);
         if destination_path.try_exists().map_err(|e| e.to_string())? {
             verify_identical(&source_path, &destination_path)?;
             continue;

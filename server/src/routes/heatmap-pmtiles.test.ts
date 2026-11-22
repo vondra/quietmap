@@ -11,10 +11,12 @@ import { zxyToTileId } from 'pmtiles'
 import { heatmapPmtilesRoutes } from './heatmap-pmtiles.ts'
 import { HM3_VERSION, decodeHM3 } from '../../../frontend/src/lib/hm3-decoder.ts'
 
+const archiveMeta = (name = 'road', build = 'b0', year = '2026') => JSON.stringify({ name, build, year })
+
 /** Minimal valid pmtiles v3 archive with ZERO tile entries — every getZxy
- *  misses. Layout: 127-byte header, gzip root directory, gzip '{}' metadata.
+ *  misses. Layout: 127-byte header, gzip root directory, gzip metadata.
  *  Field offsets mirror the pmtiles JS lib's bytesToHeader. */
-function emptyArchive(metadataJson = JSON.stringify({ year: '2026' })): Buffer {
+function emptyArchive(metadataJson = archiveMeta()): Buffer {
   const rootDir = gzipSync(Buffer.from([0])) // varint 0 = no entries
   const metadata = gzipSync(Buffer.from(metadataJson))
   const header = Buffer.alloc(127)
@@ -53,7 +55,7 @@ test('a stored predicted HM3 stream reaches the frontend verbatim with native Br
   const tile = brotliCompressSync(predicted)
   assert.ok(tile.length < 128)
   const root = gzipSync(Buffer.from([1, zxyToTileId(2, 0, 0), 1, tile.length, 1]))
-  const metadata = gzipSync(Buffer.from(JSON.stringify({ year: '2026' })))
+  const metadata = gzipSync(Buffer.from(archiveMeta('road', 'b4', '2026')))
   const header = Buffer.from(emptyArchive().subarray(0, 127))
   header.writeBigUInt64LE(BigInt(root.length), 16)
   header.writeBigUInt64LE(BigInt(127 + root.length), 24)
@@ -110,28 +112,30 @@ test('archive or directory year mismatch fails closed with uncached 500', async 
   const mismatchDir = mkdtempSync(join(tmpdir(), 'pmtiles-year-mismatch-'))
   t.after(() => rmSync(mismatchDir, { recursive: true, force: true }))
   writeFileSync(join(mismatchDir, 'year'), '2026\n')
-  writeFileSync(join(mismatchDir, 'road.b0.pmtiles'), emptyArchive(JSON.stringify({ year: '2024' })))
+  writeFileSync(join(mismatchDir, 'road.b0.pmtiles'), emptyArchive(archiveMeta('road', 'b0', '2024')))
   writeFileSync(join(mismatchDir, 'road.b1.pmtiles'), emptyArchive('{}'))
+  writeFileSync(join(mismatchDir, 'road.b3.pmtiles'), emptyArchive(archiveMeta('railway', 'b3', '2026')))
+  writeFileSync(join(mismatchDir, 'road.b4.pmtiles'), emptyArchive(archiveMeta('road', 'b9', '2026')))
   const app = await buildApp(mismatchDir, '2026')
   t.after(() => app.close())
-  for (const build of ['b0', 'b1']) {
+  for (const build of ['b0', 'b1', 'b3', 'b4']) {
     const res = await app.inject({ url: `/api/tiles/2026/${build}/road/6/33/21.bin` })
     assert.equal(res.statusCode, 500, build)
     assert.equal(res.headers['cache-control'], 'no-store')
   }
-  writeFileSync(join(mismatchDir, 'road.b2.pmtiles'), emptyArchive(JSON.stringify({ year: '2026' })))
+  writeFileSync(join(mismatchDir, 'road.b2.pmtiles'), emptyArchive(archiveMeta('road', 'b2', '2026')))
   writeFileSync(join(mismatchDir, 'year'), '2024\n')
   const wrongDir = await app.inject({ url: '/api/tiles/2026/b2/road/6/33/21.bin' })
   assert.equal(wrongDir.statusCode, 500)
   assert.equal(wrongDir.headers['cache-control'], 'no-store')
 })
 
-test('warm archive cache rejects in-place replacement or year-marker swap for hits and misses', async (t) => {
+test('warm archive cache rejects in-place replacement or year-marker swap for misses and hits', async (t) => {
   const swapDir = mkdtempSync(join(tmpdir(), 'pmtiles-warm-swap-'))
   t.after(() => rmSync(swapDir, { recursive: true, force: true }))
-  const makeTileArchive = (year: string, payload: Buffer) => {
+  const makeTileArchive = (name: string, build: string, year: string, payload: Buffer) => {
     const root = gzipSync(Buffer.from([1, zxyToTileId(2, 0, 0), 1, payload.length, 1]))
-    const metadata = gzipSync(Buffer.from(JSON.stringify({ year })))
+    const metadata = gzipSync(Buffer.from(archiveMeta(name, build, year)))
     const header = Buffer.from(emptyArchive().subarray(0, 127))
     header.writeBigUInt64LE(BigInt(root.length), 16)
     header.writeBigUInt64LE(BigInt(127 + root.length), 24)
@@ -144,7 +148,7 @@ test('warm archive cache rejects in-place replacement or year-marker swap for hi
   }
   const archivePath = join(swapDir, 'road.b1.pmtiles')
   writeFileSync(join(swapDir, 'year'), '2026\n')
-  writeFileSync(archivePath, makeTileArchive('2026', brotliCompressSync(Buffer.from('2026 tile'))))
+  writeFileSync(archivePath, makeTileArchive('road', 'b1', '2026', brotliCompressSync(Buffer.from('2026 tile'))))
   const app = await buildApp(swapDir, '2026')
   t.after(() => app.close())
 
@@ -152,18 +156,27 @@ test('warm archive cache rejects in-place replacement or year-marker swap for hi
   assert.equal((await app.inject({ url: '/api/tiles/2026/b1/road/2/0/0.bin' })).statusCode, 200)
   assert.equal((await app.inject({ url: '/api/tiles/2026/b1/road/6/33/21.bin' })).statusCode, 200)
 
-  // Replace the archive with a 2024 archive under the same build name via atomic rename (new inode).
-  const replacement = join(swapDir, 'road.b1.pmtiles.2024')
-  writeFileSync(replacement, makeTileArchive('2024', brotliCompressSync(Buffer.from('2024 tile'))))
+  // Replace the archive with a 2024 archive via rename (new inode) and test the warm MISS FIRST.
+  const replacement = join(swapDir, 'road.b1.pmtiles.swap')
+  writeFileSync(replacement, makeTileArchive('road', 'b1', '2024', brotliCompressSync(Buffer.from('2024 tile'))))
   renameSync(replacement, archivePath)
-  for (const url of ['/api/tiles/2026/b1/road/2/0/0.bin', '/api/tiles/2026/b1/road/6/33/21.bin']) {
+  for (const url of ['/api/tiles/2026/b1/road/6/33/21.bin', '/api/tiles/2026/b1/road/2/0/0.bin']) {
     const res = await app.inject({ url })
     assert.equal(res.statusCode, 500, url)
     assert.equal(res.headers['cache-control'], 'no-store')
   }
 
-  // Restore a valid 2026 archive, re-warm, then remove the directory year marker.
-  writeFileSync(replacement, makeTileArchive('2026', brotliCompressSync(Buffer.from('2026 tile'))))
+  // Restore valid 2026 archive, re-warm, then rewrite IN PLACE (same inode) with a same-year wrong layer.
+  writeFileSync(replacement, makeTileArchive('road', 'b1', '2026', brotliCompressSync(Buffer.from('2026 tile'))))
+  renameSync(replacement, archivePath)
+  assert.equal((await app.inject({ url: '/api/tiles/2026/b1/road/2/0/0.bin' })).statusCode, 200)
+  writeFileSync(archivePath, makeTileArchive('railway', 'b2', '2026', brotliCompressSync(Buffer.from('railway tile longer'))))
+  const inPlace = await app.inject({ url: '/api/tiles/2026/b1/road/6/33/21.bin' })
+  assert.equal(inPlace.statusCode, 500)
+  assert.equal(inPlace.headers['cache-control'], 'no-store')
+
+  // Restore valid 2026 archive, re-warm, then remove the directory year marker.
+  writeFileSync(replacement, makeTileArchive('road', 'b1', '2026', brotliCompressSync(Buffer.from('2026 tile'))))
   renameSync(replacement, archivePath)
   assert.equal((await app.inject({ url: '/api/tiles/2026/b1/road/2/0/0.bin' })).statusCode, 200)
   unlinkSync(join(swapDir, 'year'))
@@ -185,7 +198,7 @@ test('symlinked archive leaf fails closed before PMTiles open', async () => {
 
 test('completed concurrent tile requests do not retain a deleted archive on disk', { skip: process.platform !== 'linux' }, async (t) => {
   const path = join(dir, 'road.b2.pmtiles')
-  writeFileSync(path, emptyArchive())
+  writeFileSync(path, emptyArchive(archiveMeta('road', 'b2')))
   const app = await buildApp()
   t.after(() => app.close())
   const responses = await Promise.all(Array.from({ length: 8 }, () =>
@@ -206,7 +219,7 @@ test('a failed leaf-directory read retries after the archive becomes readable ag
   const leaves = ids.map(id => gzipSync(Buffer.from([1, id, 1, tile.length, 1])))
   const root = gzipSync(Buffer.from([2, ids[0], ids[1] - ids[0], 0, 0,
     leaves[0].length, leaves[1].length, 1, leaves[0].length + 1]))
-  const metadata = gzipSync(Buffer.from(JSON.stringify({ year: '2026' })))
+  const metadata = gzipSync(Buffer.from(archiveMeta('road', 'b3', '2026')))
   const header = Buffer.from(emptyArchive().subarray(0, 127))
   header.writeBigUInt64LE(BigInt(root.length), 16)
   header.writeBigUInt64LE(BigInt(127 + root.length), 24)

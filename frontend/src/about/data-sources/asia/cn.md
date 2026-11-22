@@ -1,6 +1,6 @@
 ---
 title: China
-intro: Road traffic follows the global model and mapped buildings. Train counts are assigned by line speed from a community network map.
+intro: Road traffic follows the global model and mapped buildings. On the 2026 map, train counts are assigned by line speed from a community network map; earlier maps without it use class defaults.
 ---
 
 ## Roads

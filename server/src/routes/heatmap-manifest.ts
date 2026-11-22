@@ -5,10 +5,12 @@
 // and publisher proofs never cross the public boundary. `zoom` is the zoom the world was painted
 // at (the deepest natively-servable zoom); a manifest without it serves at WORLD_BASE_ZOOM.
 
-import { readdir, readFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { open, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { ALLOWED_LAYERS, LDEN_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, NDEN_LAYERS, WORLD_BASE_ZOOM } from './heatmap-shared.ts'
+import { fileIdentityOf, type FileIdentity } from './pmtiles-file.ts'
 import { HM3_MANIFEST_URL, HM3_VERSION } from '../../../frontend/src/lib/hm3-decoder.ts'
 
 const BUILD_ID = /^b\d+$/
@@ -51,14 +53,33 @@ export async function readTilesDirYear(tilesDir: string): Promise<string | null>
   return year
 }
 
-/** Require `tilesDir/year` to exist and equal `expectedYear` (never fails with ENOENT). */
-export async function requireTilesDirYear(tilesDir: string, expectedYear: string): Promise<void> {
-  const dirYear = await readTilesDirYear(tilesDir)
-  if (dirYear === null) {
-    throw new Error(`${tilesDir} is missing a year marker`)
+/** Require `tilesDir/year` to exist and equal `expectedYear` (never fails with ENOENT), returning
+ *  the stat identity captured from the exact open descriptor whose bytes were validated. */
+export async function requireTilesDirYear(tilesDir: string, expectedYear: string): Promise<FileIdentity> {
+  const path = join(tilesDir, 'year')
+  let handle
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`${tilesDir} is missing a year marker`)
+    }
+    throw e
   }
-  if (dirYear !== expectedYear) {
-    throw new Error(`${tilesDir} is bound to year ${dirYear}, not ${expectedYear}`)
+  try {
+    const stat = await handle.stat()
+    if (!stat.isFile()) throw new Error(`${path} is not a regular file`)
+    const raw = await handle.readFile('utf8')
+    const dirYear = raw.trim()
+    if (!YEAR_ID.test(dirYear)) {
+      throw new Error(`${path} contains invalid map year ${JSON.stringify(raw)}`)
+    }
+    if (dirYear !== expectedYear) {
+      throw new Error(`${tilesDir} is bound to year ${dirYear}, not ${expectedYear}`)
+    }
+    return fileIdentityOf(stat)
+  } finally {
+    await handle.close()
   }
 }
 
@@ -211,10 +232,7 @@ async function verifyTilesDirYearAtStartup(tilesDir: string, expectedYear: strin
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(`${manifestPath} must be a JSON object`)
   }
-  const year = (parsed as PmtilesManifest).year
-  if (year !== expectedYear) {
-    throw new Error(`${manifestPath} is for year ${String(year)}, not ${expectedYear}`)
-  }
+  validatePmtilesManifest(parsed as PmtilesManifest, manifestPath, expectedYear)
 }
 
 export async function heatmapManifestRoutes(

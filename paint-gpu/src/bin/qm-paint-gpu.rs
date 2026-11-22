@@ -92,8 +92,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let year = required("year")?;
     let release = Release::open(&PathBuf::from(required("prepared")?), year)?;
     if command == Some("compare") {
-        let painted = PathBuf::from(required("painted")?);
-        let reference = PathBuf::from(required("reference")?);
+        let painted_arg = PathBuf::from(required("painted")?);
+        let reference_arg = PathBuf::from(required("reference")?);
+        let painted = std::fs::canonicalize(&painted_arg)
+            .map_err(|e| format!("{}: {e}", painted_arg.display()))?;
+        let reference = std::fs::canonicalize(&reference_arg)
+            .map_err(|e| format!("{}: {e}", reference_arg.display()))?;
         for (label, dir) in [("--painted", &painted), ("--reference", &reference)] {
             let found = paint::year::read_year(dir)?;
             if found != year {

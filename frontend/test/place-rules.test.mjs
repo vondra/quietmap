@@ -160,6 +160,10 @@ test('stored recent noise levels show only on the map year that computed them, p
   assert.deepEqual(recentLevelsForYear(list[0], '2024'), { sone: 4.5, lden: 48 })
   assert.deepEqual(recentLevelsForYear(list[0], '2026'), { sone: null, lden: null })
   assert.deepEqual(recentLevelsForYear({ sone: 4.5, lden: 48 }, '2026'), { sone: null, lden: null })
+  // An untagged answer clears any older year tag instead of inheriting it.
+  const untagged = withAnswer(list, { lat: 50, lng: 14, place: 'Kytín', sone: 2.0, lden: 40 })
+  assert.equal(untagged[0].year, undefined)
+  assert.deepEqual(recentLevelsForYear(untagged[0], '2024'), { sone: null, lden: null })
   const items = new Map([['quietmap.recent-places', JSON.stringify(list)]])
   globalThis.localStorage = { getItem: key => items.get(key) ?? null }
   t.after(() => delete globalThis.localStorage)

@@ -1,6 +1,6 @@
 ---
 title: Asia
-intro: Counted road traffic in Japan, Thailand, Saudi Arabia and Indonesia; timetables in India, Israel, Thailand and the UAE (by year). Most other main roads use the global road model, smaller roads are estimated from the buildings around them, and railways without a timetable or network map use class defaults.
+intro: Counted road traffic in Japan, Thailand, Saudi Arabia and Indonesia; timetables in India, Israel, Thailand and the UAE (by year). Most other main roads use the global road model, smaller roads are estimated from the buildings around them, and railways without a timetable, network map or corridor count use class defaults.
 ---
 
 <!-- SUBPAGES -->

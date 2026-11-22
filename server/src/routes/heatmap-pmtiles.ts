@@ -6,7 +6,13 @@ import type { FastifyInstance } from 'fastify'
 import { Compression, type RangeResponse } from 'pmtiles'
 import { requireTilesDirYear } from './heatmap-manifest.ts'
 import { parseTileParams } from './heatmap-shared.ts'
-import { ArchiveChangedError, openVerifiedArchive, type VerifiedArchive } from './pmtiles-file.ts'
+import {
+  ArchiveChangedError,
+  openVerifiedArchive,
+  sameFileIdentity,
+  type FileIdentity,
+  type VerifiedArchive,
+} from './pmtiles-file.ts'
 
 const BUILD_ID = /^b\d+$/
 const YEAR_ID = /^\d{4}$/
@@ -17,7 +23,7 @@ const ARCHIVE_DIRECTORIES_MAX = 100
 
 interface CachedArchive {
   archive: VerifiedArchive
-  yearMarker: { dev: number; ino: number; mtimeMs: number; size: number }
+  yearMarker: FileIdentity
 }
 
 /**
@@ -43,19 +49,10 @@ export async function heatmapPmtilesRoutes(
         join(tilesDir, `${layer}.${build}.pmtiles`),
         Compression.Brotli,
         ARCHIVE_DIRECTORIES_MAX,
-        expectedYear,
+        { year: expectedYear, layer, build },
       )
-      await requireTilesDirYear(tilesDir, expectedYear)
-      const markerStat = await stat(yearPath)
-      return {
-        archive,
-        yearMarker: {
-          dev: markerStat.dev,
-          ino: markerStat.ino,
-          mtimeMs: markerStat.mtimeMs,
-          size: markerStat.size,
-        },
-      }
+      const yearMarker = await requireTilesDirYear(tilesDir, expectedYear)
+      return { archive, yearMarker }
     })()
     archiveCache.set(key, entry)
     if (archiveCache.size > ARCHIVE_CACHE_MAX) {
@@ -65,19 +62,14 @@ export async function heatmapPmtilesRoutes(
     return entry
   }
 
-  async function verifyYearMarker(expected: CachedArchive['yearMarker']): Promise<void> {
+  async function verifyYearMarker(expected: FileIdentity): Promise<void> {
     let current
     try {
       current = await stat(yearPath)
     } catch {
       throw new ArchiveChangedError(`${yearPath} changed or disappeared`)
     }
-    if (
-      current.dev !== expected.dev ||
-      current.ino !== expected.ino ||
-      current.mtimeMs !== expected.mtimeMs ||
-      current.size !== expected.size
-    ) {
+    if (!current.isFile() || !sameFileIdentity(current, expected)) {
       throw new ArchiveChangedError(`${yearPath} was modified after validation`)
     }
   }

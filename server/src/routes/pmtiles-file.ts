@@ -21,21 +21,50 @@ export class ArchiveChangedError extends Error {
   }
 }
 
-interface FileIdentity {
+export interface FileIdentity {
   dev: number
   ino: number
+  size: number
+  mtimeMs: number
+  ctimeMs: number
+}
+
+export function sameFileIdentity(a: FileIdentity, b: FileIdentity): boolean {
+  return (
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.size === b.size &&
+    a.mtimeMs === b.mtimeMs &&
+    a.ctimeMs === b.ctimeMs
+  )
+}
+
+export function fileIdentityOf(stat: {
+  dev: number
+  ino: number
+  size: number
+  mtimeMs: number
+  ctimeMs: number
+}): FileIdentity {
+  return { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs }
+}
+
+export interface ExpectedArchiveMetadata {
+  year: string
+  layer?: string
+  build?: string
 }
 
 export interface VerifiedArchive {
   pmtiles: PMTiles
-  /** Verify the pathname still resolves to the exact regular file validated at open time. */
+  /** Verify the pathname still resolves to the exact regular file generation validated at open time. */
   verifyIdentity: () => Promise<void>
 }
 
 /** Cache parsed directories, but retain an archive descriptor only during a range read:
  * an idle cached descriptor would pin hundreds of GB after publication GC unlinks it.
- * Every open verifies `(dev, ino)` so an in-place swap can never feed another file's bytes
- * to cached directory offsets. */
+ * Every open verifies `(dev, ino, size, mtimeMs, ctimeMs)` so an in-place rewrite or rename can
+ * never feed another file's bytes to cached directory offsets. */
 class FileRangeSource implements Source {
   private readonly path: string
   private readonly identity: FileIdentity
@@ -57,7 +86,7 @@ class FileRangeSource implements Source {
     try {
       const stat = await handle.stat()
       if (!stat.isFile()) throw new Error(`${this.path} is not a regular file`)
-      if (stat.dev !== this.identity.dev || stat.ino !== this.identity.ino) {
+      if (!sameFileIdentity(stat, this.identity)) {
         throw new ArchiveChangedError(`${this.path} was replaced after validation`)
       }
       // Positional reads may be short; only EOF ends the range early. The header probe at the
@@ -98,14 +127,14 @@ export async function openVerifiedArchive(
   path: string,
   tileCompression: Compression,
   cachedDirectories: number,
-  expectedYear?: string,
+  expected?: ExpectedArchiveMetadata,
 ): Promise<VerifiedArchive> {
   const probe = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   let identity: FileIdentity
   try {
     const stat = await probe.stat()
     if (!stat.isFile()) throw new Error(`${path} is not a regular file`)
-    identity = { dev: stat.dev, ino: stat.ino }
+    identity = fileIdentityOf(stat)
   } finally {
     await probe.close()
   }
@@ -119,20 +148,30 @@ export async function openVerifiedArchive(
   if (header.tileCompression !== tileCompression) {
     throw new Error(`tile compression ${header.tileCompression} contradicts serving as ${tileCompression}`)
   }
-  if (expectedYear !== undefined) {
+  if (expected !== undefined) {
     if (header.jsonMetadataLength === 0) {
       throw new Error(`${path} lacks metadata year`)
     }
     const raw = await source.getBytes(header.jsonMetadataOffset, header.jsonMetadataLength)
     const inflated = await inflateDirectory(raw.data, header.internalCompression)
-    const metadata = JSON.parse(new TextDecoder('utf-8').decode(inflated)) as { year?: unknown }
-    if (metadata?.year !== expectedYear) {
-      throw new Error(`${path} is for year ${String(metadata?.year)}, not ${expectedYear}`)
+    const metadata = JSON.parse(new TextDecoder('utf-8').decode(inflated)) as {
+      year?: unknown
+      name?: unknown
+      build?: unknown
+    }
+    if (metadata?.year !== expected.year) {
+      throw new Error(`${path} is for year ${String(metadata?.year)}, not ${expected.year}`)
+    }
+    if (expected.layer !== undefined && metadata?.name !== expected.layer) {
+      throw new Error(`${path} is for layer ${String(metadata?.name)}, not ${expected.layer}`)
+    }
+    if (expected.build !== undefined && metadata?.build !== expected.build) {
+      throw new Error(`${path} is for build ${String(metadata?.build)}, not ${expected.build}`)
     }
   }
   const verifyIdentity = async () => {
     const stat = await lstat(path)
-    if (!stat.isFile() || stat.dev !== identity.dev || stat.ino !== identity.ino) {
+    if (!stat.isFile() || !sameFileIdentity(stat, identity)) {
       throw new ArchiveChangedError(`${path} was replaced after validation`)
     }
   }
@@ -143,7 +182,7 @@ export async function openArchiveServedAsStored(
   path: string,
   tileCompression: Compression,
   cachedDirectories: number,
-  expectedYear?: string,
+  expected?: ExpectedArchiveMetadata,
 ): Promise<PMTiles> {
-  return (await openVerifiedArchive(path, tileCompression, cachedDirectories, expectedYear)).pmtiles
+  return (await openVerifiedArchive(path, tileCompression, cachedDirectories, expected)).pmtiles
 }

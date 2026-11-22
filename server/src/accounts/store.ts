@@ -78,16 +78,14 @@ export class AccountStore {
     this.#db.exec('PRAGMA journal_mode = DELETE; PRAGMA secure_delete = ON; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;')
     this.#db.exec(SCHEMA)
     // A database from before the recent places had times reads each opened at no known time; one from
-    // when they were counted (until 2026-10-30) loses the count. In one transaction: a start cut short
-    // changes both or neither.
-    const columns = new Set(this.#db.prepare('PRAGMA table_info(recent_places)').all().map(column => column.name))
-    if (!columns.has('opened_at') || !columns.has('year') || columns.has('count')) {
-      this.#transaction(() => {
-        if (!columns.has('opened_at')) this.#db.exec('ALTER TABLE recent_places ADD COLUMN opened_at INTEGER NOT NULL DEFAULT 0')
-        if (!columns.has('year')) this.#db.exec('ALTER TABLE recent_places ADD COLUMN year TEXT')
-        if (columns.has('count')) this.#db.exec('ALTER TABLE recent_places DROP COLUMN count')
-      })
-    }
+    // when they were counted (until 2026-10-30) loses the count. Inspect and migrate inside one
+    // write transaction so concurrent server startups cannot race ALTER TABLE.
+    this.#transaction(() => {
+      const columns = new Set(this.#db.prepare('PRAGMA table_info(recent_places)').all().map(column => column.name))
+      if (!columns.has('opened_at')) this.#db.exec('ALTER TABLE recent_places ADD COLUMN opened_at INTEGER NOT NULL DEFAULT 0')
+      if (!columns.has('year')) this.#db.exec('ALTER TABLE recent_places ADD COLUMN year TEXT')
+      if (columns.has('count')) this.#db.exec('ALTER TABLE recent_places DROP COLUMN count')
+    })
   }
 
   close(): void {

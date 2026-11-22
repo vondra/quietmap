@@ -191,9 +191,9 @@ junctions and the place's yearly air temperature.
   29,400 vehicles a day on a one-way carriageway and 14,000 on a two-way road (for this, a road that
   tags no lanes takes those of the piece whose count it carries; where that tags none either, a
   two-way road has two and a one-way carriageway carries at most 72,900, as the counted untagged ones
-  do): a count
-  above that takes the model of its class, bounded by it, and a national
-  table's or a country's default value is cut to it (India's national table put 70,000 vehicles a
+  do): a count or a publisher's estimated road count
+  above that takes the model of its class, bounded by it, while a class-median fallback (or a
+  national table on the 2026 map) is cut to it (India's national table put 70,000 vehicles a
   day on two-lane trunk roads). A count under a
   fortieth of what the major roads' model predicts for its class, lanes and surroundings is not the
   road's (Warsaw's Trasa Łazienkowska carried 32 vehicles a carriageway a day, another road's count

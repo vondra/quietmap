@@ -94,14 +94,15 @@ export function withAnswer(
   const k = list.findIndex(other => samePlace(other, answer))
   if (k < 0) return list
   const older = list[k]
-  const year = answer.year ?? older.year
+  const { year: _previousYear, ...rest } = older
   const entry: RecentPlace = {
-    ...older,
+    ...rest,
     place: older.place ?? answer.place,
     sone: answer.sone,
     lden: answer.lden,
-    ...(year !== undefined ? { year } : {}),
+    ...(answer.year !== undefined ? { year: answer.year } : {}),
   }
+  void _previousYear
   if (entry.place === older.place && entry.sone === older.sone && entry.lden === older.lden && entry.year === older.year) return list
   return list.map((other, j) => (j === k ? entry : other))
 }

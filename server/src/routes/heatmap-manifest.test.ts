@@ -95,12 +95,17 @@ test('a torn/unparseable manifest fails startup and returns 500 on hot-swap', as
   await app.close()
 })
 
-test('a manifest missing a layer is a 500, never served', async () => {
+test('a manifest missing a layer fails startup and returns 500 on hot-swap', async () => {
   clearFixture('2026')
   const manifest = validManifest('b546')
   delete manifest.layers.road
   writeFileSync(pinPath, JSON.stringify(manifest))
+  await assert.rejects(() => buildApp(), /missing layer road/)
+  writeFileSync(pinPath, JSON.stringify({ year: '2026' }))
+  await assert.rejects(() => buildApp(), /HM3 version/)
+  writeFileSync(pinPath, JSON.stringify(validManifest('b546')))
   const app = await buildApp()
+  writeFileSync(pinPath, JSON.stringify(manifest))
   const res = await app.inject(HM3_MANIFEST_URL)
   assert.equal(res.statusCode, 500)
   assert.deepEqual(res.json(), { error: 'manifest unreadable' })
@@ -122,12 +127,15 @@ test('a build without Lden serves its Nden layers; one with only some Lden layer
   await app.close()
 })
 
-test('a layer pointing at another layer archive is a 500', async () => {
+test('a layer pointing at another layer archive fails startup and returns 500 on hot-swap', async () => {
   clearFixture('2026')
   const manifest = validManifest('b546')
   manifest.layers.road = { file: 'rail.b546.pmtiles', build: 'b546' }
   writeFileSync(pinPath, JSON.stringify(manifest))
+  await assert.rejects(() => buildApp(), /does not match the served archive name/)
+  writeFileSync(pinPath, JSON.stringify(validManifest('b546')))
   const app = await buildApp()
+  writeFileSync(pinPath, JSON.stringify(manifest))
   const res = await app.inject(HM3_MANIFEST_URL)
   assert.equal(res.statusCode, 500)
   await app.close()
@@ -155,7 +163,10 @@ test('a layer omitting build must match the top-level build', async () => {
   const manifest = validManifest('b2')
   manifest.layers.road = { file: 'road.b1.pmtiles' }
   writeFileSync(pinPath, JSON.stringify(manifest))
+  await assert.rejects(() => buildApp(), /does not match manifest build/)
+  writeFileSync(pinPath, JSON.stringify(validManifest('b2')))
   const app = await buildApp()
+  writeFileSync(pinPath, JSON.stringify(manifest))
   const res = await app.inject(HM3_MANIFEST_URL)
   assert.equal(res.statusCode, 500)
   await app.close()
@@ -170,7 +181,7 @@ test('mismatched or missing year fails at startup and on hot-swap, and unbound a
   const missingYear = validManifest('b1')
   delete missingYear.year
   writeFileSync(pinPath, JSON.stringify(missingYear))
-  await assert.rejects(() => buildApp('2026'), /not 2026/)
+  await assert.rejects(() => buildApp('2026'), /invalid map year/)
 
   clearFixture()
   writeFileSync(pinPath, JSON.stringify(validManifest('b1', '2026')))

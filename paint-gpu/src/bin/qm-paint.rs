@@ -124,12 +124,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
     let year = required("year")?;
     let release = Release::open(&PathBuf::from(required("prepared")?), year)?;
-    let out = PathBuf::from(required("out")?);
+    let out_arg = PathBuf::from(required("out")?);
     let zoom: u32 = required("zoom")?
         .parse()
         .map_err(|_| "--zoom is 12 or 13")?;
     let grid = Grid::at_zoom(zoom).ok_or("--zoom is 12 or 13")?;
     let squares = squares(arguments)?;
+    std::fs::create_dir_all(&out_arg).map_err(|e| format!("{}: {e}", out_arg.display()))?;
+    let out = std::fs::canonicalize(&out_arg).map_err(|e| format!("{}: {e}", out_arg.display()))?;
     paint::year::bind_painted_dir(&out, year)?;
     let mut todo = Vec::new();
     for (number, tile) in squares.iter().copied().enumerate() {
