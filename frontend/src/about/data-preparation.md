@@ -544,8 +544,10 @@ hold water, by their share of it (the open sea where it maps no land), never ove
 a cell's activity can move onto neighbouring water outside its original footprint. South of 60° S
 and north of 82.75° N it maps no land at all, so there the land reads as water. Speed is not modelled, so ships under way may be a
 few decibels louder. Activity is constant over the day, which overstates leisure boats at night.
-Outside European seas every vessel that is not a work boat counts as a large ship, moored yachts too:
-a marina can read as loud as a port, up to 75 dB Lden at Marina del Rey.
+Outside European seas, Global Fishing Watch groups cargo, tanker, carrier, bunker and passenger ships
+as large ships and fishing, support, gear, seismic and other vessels as work boats. It has no leisure-boat
+class, so pleasure craft with an AIS transmitter fall under other vessels and count as work boats,
+while boats without AIS are missing.
 
 ## Industry
 

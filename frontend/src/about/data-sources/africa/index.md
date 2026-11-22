@@ -9,26 +9,21 @@ intro: Data sources, defaults and known gaps in the noise map of Africa.
 
 No traffic counts are available for any African country. Roads come from OpenStreetMap.
 
-Nine countries have their own estimates: Algeria, DR Congo, Egypt, Ethiopia, Kenya,
-Morocco, Nigeria, Sudan and Tanzania. Each has volumes per road class and multipliers for
-listed cities; the tables are on the country pages.
-
-In all other countries motorways, trunk and primary roads use the
-[world defaults](/about/data-preparation), and secondary and tertiary roads follow a model of
-the trips made within 5 km, fitted on European counts. Local streets, in the nine countries too,
-carry the trips their buildings make where enough buildings are mapped. A main road takes the
-medium and heavy shares of counted roads of its class elsewhere in the world, a street 1 % medium
-and 2 % heavy; motorcycles come
-from national fleets (WHO 2023; 13 % of a town street's traffic in Egypt), local estimates
-(20 % in Kenya, 30 % in Nigeria) or, without either, the median of the WHO region or the world.
+Motorways, trunk and primary roads use the [global road model](/about/data-preparation), and
+secondary and tertiary roads follow a model of the trips made within 5 km. Local streets carry
+the trips their buildings make where enough buildings are mapped. A main road takes the medium
+and heavy shares of counted roads of its class elsewhere in the world, a street 1 % medium and
+2 % heavy; motorcycles come from national fleets (WHO 2023; 13 % of a town street's traffic in
+Egypt), local estimates (20 % in Kenya, 30 % in Nigeria) or, without either, the median of the
+WHO region or the world.
 
 ## Railways
 
-No African country has a timetable feed. The nine countries above and Djibouti use per-line
-estimates based on services reported by the operators. Elsewhere every track takes the world
-defaults described in the [railway method](/about/data-preparation). These can
-overstate lightly used lines. Surface metro sections are included; underground sections
-do not emit outdoor noise.
+No African country has a timetable feed. Algeria, Djibouti, DR Congo, Egypt, Ethiopia, Kenya,
+Morocco, Nigeria, Sudan and Tanzania use per-line estimates based on services reported by the
+operators. Elsewhere every track takes the world defaults described in the
+[railway method](/about/data-preparation). These can overstate lightly used lines. Surface metro
+sections are included; underground sections do not emit outdoor noise.
 
 ## Industry
 
