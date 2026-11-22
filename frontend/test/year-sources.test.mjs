@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { readYears, renderYearSources, validatePublicManifest, observedLabel, REGIONS, PRIVATE_SOURCE_TEXT } from '../scripts/year-sources.ts'
+import { selectMapYear } from '../scripts/generate-datasets.ts'
+import { MAP_YEAR } from '../src/lib/map-year.ts'
 
 const source = (id, region, public_ok = true) => ({ id, kind: 'prepare-road-counts', region, public_ok,
   publisher: id, url: 'https://example.org/counts', observed: { start: '1999', end: '2000' }, published: '2002', licence: 'CC0',
@@ -65,7 +67,7 @@ test('all real source regions have pages; built maps alone are published with th
 test('popup citations change with the same manifest and never borrow a different year', async () => {
   const { datasetCitations } = await import('../scripts/dataset-citations.ts')
   const years = readYears()
-  const current = years.find(year => year.manifest.built).manifest
+  const current = years.find(year => year.name === MAP_YEAR).manifest
   const copy = structuredClone(current)
   const input = copy.inputs.find(input => input.kind === 'road-reference-counts')
   input.publisher = 'Synthetic traffic survey'
@@ -105,7 +107,8 @@ test('a city collection credits its common publisher once and model codes invent
 
 test('every established popup provenance code retains its citation', async () => {
   const { datasetCitations } = await import('../scripts/dataset-citations.ts')
-  const current = readYears().find(year => year.manifest.built).manifest
+  // Established baseline catalogue for the 2026 release; earlier years exclude post-year sources.
+  const current = readYears().find(year => year.name === '2026').manifest
   const citations = datasetCitations(current)
   const codes = [10, 11, 12, 20, 21, 22, 23, 24, 30, 31, 100, 110, 111, 112, 1004, 1013, 1019, 1023, 1025, 1026, 1031, 1034, 1037, 1039, 1041, 1048, 1049, 1050, 1054, 1088, 1090, 1093, 1095, 1097, 1098, 1102, 1103, 1113, 1124, 2000, 2004, 2005, 2009, 2015, 2021, 2024, 2028, 2030, 2035, 2036, 2037, 2040, 2044, 2057, 2066, 2067, 2073, 2075, 9003, 9004, 9005, 9012, 9013, 9180, 9181, 9231, 9232, 9263, 9364, 9365, 9368, 9369, 9392, 9398, 9399, 9404, 9405, 9484, 9504, 9505, 9528, 9566, 9567, 9643, 9644, 9705, 9729, 9730, 9752, 9756, 9792, 9793, 9804, 9805, 9818, 9819, 9834, 9835, 9860, 9861, 9862, 9863, 9864, 9865, 9870, 9871, 9872, 9873, 9874, 9875, 9876]
   for (const code of codes) assert.ok(citations[code]?.[0], `Missing citation for ${code}`)
@@ -140,4 +143,27 @@ test('an excluded railway object cannot widen an admitted timetable citation', a
     railways: { objects: [{ input: 'current', source_id: 2057 }, { input: 'future', source_id: 2057 }] },
   }
   assert.deepEqual(datasetCitations(manifest)[2057], ['Current operator', observedLabel({ start: '2024-01-01', end: '2024-12-31' }), '', 'https://example.com/current'])
+})
+
+test('when several maps are built, MAP_YEAR selects one for citations while About lists all built years', async () => {
+  const { datasetCitations } = await import('../scripts/dataset-citations.ts')
+  const makeYear = (year, publisher) => ({
+    name: year,
+    manifest: {
+      ...manifest(),
+      year,
+      inputs: [{ ...source('eu-city-brno', 'CZ'), publisher, observed: { start: year, end: year } }],
+    },
+  })
+  const both = [makeYear('2024', 'Survey 2024'), makeYear('2026', 'Survey 2026')]
+  assert.throws(() => selectMapYear(both, undefined), /MAP_YEAR/)
+  assert.throws(() => selectMapYear(both, '2025'), /MAP_YEAR/)
+  assert.throws(() => selectMapYear([{ name: '2024', manifest: { ...both[1].manifest } }], '2024'), /disagrees/)
+  assert.equal(selectMapYear(both, '2024').name, '2024')
+  assert.equal(selectMapYear(both, '2026').name, '2026')
+  assert.equal(datasetCitations(selectMapYear(both, '2024').manifest)[10][0], 'Survey 2024')
+  assert.equal(datasetCitations(selectMapYear(both, '2026').manifest)[10][0], 'Survey 2026')
+  const page = renderYearSources('data-sources/europe/cz.md', both)
+  assert.ok(page.includes('### 2026') && page.includes('### 2024'))
+  assert.ok(page.indexOf('### 2026') < page.indexOf('### 2024'))
 })

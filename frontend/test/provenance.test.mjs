@@ -2,9 +2,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { MAP_YEAR } from '../src/lib/map-year.ts'
 import { readYears } from '../scripts/year-sources.ts'
 import { datasetCitations } from '../scripts/dataset-citations.ts'
-const built = readYears().find(year => year.manifest.built).manifest
+const built = readYears().find(year => year.name === MAP_YEAR).manifest
 const citation = code => { const [name, observed, measurement] = datasetCitations(built)[code]; return [name, observed, measurement].filter(Boolean).join(', ') }
 
 import {
@@ -65,7 +66,7 @@ test('a record names the dataset behind its traffic; a class prior or an unknown
 })
 
 test('a level crossing names the dataset of its soundings, never passenger trains or freight', () => {
-  assert.deepEqual(railDatasetLines(111, 20, true), [`Soundings: ${citation(111)}`])
+  assert.deepEqual(railDatasetLines(112, 20, true), [`Soundings: ${citation(112)}`])
   assert.deepEqual(railDatasetLines(20, 0, false), [`Passenger trains: ${citation(20)}`])
 })
 
@@ -85,5 +86,5 @@ test('a US commuter or metro line names how many US timetables its trains come f
     assert.equal(name, `${timetables[year.name]} public timetables`, year.name)
     assert.equal(url, '/about/data-sources/north-america/us', year.name)
   }
-  assert.match(railDatasetLines(2079, 0, false)[0], /^Passenger trains: 5[45] public timetables, 20\d\d( to 20\d\d)?$/)
+  assert.match(railDatasetLines(2079, 0, false)[0], new RegExp(`^Passenger trains: ${timetables[MAP_YEAR]} public timetables, 20\\d\\d( to 20\\d\\d)?$`))
 })

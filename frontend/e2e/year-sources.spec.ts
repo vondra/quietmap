@@ -12,7 +12,9 @@ for (const device of ['desktop', 'phone'] as const) {
     test('a country without admitted road counts explains its model and retains the source journey', async ({ page }, info) => {
       await page.goto('/about/data-sources/asia')
       await page.getByRole('link', { name: 'India', exact: true }).click()
-      const explanation = page.getByText('No road count at or before this year is used for this country.', { exact: false })
+      const explanations = page.getByText('No road count at or before this year is used for this country.', { exact: false })
+      await expect(explanations).toHaveCount(years.filter(year => year.manifest.built).length)
+      const explanation = explanations.first()
       await explanation.scrollIntoViewIfNeeded()
       await expect(explanation).toBeVisible()
       await expect(explanation).toContainText('global model')
