@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train, DART and Luas counts: [Transport for Ireland timetable](https://www.transportforireland.ie/transitData/Data/GTFS_All.zip), one busy Wednesday. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train, DART and Luas counts: [Transport for Ireland timetable](https://www.transportforireland.ie/transitData/Data/GTFS_All.zip), one busy Wednesday. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Buildings and terrain
 

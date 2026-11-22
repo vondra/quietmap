@@ -24,7 +24,7 @@ Train counts, one busy Wednesday:
 | [Tampere](http://data.itsfactory.fi/journeys/files/gtfs/latest/gtfs_tampere.zip) | Tampere tram |
 | [Föli](http://data.foli.fi/gtfs/gtfs.zip) | Turku, which has buses only, so it adds nothing to rail |
 
-The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Buildings and terrain
 

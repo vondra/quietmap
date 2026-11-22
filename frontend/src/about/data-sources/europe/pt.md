@@ -24,7 +24,7 @@ Train counts, one busy Wednesday:
 | [Metro Sul do Tejo](https://mts.pt/imt/MTS-20240129.zip) | Almada and Seixal light rail |
 | [Carris Metropolitana](https://api.carrismetropolitana.pt/v2/gtfs) | Lisbon area. Mostly buses; not used |
 
-Fertagus trains over the 25 de Abril bridge and the Lisbon trams have no feed loaded. The timetables are passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Fertagus trains over the 25 de Abril bridge and the Lisbon trams have no feed loaded. The timetables are passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Buildings and terrain
 

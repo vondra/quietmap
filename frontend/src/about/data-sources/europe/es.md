@@ -24,7 +24,7 @@ Train counts, one busy Wednesday:
 | [Renfe Cercanías](https://data.renfe.com/) | Commuter trains |
 | [FGC](https://www.fgc.cat/google/google_transit.zip) | Ferrocarrils de la Generalitat de Catalunya |
 
-The northern narrow-gauge lines (former Feve), Euskotren, and metros and trams outside these feeds use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+The northern narrow-gauge lines (former Feve), Euskotren, and metros and trams outside these feeds use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Industry
 

@@ -18,7 +18,7 @@ Train counts, one busy Wednesday:
 - National railway: [SNCB/NMBS](https://gtfs.irail.be/).
 - Trams, metro and light rail: [STIB/MIVB](https://stibmivb.opendatasoft.com/) (Brussels), [De Lijn](http://gtfs.irail.be/de-lijn/de_lijn-gtfs.zip) (Antwerp, Ghent, coast tram), [TEC](http://opendata.tec-wl.be/Current%20GTFS/TEC-GTFS.zip) (Charleroi).
 
-Lines without a count take the class defaults. No Belgian timetable includes freight, and Belgium publishes no goods train-kilometres: freight keeps the class defaults' national total, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Lines without a count take the class defaults. No Belgian timetable includes freight, and Belgium publishes no goods train-kilometres: freight keeps the class defaults' national total, drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Industry
 

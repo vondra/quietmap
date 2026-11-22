@@ -18,7 +18,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 Train counts: two [SNCF timetables](https://data.sncf.com/), one busy Wednesday. The national feed covers TGV, Intercités and TER; the Transilien feed adds the RER and Transilien trains of the Paris region.
 
-The Paris metro and city trams are not covered: no RATP feed is loaded. Their surface sections use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+The Paris metro and city trams are not covered: no RATP feed is loaded. Their surface sections use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Buildings and terrain
 
@@ -30,4 +30,5 @@ Homes mapped in OpenStreetMap: 20 heat pumps and 24 air conditioners per 100 hom
 
 ## Checked against
 
-Bruitparif's stations; Paris's street stations ([validation](/about/validation)).
+Bruitparif identified train noise at 23 sites around Paris. Published street measurements in Paris
+provide a separate check. [Railway noise](/about/validation#railway-noise) and [street measurements](/about/validation#map-against-microphone).

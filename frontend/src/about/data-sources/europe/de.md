@@ -26,7 +26,10 @@ Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-Train, tram and U-Bahn counts: national DELFI timetable from [gtfs.de](https://gtfs.de/en/feeds/de_full/) and [public-transport.earth](https://data.public-transport.earth/gtfs/de), one busy Wednesday. DB InfraGO publishes no freight paths. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train, tram and U-Bahn counts: national DELFI timetable from [gtfs.de](https://gtfs.de/en/feeds/de_full/) and [public-transport.earth](https://data.public-transport.earth/gtfs/de), one busy Wednesday. DB InfraGO publishes no freight paths. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
+
+The Eisenbahn-Bundesamt measures passing trains 7.5 m from their own track. Its train lengths
+help define the model's typical trains. [German railway monitoring method](https://www.laerm-monitoring.de/Messverfahren).
 
 ## Industry
 
@@ -43,7 +46,3 @@ Terrain from the laser surveys of 15 Länder (DGM1, DGM5, via [hoehendaten.de](h
 ## Homes and places
 
 Homes mapped in OpenStreetMap: 4 heat pumps and 6 air conditioners per 100 homes. Church bells ring three times a day, with a Sunday peal; church clocks strike the quarters by day and in the evening. Mosques: only those with a mapped minaret call, once on Fridays.
-
-## Checked against
-
-The Eisenbahn-Bundesamt's railway monitors ([validation](/about/validation)).

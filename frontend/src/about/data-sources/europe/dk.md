@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train, S-tog, metro and light rail counts: [Rejseplanen timetable](https://www.rejseplanen.info/labs/GTFS.zip), one busy Wednesday. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. Most of the Copenhagen metro runs in tunnels, which emit no noise.
+Train, S-tog, metro and light rail counts: [Rejseplanen timetable](https://www.rejseplanen.info/labs/GTFS.zip), one busy Wednesday. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways). Most of the Copenhagen metro runs in tunnels, which emit no noise.
 
 ## Industry
 

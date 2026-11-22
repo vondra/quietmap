@@ -22,7 +22,7 @@ Train counts are derived from the national timetable
 ([CIS JR](https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/)), routed along
 OpenStreetMap tracks.
 
-The public timetable is passenger-only. Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. Lines without any
+The public timetable is passenger-only. Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways). Lines without any
 scheduled service default to 2 passenger and 1 freight train per day.
 
 ## Industry
