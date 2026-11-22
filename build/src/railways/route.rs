@@ -19,6 +19,28 @@ struct Snap {
     distance: f64,
 }
 
+fn for_each_snap(
+    network: &Network,
+    point: [f64; 2],
+    allowed: &impl Fn(&Edge) -> bool,
+    mut visit_snap: impl FnMut(Snap),
+) {
+    for index in network.nearby(point, 300.0) {
+        let edge = &network.edges[index];
+        if !allowed(edge) {
+            continue;
+        }
+        let (distance, fraction) = project(point, edge.points[0], edge.points[1]);
+        if distance <= 300.0 {
+            visit_snap(Snap {
+                edge: index,
+                fraction,
+                distance,
+            });
+        }
+    }
+}
+
 fn snaps(
     network: &Network,
     point: [f64; 2],
@@ -26,37 +48,35 @@ fn snaps(
 ) -> Vec<(usize, Snap)> {
     let mut components = Vec::<(usize, Snap)>::new();
     let mut indices = HashMap::new();
-    for index in network.nearby(point, 300.0) {
-        let edge = &network.edges[index];
-        if !allowed(edge) {
-            continue;
-        }
-        let (distance, fraction) = project(point, edge.points[0], edge.points[1]);
-        if distance > 300.0 {
-            continue;
-        }
-        let component = network.components[edge.nodes[0]];
+    for_each_snap(network, point, allowed, |snap| {
+        let component = network.components[network.edges[snap.edge].nodes[0]];
         let position = *indices.entry(component).or_insert_with(|| {
             let at = components.len();
             components.push((
                 component,
                 Snap {
-                    edge: index,
-                    fraction,
                     distance: f64::INFINITY,
+                    ..snap
                 },
             ));
             at
         });
-        if distance < components[position].1.distance {
-            components[position].1 = Snap {
-                edge: index,
-                fraction,
-                distance,
-            };
+        if snap.distance < components[position].1.distance {
+            components[position].1 = snap;
         }
-    }
+    });
     components
+}
+
+fn collect_snaps(
+    network: &Network,
+    point: [f64; 2],
+    allowed: &impl Fn(&Edge) -> bool,
+) -> Vec<Snap> {
+    let mut out = Vec::new();
+    for_each_snap(network, point, allowed, |snap| out.push(snap));
+    out.sort_by(|a, b| a.distance.total_cmp(&b.distance).then(a.edge.cmp(&b.edge)));
+    out
 }
 
 fn visit(network: &Network, edge: usize, from: f64, to: f64) -> Visit {
@@ -69,32 +89,147 @@ fn visit(network: &Network, edge: usize, from: f64, to: f64) -> Visit {
     }
 }
 
-pub fn walk(
-    network: &Network,
-    search: &mut Search,
-    from: [f64; 2],
-    to: [f64; 2],
-    shape: &[[f64; 2]],
-) -> Result<Vec<Visit>, &'static str> {
+pub(super) fn has_corridor_snap(network: &Network, point: [f64; 2], shape: &[[f64; 2]]) -> bool {
     let corridor =
         |edge: &Edge| shape.is_empty() || distance_to_line(edge.midpoint(), shape) <= 250.0;
-    let starts = snaps(network, from, &corridor);
-    let ends = snaps(network, to, &corridor);
+    network.nearby(point, 300.0).into_iter().any(|index| {
+        let edge = &network.edges[index];
+        corridor(edge) && project(point, edge.points[0], edge.points[1]).0 <= 300.0
+    })
+}
+
+fn corridor_fallback_pair(
+    network: &Network,
+    from: [f64; 2],
+    to: [f64; 2],
+    corridor: &impl Fn(&Edge) -> bool,
+) -> Option<(Snap, Snap)> {
+    let starts = collect_snaps(network, from, corridor);
+    let ends = collect_snaps(network, to, corridor);
     if starts.is_empty() || ends.is_empty() {
-        return Err("snap");
+        return None;
     }
-    let mut pair: Option<(Snap, Snap, f64)> = None;
-    for (component, start) in starts {
-        if let Some((_, end)) = ends.iter().find(|(candidate, _)| *candidate == component) {
-            let distance = start.distance + end.distance;
-            if pair.is_none_or(|(_, _, old)| distance < old) {
-                pair = Some((start, *end, distance));
+    let mut best: Option<(Snap, Snap, f64)> = None;
+    let consider = |best: &mut Option<(Snap, Snap, f64)>, s: Snap, e: Snap| {
+        let sum = s.distance + e.distance;
+        let better = best.is_none_or(|(bs, be, bd)| {
+            sum.total_cmp(&bd)
+                .then(s.edge.cmp(&bs.edge))
+                .then(e.edge.cmp(&be.edge))
+                .is_lt()
+        });
+        if better {
+            *best = Some((s, e, sum));
+        }
+    };
+    let end_by_edge: HashMap<usize, Snap> = ends.iter().map(|&e| (e.edge, e)).collect();
+    for &s in &starts {
+        if let Some(&e) = end_by_edge.get(&s.edge)
+            && (s.fraction - e.fraction).abs() > 1e-12
+        {
+            consider(&mut best, s, e);
+        }
+    }
+    let mut end_by_node: HashMap<usize, Vec<Snap>> = HashMap::new();
+    for &e in &ends {
+        let nodes = network.edges[e.edge].nodes;
+        end_by_node.entry(nodes[0]).or_default().push(e);
+        if nodes[1] != nodes[0] {
+            end_by_node.entry(nodes[1]).or_default().push(e);
+        }
+    }
+    let mut families = Vec::new();
+    for &s in &starts {
+        let fam = network.edges[s.edge].family();
+        if !families.contains(&fam) {
+            families.push(fam);
+        }
+    }
+    for fam in families {
+        let allowed = |edge: &Edge| {
+            (edge.traversal_only || fam == 0 || edge.family() == fam) && corridor(edge)
+        };
+        let mut comp_of: HashMap<usize, usize> = HashMap::new();
+        let mut comp_ends: Vec<[Option<Snap>; 2]> = Vec::new();
+        for &s in &starts {
+            if network.edges[s.edge].family() != fam {
+                continue;
+            }
+            if best.is_some_and(|(_, _, bd)| s.distance > bd) {
+                break;
+            }
+            let se = &network.edges[s.edge];
+            let comp = if let Some(&c) = comp_of.get(&se.nodes[0]) {
+                c
+            } else {
+                let c = comp_ends.len();
+                let mut stack = Vec::new();
+                for node in se.nodes {
+                    if comp_of.insert(node, c).is_none() {
+                        stack.push(node);
+                    }
+                }
+                let mut top: [Option<Snap>; 2] = [None; 2];
+                while let Some(u) = stack.pop() {
+                    if let Some(candidates) = end_by_node.get(&u) {
+                        for &e in candidates {
+                            if top.iter().flatten().any(|b| b.edge == e.edge) {
+                                continue;
+                            }
+                            let better = |slot: Option<Snap>| {
+                                slot.is_none_or(|b| {
+                                    e.distance
+                                        .total_cmp(&b.distance)
+                                        .then(e.edge.cmp(&b.edge))
+                                        .is_lt()
+                                })
+                            };
+                            if better(top[0]) {
+                                top[1] = top[0];
+                                top[0] = Some(e);
+                            } else if better(top[1]) {
+                                top[1] = Some(e);
+                            }
+                        }
+                    }
+                    for &edge_idx in &network.adjacency[u] {
+                        let edge = &network.edges[edge_idx];
+                        if !allowed(edge) {
+                            continue;
+                        }
+                        let v = if edge.nodes[0] == u {
+                            edge.nodes[1]
+                        } else {
+                            edge.nodes[0]
+                        };
+                        if comp_of.insert(v, c).is_none() {
+                            stack.push(v);
+                        }
+                    }
+                }
+                comp_ends.push(top);
+                c
+            };
+            if let Some(e) = comp_ends[comp]
+                .into_iter()
+                .flatten()
+                .find(|e| e.edge != s.edge)
+            {
+                consider(&mut best, s, e);
             }
         }
     }
-    let Some((start, end, _)) = pair else {
-        return Err("disconnected");
-    };
+    best.map(|(s, e, _)| (s, e))
+}
+
+fn shortest_between(
+    network: &Network,
+    search: &mut Search,
+    start: Snap,
+    end: Snap,
+    shape: &[[f64; 2]],
+    corridor: &impl Fn(&Edge) -> bool,
+) -> Result<Vec<Visit>, &'static str> {
     if start.edge == end.edge {
         return Ok(if start.fraction == end.fraction {
             Vec::new()
@@ -194,6 +329,44 @@ pub fn walk(
     Ok(visits)
 }
 
+pub fn walk(
+    network: &Network,
+    search: &mut Search,
+    from: [f64; 2],
+    to: [f64; 2],
+    shape: &[[f64; 2]],
+) -> Result<Vec<Visit>, &'static str> {
+    let corridor =
+        |edge: &Edge| shape.is_empty() || distance_to_line(edge.midpoint(), shape) <= 250.0;
+    let starts = snaps(network, from, &corridor);
+    let ends = snaps(network, to, &corridor);
+    if starts.is_empty() || ends.is_empty() {
+        return Err("snap");
+    }
+    let mut pair: Option<(Snap, Snap, f64)> = None;
+    for (component, start) in starts {
+        if let Some((_, end)) = ends.iter().find(|(candidate, _)| *candidate == component) {
+            let distance = start.distance + end.distance;
+            if pair.is_none_or(|(_, _, old)| distance < old) {
+                pair = Some((start, *end, distance));
+            }
+        }
+    }
+    let Some((start, end, _)) = pair else {
+        return Err("disconnected");
+    };
+    match shortest_between(network, search, start, end, shape, &corridor) {
+        Ok(visits) => Ok(visits),
+        Err("disconnected") if !shape.is_empty() => {
+            let Some((s, e)) = corridor_fallback_pair(network, from, to, &corridor) else {
+                return Err("disconnected");
+            };
+            shortest_between(network, search, s, e, shape, &corridor)
+        }
+        Err(err) => Err(err),
+    }
+}
+
 pub fn stitch(visits: &mut Vec<Visit>, mut next: Vec<Visit>) {
     if let (Some(previous), Some(first)) = (visits.last_mut(), next.first())
         && previous.edge == first.edge
@@ -203,4 +376,92 @@ pub fn stitch(visits: &mut Vec<Visit>, mut next: Vec<Visit>) {
         next.remove(0);
     }
     visits.extend(next);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn push_edge(net: &mut Network, a: usize, b: usize, way: i64, rail_type: u8) {
+        let len = distance(net.nodes[a], net.nodes[b]);
+        net.edges.push(Edge {
+            nodes: [a, b],
+            points: [net.nodes[a], net.nodes[b]],
+            length: len,
+            way,
+            segment: 0,
+            square: [100, 100],
+            extent: [0.0, len],
+            rail_type,
+            usage: 0,
+            traffic_mode: 0,
+            country: *b"US",
+            corridor: "main".into(),
+            corridor_name: String::new(),
+            traversal_only: false,
+        });
+    }
+
+    #[test]
+    fn corridor_fallback_connects_parallel_tracks_with_distant_crossover_and_isolated_families() {
+        // Two parallel heavy-rail tracks 10 m apart running east from x=0 to x=0.02 (~2.2 km),
+        // split into three segments each so the start and end edges share no node and force
+        // neighbour expansion, and linked only by a crossover at x=-0.005 (550 m west, outside
+        // the 250 m leg corridor). A family-0 stub sits closer to `from` and must not poison
+        // family-1 traversal.
+        let mut net = Network::default();
+        net.nodes = vec![
+            [0.0, -0.005],      // 0: west crossover north
+            [0.0001, -0.005],   // 1: west crossover south
+            [0.0, 0.0],         // 2: track 1 start
+            [0.0, 0.007],       // 3: track 1 mid-1
+            [0.0, 0.014],       // 4: track 1 mid-2
+            [0.0, 0.02],        // 5: track 1 end
+            [0.0001, 0.0],      // 6: track 2 start
+            [0.0001, 0.007],    // 7: track 2 mid-1
+            [0.0001, 0.014],    // 8: track 2 mid-2
+            [0.0001, 0.02],     // 9: track 2 end
+            [-0.00001, 0.0],    // 10: family-0 stub start
+            [-0.00001, 0.0005], // 11: family-0 stub end
+        ];
+        push_edge(&mut net, 0, 1, 1, 0);
+        push_edge(&mut net, 0, 2, 2, 0);
+        push_edge(&mut net, 1, 6, 3, 0);
+        push_edge(&mut net, 2, 3, 10, 0); // Track 1 west
+        push_edge(&mut net, 3, 4, 11, 0); // Track 1 mid
+        push_edge(&mut net, 4, 5, 12, 0); // Track 1 east
+        push_edge(&mut net, 6, 7, 20, 0); // Track 2 west
+        push_edge(&mut net, 7, 8, 21, 0); // Track 2 mid
+        push_edge(&mut net, 8, 9, 22, 0); // Track 2 east
+        push_edge(&mut net, 10, 11, 30, 5); // family 0 stub
+        net.index();
+
+        // Start pin sits 2 m south of Track 1 (and 1 m from family-0 stub); end pin sits 2 m
+        // north of Track 2. Primary single-snap lands on Track 1 -> Track 2 (disconnected inside
+        // the 250 m corridor), while corridor_fallback_pair traverses Track 1 or Track 2.
+        let from = [0.00002, 0.0];
+        let to = [0.00008, 0.02];
+        let shape = [[0.00005, 0.0], [0.00005, 0.02]];
+        let mut search = Search::new(net.nodes.len());
+        let visits = walk(&net, &mut search, from, to, &shape).expect("parallel track fallback");
+        assert_eq!(visits.len(), 3);
+        let ways: Vec<i64> = visits.iter().map(|v| net.edges[v.edge].way).collect();
+        assert!(
+            ways == [10, 11, 12] || ways == [20, 21, 22],
+            "ways={ways:?}"
+        );
+        // Closest start sharing the only end's edge at equal fraction must not block a second
+        // start in the same component from pairing with that end.
+        let mut net2 = Network::default();
+        net2.nodes = vec![[0.0, 0.0], [0.005, 0.0], [0.0025, 0.0005]];
+        push_edge(&mut net2, 0, 1, 40, 0);
+        push_edge(&mut net2, 1, 2, 41, 0);
+        net2.index();
+        let pair = corridor_fallback_pair(&net2, [0.0025, 0.0002], [0.0025, -0.0025], &|_| true)
+            .expect("second start in same component");
+        assert_eq!(
+            (net2.edges[pair.0.edge].way, net2.edges[pair.1.edge].way),
+            (41, 40)
+        );
+    }
 }

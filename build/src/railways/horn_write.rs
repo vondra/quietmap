@@ -1,5 +1,6 @@
 //! Encode horn approaches with their measured soundings and matched railway attributes.
 use super::horn_geometry::{Approach, MergedPiece};
+use super::model::RailModel;
 use super::types::Crossing;
 use arrow_array::{
     ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -12,6 +13,7 @@ const HORN_RAIL_TYPE: u8 = 6;
 pub(super) fn build_horn_batch(
     schema: &arrow_schema::SchemaRef,
     base: &RecordBatch,
+    model: &RailModel,
     crossings: &[Crossing],
     approaches: &[Approach],
     pieces: &[MergedPiece],
@@ -131,9 +133,23 @@ pub(super) fn build_horn_batch(
                     .collect::<Vec<_>>(),
             )),
             "freight_source_id" => Arc::new(UInt16Array::from(vec![0u16; pieces.len()])),
-            "passenger_matching" | "freight_matching" => {
-                Arc::new(UInt8Array::from(vec![0u8; pieces.len()]))
-            }
+            "passenger_matching" => Arc::new(UInt8Array::from(vec![0u8; pieces.len()])),
+            // Stamp only crossing inventories that also allocate corridor flows (e.g. FRA 111) so
+            // their per-approach overlaps stay exact in `sources` without altering horns-only feeds.
+            "freight_matching" => Arc::new(UInt8Array::from(
+                pieces
+                    .iter()
+                    .map(|piece| {
+                        let source_id =
+                            crossings[approaches[piece.approach_idx].crossing].source_id;
+                        if model.stamps_whole_line(source_id) {
+                            super::encode::MATCHING_GLOBAL_SECTION
+                        } else {
+                            0u8
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )),
             // Tags + baked identity follow the matched track, as does the
             // retained OSM evidence: the approach runs along the track, and
             // the way extent describes the parent way, not the piece.

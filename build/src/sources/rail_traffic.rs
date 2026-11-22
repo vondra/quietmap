@@ -2,6 +2,7 @@
 use super::runs::{RunRow, run_medians};
 use super::tent::Tier;
 use crate::dev4::{Table, z30_corner_mercator_m};
+use crate::railways::encode::MATCHING_GLOBAL_SECTION;
 use crate::source_tables::{SourceTables, TrainScales};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int32Type, UInt8Type, UInt16Type};
@@ -67,6 +68,9 @@ pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
         let u8s = |name| column(batch, name).map(|a| a.as_primitive::<UInt8Type>());
         let u16s = |name| column(batch, name).map(|a| a.as_primitive::<UInt16Type>());
         let kind = u8s("rail_type")?;
+        let freight_matching = batch
+            .column_by_name("freight_matching")
+            .map(|a| a.as_primitive::<UInt8Type>());
         let status = [u8s("passenger_status")?, u8s("freight_status")?];
         let source = [u16s("passenger_source_id")?, u16s("freight_source_id")?];
         let passenger = [
@@ -89,9 +93,13 @@ pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
                 status: status.map(|column| column.value(row)),
                 source: source.map(|column| column.value(row)),
             };
+            // Rows whose cross-section was already resolved globally keep their own record;
+            // every other row joins by rail type alone so uncrossed corridors keep r091 smoothing.
+            let global_section =
+                freight_matching.is_some_and(|col| (col.value(row) & MATCHING_GLOBAL_SECTION) != 0);
             rows.push(RunRow {
                 meets: kind.value(row),
-                joins: Some(kind.value(row)),
+                joins: (!global_section).then_some(kind.value(row)),
                 ends,
                 length_m: (a[0] - b[0]).hypot(a[1] - b[1]),
                 value: row_trains.passenger.iter().chain(&row_trains.freight).sum(),

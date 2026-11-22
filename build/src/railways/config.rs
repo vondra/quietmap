@@ -4,6 +4,13 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FraConversion {
+    pub sha256: String,
+    pub cutoff: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RailPlan {
     pub objects: Vec<RailObject>,
 }
@@ -95,6 +102,33 @@ impl RailPlan {
                 && *source_id == 0
             {
                 return Err(format!("{id}: crossing source must be attributed"));
+            }
+            if let RailObject::FraCrossings { .. } = object {
+                let entry = manifest
+                    .inputs
+                    .iter()
+                    .find(|input| input.id == id)
+                    .ok_or_else(|| format!("{id}: missing manifest input"))?;
+                let conversion: FraConversion =
+                    serde_json::from_value(entry.conversion.clone().ok_or_else(|| {
+                        format!("{id}: FRA crossings must pin sha256 and cutoff")
+                    })?)
+                    .map_err(|error| format!("{id}: invalid FRA conversion: {error}"))?;
+                if conversion.sha256.len() != 64
+                    || !conversion
+                        .sha256
+                        .bytes()
+                        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+                {
+                    return Err(format!("{id}: FRA sha256 must be 64 lowercase hex digits"));
+                }
+                let cutoff = chrono::NaiveDate::parse_from_str(&conversion.cutoff, "%Y-%m-%d")
+                    .map_err(|error| format!("{id}: invalid FRA cutoff date: {error}"))?;
+                let as_of = chrono::NaiveDate::parse_from_str(&manifest.as_of, "%Y-%m-%d")
+                    .map_err(|error| format!("{id}: invalid manifest as_of: {error}"))?;
+                if cutoff >= as_of {
+                    return Err(format!("{id}: FRA cutoff {cutoff} is not before {as_of}"));
+                }
             }
             if let RailObject::Geojson {
                 source_id,

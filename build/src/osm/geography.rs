@@ -30,6 +30,7 @@ struct Coast {
     start: [f64; 2],
     end: [f64; 2],
     region: usize,
+    hole: bool,
 }
 
 struct Indexed {
@@ -78,7 +79,7 @@ impl Regions {
         Self::from_input(input)
     }
 
-    fn from_input(input: RegionFile) -> Result<Self> {
+    pub(crate) fn from_input(input: RegionFile) -> Result<Self> {
         let mut parts = Vec::new();
         let mut land = Vec::new();
         let mut coasts = Vec::new();
@@ -119,15 +120,18 @@ impl Regions {
                 let latitude_range = outer.iter().fold([90.0_f64, -90.0_f64], |range, point| {
                     [range[0].min(point[1]), range[1].max(point[1])]
                 });
-                for edge in outer
-                    .windows(2)
-                    .filter(|edge| (edge[0][0] - edge[1][0]).abs() <= 180.0)
-                {
-                    coasts.push(Coast {
-                        start: edge[0],
-                        end: edge[1],
-                        region,
-                    });
+                for (ring_idx, ring) in rings.iter().enumerate() {
+                    for edge in ring
+                        .windows(2)
+                        .filter(|edge| (edge[0][0] - edge[1][0]).abs() <= 180.0)
+                    {
+                        coasts.push(Coast {
+                            start: edge[0],
+                            end: edge[1],
+                            region,
+                            hole: ring_idx > 0,
+                        });
+                    }
                 }
                 let mut projected = rings.into_iter().map(|ring| {
                     LineString::from(
@@ -235,6 +239,9 @@ impl Regions {
             );
             for candidate in self.coastal_index.locate_in_envelope_intersecting(&bounds) {
                 let edge = &self.coasts[candidate.index];
+                if edge.hole {
+                    continue;
+                }
                 let delta = |from: f64, to: f64| (to - from + 180.0_f64).rem_euclid(360.0) - 180.0;
                 let (px, py) = (
                     delta(edge.start[0], longitude) * scale_x,
@@ -260,6 +267,86 @@ impl Regions {
         } else {
             Identity::default()
         }
+    }
+
+    /// Fraction in `[0.0, 1.0]` along the segment `start -> end` (`[lat, lon]`) before it first
+    /// leaves `country` under the same coastal-inclusive rule that bakes railway `country_iso`.
+    pub fn ray_exit_fraction(&self, start: [f64; 2], end: [f64; 2], country: u16) -> f64 {
+        if country == 0 {
+            return 1.0;
+        }
+        let wrap = |lon: f64| (lon + 180.0).rem_euclid(360.0) - 180.0;
+        let (lat0, lon0) = (start[0], wrap(start[1]));
+        let (lat1, lon1) = (end[0], wrap(end[1]));
+        let dlon = ((lon1 - lon0 + 180.0).rem_euclid(360.0)) - 180.0;
+        let dlat = lat1 - lat0;
+        let at = |t: f64| (lat0 + t * dlat, wrap(lon0 + t * dlon));
+        let in_country = |t: f64| {
+            let (lat, lon) = at(t);
+            self.resolve(lat, lon, true).country == country
+        };
+        let bisect_exit = |mut lo: f64, mut hi: f64| {
+            for _ in 0..24 {
+                let mid = 0.5 * (lo + hi);
+                if in_country(mid) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            lo
+        };
+        if !in_country(0.0) {
+            return 0.0;
+        }
+        let mut cuts = vec![0.0_f64, 1.0_f64];
+        if (lon0 + dlon).abs() <= 180.0 {
+            let (ax, ay) = (lon0, lat0);
+            let (dx, dy) = (dlon, dlat);
+            let bounds = AABB::from_corners(
+                [ax.min(ax + dx) - 1e-9, ay.min(ay + dy) - 1e-9],
+                [ax.max(ax + dx) + 1e-9, ay.max(ay + dy) + 1e-9],
+            );
+            for candidate in self.coastal_index.locate_in_envelope_intersecting(&bounds) {
+                let edge = &self.coasts[candidate.index];
+                let (cx, cy) = (edge.start[0], edge.start[1]);
+                let (wx, wy) = (edge.end[0] - cx, edge.end[1] - cy);
+                let denom = dx * wy - dy * wx;
+                if denom.abs() <= 1e-18 {
+                    continue;
+                }
+                let t = ((cx - ax) * wy - (cy - ay) * wx) / denom;
+                let u = ((cx - ax) * dy - (cy - ay) * dx) / denom;
+                if (-1e-9..=1.0 + 1e-9).contains(&t) && (-1e-9..=1.0 + 1e-9).contains(&u) {
+                    cuts.push(t.clamp(0.0, 1.0));
+                }
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        let mut unique = Vec::with_capacity(cuts.len());
+        for t in cuts {
+            if unique.last().is_none_or(|prev| t - *prev > 1e-9) {
+                unique.push(t);
+            }
+        }
+        if unique.len() == 2 {
+            return if in_country(1.0) {
+                1.0
+            } else {
+                bisect_exit(0.0, 1.0)
+            };
+        }
+        for pair in unique.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let mid = 0.5 * (a + b);
+            if !in_country(mid) {
+                return bisect_exit(a, mid);
+            }
+            if !in_country(b) {
+                return bisect_exit(mid, b);
+            }
+        }
+        1.0
     }
 }
 

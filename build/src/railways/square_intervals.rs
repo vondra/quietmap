@@ -1,4 +1,5 @@
 //! Source-way intervals grouped in a deterministic summation order for finalization.
+use super::types::RowTraffic;
 use std::collections::HashMap;
 #[derive(Clone, Debug)]
 pub struct Interval {
@@ -16,6 +17,8 @@ pub struct Interval {
     pub matching: u8,
     /// The stop observation that stamps this interval (`local_match`), 0 for any other claim.
     pub stop: u32,
+    /// Pre-allocated per-track traffic for crossing-backed cross-sections (`None` otherwise).
+    pub resolved_section: Option<RowTraffic>,
 }
 pub type Intervals = HashMap<(i64, i16), Vec<Interval>>;
 pub fn grouped(mut rows: Vec<(Interval, i64)>) -> Intervals {

@@ -35,3 +35,104 @@ fn a_normalized_stream_requires_the_current_version_and_its_calendar_component()
     write(STREAM_VERSION, &movement);
     read_stream().unwrap();
 }
+
+#[test]
+fn crossing_stream_enforces_flow_invariants_and_accepts_missing_vs_zero() {
+    use super::super::types::Crossing;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("crossings.jsonl");
+    let check = |crossing: Crossing| {
+        let mut file = std::fs::File::create(&path).unwrap();
+        write_record(
+            &mut file,
+            &Record::Window {
+                version: STREAM_VERSION,
+                start: "2024-01-01".into(),
+                end: "2024-01-05".into(),
+            },
+        )
+        .unwrap();
+        write_record(&mut file, &Record::Crossing(crossing)).unwrap();
+        read(&path, "2024-01-01", "2024-01-05", |_| Ok(()))
+    };
+
+    let base = Crossing {
+        id: "100001A".into(),
+        lat: 41.8,
+        lon: -87.6,
+        soundings: [0.0; 3],
+        speed_kmh: Some(80.0),
+        source_id: 111,
+        synth_osm: -1,
+        total_periods: Some([10.0, 2.0, 6.0]),
+        passenger_daily: Some(4.0),
+        passenger_lt1: false,
+        measured_periods: true,
+    };
+    check(base.clone()).unwrap();
+
+    // Explicit zero and LT1-bounded unknown passenger split are valid; horn-only is valid.
+    let mut explicit_zero = base.clone();
+    explicit_zero.total_periods = Some([0.0; 3]);
+    explicit_zero.passenger_daily = Some(0.0);
+    check(explicit_zero).unwrap();
+
+    let mut lt1_unknown = base.clone();
+    lt1_unknown.passenger_daily = None;
+    lt1_unknown.passenger_lt1 = true;
+    check(lt1_unknown).unwrap();
+
+    let horn_only = Crossing {
+        soundings: [6.0, 2.0, 4.0],
+        total_periods: None,
+        passenger_daily: None,
+        passenger_lt1: false,
+        measured_periods: false,
+        ..base.clone()
+    };
+    check(horn_only).unwrap();
+
+    // measured_periods without total_periods is rejected.
+    let bad_measured = Crossing {
+        soundings: [6.0, 2.0, 4.0],
+        total_periods: None,
+        passenger_daily: None,
+        passenger_lt1: false,
+        measured_periods: true,
+        ..base.clone()
+    };
+    assert!(check(bad_measured).is_err());
+
+    // passenger_lt1 alongside a known passenger count or without total_periods is rejected.
+    let mut bad_lt1_known = base.clone();
+    bad_lt1_known.passenger_lt1 = true;
+    assert!(check(bad_lt1_known).is_err());
+
+    let bad_lt1_empty = Crossing {
+        soundings: [6.0, 2.0, 4.0],
+        total_periods: None,
+        passenger_daily: None,
+        passenger_lt1: true,
+        measured_periods: false,
+        ..base.clone()
+    };
+    assert!(check(bad_lt1_empty).is_err());
+
+    // Passenger exceeding total is rejected.
+    let mut bad_pax = base.clone();
+    bad_pax.passenger_daily = Some(20.0);
+    assert!(check(bad_pax).is_err());
+
+    // Empty crossing (neither soundings nor through-train counts) is rejected.
+    let mut empty = base.clone();
+    empty.total_periods = None;
+    empty.passenger_daily = None;
+    empty.measured_periods = false;
+    assert!(check(empty).is_err());
+
+    // Null Island (0, 0) is rejected.
+    let mut null_island = base;
+    null_island.lat = 0.0;
+    null_island.lon = 0.0;
+    assert!(check(null_island).is_err());
+}

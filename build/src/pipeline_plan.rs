@@ -139,7 +139,7 @@ pub(crate) fn steps() -> Vec<Step> {
         ("rail-movements", &[], Some(RailFlows), None, false),
         (
             "prepare-railways",
-            &["osm", "rail-movements"],
+            &["osm-regions", "osm", "rail-movements"],
             None,
             Some(1),
             false,

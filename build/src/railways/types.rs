@@ -1,4 +1,5 @@
 //! Explicit passenger and freight evidence, with zero distinct from unknown.
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CategoryFlow {
     pub periods: [f64; 3],
@@ -16,6 +17,10 @@ pub struct RowTraffic {
     pub freight: CategoryFlow,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Crossing {
@@ -26,4 +31,19 @@ pub struct Crossing {
     pub speed_kmh: Option<f64>,
     pub source_id: u16,
     pub synth_osm: i64,
+    /// Through trains across END [day, evening, night] over all main tracks;
+    /// `None` when the inventory carries no usable through-train count.
+    #[serde(default)]
+    pub total_periods: Option<[f64; 3]>,
+    /// Daily passenger trains over all main tracks; `None` when unknown.
+    #[serde(default)]
+    pub passenger_daily: Option<f64>,
+    /// True when the inventory reports "Less Than One Passenger Train Per Day" and
+    /// `passenger_daily` is unknown, bounding crossing-wide passengers below 1/day.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub passenger_lt1: bool,
+    /// True when `total_periods` reflects measured daylight/nighttime blocks rather
+    /// than an unsplit weekly or daily count.
+    #[serde(default)]
+    pub measured_periods: bool,
 }

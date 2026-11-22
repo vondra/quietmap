@@ -3,7 +3,8 @@ use super::encode::Expanded;
 use super::merge::{CategoryFlow, RowTraffic, STATUS_ESTIMATED, STATUS_KNOWN, STATUS_UNKNOWN};
 use super::model::RailModel;
 use super::parallel_geometry::{cross_sections, project_tracks};
-fn scope_winner(
+
+pub(super) fn scope_winner(
     model: &RailModel,
     own_iso: [u8; 2],
     members: &[usize],
@@ -30,7 +31,7 @@ fn scope_winner(
     winner
 }
 
-fn scope_value(
+pub(super) fn scope_value(
     model: &RailModel,
     members: &[usize],
     flows: &[RowTraffic],
@@ -101,11 +102,11 @@ fn daily_total(flow: &CategoryFlow) -> f64 {
     flow.periods.iter().sum()
 }
 
-fn carries_passengers(mode: u8) -> bool {
+pub(super) fn carries_passengers(mode: u8) -> bool {
     mode != 2
 }
 
-fn carries_freight(mode: u8) -> bool {
+pub(super) fn carries_freight(mode: u8) -> bool {
     mode != 1
 }
 
@@ -203,11 +204,47 @@ fn track_share(
     }
 }
 
+/// Subtract per-period passenger trains from a crossing's measured END totals,
+/// conserving `target_daily` without creating phantom daytime or night freight.
+pub(super) fn subtract_passenger_periods(
+    total: [f64; 3],
+    passenger: [f64; 3],
+    target_daily: f64,
+) -> [f64; 3] {
+    if target_daily <= 0.0 {
+        return [0.0; 3];
+    }
+    let raw = [
+        (total[0] - passenger[0]).max(0.0),
+        (total[1] - passenger[1]).max(0.0),
+        (total[2] - passenger[2]).max(0.0),
+    ];
+    let raw_sum: f64 = raw.iter().sum();
+    if raw_sum <= 1e-12 {
+        return [0.0; 3];
+    }
+    let scale = target_daily / raw_sum;
+    [raw[0] * scale, raw[1] * scale, raw[2] * scale]
+}
+
 pub(crate) fn allocate_over_parallel_tracks(
     model: &RailModel,
     rows: &mut [Expanded],
     square: crate::osm::geometry::Square,
 ) {
+    if !rows
+        .iter()
+        .any(|row| row.service == 0 && row.child.resolved_section.is_none())
+    {
+        for row in rows.iter_mut() {
+            if row.service == 0
+                && let Some(resolved) = row.child.resolved_section
+            {
+                row.child.traffic = resolved;
+            }
+        }
+        return;
+    }
     let tracks = project_tracks(rows, square);
     let sections = cross_sections(rows, &tracks);
     let domestic: Vec<RowTraffic> = rows.iter().map(|row| row.child.traffic).collect();
@@ -225,25 +262,28 @@ pub(crate) fn allocate_over_parallel_tracks(
         if row.service != 0 {
             continue;
         }
+        if let Some(resolved) = row.child.resolved_section {
+            row.child.traffic = resolved;
+            continue;
+        }
         let members = &sections[index];
-        row.child.traffic = RowTraffic {
-            passenger: track_share(
-                &evidence,
-                row.country_iso,
-                members,
-                |t| t.passenger,
-                index,
-                carries_passengers,
-            ),
-            freight: track_share(
-                &evidence,
-                row.country_iso,
-                members,
-                |t| t.freight,
-                index,
-                carries_freight,
-            ),
-        };
+        let passenger = track_share(
+            &evidence,
+            row.country_iso,
+            members,
+            |t| t.passenger,
+            index,
+            carries_passengers,
+        );
+        let freight = track_share(
+            &evidence,
+            row.country_iso,
+            members,
+            |t| t.freight,
+            index,
+            carries_freight,
+        );
+        row.child.traffic = RowTraffic { passenger, freight };
     }
 }
 

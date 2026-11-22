@@ -1455,6 +1455,26 @@
       "description": "DRR rural roads AADT."
     },
     {
+      "id": "us-fra-highway-rail-crossing-inventory",
+      "kind": "prepare-crossings",
+      "region": "US",
+      "publisher": "US DOT FRA",
+      "url": "https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6",
+      "observed": {
+        "start": "2024-12-31",
+        "end": "2024-12-31"
+      },
+      "published": null,
+      "licence": "Public Domain (US DOT open data; dataset metadata license=Public Domain)",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "FRA Highway-Rail Crossing Inventory (horns and train counts), latest revision per crossing through 2024-12-31 from Current (m2f8-22s6) and Historical (vhwz-raag).",
+      "conversion": {
+        "sha256": "5bc09ea7751e3d08e2cb94a711dfa45f0e12365bf6832290c095194274b3655c",
+        "cutoff": "2024-12-31"
+      }
+    },
+    {
       "id": "ca-transport-canada-grade-crossings-inventory",
       "kind": "prepare-crossings",
       "region": "CA",
@@ -6514,6 +6534,7 @@
       "licence": "See dependencies; model parameters MIT",
       "public_ok": false,
       "depends_on": [
+        "us-fra-highway-rail-crossing-inventory",
         "ca-transport-canada-grade-crossings-inventory",
         "gtfs-archive-gtfs-de-mdb-768-202406100048-zip",
         "gtfs-archive-gtfs-de-mdb-1089-202406100012-zip",
@@ -7572,13 +7593,6 @@
       "kind": "prepare-rail-network",
       "region": "IN",
       "description": "Living Atlas IN railway + metro (spatial): no dated input at or before the map date is admitted. The remaining mapped features and class defaults are used.",
-      "depends_on": []
-    },
-    {
-      "id": "us-fra-highway-rail-crossing-inventory",
-      "kind": "prepare-crossings",
-      "region": "US",
-      "description": "FRA Highway-Rail Crossing Inventory (horns): no dated input at or before the map date is admitted. Only the mapped crossing information remains.",
       "depends_on": []
     },
     {
@@ -9984,6 +9998,11 @@
   },
   "railways": {
     "objects": [
+      {
+        "format": "fra-crossings",
+        "input": "us-fra-highway-rail-crossing-inventory",
+        "source_id": 111
+      },
       {
         "format": "tc-crossings",
         "input": "ca-transport-canada-grade-crossings-inventory",

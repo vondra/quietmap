@@ -14,6 +14,8 @@ fn an_empty_railway_selection_has_a_completed_output_directory() {
             &model,
             &root.path().join("geography/z9/0/0"),
             &[],
+            None,
+            None,
             &Default::default(),
             &output,
             crate::osm::geometry::Square { x: 0, y: 0 },
@@ -97,10 +99,20 @@ fn matcher_fixture_replay() {
         let relative = format!("z9/{}/{}", square.x, square.y);
         let rows = matched.claims.remove(&key).unwrap_or_default();
         let intervals = super::square_intervals::grouped(rows);
+        let own_crossings = matched
+            .crossings
+            .get(&key)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         super::write::finalize_square(
             &model,
             &geography.join(&relative),
-            &matched.crossings.remove(&key).unwrap_or_default(),
+            own_crossings,
+            None,
+            Some(super::horns::NeighborHorns {
+                geography: &geography,
+                all_crossings: &matched.crossings,
+            }),
             &intervals,
             &output.join(&relative),
             crate::osm::geometry::Square {

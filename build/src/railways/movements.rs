@@ -7,7 +7,7 @@ use std::{
     path::Path,
 };
 
-pub const STREAM_VERSION: u8 = 2;
+pub const STREAM_VERSION: u8 = 3;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -266,8 +266,23 @@ pub fn read(
                 }
             }
             Record::Crossing(crossing) => {
+                let bad_total = crossing
+                    .total_periods
+                    .is_some_and(|periods| periods.iter().any(|n| !n.is_finite() || *n < 0.0));
+                let bad_pax = crossing.passenger_daily.is_some_and(|pax| {
+                    !pax.is_finite() || pax < 0.0 || crossing.total_periods.is_none()
+                }) || match (crossing.total_periods, crossing.passenger_daily) {
+                    (Some(periods), Some(pax)) => periods.iter().sum::<f64>() + 1e-9 < pax,
+                    _ => false,
+                };
+                let bad_lt1 = crossing.passenger_lt1
+                    && (crossing.total_periods.is_none() || crossing.passenger_daily.is_some());
+                let bad_measured = crossing.measured_periods && crossing.total_periods.is_none();
+                let bad_empty = crossing.total_periods.is_none()
+                    && crossing.soundings.iter().all(|&soundings| soundings <= 0.0);
                 if !(-90.0..=90.0).contains(&crossing.lat)
                     || !(-180.0..=180.0).contains(&crossing.lon)
+                    || (crossing.lat == 0.0 && crossing.lon == 0.0)
                     || crossing
                         .soundings
                         .iter()
@@ -275,6 +290,11 @@ pub fn read(
                     || crossing
                         .speed_kmh
                         .is_some_and(|speed| !speed.is_finite() || speed <= 0.0)
+                    || bad_total
+                    || bad_pax
+                    || bad_lt1
+                    || bad_measured
+                    || bad_empty
                     || crossing.synth_osm >= 0
                     || crossing.source_id == 0
                 {
