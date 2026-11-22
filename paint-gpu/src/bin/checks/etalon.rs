@@ -9,7 +9,9 @@ pub(super) fn run(
     files: &Files,
     weather: &WeatherTable,
 ) -> Result<(), String> {
-    let out = PathBuf::from(option(arguments, "out").ok_or("--out is required")?);
+    let out_arg = PathBuf::from(option(arguments, "out").ok_or("--out is required")?);
+    std::fs::create_dir_all(&out_arg).map_err(|e| format!("{}: {e}", out_arg.display()))?;
+    let out = std::fs::canonicalize(&out_arg).map_err(|e| format!("{}: {e}", out_arg.display()))?;
     paint::year::bind_painted_dir(&out, year)?;
     let sample_step = match number(arguments, "sample-step", 1)? {
         0 => return Err("--sample-step: at least 1".into()),

@@ -111,11 +111,13 @@ pub fn pack(
         }
     }
     // Every archive is complete before any immutable name appears; a failed pack leaves the
-    // previous manifest in place. A hard link installs without replacing an existing archive.
+    // previous manifest in place. Hard-link into place and drop the staging link before publishing
+    // current.json so link-count cleanup cannot shift ctime after the manifest advertises the build.
     for entry in layers.values() {
         let name = entry["file"].as_str().expect("an archive's file name");
-        std::fs::hard_link(temporary.path().join(name), tiles_dir.join(name))
-            .map_err(|e| e.to_string())?;
+        let staged = temporary.path().join(name);
+        std::fs::hard_link(&staged, tiles_dir.join(name)).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&staged).map_err(|e| e.to_string())?;
     }
     File::open(&tiles_dir)
         .and_then(|file| file.sync_all())

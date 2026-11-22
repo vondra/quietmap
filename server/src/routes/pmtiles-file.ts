@@ -100,6 +100,12 @@ class FileRangeSource implements Source {
         if (bytesRead === 0) break
         filled += bytesRead
       }
+      // Recheck the same open descriptor after reading so an in-place rewrite mid-read cannot
+      // return replacement bytes under a cached generation.
+      const after = await handle.stat()
+      if (!after.isFile() || !sameFileIdentity(after, this.identity)) {
+        throw new ArchiveChangedError(`${this.path} changed during range read`)
+      }
       if (filled === length) return { data }
       if (offset !== 0) throw new Error(`${this.path} ends inside the range ${offset}+${length}`)
       return { data: data.slice(0, filled) }

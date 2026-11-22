@@ -80,7 +80,6 @@ export async function heatmapPmtilesRoutes(
     const key = `${year}/${build}/${layer}`
     for (let attempt = 0; attempt < 2; attempt++) {
       let entry = archiveCache.get(key)
-      const reused = entry !== undefined
       if (!entry) entry = openEntry(key, build, layer)
       try {
         const cached = await entry
@@ -90,9 +89,10 @@ export async function heatmapPmtilesRoutes(
         await verifyYearMarker(cached.yearMarker)
         return await cached.archive.pmtiles.getZxy(z, x, y)
       } catch (error) {
-        // SharedPromiseCache retains rejected leaf reads; evict before propagating or retrying once.
+        // SharedPromiseCache retains rejected leaf reads; evict before propagating or retrying once
+        // (including on a cold open racing a concurrent temp-link unlink).
         if (archiveCache.get(key) === entry) archiveCache.delete(key)
-        if (reused && error instanceof ArchiveChangedError) continue
+        if (attempt === 0 && error instanceof ArchiveChangedError) continue
         throw error
       }
     }
