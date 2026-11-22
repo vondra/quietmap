@@ -5,8 +5,11 @@
 //! fraction of what the road's class, lanes and surroundings predict (Warsaw's Trasa Łazienkowska
 //! carried 32 vehicles a carriageway a day, a five-hundredth of the model, from a route number
 //! shared with a country road; evidence 2026-11-12, data-1). Annual prepared trees record per row
-//! whether the total was measured (`traffic_observation_measured`); frozen dev4 trees without that
-//! column fall back to source-id heuristics. A row that fails takes its model.
+//! whether the observation was measured (`traffic_observation_measured`) and whether it carried
+//! point/line geometry (`traffic_observation_located`); only guessed class fallbacks and
+//! unmeasured, unlocated route/network estimates face the tighter estimate band and stay out of
+//! runs. Located link estimates (US HPMS B/E, UK DfT prior-year links, Amsterdam VMA) stay counts
+//! so quiet roads are not overwritten by the global model. A row that fails takes its model.
 
 use super::road::{DEFAULT_LANES, guessed};
 use super::road_traffic::{BuildingTraffic, major_group};
@@ -15,7 +18,8 @@ use crate::dev4::{Table, column};
 use crate::source_tables::RoadModels;
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    Array, BooleanArray, Float32Array, Float64Array, Int32Array, UInt8Array, UInt16Array,
+    Array, BooleanArray, Float32Array, Float64Array, Int32Array, RecordBatch, UInt8Array,
+    UInt16Array,
 };
 use std::collections::HashSet;
 use tiles::sources::{NETWORK_ESTIMATE_SOURCE_IDS, PRIOR_SOURCE_ID, SERVICE_TREE_SOURCE_ID};
@@ -42,7 +46,7 @@ pub const LEAST_COUNT_OF_MODEL: f64 = 0.025;
 /// The low edge of the band of counts around the major model, by class group (motorway, trunk,
 /// primary, link) and surroundings (rural, urban; unknown takes rural): three scaled median
 /// absolute deviations of ln(count / model) under its median over the counted rows of the group.
-/// An estimate (a table's value or a country default) below it is not the road's.
+/// An estimate (an unlocated route/network table or a country default) below it is not the road's.
 const ESTIMATE_LEAST_OF_MODEL: [[f64; 2]; 4] = [
     [0.218, 0.320],
     [0.205, 0.213],
@@ -50,10 +54,9 @@ const ESTIMATE_LEAST_OF_MODEL: [[f64; 2]; 4] = [
     [0.067, 0.093],
 ];
 
-/// What a road row's traffic is, for the rules: a measured station count, an unmeasured estimate
-/// (annual `traffic_observation_measured == false`, or on frozen dev4 trees without that column a
-/// network table in `NETWORK_ESTIMATE_SOURCE_IDS` or a country default), or neither (a class
-/// prior, a copy, a street's routed trips).
+/// What a road row's traffic is, for the rules: a link count/observation, an unlocated estimate
+/// (guessed class fallback, unmeasured unlocated route/network median, or legacy dev4
+/// `NETWORK_ESTIMATE_SOURCE_IDS`), or neither (a class prior, a copy, a street's routed trips).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Traffic {
     Count,
@@ -70,28 +73,47 @@ pub enum Disposition {
 }
 
 /// Classify a row and whether over-capacity values are capped (`true`) rather than replaced
-/// (`false`). Annual prepared trees carry `traffic_observation_measured` and cap only `guessed`
-/// class-median fallbacks (e.g. MLIT fallback source `9865`); every other annual over-capacity
-/// observation is replaced. Frozen dev4 trees without the column preserve legacy classification
-/// and cap every legacy `Estimate`.
+/// (`false`). Guessed class fallbacks (e.g. MLIT `9865`) and frozen dev4 network estimates cap over
+/// capacity; annual unlocated unmeasured estimates replace over capacity; measured or located
+/// observations stay `Count`.
 fn classify_row(
     is_copy: bool,
     source: u16,
     estimated: u8,
     observation_measured: Option<bool>,
+    observation_located: Option<bool>,
 ) -> (Traffic, bool) {
     if is_copy || source == PRIOR_SOURCE_ID || source == SERVICE_TREE_SOURCE_ID {
         return (Traffic::Other, false);
     }
-    let is_guessed = guessed(source, estimated);
-    match observation_measured {
-        Some(true) => (Traffic::Count, false),
-        Some(false) => (Traffic::Estimate, is_guessed),
-        None if is_guessed || NETWORK_ESTIMATE_SOURCE_IDS.contains(&source) => {
-            (Traffic::Estimate, true)
-        }
-        None => (Traffic::Count, false),
+    if guessed(source, estimated) {
+        return (Traffic::Estimate, true);
     }
+    match (observation_measured, observation_located) {
+        (Some(true), _) | (Some(false), Some(true)) => (Traffic::Count, false),
+        (Some(false), Some(false)) => (Traffic::Estimate, false),
+        (Some(false) | None, None) if NETWORK_ESTIMATE_SOURCE_IDS.contains(&source) => {
+            (Traffic::Estimate, observation_measured.is_none())
+        }
+        (Some(false) | None, None) | (None, Some(_)) => (Traffic::Count, false),
+    }
+}
+
+fn optional_bool_column<'a>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> Result<Option<&'a BooleanArray>, String> {
+    let Some(array) = batch.column_by_name(name) else {
+        return Ok(None);
+    };
+    let values = array
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or_else(|| format!("column {name} is not boolean"))?;
+    if values.null_count() > 0 {
+        return Err(format!("column {name} contains nulls"));
+    }
+    Ok(Some(values))
 }
 
 /// The most vehicles a day a row of `lanes` (0 untagged) carries, one-way or not.
@@ -106,10 +128,9 @@ pub fn capacity(oneway: bool, lanes: u8) -> f64 {
 
 /// Whether a row's `vehicles` stand (`Keep`), are cut to lane capacity (`Cap`), or take the
 /// model (`Replace`): an over-capacity row caps only when `cap_over_capacity` is true (legacy
-/// dev4 estimates and annual `guessed` fallbacks) and otherwise replaces; held against the major
-/// model's `predicted` traffic of a major row (asked only then; `None` where the buildings give
-/// none), a count under [`LEAST_COUNT_OF_MODEL`] of it or an estimate under its band's low edge
-/// replaces.
+/// dev4 estimates and `guessed` fallbacks) and otherwise replaces; held against the major model's
+/// `predicted` traffic of a major row (asked only then; `None` where the buildings give none), a
+/// count under [`LEAST_COUNT_OF_MODEL`] of it or an estimate under its band's low edge replaces.
 pub fn disposition(
     traffic: Traffic,
     cap_over_capacity: bool,
@@ -260,21 +281,13 @@ fn held_counts_with_prediction(
             .column_by_name("traffic_observation_estimated")
             .map(|a| a.as_primitive::<arrow_array::types::UInt8Type>())
             .unwrap_or(estimated);
-        let observation_measured = match batch.column_by_name("traffic_observation_measured") {
-            Some(array) => {
-                let measured = array
-                    .as_any()
-                    .downcast_ref::<BooleanArray>()
-                    .ok_or_else(|| {
-                        "column traffic_observation_measured is not boolean".to_string()
-                    })?;
-                if measured.null_count() > 0 {
-                    return Err("column traffic_observation_measured contains nulls".into());
-                }
-                Some(measured)
-            }
-            None => None,
-        };
+        let observation_measured = optional_bool_column(batch, "traffic_observation_measured")?;
+        let observation_located = optional_bool_column(batch, "traffic_observation_located")?;
+        if observation_located.is_some() && observation_measured.is_none() {
+            return Err(
+                "column traffic_observation_located requires traffic_observation_measured".into(),
+            );
+        }
         let source = column::<UInt16Array>(batch, "source_id")?;
         let length = column::<Float32Array>(batch, "length_m")?;
         let tunnel = column::<BooleanArray>(batch, "tunnel")?;
@@ -287,7 +300,8 @@ fn held_counts_with_prediction(
                 copies.contains(&index),
                 source.value(row),
                 estimated.value(row),
-                observation_measured.map(|measured| measured.value(row)),
+                observation_measured.map(|m| m.value(row)),
+                observation_located.map(|l| l.value(row)),
             );
             let counted = traffic == Traffic::Count && vehicles > 0.0 && !tunnel.value(row);
             runs.push(RunRow {
@@ -359,18 +373,11 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    struct TestRow {
-        ends: [(i32, i32); 2],
-        class: u8,
-        oneway: u8,
-        lanes: u8,
-        built_up: u8,
-        estimated: u8,
-        source: u16,
-        vehicles: f64,
-    }
-
-    fn road_table(rows: &[TestRow], measured: Option<ArrayRef>) -> Table {
+    fn road_table(
+        rows: &[([(i32, i32); 2], u8, u8, u8, u8, u16, f64)],
+        measured: Option<ArrayRef>,
+        located: Option<ArrayRef>,
+    ) -> Table {
         let mut fields = vec![
             Field::new("start_gx", DataType::Int32, false),
             Field::new("start_gy", DataType::Int32, false),
@@ -391,88 +398,54 @@ mod tests {
             Field::new("tunnel", DataType::Boolean, false),
         ];
         let mut columns: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from_iter_values(
-                rows.iter().map(|r| r.ends[0].0),
-            )),
-            Arc::new(Int32Array::from_iter_values(
-                rows.iter().map(|r| r.ends[0].1),
-            )),
-            Arc::new(Int32Array::from_iter_values(
-                rows.iter().map(|r| r.ends[1].0),
-            )),
-            Arc::new(Int32Array::from_iter_values(
-                rows.iter().map(|r| r.ends[1].1),
-            )),
-            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.class))),
-            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.oneway))),
-            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.lanes))),
-            Arc::new(UInt8Array::from_iter_values(
-                rows.iter().map(|r| r.built_up),
-            )),
-            Arc::new(UInt8Array::from_iter_values(
-                rows.iter().map(|r| r.estimated),
-            )),
-            Arc::new(Float64Array::from_iter_values(
-                rows.iter().map(|r| r.vehicles),
-            )),
+            Arc::new(Int32Array::from_iter_values(rows.iter().map(|r| r.0[0].0))),
+            Arc::new(Int32Array::from_iter_values(rows.iter().map(|r| r.0[0].1))),
+            Arc::new(Int32Array::from_iter_values(rows.iter().map(|r| r.0[1].0))),
+            Arc::new(Int32Array::from_iter_values(rows.iter().map(|r| r.0[1].1))),
+            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.1))),
+            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.2))),
+            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.3))),
+            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.4))),
+            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|_| 15u8))),
+            Arc::new(Float64Array::from_iter_values(rows.iter().map(|r| r.6))),
             Arc::new(Float64Array::from_iter_values(rows.iter().map(|_| 0.0))),
             Arc::new(Float64Array::from_iter_values(rows.iter().map(|_| 0.0))),
             Arc::new(Float64Array::from_iter_values(rows.iter().map(|_| 0.0))),
-            Arc::new(Float64Array::from_iter_values(
-                rows.iter().map(|r| r.vehicles),
-            )),
-            Arc::new(UInt16Array::from_iter_values(rows.iter().map(|r| r.source))),
+            Arc::new(Float64Array::from_iter_values(rows.iter().map(|r| r.6))),
+            Arc::new(UInt16Array::from_iter_values(rows.iter().map(|r| r.5))),
             Arc::new(Float32Array::from_iter_values(rows.iter().map(|_| 100.0))),
             Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
         ];
-        if let Some(array) = measured {
-            fields.push(Field::new(
-                "traffic_observation_measured",
-                array.data_type().clone(),
-                true,
-            ));
-            columns.push(array);
+        for (name, opt) in [
+            ("traffic_observation_measured", measured),
+            ("traffic_observation_located", located),
+        ] {
+            if let Some(array) = opt {
+                fields.push(Field::new(name, array.data_type().clone(), true));
+                columns.push(array);
+            }
         }
-        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
         Table {
             metadata: HashMap::new(),
-            batches: vec![batch],
+            batches: vec![RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()],
         }
     }
 
-    /// India's national-highway table puts 70,000 vehicles a day on a two-lane trunk road (and
-    /// 35,000 where it tags no lanes), Indiana's ramps carry their interstate's 80,000 on one lane,
-    /// Houston's HOV lane both carriageways' 287,789: over capacity. Three-lane carriageways at
-    /// 80,000 are not.
     #[test]
     fn no_lane_carries_more_than_the_busiest_counted_lanes() {
-        let at = |vehicles, oneway, lanes| {
-            disposition(
-                Traffic::Count,
-                false,
-                vehicles,
-                (1, oneway, lanes, 1),
-                || None,
-            )
-        };
+        let at = |v, ow, ln| disposition(Traffic::Count, false, v, (1, ow, ln, 1), || None);
         assert_eq!(at(70_000.0, false, 2), Disposition::Replace);
         assert_eq!(at(35_000.0, false, 0), Disposition::Replace);
         assert_eq!(at(15_000.0, false, 0), Disposition::Keep);
         assert_eq!(at(80_000.0, true, 1), Disposition::Replace);
         assert_eq!(at(287_789.0, false, 1), Disposition::Replace);
         assert_eq!(at(80_000.0, true, 3), Disposition::Keep);
-        // An untagged carriageway carries what the counted untagged ones do (72,900).
         assert_eq!(at(70_000.0, true, 0), Disposition::Keep);
         assert_eq!(at(80_000.0, true, 0), Disposition::Replace);
-        // Legacy or guessed estimates over capacity cap; annual non-guessed estimates replace.
         assert_eq!(
-            disposition(
-                Traffic::Estimate,
-                true,
-                70_000.0,
-                (1, false, 2, 1),
-                || Some(5_000.0)
-            ),
+            disposition(Traffic::Estimate, true, 70_000.0, (1, false, 2, 1), || {
+                Some(5_000.0)
+            }),
             Disposition::Cap
         );
         assert_eq!(
@@ -483,17 +456,10 @@ mod tests {
         );
         assert_eq!(
             disposition(Traffic::Other, false, 287_789.0, (1, false, 1, 1), || None),
-            Disposition::Keep,
-            "a prior"
+            Disposition::Keep
         );
     }
 
-    /// Warsaw's expressway carriageway with 32 vehicles a day where the model predicts 17,000 is
-    /// not counted there; Spain's AP-41 at 569 a day beside the model's 15,600 is (a toll road's
-    /// own count); Riyadh's ministry value of 7,346 on an urban motorway carriageway the model
-    /// puts at 54,610 is an estimate under the band, as is Caracas's SIGOT tier of 1,000 on a
-    /// rural motorway (12,816); a rural estimate at 5 times the model stands (through traffic the
-    /// buildings around do not show).
     #[test]
     fn a_count_far_under_the_model_and_an_estimate_under_the_band_take_the_model() {
         let warsaw = (2, true, 3, 2);
@@ -520,240 +486,163 @@ mod tests {
             Disposition::Replace
         );
         assert_eq!(
-            disposition(
-                Traffic::Estimate,
-                true,
-                25_000.0,
-                (1, false, 0, 1),
-                || Some(5_000.0)
-            ),
+            disposition(Traffic::Estimate, true, 25_000.0, (1, false, 0, 1), || {
+                Some(5_000.0)
+            }),
             Disposition::Keep
         );
         assert_eq!(
             disposition(Traffic::Count, false, 32.0, warsaw, || None),
-            Disposition::Keep,
-            "no model, no floor"
+            Disposition::Keep
         );
         assert_eq!(
             disposition(Traffic::Estimate, false, 100.0, (4, false, 2, 2), || Some(
                 5_000.0
             )),
-            Disposition::Keep,
-            "a tertiary road"
+            Disposition::Keep
         );
     }
 
-    /// Annual trees classify by `traffic_observation_measured`: located stations (`1102`, `1054`)
-    /// stay counts, unmeasured observations (`9392`, `21`) face the stricter estimate band and are
-    /// replaced over capacity, while `guessed` class fallbacks (`9865`) stay capped over capacity.
+    /// Annual trees with measured + located metadata: located stations (`1102`) and located link
+    /// estimates (`21`, `1041`) stay `Count`; unlocated unmeasured route medians (`1097`, `9392`)
+    /// face the estimate band and replace over capacity; `guessed` class fallbacks (`9865`) cap.
     #[test]
-    fn annual_observation_metadata_decides_count_estimate_and_over_capacity() {
+    fn annual_measured_and_located_metadata_decides_count_vs_estimate() {
         let rows = [
-            // 0: Saudi located station 1102, measured=true, 3,800 vs model 20,000 -> Count, kept.
-            TestRow {
-                ends: [(0, 0), (10, 0)],
-                class: 1,
-                oneway: 1,
-                lanes: 2,
-                built_up: 1,
-                estimated: 15,
-                source: 1102,
-                vehicles: 3_800.0,
-            },
-            // 1: Japan MLIT estimated-only route 9392, measured=false, 8,400 vs model 45,000 -> Estimate, replaced.
-            TestRow {
-                ends: [(100, 0), (110, 0)],
-                class: 1,
-                oneway: 1,
-                lanes: 2,
-                built_up: 2,
-                estimated: 15,
-                source: 9392,
-                vehicles: 8_400.0,
-            },
-            // 2: US HPMS ramp 21, measured=false, 119,086 on 1 lane -> annual over-capacity replaced, not capped.
-            TestRow {
-                ends: [(200, 0), (210, 0)],
-                class: 10,
-                oneway: 1,
-                lanes: 1,
-                built_up: 2,
-                estimated: 15,
-                source: 21,
-                vehicles: 119_086.0,
-            },
-            // 3: Japan MLIT class fallback 9865, measured=false, guessed=true, over capacity -> capped, not replaced.
-            TestRow {
-                ends: [(300, 0), (310, 0)],
-                class: 1,
-                oneway: 0,
-                lanes: 2,
-                built_up: 1,
-                estimated: 15,
-                source: 9865,
-                vehicles: 40_000.0,
-            },
+            ([(0, 0), (10, 0)], 1, 1, 2, 1, 1102, 3_800.0), // 0: SA 1102 located station -> Count
+            ([(100, 0), (110, 0)], 2, 0, 2, 2, 1097, 800.0), // 1: PL 1097 unlocated DW median -> Estimate
+            ([(200, 0), (210, 0)], 1, 0, 2, 1, 21, 298.0), // 2: US 21 located B/E (Klondike) -> Count
+            ([(300, 0), (310, 0)], 2, 0, 2, 1, 1041, 240.0), // 3: GB 1041 located prior-year -> Count
+            ([(400, 0), (410, 0)], 1, 1, 1, 2, 9392, 40_000.0), // 4: JP 9392 unlocated est over cap -> Replace
+            ([(500, 0), (510, 0)], 1, 0, 2, 1, 9865, 40_000.0), // 5: JP 9865 guessed over cap -> Cap
         ];
-        let measured: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, false, false]));
-        let table = road_table(&rows, Some(measured));
-        let held = held_counts_with_prediction(&table, &HashSet::new(), |middle, _| {
-            if middle.0 < 50 {
-                Some(20_000.0)
-            } else {
-                Some(45_000.0)
-            }
-        })
+        let measured: ArrayRef = Arc::new(BooleanArray::from(vec![
+            true, false, false, false, false, false,
+        ]));
+        let located: ArrayRef = Arc::new(BooleanArray::from(vec![
+            true, false, true, true, false, false,
+        ]));
+        let held = held_counts_with_prediction(
+            &road_table(&rows, Some(measured), Some(located)),
+            &HashSet::new(),
+            |m, _| Some(if m.0 < 150 { 20_000.0 } else { 2_000.0 }),
+        )
         .unwrap();
-        assert!(
-            !held.implausible.contains(&0),
-            "SA 1102 measured count stands"
-        );
+        assert!(!held.implausible.contains(&0), "SA 1102 station stands");
         assert!(
             held.implausible.contains(&1),
-            "JP 9392 unmeasured estimate under band"
+            "PL 1097 unlocated DW replaced"
         );
+        assert!(!held.implausible.contains(&2), "US 21 located B/E stands");
         assert!(
-            held.implausible.contains(&2),
-            "US 21 F over capacity replaced"
+            !held.implausible.contains(&3),
+            "GB 1041 located link stands"
         );
-        assert!(!held.capped.contains(&2));
+        assert!(held.implausible.contains(&4) && !held.capped.contains(&4));
+        assert!(held.capped.contains(&5) && !held.implausible.contains(&5));
+    }
+
+    /// Trees without `traffic_observation_located` (frozen dev4 or earlier annual trees) keep
+    /// legacy `NETWORK_ESTIMATE_SOURCE_IDS` without replacing located US/GB estimates, while
+    /// `measured=true` already upgrades located stations like `1102` and malformed columns fail.
+    #[test]
+    fn legacy_and_partial_metadata_and_run_isolation_behave_safely() {
+        let rows = [
+            ([(0, 0), (10, 0)], 1, 0, 2, 1, 9865, 40_000.0),
+            ([(100, 0), (110, 0)], 1, 0, 2, 1, 1050, 70_000.0),
+            ([(200, 0), (210, 0)], 1, 1, 2, 1, 1102, 3_800.0),
+        ];
+        // Frozen dev4 (neither column): 9865 & 1050 cap, 1102 replaced as legacy estimate.
+        let dev4 =
+            held_counts_with_prediction(&road_table(&rows, None, None), &HashSet::new(), |_, _| {
+                Some(20_000.0)
+            })
+            .unwrap();
         assert!(
-            held.capped.contains(&3),
-            "JP 9865 guessed fallback over capacity capped"
+            dev4.capped.contains(&0) && dev4.capped.contains(&1) && dev4.implausible.contains(&2)
         );
-        assert!(!held.implausible.contains(&3));
-    }
 
-    /// Frozen dev4 trees without `traffic_observation_measured` keep legacy classification and cap
-    /// every legacy `Estimate` over capacity, including `guessed` fallbacks like `9865` (mask 15).
-    #[test]
-    fn legacy_tree_without_measured_column_preserves_full_estimate_cap() {
-        let rows = [
-            // 0: 9865 mask 15 over capacity -> legacy guessed Estimate -> capped, not replaced.
-            TestRow {
-                ends: [(0, 0), (10, 0)],
-                class: 1,
-                oneway: 0,
-                lanes: 2,
-                built_up: 1,
-                estimated: 15,
-                source: 9865,
-                vehicles: 40_000.0,
-            },
-            // 1: India 1050 over capacity -> legacy network Estimate -> capped, not replaced.
-            TestRow {
-                ends: [(100, 0), (110, 0)],
-                class: 1,
-                oneway: 0,
-                lanes: 2,
-                built_up: 1,
-                estimated: 15,
-                source: 1050,
-                vehicles: 70_000.0,
-            },
-            // 2: Saudi 1102 under model 20,000 without measured column -> legacy Estimate -> replaced.
-            TestRow {
-                ends: [(200, 0), (210, 0)],
-                class: 1,
-                oneway: 1,
-                lanes: 2,
-                built_up: 1,
-                estimated: 15,
-                source: 1102,
-                vehicles: 3_800.0,
-            },
+        // Annual without `located` column: measured=true upgrades SA 1102 to Count immediately.
+        let m: ArrayRef = Arc::new(BooleanArray::from(vec![false, false, true]));
+        let pre_loc = held_counts_with_prediction(
+            &road_table(&rows, Some(m), None),
+            &HashSet::new(),
+            |_, _| Some(20_000.0),
+        )
+        .unwrap();
+        assert!(!pre_loc.implausible.contains(&2));
+
+        // Unlocated unmeasured row does not bridge a measured run; located estimate joins it.
+        let run = [
+            ([(0, 0), (10, 0)], 0, 1, 2, 1, 21, 40_000.0),
+            ([(10, 0), (20, 0)], 0, 1, 2, 1, 21, 10_000.0),
+            ([(20, 0), (30, 0)], 0, 1, 2, 1, 21, 20_000.0),
         ];
-        let table = road_table(&rows, None);
-        let held =
-            held_counts_with_prediction(&table, &HashSet::new(), |_, _| Some(20_000.0)).unwrap();
-        assert!(held.capped.contains(&0) && !held.implausible.contains(&0));
-        assert!(held.capped.contains(&1) && !held.implausible.contains(&1));
-        assert!(held.implausible.contains(&2));
-    }
-
-    /// An unmeasured link sitting between two measured counts stays in the junction topology with
-    /// `joins = None`: neither neighbour bridges through it, nor does it inherit or supply a run
-    /// median.
-    #[test]
-    fn unmeasured_link_does_not_join_or_bridge_a_measured_run() {
-        let rows = [
-            TestRow {
-                ends: [(0, 0), (10, 0)],
-                class: 0,
-                oneway: 1,
-                lanes: 2,
-                built_up: 1,
-                estimated: 15,
-                source: 21,
-                vehicles: 40_000.0,
-            },
-            TestRow {
-                ends: [(10, 0), (20, 0)],
-                class: 0,
-                oneway: 1,
-                lanes: 2,
-                built_up: 1,
-                estimated: 15,
-                source: 21,
-                vehicles: 10_000.0,
-            },
-            TestRow {
-                ends: [(20, 0), (30, 0)],
-                class: 0,
-                oneway: 1,
-                lanes: 2,
-                built_up: 1,
-                estimated: 15,
-                source: 21,
-                vehicles: 20_000.0,
-            },
-        ];
-        let measured: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
-        let table = road_table(&rows, Some(measured));
-        let held = held_counts_with_prediction(&table, &HashSet::new(), |_, _| None).unwrap();
-        assert_eq!(held.of(0).flows[0], 40_000.0);
-        assert_eq!(held.of(1).flows[0], 10_000.0);
-        assert_eq!(held.of(2).flows[0], 20_000.0);
-    }
-
-    /// A present `traffic_observation_measured` column with the wrong Arrow type or any null is a
-    /// schema error, never silently treated as legacy.
-    #[test]
-    fn malformed_measured_column_is_rejected() {
-        let row = [TestRow {
-            ends: [(0, 0), (10, 0)],
-            class: 1,
-            oneway: 1,
-            lanes: 2,
-            built_up: 1,
-            estimated: 15,
-            source: 21,
-            vehicles: 10_000.0,
-        }];
-        let wrong_type: ArrayRef = Arc::new(UInt8Array::from(vec![1u8]));
-        let err = held_counts_with_prediction(
-            &road_table(&row, Some(wrong_type)),
+        let rm = || -> ArrayRef { Arc::new(BooleanArray::from(vec![true, false, true])) };
+        let unloc = held_counts_with_prediction(
+            &road_table(
+                &run,
+                Some(rm()),
+                Some(Arc::new(BooleanArray::from(vec![true, false, true]))),
+            ),
             &HashSet::new(),
             |_, _| None,
         )
-        .err()
-        .expect("wrong type rejected");
-        assert!(err.contains("not boolean"), "{err}");
+        .unwrap();
+        assert_eq!(
+            [
+                unloc.of(0).flows[0],
+                unloc.of(1).flows[0],
+                unloc.of(2).flows[0]
+            ],
+            [40_000.0, 10_000.0, 20_000.0]
+        );
+        let loc = held_counts_with_prediction(
+            &road_table(
+                &run,
+                Some(rm()),
+                Some(Arc::new(BooleanArray::from(vec![true, true, true]))),
+            ),
+            &HashSet::new(),
+            |_, _| None,
+        )
+        .unwrap();
+        assert_eq!(
+            [loc.of(0).flows[0], loc.of(1).flows[0], loc.of(2).flows[0]],
+            [20_000.0, 20_000.0, 20_000.0]
+        );
 
+        // Schema errors are refused loudly.
+        let one = [([(0, 0), (10, 0)], 1, 1, 2, 1, 21, 10_000.0)];
+        let bad_type: ArrayRef = Arc::new(UInt8Array::from(vec![1u8]));
+        assert!(
+            held_counts_with_prediction(
+                &road_table(&one, Some(bad_type), None),
+                &HashSet::new(),
+                |_, _| None
+            )
+            .is_err()
+        );
         let with_null: ArrayRef = Arc::new(BooleanArray::from(vec![None]));
-        let err = held_counts_with_prediction(
-            &road_table(&row, Some(with_null)),
-            &HashSet::new(),
-            |_, _| None,
-        )
-        .err()
-        .expect("null rejected");
-        assert!(err.contains("nulls"), "{err}");
+        assert!(
+            held_counts_with_prediction(
+                &road_table(&one, Some(with_null), None),
+                &HashSet::new(),
+                |_, _| None
+            )
+            .is_err()
+        );
+        let loc_only: ArrayRef = Arc::new(BooleanArray::from(vec![true]));
+        assert!(
+            held_counts_with_prediction(
+                &road_table(&one, None, Some(loc_only)),
+                &HashSet::new(),
+                |_, _| None
+            )
+            .is_err()
+        );
     }
 
-    /// A carriageway of 1 vehicle a day paired into 50,000 carries its run's 46,000: its pair shows
-    /// 95,999, not 2.3 billion; a replaced one-way row shows none, a replaced two-way row its own; a
-    /// row carrying its own traffic scales its pair (20,000 for 10,000, modelled at 12,000: 24,000).
     #[test]
     fn a_cross_section_follows_its_own_carriageway() {
         let row = |vehicles: f64, cross_section: f64, oneway: bool| RowTraffic {

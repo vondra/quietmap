@@ -90,6 +90,10 @@ pub fn stage(
     let dropped = [
         "traffic_estimated",
         "traffic_observation_estimated",
+        "traffic_observation_measured",
+        "traffic_observation_located",
+        "traffic_observation_time_basis",
+        "traffic_observation_design",
         "traffic_count_basis",
         "traffic_observation_id",
         "traffic_observation_source",
@@ -165,6 +169,15 @@ pub fn stage(
                 children
                     .iter()
                     .map(|c| roads[c.parent as usize].count_origin_measured)
+                    .collect::<Vec<_>>(),
+            )),
+        ),
+        (
+            "traffic_observation_located",
+            Arc::new(BooleanArray::from(
+                children
+                    .iter()
+                    .map(|c| roads[c.parent as usize].count_origin_located)
                     .collect::<Vec<_>>(),
             )),
         ),

@@ -92,6 +92,7 @@ fn an_allocated_count_keeps_its_observed_truck_mix_in_the_prepared_columns() {
     road.observation_source_id = 21;
     road.observation = "measured section".into();
     road.count_origin_measured = true;
+    road.count_origin_located = true;
     road.observation_time_basis = 1;
     road.counts = [80.0, 10.0, 5.0, 5.0];
     road.basis = 2;
@@ -123,6 +124,11 @@ fn an_allocated_count_keeps_its_observed_truck_mix_in_the_prepared_columns() {
     );
     assert!(
         input::column::<arrow_array::BooleanArray>(&batch, "traffic_observation_measured")
+            .unwrap()
+            .value(0)
+    );
+    assert!(
+        input::column::<arrow_array::BooleanArray>(&batch, "traffic_observation_located")
             .unwrap()
             .value(0)
     );

@@ -26,6 +26,7 @@ struct Flow {
     basis: u8,
     observation_estimated: u8,
     observation_time_basis: u8,
+    located: bool,
     source: u16,
     identity: String,
 }
@@ -58,6 +59,7 @@ impl Agreement {
                 basis: road.basis,
                 observation_estimated: road.observation_estimated,
                 observation_time_basis: road.observation_time_basis,
+                located: road.count_origin_located,
                 source: road.observation_source_id,
                 identity: road.observation.clone(),
             }),
@@ -161,6 +163,7 @@ impl Plan {
                 road.estimated = 15;
                 road.observation_estimated = fill.flow.observation_estimated;
                 road.count_origin_measured = true;
+                road.count_origin_located = fill.flow.located;
                 road.observation_time_basis = fill.flow.observation_time_basis;
             }
         }

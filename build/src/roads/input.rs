@@ -34,6 +34,7 @@ pub struct Road {
     pub source_id: u16,
     pub observation_source_id: u16,
     pub count_origin_measured: bool,
+    pub count_origin_located: bool,
     /// The publisher's sampling design of the count matched to the piece (none for a continuation).
     pub observation_design: super::observation_sample::SamplingDesign,
     pub counts: [f64; 4],
@@ -181,6 +182,7 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>> {
                 source_id: 0,
                 observation_source_id: 0,
                 count_origin_measured: false,
+                count_origin_located: false,
                 observation_design: Default::default(),
                 counts: [0.0; 4],
                 basis: 0,
