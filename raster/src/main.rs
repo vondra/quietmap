@@ -167,8 +167,11 @@ fn run(arguments: &[String]) -> Result<Vec<u8>, String> {
     if !(layer.min_zoom()..=MAX_ZOOM).contains(&z) || x >> z != 0 || y >> z != 0 {
         return Err(format!("no {layer:?} tile {z}/{x}/{y}"));
     }
-    let year_root = PathBuf::from(required("prepared")?).join(required("year")?);
-    if tiles::check_year_complete(&year_root)? != required("year")? {
+    let year = required("year")?;
+    let joined = PathBuf::from(required("prepared")?).join(year);
+    let year_root = std::fs::canonicalize(&joined)
+        .map_err(|e| format!("{}: not a complete release ({e})", joined.display()))?;
+    if tiles::check_year_complete(&year_root)? != year {
         return Err("completion manifest names a different year".into());
     }
     let map_tile = MapTile::new(z, x, y);

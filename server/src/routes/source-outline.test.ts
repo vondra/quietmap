@@ -65,4 +65,14 @@ test('outlines refuse a year directory whose completion manifest names another y
     const app = Fastify()
     await app.register(sourceOutlineRoutes, { preparedDir, years: ['2024'] })
   }, /2026.*2024/)
+
+  // A database stamped for 2026 copied into an otherwise valid 2024 root is refused too.
+  markComplete(yearRoot, '2024')
+  const tagged = new DatabaseSync(join(yearRoot, 'source-outlines.sqlite'))
+  tagged.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID; INSERT INTO meta VALUES ('year', '2026');")
+  tagged.close()
+  await assert.rejects(async () => {
+    const app = Fastify()
+    await app.register(sourceOutlineRoutes, { preparedDir, years: ['2024'] })
+  }, /source-outlines\.sqlite is for year 2026, not 2024/)
 })

@@ -126,6 +126,52 @@ test('archive or directory year mismatch fails closed with uncached 500', async 
   assert.equal(wrongDir.headers['cache-control'], 'no-store')
 })
 
+test('warm archive cache rejects in-place replacement or year-marker swap for hits and misses', async (t) => {
+  const swapDir = mkdtempSync(join(tmpdir(), 'pmtiles-warm-swap-'))
+  t.after(() => rmSync(swapDir, { recursive: true, force: true }))
+  const makeTileArchive = (year: string, payload: Buffer) => {
+    const root = gzipSync(Buffer.from([1, zxyToTileId(2, 0, 0), 1, payload.length, 1]))
+    const metadata = gzipSync(Buffer.from(JSON.stringify({ year })))
+    const header = Buffer.from(emptyArchive().subarray(0, 127))
+    header.writeBigUInt64LE(BigInt(root.length), 16)
+    header.writeBigUInt64LE(BigInt(127 + root.length), 24)
+    header.writeBigUInt64LE(BigInt(metadata.length), 32)
+    const dataOffset = 127 + root.length + metadata.length
+    header.writeBigUInt64LE(BigInt(dataOffset), 40)
+    header.writeBigUInt64LE(BigInt(dataOffset), 56)
+    header.writeBigUInt64LE(BigInt(payload.length), 64)
+    return Buffer.concat([header, root, metadata, payload])
+  }
+  const archivePath = join(swapDir, 'road.b1.pmtiles')
+  writeFileSync(join(swapDir, 'year'), '2026\n')
+  writeFileSync(archivePath, makeTileArchive('2026', brotliCompressSync(Buffer.from('2026 tile'))))
+  const app = await buildApp(swapDir, '2026')
+  t.after(() => app.close())
+
+  // Warm the cache on both a hit and a miss.
+  assert.equal((await app.inject({ url: '/api/tiles/2026/b1/road/2/0/0.bin' })).statusCode, 200)
+  assert.equal((await app.inject({ url: '/api/tiles/2026/b1/road/6/33/21.bin' })).statusCode, 200)
+
+  // Replace the archive with a 2024 archive under the same build name via atomic rename (new inode).
+  const replacement = join(swapDir, 'road.b1.pmtiles.2024')
+  writeFileSync(replacement, makeTileArchive('2024', brotliCompressSync(Buffer.from('2024 tile'))))
+  renameSync(replacement, archivePath)
+  for (const url of ['/api/tiles/2026/b1/road/2/0/0.bin', '/api/tiles/2026/b1/road/6/33/21.bin']) {
+    const res = await app.inject({ url })
+    assert.equal(res.statusCode, 500, url)
+    assert.equal(res.headers['cache-control'], 'no-store')
+  }
+
+  // Restore a valid 2026 archive, re-warm, then remove the directory year marker.
+  writeFileSync(replacement, makeTileArchive('2026', brotliCompressSync(Buffer.from('2026 tile'))))
+  renameSync(replacement, archivePath)
+  assert.equal((await app.inject({ url: '/api/tiles/2026/b1/road/2/0/0.bin' })).statusCode, 200)
+  unlinkSync(join(swapDir, 'year'))
+  const unlinked = await app.inject({ url: '/api/tiles/2026/b1/road/6/33/21.bin' })
+  assert.equal(unlinked.statusCode, 500)
+  assert.equal(unlinked.headers['cache-control'], 'no-store')
+})
+
 test('symlinked archive leaf fails closed before PMTiles open', async () => {
   const link = join(dir, 'road.b1.pmtiles')
   symlinkSync(join(dir, 'road.b0.pmtiles'), link)

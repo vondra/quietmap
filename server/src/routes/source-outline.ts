@@ -37,7 +37,16 @@ export async function sourceOutlineRoutes(
     const yearRoot = join(preparedDir, year)
     if (!existsSync(join(yearRoot, 'source-outlines.sqlite'))) return []
     const pinned = verifyCompletedYearRoot(yearRoot, year)
-    return [[year, new DatabaseSync(join(pinned, 'source-outlines.sqlite'), { readOnly: true })] as const]
+    const database = new DatabaseSync(join(pinned, 'source-outlines.sqlite'), { readOnly: true })
+    const hasMeta = database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get()
+    if (hasMeta) {
+      const row = database.prepare("SELECT value FROM meta WHERE key = 'year'").get() as { value?: unknown } | undefined
+      if (row?.value !== year) {
+        database.close()
+        throw new Error(`${pinned}/source-outlines.sqlite is for year ${String(row?.value)}, not ${year}`)
+      }
+    }
+    return [[year, database] as const]
   }))
   app.addHook('onClose', async () => { for (const database of databases.values()) database.close() })
   const queries = new Map([...databases].map(([year, database]) =>

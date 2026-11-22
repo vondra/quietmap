@@ -1,11 +1,12 @@
 // Serve the stored HM3 Brotli streams by range from immutable per-layer PMTiles archives.
 
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { Compression, type PMTiles, type RangeResponse } from 'pmtiles'
+import { Compression, type RangeResponse } from 'pmtiles'
 import { requireTilesDirYear } from './heatmap-manifest.ts'
 import { parseTileParams } from './heatmap-shared.ts'
-import { openArchiveServedAsStored } from './pmtiles-file.ts'
+import { ArchiveChangedError, openVerifiedArchive, type VerifiedArchive } from './pmtiles-file.ts'
 
 const BUILD_ID = /^b\d+$/
 const YEAR_ID = /^\d{4}$/
@@ -13,6 +14,11 @@ const YEAR_ID = /^\d{4}$/
 // Retain parsed directories for up to 32 immutable layer archives, 100 directories each.
 const ARCHIVE_CACHE_MAX = 32
 const ARCHIVE_DIRECTORIES_MAX = 100
+
+interface CachedArchive {
+  archive: VerifiedArchive
+  yearMarker: { dev: number; ino: number; mtimeMs: number; size: number }
+}
 
 /**
  * GET /api/tiles/:year/:build/:layer/:z/:x/:y.bin
@@ -27,38 +33,78 @@ export async function heatmapPmtilesRoutes(
   app: FastifyInstance,
   { tilesDir, expectedYear }: { tilesDir: string; expectedYear: string },
 ): Promise<void> {
-  // One PMTiles instance per (year, build, layer) retains parsed headers and directories.
-  const archiveCache = new Map<string, Promise<PMTiles>>()
+  // One pinned PMTiles instance per (year, build, layer) retains parsed headers and directories.
+  const archiveCache = new Map<string, Promise<CachedArchive>>()
+  const yearPath = join(tilesDir, 'year')
+
+  function openEntry(key: string, build: string, layer: string): Promise<CachedArchive> {
+    const entry = (async (): Promise<CachedArchive> => {
+      const archive = await openVerifiedArchive(
+        join(tilesDir, `${layer}.${build}.pmtiles`),
+        Compression.Brotli,
+        ARCHIVE_DIRECTORIES_MAX,
+        expectedYear,
+      )
+      await requireTilesDirYear(tilesDir, expectedYear)
+      const markerStat = await stat(yearPath)
+      return {
+        archive,
+        yearMarker: {
+          dev: markerStat.dev,
+          ino: markerStat.ino,
+          mtimeMs: markerStat.mtimeMs,
+          size: markerStat.size,
+        },
+      }
+    })()
+    archiveCache.set(key, entry)
+    if (archiveCache.size > ARCHIVE_CACHE_MAX) {
+      const oldestKey = archiveCache.keys().next().value
+      if (oldestKey !== undefined) archiveCache.delete(oldestKey)
+    }
+    return entry
+  }
+
+  async function verifyYearMarker(expected: CachedArchive['yearMarker']): Promise<void> {
+    let current
+    try {
+      current = await stat(yearPath)
+    } catch {
+      throw new ArchiveChangedError(`${yearPath} changed or disappeared`)
+    }
+    if (
+      current.dev !== expected.dev ||
+      current.ino !== expected.ino ||
+      current.mtimeMs !== expected.mtimeMs ||
+      current.size !== expected.size
+    ) {
+      throw new ArchiveChangedError(`${yearPath} was modified after validation`)
+    }
+  }
 
   async function readHeatmapTile(
     year: string, build: string, layer: string, z: number, x: number, y: number,
   ): Promise<RangeResponse | undefined> {
     const key = `${year}/${build}/${layer}`
-    let entry = archiveCache.get(key)
-    if (!entry) {
-      entry = (async () => {
-        const archive = await openArchiveServedAsStored(
-          join(tilesDir, `${layer}.${build}.pmtiles`),
-          Compression.Brotli,
-          ARCHIVE_DIRECTORIES_MAX,
-          expectedYear,
-        )
-        await requireTilesDirYear(tilesDir, expectedYear)
-        return archive
-      })()
-      archiveCache.set(key, entry)
-      if (archiveCache.size > ARCHIVE_CACHE_MAX) {
-        const oldestKey = archiveCache.keys().next().value
-        if (oldestKey !== undefined) archiveCache.delete(oldestKey)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let entry = archiveCache.get(key)
+      const reused = entry !== undefined
+      if (!entry) entry = openEntry(key, build, layer)
+      try {
+        const cached = await entry
+        // Check archive inode and directory year marker even on directory-cache misses so an
+        // in-place swap can never serve foreign bytes or an immutable empty miss.
+        await cached.archive.verifyIdentity()
+        await verifyYearMarker(cached.yearMarker)
+        return await cached.archive.pmtiles.getZxy(z, x, y)
+      } catch (error) {
+        // SharedPromiseCache retains rejected leaf reads; evict before propagating or retrying once.
+        if (archiveCache.get(key) === entry) archiveCache.delete(key)
+        if (reused && error instanceof ArchiveChangedError) continue
+        throw error
       }
     }
-    try {
-      return await (await entry).getZxy(z, x, y)
-    } catch (error) {
-      // SharedPromiseCache retains rejected leaf reads; retry with a fresh instance.
-      if (archiveCache.get(key) === entry) archiveCache.delete(key)
-      throw error
-    }
+    throw new Error('unreachable')
   }
 
   app.get<{ Params: { year: string; build: string; layer: string; z: string; x: string; y: string } }>(

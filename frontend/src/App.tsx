@@ -21,7 +21,8 @@ import { type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import AccountButton from './components/AccountButton'
 import PlaceMedia, { MediaButtons } from './components/PlaceMedia'
-import { samePlace, titleAt } from './lib/place-rules'
+import { MAP_YEAR } from './lib/map-year'
+import { recentLevelsForYear, samePlace, titleAt } from './lib/place-rules'
 import { usePlaces } from './hooks/usePlaces'
 import { createMediaKeeper } from './lib/media-keeper'
 import { isSignedIn } from './lib/places-keeper'
@@ -148,6 +149,7 @@ export default function App() {
       place: detailPlaceName,
       sone: noiseDetailData.loudness?.nden_sone ?? null,
       lden: noiseDetailData.total_lden,
+      year: MAP_YEAR,
     })
   }, [detailPosition, noiseDetailData, detailPlaceName, answered])
   // The open place's own name, given or taken back under the search field, and its entry of the history,
@@ -277,12 +279,15 @@ export default function App() {
         getMapView={getMapView}
         history={recentPlaces}
         titles={placeTitles}
-        open={detailPosition && {
-          at: detailPosition,
-          place: openEntry?.place ?? detailPlaceName,
-          sone: noiseDetailData?.loudness?.nden_sone ?? openEntry?.sone ?? null,
-          lden: (noiseDetailData?.partial ? null : noiseDetailData?.total_lden) ?? openEntry?.lden ?? null,
-        }}
+        open={detailPosition && (() => {
+          const cached = recentLevelsForYear(openEntry, MAP_YEAR)
+          return {
+            at: detailPosition,
+            place: openEntry?.place ?? detailPlaceName,
+            sone: noiseDetailData?.loudness?.nden_sone ?? cached.sone,
+            lden: (noiseDetailData?.partial ? null : noiseDetailData?.total_lden) ?? cached.lden,
+          }
+        })()}
         notSaved={notSaved}
         // A place of the history flies in as a search's result does, out, across and in, to at least the
         // search's zoom, and opens on arrival. A named place opens at the point it was named at, not where

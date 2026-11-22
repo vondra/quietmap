@@ -23,31 +23,59 @@ pub fn read_year(dir: &Path) -> Result<String, String> {
     parse_year(&raw).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Bind `dir` to `year`: if `dir/year` exists it must match `year`; if absent and `has_payload`
-/// reports existing files the directory is refused; otherwise `dir/year` is created atomically
-/// with no-clobber and parent-directory sync.
-fn bind_year(
-    dir: &Path,
-    year: &str,
-    has_payload: impl FnOnce(&Path) -> Result<bool, String>,
-) -> Result<(), String> {
-    let year = parse_year(year)?;
+/// Read `dir/year` if present and verify it matches `expected`; returns `Ok(false)` only on ENOENT.
+fn verify_existing(dir: &Path, expected: &str) -> Result<bool, String> {
     let path = dir.join(MARKER);
     match std::fs::read_to_string(&path) {
         Ok(raw) => {
             let existing = parse_year(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
-            if existing != year {
+            if existing != expected {
                 return Err(format!(
-                    "{}: bound to year {existing}, not {year}",
+                    "{}: bound to year {existing}, not {expected}",
                     dir.display()
                 ));
             }
+            Ok(true)
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+
+#[cfg(unix)]
+fn make_world_readable(file: &File, path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(std::fs::Permissions::from_mode(0o644))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn make_world_readable(_file: &File, _path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+fn is_payload_entry(name: &str) -> bool {
+    name.parse::<u8>().is_ok_and(|zoom| zoom <= 15)
+        || name.ends_with(".hm3")
+        || name.ends_with(".region")
+        || name == "current.json"
+        || name.ends_with(".pmtiles")
+}
+
+/// Bind `dir` to `year`: if `dir/year` exists it must match `year`; if absent and the directory
+/// already holds any painted, region or published payload it is refused (re-checking `dir/year`
+/// once so a concurrent same-year first writer racing with payload creation succeeds); otherwise
+/// `dir/year` is created atomically with no-clobber, readable permissions and parent-dir sync.
+fn bind_year(dir: &Path, year: &str) -> Result<(), String> {
+    let year = parse_year(year)?;
+    let path = dir.join(MARKER);
+    if verify_existing(dir, &year)? {
+        return Ok(());
+    }
+    if root_entries(dir)?.iter().any(|name| is_payload_entry(name)) {
+        if verify_existing(dir, &year)? {
             return Ok(());
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("{}: {error}", path.display())),
-    }
-    if has_payload(dir)? {
         return Err(format!(
             "{}: contains existing files without a year marker",
             dir.display()
@@ -57,6 +85,7 @@ fn bind_year(
     let mut temporary =
         tempfile::NamedTempFile::new_in(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     writeln!(temporary, "{year}").map_err(|e| format!("{}: {e}", dir.display()))?;
+    make_world_readable(temporary.as_file(), dir)?;
     temporary
         .as_file()
         .sync_all()
@@ -96,32 +125,19 @@ fn root_entries(dir: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// Bind a painted square tree (`12/`, `13/`, or `.hm3` bundles) to `year`.
+/// Bind a painted square tree to `year`.
 pub fn bind_painted_dir(dir: &Path, year: &str) -> Result<(), String> {
-    bind_year(dir, year, |root| {
-        Ok(root_entries(root)?
-            .iter()
-            .any(|name| name == "12" || name == "13" || name.ends_with(".hm3")))
-    })
+    bind_year(dir, year)
 }
 
-/// Bind a zoom-8 region cache directory (`*.region`) to `year`.
+/// Bind a zoom-8 region cache directory to `year`.
 pub fn bind_regions_dir(dir: &Path, year: &str) -> Result<(), String> {
-    bind_year(dir, year, |root| {
-        Ok(root_entries(root)?
-            .iter()
-            .any(|name| name.ends_with(".region")))
-    })
+    bind_year(dir, year)
 }
 
-/// Bind a published tiles directory (`*.pmtiles` or `current.json`, ignoring `.pack.lock`) to
-/// `year`.
+/// Bind a published tiles directory (ignoring `.pack.lock`) to `year`.
 pub fn bind_tiles_dir(dir: &Path, year: &str) -> Result<(), String> {
-    bind_year(dir, year, |root| {
-        Ok(root_entries(root)?
-            .iter()
-            .any(|name| name == "current.json" || name.ends_with(".pmtiles")))
-    })
+    bind_year(dir, year)
 }
 
 #[cfg(test)]
@@ -175,6 +191,57 @@ mod tests {
                 .unwrap_err()
                 .contains("without a year marker")
         );
+
+        // Cross-role check: a region or tiles command cannot stamp an unmarked legacy painted tree.
+        assert!(
+            bind_regions_dir(&legacy_painted, "2024")
+                .unwrap_err()
+                .contains("without a year marker")
+        );
+        assert!(
+            bind_tiles_dir(&legacy_painted, "2024")
+                .unwrap_err()
+                .contains("without a year marker")
+        );
+        assert!(
+            bind_painted_dir(&interrupted_tiles, "2024")
+                .unwrap_err()
+                .contains("without a year marker")
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(tiles.join(MARKER))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o644);
+        }
+    }
+
+    #[test]
+    fn concurrent_same_year_first_writers_both_succeed_even_with_payload() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared-same");
+        std::fs::create_dir_all(&shared).unwrap();
+        let barrier = std::sync::Barrier::new(2);
+        let (a, b) = std::thread::scope(|scope| {
+            let h1 = scope.spawn(|| {
+                barrier.wait();
+                bind_painted_dir(&shared, "2026")?;
+                std::fs::create_dir_all(shared.join("13")).map_err(|e| e.to_string())
+            });
+            let h2 = scope.spawn(|| {
+                barrier.wait();
+                bind_painted_dir(&shared, "2026")
+            });
+            (h1.join().unwrap(), h2.join().unwrap())
+        });
+        assert!(a.is_ok(), "worker 1 failed: {a:?}");
+        assert!(b.is_ok(), "worker 2 failed: {b:?}");
+        assert_eq!(read_year(&shared).unwrap(), "2026");
     }
 
     #[test]

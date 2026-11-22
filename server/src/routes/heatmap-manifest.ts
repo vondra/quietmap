@@ -152,10 +152,7 @@ export async function readValidatedPmtilesManifest(
     throw e
   }
   if (expectedYear !== undefined) {
-    const dirYear = await readTilesDirYear(tilesDir)
-    if (dirYear !== null && dirYear !== expectedYear) {
-      throw new Error(`${tilesDir} is bound to year ${dirYear}, not ${expectedYear}`)
-    }
+    await requireTilesDirYear(tilesDir, expectedYear)
   }
   const manifest = JSON.parse(raw) as PmtilesManifest
   validatePmtilesManifest(manifest, manifestPath, expectedYear)
@@ -178,8 +175,8 @@ function publicManifest(manifest: PmtilesManifest) {
 }
 
 /** Check year binding of `tilesDir` at startup: an empty directory stays valid (404 until first
- *  pack), while a mismatched `year` marker, unbound `.pmtiles` archives, or a manifest naming
- *  another or missing year fails startup loudly. */
+ *  pack), while a mismatched `year` marker, unbound `.pmtiles` archives, or a malformed/wrong-year
+ *  `current.json` fails startup loudly. */
 async function verifyTilesDirYearAtStartup(tilesDir: string, expectedYear: string): Promise<void> {
   const dirYear = await readTilesDirYear(tilesDir)
   if (dirYear !== null && dirYear !== expectedYear) {
@@ -204,17 +201,19 @@ async function verifyTilesDirYearAtStartup(tilesDir: string, expectedYear: strin
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return
     throw e
   }
+  await requireTilesDirYear(tilesDir, expectedYear)
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
-  } catch {
-    return // a torn manifest fails closed with HTTP 500 on request
+  } catch (e) {
+    throw new Error(`${manifestPath} is malformed JSON: ${(e as Error).message}`)
   }
-  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    const year = (parsed as PmtilesManifest).year
-    if (year !== expectedYear) {
-      throw new Error(`${manifestPath} is for year ${String(year)}, not ${expectedYear}`)
-    }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${manifestPath} must be a JSON object`)
+  }
+  const year = (parsed as PmtilesManifest).year
+  if (year !== expectedYear) {
+    throw new Error(`${manifestPath} is for year ${String(year)}, not ${expectedYear}`)
   }
 }
 

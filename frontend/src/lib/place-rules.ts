@@ -12,8 +12,20 @@ export interface RecentPlace {
   /** The whole day's loudness (sone) and Lden (dB), when answered. */
   sone: number | null
   lden: number | null
+  /** The four-digit map year whose `sone`/`lden` are stored (absent on legacy untagged entries). */
+  year?: string
   /** When it was opened last (ms since 1970; 0 for a place kept from before the history kept times). */
   openedAt: number
+}
+
+/** Return stored noise levels only when they belong to the active map year, preserving saved
+ *  places across year switches without showing stale levels from another year. */
+export function recentLevelsForYear(
+  place: Pick<RecentPlace, 'sone' | 'lden' | 'year'> | null | undefined,
+  mapYear: string,
+): { sone: number | null, lden: number | null } {
+  if (!place || place.year !== mapYear) return { sone: null, lden: null }
+  return { sone: place.sone, lden: place.lden }
 }
 
 /** A place's name as the visitor wrote it. */
@@ -77,13 +89,20 @@ export function withOpened(list: RecentPlace[], at: { lat: number, lng: number }
  *  `list` itself when nothing changes or the place is not in it (forgotten while it was computed). */
 export function withAnswer(
   list: RecentPlace[],
-  answer: { lat: number, lng: number, place: string | null, sone: number | null, lden: number | null },
+  answer: { lat: number, lng: number, place: string | null, sone: number | null, lden: number | null, year?: string },
 ): RecentPlace[] {
   const k = list.findIndex(other => samePlace(other, answer))
   if (k < 0) return list
   const older = list[k]
-  const entry = { ...older, place: older.place ?? answer.place, sone: answer.sone, lden: answer.lden }
-  if (entry.place === older.place && entry.sone === older.sone && entry.lden === older.lden) return list
+  const year = answer.year ?? older.year
+  const entry: RecentPlace = {
+    ...older,
+    place: older.place ?? answer.place,
+    sone: answer.sone,
+    lden: answer.lden,
+    ...(year !== undefined ? { year } : {}),
+  }
+  if (entry.place === older.place && entry.sone === older.sone && entry.lden === older.lden && entry.year === older.year) return list
   return list.map((other, j) => (j === k ? entry : other))
 }
 

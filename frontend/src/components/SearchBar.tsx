@@ -10,7 +10,8 @@ import type { Metric } from '../lib/hm3-decoder'
 import { History, Search, UserRound } from 'lucide-react'
 import PlaceRow from './PlaceRow'
 import { FLOATING } from './ui/button'
-import { placeLabel, samePlace, titleAt, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
+import { MAP_YEAR } from '../lib/map-year'
+import { placeLabel, recentLevelsForYear, samePlace, titleAt, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
 import { coordinateSuggestions, MAX_LATITUDE, type SearchResult } from '../lib/coordinates'
 
 type Point = { lat: number; lng: number }
@@ -229,14 +230,16 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
             }}
           >
             <ul ref={listRef} id="search-list" role="listbox" aria-label="Places" className="overflow-y-auto overscroll-contain" style={{ maxHeight: room }}>
-              {places.map((place, k) => (
+              {places.map((place, k) => {
+                const levels = recentLevelsForYear(place, MAP_YEAR)
+                return (
                 <li key={keyOf(place)} id={`search-option-${k}`} role="option" aria-selected={k === highlighted} onMouseEnter={() => setRowIndex(k)}>
                   <PlaceRow
                     listed
                     {...described(place, place.place)}
                     metric={metric}
-                    sone={place.sone}
-                    lden={place.lden}
+                    sone={levels.sone}
+                    lden={levels.lden}
                     highlighted={k === highlighted}
                     onOpen={() => choose(k)}
                     onForget={() => onForget(place)}
@@ -245,7 +248,8 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
                     {open != null && samePlace(place, open.at) ? undefined : <History className="size-4 shrink-0 text-muted-foreground" />}
                   </PlaceRow>
                 </li>
-              ))}
+                )
+              })}
               {shownResults.map((r, i) => {
                 const k = places.length + i
                 return (

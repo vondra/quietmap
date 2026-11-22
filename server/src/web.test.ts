@@ -1,6 +1,6 @@
 // The static frontend and the 404 shapes.
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -79,4 +79,23 @@ test('registerWeb refuses a frontend built without or for another map year', asy
   await assert.rejects(() => registerWeb(Fastify(), frontend, '2026'))
   await writeFile(join(frontend, 'map-year.json'), JSON.stringify('2024'))
   await assert.rejects(() => registerWeb(Fastify(), frontend, '2026'), /2024.*2026/)
+
+  // Symlinked dist stays pinned to the verified release after a live symlink swap.
+  const root = await mkdtemp(join(tmpdir(), '0db-web-pin-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  for (const year of ['2026', '2024']) {
+    const target = join(root, `dist-${year}`)
+    await mkdir(target)
+    await writeFile(join(target, 'index.html'), `<!doctype html><title>map-${year}</title>`)
+    await writeFile(join(target, 'about-pages.json'), '[""]')
+    await writeFile(join(target, 'map-year.json'), JSON.stringify(year))
+  }
+  const link = join(root, 'current')
+  await symlink(join(root, 'dist-2026'), link)
+  const app = Fastify()
+  await registerWeb(app, link, '2026')
+  t.after(async () => app.close())
+  await unlink(link)
+  await symlink(join(root, 'dist-2024'), link)
+  assert.match((await app.inject('/')).body, /map-2026/)
 })

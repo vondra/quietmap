@@ -92,11 +92,18 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let year = required("year")?;
     let release = Release::open(&PathBuf::from(required("prepared")?), year)?;
     if command == Some("compare") {
-        return compare::compare_maps(
-            &PathBuf::from(required("painted")?),
-            &PathBuf::from(required("reference")?),
-            required("squares")?,
-        );
+        let painted = PathBuf::from(required("painted")?);
+        let reference = PathBuf::from(required("reference")?);
+        for (label, dir) in [("--painted", &painted), ("--reference", &reference)] {
+            let found = paint::year::read_year(dir)?;
+            if found != year {
+                return Err(format!(
+                    "{label} ({}) is bound to year {found}, not {year}",
+                    dir.display()
+                ));
+            }
+        }
+        return compare::compare_maps(&painted, &reference, required("squares")?);
     }
     let (x, y) = required("square")?
         .split_once(',')

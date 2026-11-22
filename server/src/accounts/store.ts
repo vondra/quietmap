@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS place_titles (user_id INTEGER NOT NULL REFERENCES use
   updated_at INTEGER NOT NULL, PRIMARY KEY (user_id, position));
 CREATE TABLE IF NOT EXISTS recent_places (user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   position INTEGER NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, place TEXT, sone REAL, lden REAL,
-  opened_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, position));
+  opened_at INTEGER NOT NULL DEFAULT 0, year TEXT, PRIMARY KEY (user_id, position));
 CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   kind TEXT NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, taken_at INTEGER NOT NULL, bytes INTEGER NOT NULL,
   duration_s REAL, sha256 TEXT NOT NULL, details TEXT NOT NULL);
@@ -81,9 +81,10 @@ export class AccountStore {
     // when they were counted (until 2026-10-30) loses the count. In one transaction: a start cut short
     // changes both or neither.
     const columns = new Set(this.#db.prepare('PRAGMA table_info(recent_places)').all().map(column => column.name))
-    if (!columns.has('opened_at') || columns.has('count')) {
+    if (!columns.has('opened_at') || !columns.has('year') || columns.has('count')) {
       this.#transaction(() => {
         if (!columns.has('opened_at')) this.#db.exec('ALTER TABLE recent_places ADD COLUMN opened_at INTEGER NOT NULL DEFAULT 0')
+        if (!columns.has('year')) this.#db.exec('ALTER TABLE recent_places ADD COLUMN year TEXT')
         if (columns.has('count')) this.#db.exec('ALTER TABLE recent_places DROP COLUMN count')
       })
     }
@@ -189,8 +190,9 @@ export class AccountStore {
   /** The account's names, and its recent places in the history's order (a list kept under an older
    *  order reads in this one). */
   places(id: number): Places {
-    const recent = this.#db.prepare('SELECT lat, lng, place, sone, lden, opened_at AS openedAt FROM recent_places WHERE user_id = ? ORDER BY position')
-      .all(id) as unknown as RecentPlace[]
+    const rows = this.#db.prepare('SELECT lat, lng, place, sone, lden, opened_at AS openedAt, year FROM recent_places WHERE user_id = ? ORDER BY position')
+      .all(id) as unknown as Array<RecentPlace & { year: string | null }>
+    const recent: RecentPlace[] = rows.map(({ year, ...rest }) => (year != null ? { ...rest, year } : rest))
     return { titles: this.#titles(id), recent: historyOrder(recent) }
   }
 
@@ -202,8 +204,8 @@ export class AccountStore {
 
   #writeRecent(id: number, recent: RecentPlace[]): void {
     this.#db.prepare('DELETE FROM recent_places WHERE user_id = ?').run(id)
-    const insert = this.#db.prepare('INSERT INTO recent_places (user_id, position, lat, lng, place, sone, lden, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    recent.forEach((place, k) => insert.run(id, k, place.lat, place.lng, place.place, place.sone, place.lden, place.openedAt))
+    const insert = this.#db.prepare('INSERT INTO recent_places (user_id, position, lat, lng, place, sone, lden, opened_at, year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    recent.forEach((place, k) => insert.run(id, k, place.lat, place.lng, place.place, place.sone, place.lden, place.openedAt, place.year ?? null))
   }
 
   /** Names the place at `at` (null removes its name) as `withTitle` does; the account's names. */

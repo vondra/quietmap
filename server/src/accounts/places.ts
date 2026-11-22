@@ -52,12 +52,14 @@ export function parseRecent(value: unknown, now: number): RecentPlace[] | string
     const at = point(sent)
     if (!at) return 'a recent place needs lat within ±90 and lng a number'
     if (places.some(place => samePlace(place, at))) continue
-    const { place, sone, lden, openedAt } = sent
+    const { place, sone, lden, openedAt, year } = sent
+    const parsedYear = typeof year === 'string' && /^\d{4}$/.test(year) ? year : undefined
     places.push({
       ...at,
       place: typeof place === 'string' ? place.slice(0, PLACE_NAME_MAX) : null,
       sone: finite(sone) ? sone : null,
       lden: finite(lden) ? lden : null,
+      ...(parsedYear !== undefined ? { year: parsedYear } : {}),
       openedAt: finite(openedAt) && openedAt > 0 ? Math.min(Math.round(openedAt), now) : 0,
     })
   }

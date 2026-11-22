@@ -252,3 +252,30 @@ fn metric_tags_and_assessment_cannot_be_swapped_or_lost() {
             .contains("assessment differs")
     );
 }
+
+#[test]
+fn concurrent_merge_of_identical_square_succeeds() {
+    let worker_a = tempfile::tempdir().unwrap();
+    let worker_b = tempfile::tempdir().unwrap();
+    let merged = tempfile::tempdir().unwrap();
+    crate::year::bind_painted_dir(worker_a.path(), "2026").unwrap();
+    crate::year::bind_painted_dir(worker_b.path(), "2026").unwrap();
+    let cells = PaintedCells::silence(TILE_PX * TILE_PX);
+    write(worker_a.path(), 12, (3, 4), &cells).unwrap();
+    write(worker_b.path(), 12, (3, 4), &cells).unwrap();
+    let barrier = std::sync::Barrier::new(2);
+    let (a, b) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| {
+            barrier.wait();
+            crate::merge::merge(worker_a.path(), merged.path(), 12)
+        });
+        let h2 = scope.spawn(|| {
+            barrier.wait();
+            crate::merge::merge(worker_b.path(), merged.path(), 12)
+        });
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    assert!(a.is_ok(), "worker A failed: {a:?}");
+    assert!(b.is_ok(), "worker B failed: {b:?}");
+    assert!(verify(merged.path(), 12, (3, 4)).unwrap());
+}

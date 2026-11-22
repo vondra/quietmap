@@ -18,9 +18,12 @@ pub struct Release {
 }
 
 impl Release {
-    /// Opens `<prepared>/<year>`; refuses a year root that is not complete in this layout.
+    /// Opens `<prepared>/<year>`; pins its canonical directory before verifying completion so a
+    /// concurrent symlink switch cannot mix another release into later tile reads.
     pub fn open(prepared: &Path, year: &str) -> Result<Self, String> {
-        let year_root = prepared.join(year);
+        let joined = prepared.join(year);
+        let year_root = std::fs::canonicalize(&joined)
+            .map_err(|e| format!("{}: not a complete release ({e})", joined.display()))?;
         let manifest_year = tiles::check_year_complete(&year_root)?;
         if manifest_year != year {
             return Err(format!(

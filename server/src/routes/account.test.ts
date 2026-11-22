@@ -257,7 +257,7 @@ test('a database from before the recent places had times, half migrated, or from
     store.close()
     const kept = new DatabaseSync(database)
     assert.deepEqual(kept.prepare('PRAGMA table_info(recent_places)').all().map(column => column.name),
-      ['user_id', 'position', 'lat', 'lng', 'place', 'sone', 'lden', 'opened_at'])
+      ['user_id', 'position', 'lat', 'lng', 'place', 'sone', 'lden', 'opened_at', 'year'])
     kept.close()
   }
 })
