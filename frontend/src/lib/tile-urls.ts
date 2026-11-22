@@ -14,6 +14,7 @@
 
 import { useSyncExternalStore } from 'react'
 import { HM3_MANIFEST_URL, type Metric } from './hm3-decoder.ts'
+import { MAP_YEAR } from './map-year.ts'
 
 // The toggleable noise layers of the heatmap, each its own tile tree. All share
 // the same HM3 format and loudness palette, so the tile fetch/decode
@@ -144,25 +145,34 @@ export async function initTileBuild(): Promise<void> {
 
 let pollingStarted = false
 
+/** Parse a published HM3 manifest, refusing one whose map year differs from this bundle. */
+export function parseTileManifest(raw: unknown, expectedYear = MAP_YEAR): TileBuilds | null {
+  if (!raw || typeof raw !== 'object') return null
+  const manifest = raw as {
+    year?: unknown
+    build?: unknown
+    zoom?: unknown
+    layers?: Record<string, { build?: unknown }>
+  }
+  if (manifest.year !== expectedYear) return null
+  if (typeof manifest.build !== 'string' || !BUILD_ID.test(manifest.build)) return null
+  // A manifest without a usable base zoom is not servable at all: every tile
+  // request needs the top of the band. Keep the current snapshot instead.
+  if (!Number.isInteger(manifest.zoom) || (manifest.zoom as number) < MIN_ZOOM) return null
+  const byLayer: Record<string, string> = {}
+  for (const [layer, entry] of Object.entries(manifest.layers ?? {})) {
+    byLayer[layer] =
+      typeof entry?.build === 'string' && BUILD_ID.test(entry.build) ? entry.build : manifest.build
+  }
+  return { latest: manifest.build, byLayer, zoom: manifest.zoom as number }
+}
+
 async function refreshTileBuild(): Promise<void> {
   try {
     const res = await fetch(HM3_MANIFEST_URL, { cache: 'no-cache' })
     if (!res.ok) return // nothing published yet → stay as-is
-    const manifest = (await res.json()) as {
-      build?: unknown
-      zoom?: unknown
-      layers?: Record<string, { build?: unknown }>
-    }
-    if (typeof manifest.build !== 'string' || !BUILD_ID.test(manifest.build)) return
-    // A manifest without a usable base zoom is not servable at all: every tile
-    // request needs the top of the band. Keep the current snapshot instead.
-    if (!Number.isInteger(manifest.zoom) || (manifest.zoom as number) < MIN_ZOOM) return
-    const byLayer: Record<string, string> = {}
-    for (const [layer, entry] of Object.entries(manifest.layers ?? {})) {
-      byLayer[layer] =
-        typeof entry?.build === 'string' && BUILD_ID.test(entry.build) ? entry.build : manifest.build
-    }
-    const next: TileBuilds = { latest: manifest.build, byLayer, zoom: manifest.zoom as number }
+    const next = parseTileManifest(await res.json())
+    if (!next) return
     if (JSON.stringify(next) !== JSON.stringify(currentBuilds)) {
       currentBuilds = next
       for (const cb of listeners) cb()

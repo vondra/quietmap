@@ -5,7 +5,7 @@
 // and publisher proofs never cross the public boundary. `zoom` is the zoom the world was painted
 // at (the deepest natively-servable zoom); a manifest without it serves at WORLD_BASE_ZOOM.
 
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { ALLOWED_LAYERS, LDEN_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, NDEN_LAYERS, WORLD_BASE_ZOOM } from './heatmap-shared.ts'
@@ -135,7 +135,7 @@ function publicManifest(manifest: PmtilesManifest) {
       ...(typeof value.build === 'string' ? { build: value.build } : {}),
     }
   }
-  return { build: manifest.build, zoom: manifestBaseZoom(manifest), layers }
+  return { year: manifest.year, build: manifest.build, zoom: manifestBaseZoom(manifest), layers }
 }
 
 export async function heatmapManifestRoutes(
@@ -146,6 +146,12 @@ export async function heatmapManifestRoutes(
     await readValidatedPmtilesManifest(tilesDir, expectedYear)
   } catch (e) {
     if (!(e instanceof ManifestMissingError)) throw e
+    const entries = await readdir(tilesDir).catch((err: NodeJS.ErrnoException) =>
+      err.code === 'ENOENT' ? [] : Promise.reject(err),
+    )
+    if (entries.some(name => name.endsWith('.pmtiles'))) {
+      throw new Error(`${tilesDir} contains .pmtiles archives without ${MANIFEST_FILENAME}`)
+    }
   }
   app.get(HM3_MANIFEST_URL, async (_req, reply) => {
     reply.header('Cache-Control', 'no-cache')

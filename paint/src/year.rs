@@ -92,7 +92,13 @@ pub fn bind(dir: &Path, year: &str) -> Result<(), String> {
     match temporary.persist_noclobber(&path) {
         Ok(_) => Ok(()),
         Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {
-            check_existing(dir, &year)?;
+            let found = read(dir)?;
+            if found != year {
+                return Err(format!(
+                    "{}: bound to year {found}, not {year}",
+                    dir.display()
+                ));
+            }
             Ok(())
         }
         Err(error) => Err(format!("{}: {}", path.display(), error.error)),

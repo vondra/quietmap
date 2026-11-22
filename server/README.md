@@ -8,7 +8,7 @@ the optional sign-in and the streamed popup:
 |---|---|
 | `GET /api/popup?lat=&lon=[&year=][&source=ID,...[&piece=K]]` | one click, streamed as `application/x-ndjson` (below) |
 | `GET /api/source-outline/:id[?year=]` | the site's mapped parts as a GeoJSON FeatureCollection, empty without a boundary; `id` is 16 lowercase hex digits, `year` one of `QM_YEARS` (the first by default), otherwise 400; 503 when that year's outline file was absent at startup; `no-cache` |
-| `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{build, zoom, layers}` |
+| `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{year, build, zoom, layers}` |
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
 | `GET /api/basemap/:z/:x/:y.mvt` | one vector tile of the standard base map as the archive of `QM_BASEMAP_DIR` stores it (MVT, gzip); a missing tile is 204; kept a day |
 | `GET /api/basemap/fonts/:fontstack/:range.pbf`, `GET /api/basemap/sprites/:file` | the glyphs of the base map's labels and the sprite sheet of its icons (`light.json`, `light.png` and their `@2x`); 404 for any other name; kept a day |

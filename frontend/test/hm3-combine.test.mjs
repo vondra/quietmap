@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import { combineLayerCells } from '../src/lib/hm3-combine.ts'
 import { HM3_NO_LEVEL, HM3_SILENCE } from '../src/lib/hm3-decoder.ts'
-import { HEATMAP_LAYERS, LAYER_URL_SEPARATOR, buildKey, publishes, sourceOf, tileUrl } from '../src/lib/tile-urls.ts'
+import { HEATMAP_LAYERS, LAYER_URL_SEPARATOR, buildKey, parseTileManifest, publishes, sourceOf, tileUrl } from '../src/lib/tile-urls.ts'
 
 const cell = (...bytes) => combineLayerCells(bytes.map(byte => Uint8Array.of(byte)), 'nden')[0]
 const ldenCell = (...bytes) => combineLayerCells(bytes.map(byte => Uint8Array.of(byte)), 'lden')[0]
@@ -53,4 +53,7 @@ test('the layers on name one source: every layer the total, one itself, several 
   )
   assert.equal(buildKey(builds, 'road+aircraft'), 'road+aircraft:b1,b2|z13')
   assert.equal(buildKey(builds, 'road'), 'road:b1|z13')
+  assert.equal(parseTileManifest({ year: '2026', build: 'b2', zoom: 13, layers: { road: { build: 'b1' } } }, '2024'), null)
+  assert.equal(parseTileManifest({ build: 'b2', zoom: 13, layers: {} }, '2024'), null)
+  assert.deepEqual(parseTileManifest({ year: '2024', build: 'b2', zoom: 13, layers: { road: { build: 'b1' } } }, '2024'), { latest: 'b2', byLayer: { road: 'b1' }, zoom: 13 })
 })

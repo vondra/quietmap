@@ -42,11 +42,12 @@ test('serves the manifest projected to the fetch coordinates', async () => {
   const app = await buildApp()
   const res = await app.inject(HM3_MANIFEST_URL)
   assert.equal(res.statusCode, 200)
+  assert.equal(res.json().year, '2026')
   assert.equal(res.json().build, 'b546')
   assert.equal(res.json().zoom, WORLD_BASE_ZOOM)
   assert.equal(Object.keys(res.json().layers).length, ALLOWED_LAYERS.size)
   assert.equal(res.json().layers.total.file, 'total.b546.pmtiles')
-  assert.deepEqual(Object.keys(res.json()).sort(), ['build', 'layers', 'zoom'])
+  assert.deepEqual(Object.keys(res.json()).sort(), ['build', 'layers', 'year', 'zoom'])
   assert.equal(res.headers['cache-control'], 'no-cache')
   await app.close()
 })
@@ -159,6 +160,9 @@ test('a manifest for another or missing map year refuses startup and never serve
   delete missingYear.year
   writeFileSync(pinPath, JSON.stringify(missingYear))
   await assert.rejects(() => buildApp('2026'), /invalid map year/)
+  clearFixture()
+  writeFileSync(join(dir, 'road.b546.pmtiles'), '')
+  await assert.rejects(() => buildApp('2026'), /contains \.pmtiles archives/)
   clearFixture()
   const app = await buildApp('2026')
   try {
