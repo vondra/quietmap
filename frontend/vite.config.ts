@@ -8,14 +8,11 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { splitFrontMatter } from './src/lib/about-front-matter.ts'
 import { aboutPagePath } from './src/lib/about-paths.ts'
-import { datasetCitations } from './scripts/dataset-citations.ts'
-import { generateSourceArtifacts, selectMapYear } from './scripts/generate-datasets.ts'
+import { generateSourceArtifacts } from './scripts/generate-datasets.ts'
 import { expandYearSources, readYears, yearFiles } from './scripts/year-sources.ts'
 
 const ABOUT_DIR = new URL('./src/about', import.meta.url).pathname
 const ABOUT_INDEX = 'virtual:about-index'
-const VIRTUAL_MAP_YEAR = '\0generated:map-year'
-const VIRTUAL_DATASETS = '\0generated:datasets'
 
 /** The About pages (src/about): every path with its title. */
 function aboutIndex(): Record<string, { title: string }> {
@@ -25,41 +22,18 @@ function aboutIndex(): Record<string, { title: string }> {
   }))
 }
 
-/** The About pages' index for the frontend, and a single private per-build snapshot of the
- *  selected map year, its citations and emitted `map-year.json` so concurrent builds of
- *  different years cannot mix their outputs through `.generated/`. */
+/** The About pages' index for the frontend, and their paths for the server: any other /about path
+ *  is a 404. */
 function aboutPages(): Plugin {
   let years: ReturnType<typeof readYears> = []
-  let mapYear = ''
-  let datasetsJson = '{}'
-  const snapshot = () => {
-    years = readYears()
-    const selected = selectMapYear(years, process.env.MAP_YEAR)
-    mapYear = selected.manifest.year
-    datasetsJson = JSON.stringify(datasetCitations(selected.manifest))
-  }
   return {
-    buildStart() {
-      snapshot()
-    },
-    watchChange(id) {
-      if (yearFiles().includes(id)) {
-        generateSourceArtifacts()
-        snapshot()
-      }
-    },
+    buildStart() { years = readYears() },
+    watchChange(id) { if (yearFiles().includes(id)) generateSourceArtifacts() },
     name: 'about-pages',
     enforce: 'pre',
-    resolveId(id) {
-      if (id === ABOUT_INDEX) return `\0${ABOUT_INDEX}`
-      if (id.endsWith('/.generated/map-year.json')) return VIRTUAL_MAP_YEAR
-      if (id.endsWith('/.generated/datasets.json')) return VIRTUAL_DATASETS
-      return undefined
-    },
+    resolveId: id => (id === ABOUT_INDEX ? `\0${ABOUT_INDEX}` : undefined),
     load(id) {
       if (id === `\0${ABOUT_INDEX}`) return `export default ${JSON.stringify(aboutIndex())}`
-      if (id === VIRTUAL_MAP_YEAR) return `export default ${JSON.stringify(mapYear)}`
-      if (id === VIRTUAL_DATASETS) return `export default ${datasetsJson}`
       if (!id.startsWith(`${ABOUT_DIR}/`) || !id.endsWith('.md?raw')) return
       const file = id.slice(0, -4)
       const markdown = readFileSync(file, 'utf8')
@@ -69,6 +43,10 @@ function aboutPages(): Plugin {
     },
     generateBundle() {
       const pages = Object.keys(aboutIndex())
+      const mapYear = JSON.parse(readFileSync(new URL('./.generated/map-year.json', import.meta.url), 'utf8')) as string
+      if (process.env.MAP_YEAR && process.env.MAP_YEAR !== mapYear) {
+        throw new Error(`MAP_YEAR (${process.env.MAP_YEAR}) disagrees with generated map-year.json (${mapYear})`)
+      }
       this.emitFile({ type: 'asset', fileName: 'about-pages.json', source: JSON.stringify(pages) })
       this.emitFile({ type: 'asset', fileName: 'map-year.json', source: JSON.stringify(mapYear) })
     },

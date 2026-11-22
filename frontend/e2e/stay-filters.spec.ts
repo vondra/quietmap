@@ -1,7 +1,6 @@
 // A visitor narrows stays by quote and mapped total, opens one beyond reach and clears the area.
 import { expect, test, type Page } from '@playwright/test'
 import { HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
-import { MAP_YEAR } from '../src/lib/map-year'
 import { PHONE, POINT, TILE_Z, afterPaint, canvasCenter, hm3PixelCenter, installHermeticMap, mapUrl, popupRequests, swipeDown } from './support'
 
 const spots = [
@@ -42,9 +41,8 @@ async function fixtures(page: Page, offers = listings, uniformNoise = false) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ listings: offers, nights: 2, currency: 'EUR', expiresIn: 3600, failure: null }) })
   })
   let missingLden = false, failingNoise = false, nativeReads = 0
-  const tilePattern = new RegExp(`^/api/tiles/${MAP_YEAR}/b1/([^/]+)/(\\d+)/(\\d+)/(\\d+)\\.bin$`)
-  await page.route(`**/api/tiles/${MAP_YEAR}/b1/**/*.bin`, route => {
-    const [, source, z, x, y] = new URL(route.request().url()).pathname.match(tilePattern)!
+  await page.route('**/api/tiles/b1/**/*.bin', route => {
+    const [, source, z, x, y] = new URL(route.request().url()).pathname.match(/\/b1\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.bin$/)!
     if (+z === TILE_Z && source === 'total') {
       nativeReads++
       if (failingNoise) return route.fulfill({ status: 503, body: '' })

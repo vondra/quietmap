@@ -124,24 +124,13 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
     let year = required("year")?;
     let release = Release::open(&PathBuf::from(required("prepared")?), year)?;
-    let out_arg = PathBuf::from(required("out")?);
+    let out = PathBuf::from(required("out")?);
     let zoom: u32 = required("zoom")?
         .parse()
         .map_err(|_| "--zoom is 12 or 13")?;
     let grid = Grid::at_zoom(zoom).ok_or("--zoom is 12 or 13")?;
     let squares = squares(arguments)?;
-    std::fs::create_dir_all(&out_arg).map_err(|e| format!("{}: {e}", out_arg.display()))?;
-    let out = std::fs::canonicalize(&out_arg).map_err(|e| format!("{}: {e}", out_arg.display()))?;
-    paint::year::bind_painted_dir(&out, year)?;
-    let mut todo = Vec::new();
-    for (number, tile) in squares.iter().copied().enumerate() {
-        if !painted(&out, zoom, (tile.x, tile.y))? {
-            todo.push((number, tile));
-        }
-    }
-    if todo.is_empty() {
-        return Ok(());
-    }
+    paint::year::bind(&out, year)?;
     let weather = WeatherTable::read(&release.weather_path)?;
     // The card, if this host has one (CUDA_VISIBLE_DEVICES chooses it); else the cores, said
     // aloud (the CUDA loader panics where the driver's libraries are missing).
@@ -158,6 +147,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
     };
     if let Some(gpu) = &gpu {
         eprintln!("qm-paint: exact evaluations on {}", gpu.name);
+    }
+    let mut todo = Vec::new();
+    for (number, tile) in squares.iter().copied().enumerate() {
+        if !painted(&out, zoom, (tile.x, tile.y))? {
+            todo.push((number, tile));
+        }
     }
     // A square is prepared on every core, or on a few beside another's pixels: those on the card
     // wait on the rest.

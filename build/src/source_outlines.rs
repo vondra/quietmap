@@ -34,7 +34,6 @@ fn geometry(ring: &[(i32, i32)]) -> Option<Value> {
 pub fn build(
     facilities: &crate::facilities::Dataset,
     squares: &[Square],
-    year: &str,
     out: &Path,
 ) -> Result<(), String> {
     let partial = out.with_extension("sqlite.partial");
@@ -48,13 +47,9 @@ pub fn build(
         .execute_batch(
             // Larger pages keep common rings inline instead of in mostly empty overflow pages.
             "PRAGMA page_size=16384;
-             CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
              CREATE TABLE outlines (id TEXT NOT NULL, geometry TEXT NOT NULL,
                         PRIMARY KEY (id, geometry)) WITHOUT ROWID;",
         )
-        .map_err(|error| error.to_string())?;
-    database
-        .execute("INSERT INTO meta (key, value) VALUES ('year', ?1)", [year])
         .map_err(|error| error.to_string())?;
     let transaction = database.transaction().map_err(|error| error.to_string())?;
     let mut read = 0usize;

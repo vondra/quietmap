@@ -1,106 +1,54 @@
 // Serve the stored HM3 Brotli streams by range from immutable per-layer PMTiles archives.
 
-import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { Compression, type RangeResponse } from 'pmtiles'
-import { requireTilesDirYear } from './heatmap-manifest.ts'
+import { Compression, type PMTiles, type RangeResponse } from 'pmtiles'
 import { parseTileParams } from './heatmap-shared.ts'
-import {
-  ArchiveChangedError,
-  openVerifiedArchive,
-  sameFileIdentity,
-  type FileIdentity,
-  type VerifiedArchive,
-} from './pmtiles-file.ts'
+import { openArchiveServedAsStored } from './pmtiles-file.ts'
 
 const BUILD_ID = /^b\d+$/
-const YEAR_ID = /^\d{4}$/
 
 // Retain parsed directories for up to 32 immutable layer archives, 100 directories each.
 const ARCHIVE_CACHE_MAX = 32
 const ARCHIVE_DIRECTORIES_MAX = 100
 
-interface CachedArchive {
-  archive: VerifiedArchive
-  yearMarker: FileIdentity
-}
-
 /**
- * GET /api/tiles/:year/:build/:layer/:z/:x/:y.bin
+ * GET /api/tiles/:build/:layer/:z/:x/:y.bin
  *
  * Raw HM3 bytes, whole-file Brotli, `Content-Encoding: br`, addressed
- * inside an immutable year and build: hits AND misses get `max-age=31536000,
+ * inside an immutable build: hits AND misses get `max-age=31536000,
  * immutable` — for a published generation a missing tile is a permanent fact
  * (every cell not assessed, served as 200 + empty body so a CDN caches it),
- * and the frontend re-keys the URL on the next build or map year anyway.
+ * and the frontend re-keys the URL on the next build anyway.
  */
-export async function heatmapPmtilesRoutes(
-  app: FastifyInstance,
-  { tilesDir, expectedYear }: { tilesDir: string; expectedYear: string },
-): Promise<void> {
-  // One pinned PMTiles instance per (year, build, layer) retains parsed headers and directories.
-  const archiveCache = new Map<string, Promise<CachedArchive>>()
-  const yearPath = join(tilesDir, 'year')
-
-  function openEntry(key: string, build: string, layer: string): Promise<CachedArchive> {
-    const entry = (async (): Promise<CachedArchive> => {
-      const archive = await openVerifiedArchive(
-        join(tilesDir, `${layer}.${build}.pmtiles`),
-        Compression.Brotli,
-        ARCHIVE_DIRECTORIES_MAX,
-        { year: expectedYear, layer, build },
-      )
-      const yearMarker = await requireTilesDirYear(tilesDir, expectedYear)
-      return { archive, yearMarker }
-    })()
-    archiveCache.set(key, entry)
-    if (archiveCache.size > ARCHIVE_CACHE_MAX) {
-      const oldestKey = archiveCache.keys().next().value
-      if (oldestKey !== undefined) archiveCache.delete(oldestKey)
-    }
-    return entry
-  }
-
-  async function verifyYearMarker(expected: FileIdentity): Promise<void> {
-    let current
-    try {
-      current = await stat(yearPath)
-    } catch {
-      throw new ArchiveChangedError(`${yearPath} changed or disappeared`)
-    }
-    if (!current.isFile() || !sameFileIdentity(current, expected)) {
-      throw new ArchiveChangedError(`${yearPath} was modified after validation`)
-    }
-  }
+export async function heatmapPmtilesRoutes(app: FastifyInstance, { tilesDir }: { tilesDir: string }): Promise<void> {
+  // One PMTiles instance per (build, layer) retains parsed headers and directories.
+  const archiveCache = new Map<string, Promise<PMTiles>>()
 
   async function readHeatmapTile(
-    year: string, build: string, layer: string, z: number, x: number, y: number,
+    build: string, layer: string, z: number, x: number, y: number,
   ): Promise<RangeResponse | undefined> {
-    const key = `${year}/${build}/${layer}`
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let entry = archiveCache.get(key)
-      if (!entry) entry = openEntry(key, build, layer)
-      try {
-        const cached = await entry
-        // Check archive inode and directory year marker even on directory-cache misses so an
-        // in-place swap can never serve foreign bytes or an immutable empty miss.
-        await cached.archive.verifyIdentity()
-        await verifyYearMarker(cached.yearMarker)
-        return await cached.archive.pmtiles.getZxy(z, x, y)
-      } catch (error) {
-        // SharedPromiseCache retains rejected leaf reads; evict before propagating or retrying once
-        // (including on a cold open racing a concurrent temp-link unlink).
-        if (archiveCache.get(key) === entry) archiveCache.delete(key)
-        if (attempt === 0 && error instanceof ArchiveChangedError) continue
-        throw error
+    const key = `${build}/${layer}`
+    let entry = archiveCache.get(key)
+    if (!entry) {
+      entry = openArchiveServedAsStored(join(tilesDir, `${layer}.${build}.pmtiles`), Compression.Brotli, ARCHIVE_DIRECTORIES_MAX)
+      archiveCache.set(key, entry)
+      if (archiveCache.size > ARCHIVE_CACHE_MAX) {
+        const oldestKey = archiveCache.keys().next().value
+        if (oldestKey !== undefined) archiveCache.delete(oldestKey)
       }
     }
-    throw new Error('unreachable')
+    try {
+      return await (await entry).getZxy(z, x, y)
+    } catch (error) {
+      // SharedPromiseCache retains rejected leaf reads; retry with a fresh instance.
+      if (archiveCache.get(key) === entry) archiveCache.delete(key)
+      throw error
+    }
   }
 
-  app.get<{ Params: { year: string; build: string; layer: string; z: string; x: string; y: string } }>(
-    '/api/tiles/:year/:build/:layer/:z/:x/:y.bin',
+  app.get<{ Params: { build: string; layer: string; z: string; x: string; y: string } }>(
+    '/api/tiles/:build/:layer/:z/:x/:y.bin',
     // Bodies are already Brotli (served with Content-Encoding: br) — opt out of
     // @fastify/compress so it doesn't re-compress incompressible bytes.
     // CORS on EVERY response (hits, misses, errors): tiles are public,
@@ -116,25 +64,21 @@ export async function heatmapPmtilesRoutes(
       },
     },
     async (req, reply) => {
-      if (!YEAR_ID.test(req.params.year) || req.params.year !== expectedYear) {
-        reply.header('Cache-Control', 'no-store')
-        return reply.code(404).send('unknown year')
-      }
       if (!BUILD_ID.test(req.params.build)) return reply.code(404).send('unknown build')
       const parsed = parseTileParams(req.params)
       if (typeof parsed === 'string') return reply.code(400).send(parsed)
-      const { year, build } = req.params
+      const { build } = req.params
       const { layer, z, x, y } = parsed
 
       let tile: RangeResponse | undefined
       try {
-        tile = await readHeatmapTile(year, build, layer, z, x, y)
+        tile = await readHeatmapTile(build, layer, z, x, y)
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
           return reply.code(404).send('no such archive')
         }
         reply.header('Cache-Control', 'no-store')
-        app.log?.error?.(`heatmap-pmtiles read ${year}/${layer}.${build}/${z}/${x}/${y}: ${(e as Error).message}`)
+        app.log?.error?.(`heatmap-pmtiles read ${layer}.${build}/${z}/${x}/${y}: ${(e as Error).message}`)
         return reply.code(500).send('archive read failed')
       }
 

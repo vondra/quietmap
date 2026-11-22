@@ -90,7 +90,7 @@ export async function buildApp(
   await app.register(sourceOutlineRoutes, { preparedDir: config.preparedDir, years: config.years })
   await app.register(searchRoutes, { photonUrl: config.photonUrl })
   await app.register(isochronRoutes, { valhallaUrl: config.valhallaUrl })
-  await app.register(heatmapPmtilesRoutes, { tilesDir: config.tilesDir, expectedYear: config.years[0] })
+  await app.register(heatmapPmtilesRoutes, { tilesDir: config.tilesDir })
   await app.register(heatmapManifestRoutes, { tilesDir: config.tilesDir, expectedYear: config.years[0] })
   await app.register(basemapRoutes, { basemapDir: config.basemapDir })
   await app.register(rasterRoutes, { rasterBin: config.rasterBin, preparedDir: config.preparedDir, year: config.years[0] })

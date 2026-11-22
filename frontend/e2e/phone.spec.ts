@@ -2,7 +2,6 @@
 // map's credits, the control row with the ⓘ to the About pages and the layers panel, the locate
 // button, the open place under the search field and the history of places opened in its list.
 import { expect, test } from '@playwright/test'
-import { MAP_YEAR } from '../src/lib/map-year'
 import { FIXTURE_FLIGHTS, popupUpdate, withAircraft } from './answers'
 import {
   PHONE,
@@ -23,7 +22,7 @@ test.use(PHONE)
 
 test('map tap opens the real mobile sheet and layer controls', async ({ page }) => {
   await installHermeticMap(page, POINT)
-  const tilePath = `/api/tiles/${MAP_YEAR}/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
   const tileLoaded = page.waitForResponse(response =>
     new URL(response.url()).pathname === tilePath && response.status() === 200,
   )
@@ -134,7 +133,7 @@ test('the locate button opens the popup where the visitor stands, again from a m
 
 test('the open place stands under the search field, renamed there; the search lists the places opened, the last first', async ({ page }) => {
   await installHermeticMap(page, POINT)
-  const tilePath = `/api/tiles/${MAP_YEAR}/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
   const row = page.getByTestId('open-place')
   const field = row.getByTestId('place-title')
   const options = page.getByRole('option')

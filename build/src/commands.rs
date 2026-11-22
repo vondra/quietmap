@@ -144,7 +144,6 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
         "source-outlines" => source_outlines::build(
             &facilities::Dataset::open(&inputs)?,
             &parse_squares(options.get("squares")?)?,
-            &inputs.manifest.year,
             &out,
         ),
         "terrain" | "obstacles" | "sources" => {

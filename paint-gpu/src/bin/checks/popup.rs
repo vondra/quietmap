@@ -13,9 +13,7 @@ pub(super) fn popup_reference(
     random: &mut SplitMix,
     out: &std::path::Path,
 ) -> Result<(), String> {
-    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let out = std::fs::canonicalize(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    paint::year::bind_painted_dir(&out, year)?;
+    paint::year::bind(out, year)?;
     const SIDE: usize = 1024;
     let chosen: Vec<usize> = (0..pixels)
         .map(|_| (random.next_u64() % (SIDE * SIDE) as u64) as usize)
@@ -59,7 +57,7 @@ pub(super) fn popup_reference(
         }
     }
     let cells = paint::levels::PaintedCells::from_painted(sampled_pixels.into_par_iter())?;
-    paint::hm3::write(&out, 13, (tile.x, tile.y), &cells)?;
+    paint::hm3::write(out, 13, (tile.x, tile.y), &cells)?;
     eprintln!(
         "popup: {pixels} pixels answered in {:.1} s",
         started.elapsed().as_secs_f64()

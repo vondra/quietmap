@@ -116,7 +116,7 @@ test('local unproxied callers bypass the limit; proxied clients do not', async (
 test('tile routes are never rate-limited (the map bursts dozens per pan)', async (t) => {
   const server = await app(t)
   for (let i = 0; i < 12; i++) {
-    const tile = await server.inject({ method: 'GET', url: '/api/tiles/2026/b1/road/4/8/5.bin', remoteAddress: '203.0.113.30' })
+    const tile = await server.inject({ method: 'GET', url: '/api/tiles/b1/road/4/8/5.bin', remoteAddress: '203.0.113.30' })
     assert.notEqual(tile.statusCode, 429)
     const manifest = await server.inject({ method: 'GET', url: HM3_MANIFEST_URL, remoteAddress: '203.0.113.30' })
     assert.notEqual(manifest.statusCode, 429)

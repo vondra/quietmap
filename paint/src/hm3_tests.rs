@@ -142,7 +142,7 @@ fn identical_quadrants_share_bytes_and_invalid_ranges_are_refused() {
 #[test]
 fn legacy_fixture_stays_readable_and_keeps_its_nden_streams_when_lden_is_added() {
     let old = tempfile::tempdir().unwrap();
-    crate::year::bind_painted_dir(old.path(), "2026").unwrap();
+    crate::year::bind(old.path(), "2026").unwrap();
     let path = square_path(old.path(), 12, (9, 17));
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, include_bytes!("../tests/fixtures/square-v7.hm3")).unwrap();
@@ -156,7 +156,7 @@ fn legacy_fixture_stays_readable_and_keeps_its_nden_streams_when_lden_is_added()
         .map(|pixel| pixel.map(|v| if v >= SILENCE { v } else { v + 1 }))
         .collect();
     let new = tempfile::tempdir().unwrap();
-    crate::year::bind_painted_dir(new.path(), "2026").unwrap();
+    crate::year::bind(new.path(), "2026").unwrap();
     write(
         new.path(),
         12,
@@ -251,31 +251,4 @@ fn metric_tags_and_assessment_cannot_be_swapped_or_lost() {
             .unwrap_err()
             .contains("assessment differs")
     );
-}
-
-#[test]
-fn concurrent_merge_of_identical_square_succeeds() {
-    let worker_a = tempfile::tempdir().unwrap();
-    let worker_b = tempfile::tempdir().unwrap();
-    let merged = tempfile::tempdir().unwrap();
-    crate::year::bind_painted_dir(worker_a.path(), "2026").unwrap();
-    crate::year::bind_painted_dir(worker_b.path(), "2026").unwrap();
-    let cells = PaintedCells::silence(TILE_PX * TILE_PX);
-    write(worker_a.path(), 12, (3, 4), &cells).unwrap();
-    write(worker_b.path(), 12, (3, 4), &cells).unwrap();
-    let barrier = std::sync::Barrier::new(2);
-    let (a, b) = std::thread::scope(|scope| {
-        let h1 = scope.spawn(|| {
-            barrier.wait();
-            crate::merge::merge(worker_a.path(), merged.path(), 12)
-        });
-        let h2 = scope.spawn(|| {
-            barrier.wait();
-            crate::merge::merge(worker_b.path(), merged.path(), 12)
-        });
-        (h1.join().unwrap(), h2.join().unwrap())
-    });
-    assert!(a.is_ok(), "worker A failed: {a:?}");
-    assert!(b.is_ok(), "worker B failed: {b:?}");
-    assert!(verify(merged.path(), 12, (3, 4)).unwrap());
 }

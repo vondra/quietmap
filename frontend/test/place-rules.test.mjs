@@ -6,7 +6,7 @@ import test from 'node:test'
 
 import { loadPlaceTitles, loadRecentPlaces } from '../src/lib/browser-places.ts'
 import {
-  PLACE_TITLES_MAX, RECENT_PLACES_MAX, historyOrder, mergedTitles, placeLabel, recentLevelsForYear, samePlace, titleAt, withAnswer, withName,
+  PLACE_TITLES_MAX, RECENT_PLACES_MAX, historyOrder, mergedTitles, placeLabel, samePlace, titleAt, withAnswer, withName,
   withOpened, withTitle, withoutPlace,
 } from '../src/lib/place-rules.ts'
 
@@ -151,21 +151,4 @@ test('a geocoded name is proposed by its first part', () => {
   assert.equal(placeLabel('Tijarafe, Santa Cruz de Tenerife, Spain'), 'Tijarafe')
   assert.equal(placeLabel(null), null)
   assert.equal(placeLabel(' , Spain'), null)
-})
-
-test('stored recent noise levels show only on the map year that computed them, preserving the place', (t) => {
-  let list = withOpened([], { lat: 50, lng: 14 }, 1, 'Kytín')
-  list = withAnswer(list, { lat: 50, lng: 14, place: 'Kytín', sone: 4.5, lden: 48, year: '2024' })
-  assert.equal(list[0].year, '2024')
-  assert.deepEqual(recentLevelsForYear(list[0], '2024'), { sone: 4.5, lden: 48 })
-  assert.deepEqual(recentLevelsForYear(list[0], '2026'), { sone: null, lden: null })
-  assert.deepEqual(recentLevelsForYear({ sone: 4.5, lden: 48 }, '2026'), { sone: null, lden: null })
-  // An untagged answer clears any older year tag instead of inheriting it.
-  const untagged = withAnswer(list, { lat: 50, lng: 14, place: 'Kytín', sone: 2.0, lden: 40 })
-  assert.equal(untagged[0].year, undefined)
-  assert.deepEqual(recentLevelsForYear(untagged[0], '2024'), { sone: null, lden: null })
-  const items = new Map([['quietmap.recent-places', JSON.stringify(list)]])
-  globalThis.localStorage = { getItem: key => items.get(key) ?? null }
-  t.after(() => delete globalThis.localStorage)
-  assert.equal(loadRecentPlaces()[0].year, '2024')
 })

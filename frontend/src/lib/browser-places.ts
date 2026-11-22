@@ -41,10 +41,8 @@ export function loadRecentPlaces(): RecentPlace[] {
     const [lat, lng] = [numberOrNull(entry.lat), numberOrNull(entry.lng)]
     if (lat == null || lng == null) return []
     const place = typeof entry.place === 'string' ? entry.place : null
-    const year = typeof entry.year === 'string' && /^\d{4}$/.test(entry.year) ? entry.year : undefined
     return [{
       lat, lng, place, sone: numberOrNull(entry.sone), lden: numberOrNull(entry.lden),
-      ...(year !== undefined ? { year } : {}),
       openedAt: numberOrNull(entry.openedAt) ?? 0,
     }]
   })).slice(0, RECENT_PLACES_MAX)

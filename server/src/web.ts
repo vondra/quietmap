@@ -3,7 +3,7 @@
 // Unknown paths must remain 404s: returning index.html for scanner paths hides mistakes and makes
 // sensitive-looking URLs appear to exist. Browsers get the friendly HTML page, API and scanner
 // clients get JSON.
-import { readFileSync, realpathSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import fastifyStatic from '@fastify/static'
 import type { FastifyInstance } from 'fastify'
@@ -13,24 +13,16 @@ import { NOT_FOUND_PAGE_HTML } from './not-found-page.ts'
  *  (frontend/src/lib/about-paths.ts). */
 const ABOUT_PATH = /^\/about(?:\/([^/].*?))?\/?$/
 
-export async function registerWeb(
-  app: FastifyInstance,
-  frontendDist: string,
-  expectedYear: string,
-): Promise<void> {
-  // Pin the canonical directory before verifying map-year.json so a live symlink switch cannot
-  // serve another year's static bundle from a running process.
-  const pinnedDist = realpathSync(frontendDist)
-  const mapYearPath = join(pinnedDist, 'map-year.json')
-  const builtYear = JSON.parse(readFileSync(mapYearPath, 'utf8')) as unknown
+export async function registerWeb(app: FastifyInstance, frontendDist: string, expectedYear: string): Promise<void> {
+  const builtYear = JSON.parse(readFileSync(join(frontendDist, 'map-year.json'), 'utf8')) as unknown
   if (typeof builtYear !== 'string' || !/^\d{4}$/.test(builtYear) || builtYear !== expectedYear) {
-    throw new Error(`${mapYearPath} is for year ${JSON.stringify(builtYear)}, not ${expectedYear}`)
+    throw new Error(`frontend bundle ${frontendDist} is built for year ${JSON.stringify(builtYear)}, not ${expectedYear}`)
   }
   // The About pages the build found (frontend/src/about): only these paths open a page.
-  const aboutPages = new Set(JSON.parse(readFileSync(join(pinnedDist, 'about-pages.json'), 'utf8')) as string[])
+  const aboutPages = new Set(JSON.parse(readFileSync(join(frontendDist, 'about-pages.json'), 'utf8')) as string[])
   // preCompressed: the frontend build writes sibling .br files, served with
   // zero per-request compression CPU.
-  await app.register(fastifyStatic, { root: pinnedDist, preCompressed: true })
+  await app.register(fastifyStatic, { root: frontendDist, preCompressed: true })
 
   app.setNotFoundHandler(async (request, reply) => {
     // As the browser reads it (frontend/src/main.tsx), percent-encoding kept: an encoded About path

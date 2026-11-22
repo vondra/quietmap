@@ -1,7 +1,6 @@
 // Quiet areas preserve data colours and map labels across map styles and tilted views.
 import { expect, test, type Page } from '@playwright/test'
 import { HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
-import { MAP_YEAR } from '../src/lib/map-year'
 import { PHONE, POINT, afterPaint, canvasCenter, installHermeticMap, mapPixels, mapUrl, pngCenterPixel } from './support'
 
 const TRAFFIC = [40, 80, 200, 255]
@@ -81,8 +80,8 @@ async function fixtures(page: Page) {
   const [traffic, black] = await Promise.all([TRAFFIC, [0, 0, 0, 255]].map(rgba => colourPng(page, rgba)))
   await page.route('**/api/me', route => route.fulfill({ status: 401, body: '{}' }))
   await page.route('**/api/raster/traffic/**', route => route.fulfill({ contentType: 'image/png', body: traffic }))
-  await page.route(`**/api/tiles/${MAP_YEAR}/b1/**/*.bin`, route => {
-    const source = new URL(route.request().url()).pathname.split('/')[5]
+  await page.route('**/api/tiles/b1/**/*.bin', route => {
+    const source = new URL(route.request().url()).pathname.split('/')[4]
     const lden = source.startsWith('lden-')
     // Quiet total: 0.5 sone / 30 dB; the selected road layer has a visible colour.
     return route.fulfill({ contentType: 'application/octet-stream', body: uniformTile(lden, source.endsWith('total') ? 60 : 100) })

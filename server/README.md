@@ -8,8 +8,8 @@ the optional sign-in and the streamed popup:
 |---|---|
 | `GET /api/popup?lat=&lon=[&year=][&source=ID,...[&piece=K]]` | one click, streamed as `application/x-ndjson` (below) |
 | `GET /api/source-outline/:id[?year=]` | the site's mapped parts as a GeoJSON FeatureCollection, empty without a boundary; `id` is 16 lowercase hex digits, `year` one of `QM_YEARS` (the first by default), otherwise 400; 503 when that year's outline file was absent at startup; `no-cache` |
-| `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{year, build, zoom, layers}` |
-| `GET /api/tiles/:year/:build/:layer/:z/:x/:y.bin` | one HM3 tile of the served map year, Brotli, immutable; a missing tile is an empty 200; another year is 404 (`no-store`) |
+| `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{build, zoom, layers}` |
+| `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
 | `GET /api/basemap/:z/:x/:y.mvt` | one vector tile of the standard base map as the archive of `QM_BASEMAP_DIR` stores it (MVT, gzip); a missing tile is 204; kept a day |
 | `GET /api/basemap/fonts/:fontstack/:range.pbf`, `GET /api/basemap/sprites/:file` | the glyphs of the base map's labels and the sprite sheet of its icons (`light.json`, `light.png` and their `@2x`); 404 for any other name; kept a day |
 | `GET /api/raster/:layer/:z/:x/:y.png[?year=]` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year (`QM_YEARS`'s first entry; another `?year=` is 400): `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
@@ -92,9 +92,8 @@ opened read-only at startup. The browser asks for an outline when the site's row
 
 The server refuses to start without either binary, a year directory or the tiles directory, with a
 base map directory named that is none, with only one of the two Stay22 values, with only some of
-the sign-in's four, or when the frontend bundle (`map-year.json`), the tiles directory (`year` or
-`current.json`) or a prepared outline database (`complete` and `year.json`) disagrees with
-`QM_YEARS`.
+the sign-in's four, or when the frontend bundle (`map-year.json`) or the tiles manifest
+(`current.json`) disagrees with `QM_YEARS`.
 
 How to build, run and test it is in the repository's `README.md`; its tests (`npm --prefix server
 run check`) run the popup route against a fake `qm-popup`, with Stay22 mocked.

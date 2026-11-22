@@ -1,7 +1,7 @@
 // The one reader of PMTiles archives on disk: directories parsed, tile bytes handed out as stored.
 
 import { constants } from 'node:fs'
-import { lstat, open } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { gunzip } from 'node:zlib'
 import {
@@ -14,64 +14,13 @@ import {
 
 const gunzipAsync = promisify(gunzip)
 
-export class ArchiveChangedError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'ArchiveChangedError'
-  }
-}
-
-export interface FileIdentity {
-  dev: number
-  ino: number
-  size: number
-  mtimeMs: number
-  ctimeMs: number
-}
-
-export function sameFileIdentity(a: FileIdentity, b: FileIdentity): boolean {
-  return (
-    a.dev === b.dev &&
-    a.ino === b.ino &&
-    a.size === b.size &&
-    a.mtimeMs === b.mtimeMs &&
-    a.ctimeMs === b.ctimeMs
-  )
-}
-
-export function fileIdentityOf(stat: {
-  dev: number
-  ino: number
-  size: number
-  mtimeMs: number
-  ctimeMs: number
-}): FileIdentity {
-  return { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs }
-}
-
-export interface ExpectedArchiveMetadata {
-  year: string
-  layer?: string
-  build?: string
-}
-
-export interface VerifiedArchive {
-  pmtiles: PMTiles
-  /** Verify the pathname still resolves to the exact regular file generation validated at open time. */
-  verifyIdentity: () => Promise<void>
-}
-
 /** Cache parsed directories, but retain an archive descriptor only during a range read:
- * an idle cached descriptor would pin hundreds of GB after publication GC unlinks it.
- * Every open verifies `(dev, ino, size, mtimeMs, ctimeMs)` so an in-place rewrite or rename can
- * never feed another file's bytes to cached directory offsets. */
+ * an idle cached descriptor would pin hundreds of GB after publication GC unlinks it. */
 class FileRangeSource implements Source {
   private readonly path: string
-  private readonly identity: FileIdentity
 
-  constructor(path: string, identity: FileIdentity) {
+  constructor(path: string) {
     this.path = path
-    this.identity = identity
   }
 
   getKey(): string {
@@ -84,11 +33,7 @@ class FileRangeSource implements Source {
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     )
     try {
-      const stat = await handle.stat()
-      if (!stat.isFile()) throw new Error(`${this.path} is not a regular file`)
-      if (!sameFileIdentity(stat, this.identity)) {
-        throw new ArchiveChangedError(`${this.path} was replaced after validation`)
-      }
+      if (!(await handle.stat()).isFile()) throw new Error(`${this.path} is not a regular file`)
       // Positional reads may be short; only EOF ends the range early. The header probe at the
       // file's start asks for 16 KiB even of a smaller archive; anywhere else a range that ends
       // early is a truncated archive, and part of a tile must never be served as the tile.
@@ -99,12 +44,6 @@ class FileRangeSource implements Source {
         const { bytesRead } = await handle.read(view, filled, length - filled, offset + filled)
         if (bytesRead === 0) break
         filled += bytesRead
-      }
-      // Recheck the same open descriptor after reading so an in-place rewrite mid-read cannot
-      // return replacement bytes under a cached generation.
-      const after = await handle.stat()
-      if (!after.isFile() || !sameFileIdentity(after, this.identity)) {
-        throw new ArchiveChangedError(`${this.path} changed during range read`)
       }
       if (filled === length) return { data }
       if (offset !== 0) throw new Error(`${this.path} ends inside the range ${offset}+${length}`)
@@ -126,27 +65,19 @@ async function inflateDirectory(buf: ArrayBuffer, compression: Compression): Pro
 
 /**
  * Opens an archive whose tiles a route ships verbatim under the `Content-Encoding` of
- * `tileCompression`, pinned to the opened file's `(dev, ino)` so header, metadata and all later
- * range reads address the exact same inode.
+ * `tileCompression`: the browser inflates them in its network stack and the server stays a byte
+ * reader. The pmtiles lib inflates directories with its cache's function and tiles with its own,
+ * so the tiles' is the identity; an archive whose header names another tile compression is
+ * rejected instead of ever being served under the wrong encoding. `cachedDirectories` bounds the
+ * parsed directories kept in memory.
  */
-export async function openVerifiedArchive(
+export async function openArchiveServedAsStored(
   path: string,
   tileCompression: Compression,
   cachedDirectories: number,
-  expected?: ExpectedArchiveMetadata,
-): Promise<VerifiedArchive> {
-  const probe = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-  let identity: FileIdentity
-  try {
-    const stat = await probe.stat()
-    if (!stat.isFile()) throw new Error(`${path} is not a regular file`)
-    identity = fileIdentityOf(stat)
-  } finally {
-    await probe.close()
-  }
-  const source = new FileRangeSource(path, identity)
+): Promise<PMTiles> {
   const pmtiles = new PMTiles(
-    source,
+    new FileRangeSource(path),
     new SharedPromiseCache(cachedDirectories, true, inflateDirectory),
     async tile => tile,
   )
@@ -154,41 +85,5 @@ export async function openVerifiedArchive(
   if (header.tileCompression !== tileCompression) {
     throw new Error(`tile compression ${header.tileCompression} contradicts serving as ${tileCompression}`)
   }
-  if (expected !== undefined) {
-    if (header.jsonMetadataLength === 0) {
-      throw new Error(`${path} lacks metadata year`)
-    }
-    const raw = await source.getBytes(header.jsonMetadataOffset, header.jsonMetadataLength)
-    const inflated = await inflateDirectory(raw.data, header.internalCompression)
-    const metadata = JSON.parse(new TextDecoder('utf-8').decode(inflated)) as {
-      year?: unknown
-      name?: unknown
-      build?: unknown
-    }
-    if (metadata?.year !== expected.year) {
-      throw new Error(`${path} is for year ${String(metadata?.year)}, not ${expected.year}`)
-    }
-    if (expected.layer !== undefined && metadata?.name !== expected.layer) {
-      throw new Error(`${path} is for layer ${String(metadata?.name)}, not ${expected.layer}`)
-    }
-    if (expected.build !== undefined && metadata?.build !== expected.build) {
-      throw new Error(`${path} is for build ${String(metadata?.build)}, not ${expected.build}`)
-    }
-  }
-  const verifyIdentity = async () => {
-    const stat = await lstat(path)
-    if (!stat.isFile() || !sameFileIdentity(stat, identity)) {
-      throw new ArchiveChangedError(`${path} was replaced after validation`)
-    }
-  }
-  return { pmtiles, verifyIdentity }
-}
-
-export async function openArchiveServedAsStored(
-  path: string,
-  tileCompression: Compression,
-  cachedDirectories: number,
-  expected?: ExpectedArchiveMetadata,
-): Promise<PMTiles> {
-  return (await openVerifiedArchive(path, tileCompression, cachedDirectories, expected)).pmtiles
+  return pmtiles
 }

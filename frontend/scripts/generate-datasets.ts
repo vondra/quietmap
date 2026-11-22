@@ -1,8 +1,7 @@
 // Build artifacts for public citations; Rust owns admission and the release selects the map year.
-import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { datasetCitations } from './dataset-citations.ts'
 import { readSourceManifests, yearFiles, type NamedYear, type YearManifest } from './year-sources.ts'
@@ -15,19 +14,11 @@ export function selectMapYear(years: readonly NamedYear[], envYear?: string): Na
   const selected = envYear
     ? built.find(year => year.name === envYear)
     : built.length === 1 ? built[0] : undefined
-  if (!selected) {
-    throw new Error('MAP_YEAR must select a built year when publishing several maps')
-  }
+  if (!selected) throw new Error('MAP_YEAR must select a built year when publishing several maps')
   if (!YEAR_ID.test(selected.manifest.year) || selected.name !== selected.manifest.year) {
     throw new Error(`Year manifest filename ${selected.name} disagrees with manifest year ${selected.manifest.year}`)
   }
   return selected
-}
-
-function writeAtomic(target: URL, content: string): void {
-  const temp = new URL(`${target.pathname}.tmp.${process.pid}.${randomUUID()}`, target)
-  writeFileSync(temp, content)
-  renameSync(temp, target)
 }
 
 export function generateSourceArtifacts(): void {
@@ -38,9 +29,9 @@ export function generateSourceArtifacts(): void {
   const selected = selectMapYear(years, process.env.MAP_YEAR)
   const directory = new URL('../.generated/', import.meta.url)
   mkdirSync(directory, { recursive: true })
-  writeAtomic(new URL('years.json', directory), JSON.stringify(years))
-  writeAtomic(new URL('datasets.json', directory), JSON.stringify(datasetCitations(selected.manifest)))
-  writeAtomic(new URL('map-year.json', directory), JSON.stringify(selected.manifest.year))
+  writeFileSync(new URL('years.json', directory), JSON.stringify(years))
+  writeFileSync(new URL('datasets.json', directory), JSON.stringify(datasetCitations(selected.manifest)))
+  writeFileSync(new URL('map-year.json', directory), JSON.stringify(selected.manifest.year))
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) generateSourceArtifacts()

@@ -4,7 +4,6 @@ use crate::exact::LAYERS;
 use crate::hm3::{HEADER, Metric, PaintedSquare, layer_names, squares, squares_within};
 use crate::pyramid::{self, MIN_ZOOM};
 use crate::region::REGION_ZOOM;
-use crate::year::{bind_regions_dir, bind_tiles_dir, read_year};
 use pmtiles::{Compression, PmTilesWriter, TileCoord, TileId, TileType};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
@@ -36,21 +35,11 @@ pub fn pack(
     {
         return Err("pack requires zoom 12 or 13 and build b<N>".into());
     }
-    let out = std::fs::canonicalize(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let year = read_year(&out)?;
-    let regions = match regions {
-        Some(reg) => {
-            std::fs::create_dir_all(reg).map_err(|e| format!("{}: {e}", reg.display()))?;
-            let pinned =
-                std::fs::canonicalize(reg).map_err(|e| format!("{}: {e}", reg.display()))?;
-            bind_regions_dir(&pinned, &year)?;
-            Some(pinned)
-        }
-        None => None,
-    };
+    let year = crate::year::read(out)?;
+    if let Some(regions) = regions {
+        crate::year::bind(regions, &year)?;
+    }
     std::fs::create_dir_all(tiles_dir).map_err(|e| e.to_string())?;
-    let tiles_dir =
-        std::fs::canonicalize(tiles_dir).map_err(|e| format!("{}: {e}", tiles_dir.display()))?;
     // Keep the lock inode: removing it could let two publishers lock different files.
     let lock = OpenOptions::new()
         .read(true)
@@ -60,28 +49,7 @@ pub fn pack(
         .open(tiles_dir.join(".pack.lock"))
         .map_err(|e| e.to_string())?;
     lock.lock().map_err(|e| e.to_string())?;
-    bind_tiles_dir(&tiles_dir, &year)?;
-    let current_path = tiles_dir.join("current.json");
-    if current_path.try_exists().map_err(|e| e.to_string())? {
-        let existing: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&current_path).map_err(|e| e.to_string())?)
-                .map_err(|e| format!("{}: {e}", current_path.display()))?;
-        match existing.get("year").and_then(|v| v.as_str()) {
-            Some(existing_year) if existing_year == year => {}
-            Some(existing_year) => {
-                return Err(format!(
-                    "{}: bound to year {existing_year}, not {year}",
-                    current_path.display()
-                ));
-            }
-            None => {
-                return Err(format!(
-                    "{}: existing manifest lacks a year",
-                    current_path.display()
-                ));
-            }
-        }
-    }
+    check_tiles_dir_year(tiles_dir, &year)?;
     for metric in [Metric::Nden, Metric::Lden] {
         for layer in layer_names() {
             let path = tiles_dir.join(archive_name(metric, layer, build));
@@ -90,52 +58,43 @@ pub fn pack(
             }
         }
     }
-    let squares = squares(&out, u32::from(zoom))?;
+    let squares = squares(out, u32::from(zoom))?;
     if squares.is_empty() {
         return Err("no complete painted squares".into());
     }
-    let lden_squares = squares_with_lden(&out, zoom, &squares)?;
-    let temporary = tempfile::tempdir_in(&tiles_dir).map_err(|e| e.to_string())?;
+    let lden_squares = squares_with_lden(out, zoom, &squares)?;
+    let temporary = tempfile::tempdir_in(tiles_dir).map_err(|e| e.to_string())?;
     let mut layers = serde_json::Map::new();
     for (metric, squares) in [(Metric::Nden, &squares), (Metric::Lden, &lden_squares)] {
         if !squares.is_empty() {
             let archive = Archive {
-                out: &out,
+                out,
                 zoom,
                 metric,
                 build,
-                year: &year,
                 directory: temporary.path(),
             };
-            archive.write(squares, regions.as_deref(), &mut layers)?;
+            archive.write(squares, regions, &mut layers)?;
         }
     }
     // Every archive is complete before any immutable name appears; a failed pack leaves the
-    // previous manifest in place. Hard-link into place and drop the staging link before publishing
-    // current.json so link-count cleanup cannot shift ctime after the manifest advertises the build.
+    // previous manifest in place. A hard link installs without replacing an existing archive.
     for entry in layers.values() {
         let name = entry["file"].as_str().expect("an archive's file name");
-        let staged = temporary.path().join(name);
-        std::fs::hard_link(&staged, tiles_dir.join(name)).map_err(|e| e.to_string())?;
-        std::fs::remove_file(&staged).map_err(|e| e.to_string())?;
+        std::fs::hard_link(temporary.path().join(name), tiles_dir.join(name))
+            .map_err(|e| e.to_string())?;
     }
-    File::open(&tiles_dir)
+    File::open(tiles_dir)
         .and_then(|file| file.sync_all())
         .map_err(|e| e.to_string())?;
-    let manifest = serde_json::json!({
-        "year": year,
-        "build": build,
-        "zoom": zoom,
-        "hm3_version": HEADER[4],
-        "layers": layers
-    });
+    let manifest = serde_json::json!({ "year": year, "build": build, "zoom": zoom, "hm3_version": HEADER[4], "layers": layers });
     let path = temporary.path().join("current.json");
     std::fs::write(&path, manifest.to_string()).map_err(|e| e.to_string())?;
     File::open(&path)
         .and_then(|file| file.sync_all())
         .map_err(|e| e.to_string())?;
     std::fs::rename(&path, tiles_dir.join("current.json")).map_err(|e| e.to_string())?;
-    File::open(&tiles_dir)
+    File::open(tiles_dir)
         .and_then(|file| file.sync_all())
         .map_err(|e| e.to_string())?;
     eprintln!(
@@ -143,6 +102,36 @@ pub fn pack(
         squares.len(),
         lden_squares.len()
     );
+    Ok(())
+}
+
+fn check_tiles_dir_year(tiles_dir: &Path, year: &str) -> Result<(), String> {
+    let manifest_path = tiles_dir.join("current.json");
+    if manifest_path.try_exists().map_err(|e| e.to_string())? {
+        let existing: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        return match existing.get("year").and_then(|v| v.as_str()) {
+            Some(found) if found == year => Ok(()),
+            Some(found) => Err(format!(
+                "{}: bound to year {found}, not {year}",
+                manifest_path.display()
+            )),
+            None => Err(format!(
+                "{}: existing manifest lacks a year",
+                manifest_path.display()
+            )),
+        };
+    }
+    for entry in std::fs::read_dir(tiles_dir).map_err(|e| e.to_string())? {
+        let name = entry.map_err(|e| e.to_string())?.file_name();
+        if name.to_string_lossy().ends_with(".pmtiles") {
+            return Err(format!(
+                "{}: contains .pmtiles archives without a current.json year",
+                tiles_dir.display()
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -173,7 +162,6 @@ struct Archive<'a> {
     zoom: u8,
     metric: Metric,
     build: &'a str,
-    year: &'a str,
     directory: &'a Path,
 }
 
@@ -225,7 +213,7 @@ impl Archive<'_> {
                     .max_zoom(zoom)
                     .bounds(-180.0, -85.051_13, 180.0, 85.051_13)
                     .metadata(
-                        &serde_json::json!({ "name": metric.archive_layer(layer), "build": build, "year": self.year })
+                        &serde_json::json!({ "name": metric.archive_layer(layer), "build": build })
                             .to_string(),
                     )
                     .create(file)
@@ -289,25 +277,21 @@ pub fn pack_region(
     regions: &Path,
     (x, y): (u32, u32),
 ) -> Result<usize, String> {
-    let out = std::fs::canonicalize(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let year = read_year(&out)?;
-    std::fs::create_dir_all(regions).map_err(|e| format!("{}: {e}", regions.display()))?;
-    let regions =
-        std::fs::canonicalize(regions).map_err(|e| format!("{}: {e}", regions.display()))?;
-    bind_regions_dir(&regions, &year)?;
+    let year = crate::year::read(out)?;
+    crate::year::bind(regions, &year)?;
     let span = 1 << (12 - REGION_ZOOM);
     let squares = squares_within(
-        &out,
+        out,
         u32::from(zoom),
         x * span..(x + 1) * span,
         y * span..(y + 1) * span,
     )?;
     let count = squares.len();
     if count > 0 {
-        let lden = squares_with_lden(&out, zoom, &squares)?;
-        pyramid::keep_region(&out, zoom, Metric::Nden, squares, &regions, (x, y))?;
+        let lden = squares_with_lden(out, zoom, &squares)?;
+        pyramid::keep_region(out, zoom, Metric::Nden, squares, regions, (x, y))?;
         if !lden.is_empty() {
-            pyramid::keep_region(&out, zoom, Metric::Lden, lden, &regions, (x, y))?;
+            pyramid::keep_region(out, zoom, Metric::Lden, lden, regions, (x, y))?;
         }
     }
     Ok(count)
