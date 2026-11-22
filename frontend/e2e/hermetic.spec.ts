@@ -4,6 +4,7 @@
 import { expect, test } from '@playwright/test'
 import { combineLayerCells } from '../src/lib/hm3-combine'
 import { HM3_BYTE_SONE } from '../src/lib/hm3-decoder'
+import { MAP_YEAR } from '../src/lib/map-year'
 import { fmtSone } from '../src/utils/formatters'
 import { computedPiece, FIXTURE_FLIGHTS, pieceRun, popupUpdate, roadContributor, withAircraft } from './answers'
 import {
@@ -36,7 +37,7 @@ const lden = (page: import('@playwright/test').Page) => page.locator('[data-test
 
 test('a close map keeps its tile colours when one read for the seamless image fails', async ({ page }) => {
   await installHermeticMap(page, POINT)
-  const tile = `/api/tiles/b1/total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const tile = `/api/tiles/${MAP_YEAR}/b1/total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
   await page.addInitScript(tile => {
     const fetchTile = window.fetch.bind(window)
     window.fetch = (input, init) => {
@@ -68,7 +69,7 @@ test('a close map keeps its tile colours when one read for the seamless image fa
 
 test('desktop: hover reads the painted cell, the popup redraws on every streamed update', async ({ page }) => {
   await installHermeticMap(page, POINT)
-  const totalTile = `/api/tiles/b1/total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const totalTile = `/api/tiles/${MAP_YEAR}/b1/total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
   const tileLoaded = page.waitForResponse(response =>
     new URL(response.url()).pathname === totalTile && response.status() === 200,
   )
@@ -167,7 +168,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
 
 test('desktop: the Lden switch shows the Lden tiles in dB, adds layers as energy, and the popup leads with Lden', async ({ page }) => {
   await installHermeticMap(page, POINT)
-  const ldenTile = `/api/tiles/b1/lden-total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const ldenTile = `/api/tiles/${MAP_YEAR}/b1/lden-total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
   const tileLoaded = page.waitForResponse(response =>
     new URL(response.url()).pathname === ldenTile && response.status() === 200,
   )

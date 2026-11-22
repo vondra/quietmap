@@ -4,11 +4,13 @@ use super::*;
 
 pub(super) fn run(
     arguments: &[String],
+    year: &str,
     square: &Square,
     files: &Files,
     weather: &WeatherTable,
 ) -> Result<(), String> {
     let out = PathBuf::from(option(arguments, "out").ok_or("--out is required")?);
+    paint::year::bind_painted_dir(&out, year)?;
     let sample_step = match number(arguments, "sample-step", 1)? {
         0 => return Err("--sample-step: at least 1".into()),
         step => step as usize,

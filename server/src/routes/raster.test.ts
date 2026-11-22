@@ -32,15 +32,22 @@ async function app(t: test.TestContext) {
 }
 
 test('a tile is drawn from the default year and kept an hour', async (t) => {
-  const response = await (await app(t)).inject('/api/raster/elevation/12/2212/1387.png')
-  assert.equal(response.statusCode, 200)
-  assert.equal(response.headers['content-type'], 'image/png')
-  assert.equal(response.headers['cache-control'], 'public, max-age=3600')
-  assert.deepEqual([...response.rawPayload.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47])
-  assert.deepEqual(JSON.parse(response.rawPayload.subarray(4).toString()), [
-    '--prepared', '/prepared-release', '--year', '2026', '--layer', 'elevation',
-    '--z', '12', '--x', '2212', '--y', '1387',
-  ])
+  const server = await app(t)
+  for (const url of ['/api/raster/elevation/12/2212/1387.png', '/api/raster/elevation/12/2212/1387.png?year=2026']) {
+    const response = await server.inject(url)
+    assert.equal(response.statusCode, 200, url)
+    assert.equal(response.headers['content-type'], 'image/png')
+    assert.equal(response.headers['cache-control'], 'public, max-age=3600')
+    assert.deepEqual([...response.rawPayload.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47])
+    assert.deepEqual(JSON.parse(response.rawPayload.subarray(4).toString()), [
+      '--prepared', '/prepared-release', '--year', '2026', '--layer', 'elevation',
+      '--z', '12', '--x', '2212', '--y', '1387',
+    ])
+  }
+  for (const wrongYear of ['2025', '2024', 'bad']) {
+    const response = await server.inject(`/api/raster/elevation/12/2212/1387.png?year=${wrongYear}`)
+    assert.equal(response.statusCode, 400, wrongYear)
+  }
 })
 
 test('layers, zooms and positions without a tile are refused before drawing', async (t) => {

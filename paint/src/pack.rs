@@ -4,6 +4,7 @@ use crate::exact::LAYERS;
 use crate::hm3::{HEADER, Metric, PaintedSquare, layer_names, squares, squares_within};
 use crate::pyramid::{self, MIN_ZOOM};
 use crate::region::REGION_ZOOM;
+use crate::year::{bind_regions_dir, bind_tiles_dir, read_year};
 use pmtiles::{Compression, PmTilesWriter, TileCoord, TileId, TileType};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
@@ -35,6 +36,10 @@ pub fn pack(
     {
         return Err("pack requires zoom 12 or 13 and build b<N>".into());
     }
+    let year = read_year(out)?;
+    if let Some(reg) = regions {
+        bind_regions_dir(reg, &year)?;
+    }
     std::fs::create_dir_all(tiles_dir).map_err(|e| e.to_string())?;
     // Keep the lock inode: removing it could let two publishers lock different files.
     let lock = OpenOptions::new()
@@ -45,6 +50,28 @@ pub fn pack(
         .open(tiles_dir.join(".pack.lock"))
         .map_err(|e| e.to_string())?;
     lock.lock().map_err(|e| e.to_string())?;
+    bind_tiles_dir(tiles_dir, &year)?;
+    let current_path = tiles_dir.join("current.json");
+    if current_path.try_exists().map_err(|e| e.to_string())? {
+        let existing: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&current_path).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("{}: {e}", current_path.display()))?;
+        match existing.get("year").and_then(|v| v.as_str()) {
+            Some(existing_year) if existing_year == year => {}
+            Some(existing_year) => {
+                return Err(format!(
+                    "{}: bound to year {existing_year}, not {year}",
+                    current_path.display()
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "{}: existing manifest lacks a year",
+                    current_path.display()
+                ));
+            }
+        }
+    }
     for metric in [Metric::Nden, Metric::Lden] {
         for layer in layer_names() {
             let path = tiles_dir.join(archive_name(metric, layer, build));
@@ -67,6 +94,7 @@ pub fn pack(
                 zoom,
                 metric,
                 build,
+                year: &year,
                 directory: temporary.path(),
             };
             archive.write(squares, regions, &mut layers)?;
@@ -82,7 +110,13 @@ pub fn pack(
     File::open(tiles_dir)
         .and_then(|file| file.sync_all())
         .map_err(|e| e.to_string())?;
-    let manifest = serde_json::json!({ "build": build, "zoom": zoom, "hm3_version": HEADER[4], "layers": layers });
+    let manifest = serde_json::json!({
+        "year": year,
+        "build": build,
+        "zoom": zoom,
+        "hm3_version": HEADER[4],
+        "layers": layers
+    });
     let path = temporary.path().join("current.json");
     std::fs::write(&path, manifest.to_string()).map_err(|e| e.to_string())?;
     File::open(&path)
@@ -127,6 +161,7 @@ struct Archive<'a> {
     zoom: u8,
     metric: Metric,
     build: &'a str,
+    year: &'a str,
     directory: &'a Path,
 }
 
@@ -178,7 +213,7 @@ impl Archive<'_> {
                     .max_zoom(zoom)
                     .bounds(-180.0, -85.051_13, 180.0, 85.051_13)
                     .metadata(
-                        &serde_json::json!({ "name": metric.archive_layer(layer), "build": build })
+                        &serde_json::json!({ "name": metric.archive_layer(layer), "build": build, "year": self.year })
                             .to_string(),
                     )
                     .create(file)
@@ -242,6 +277,8 @@ pub fn pack_region(
     regions: &Path,
     (x, y): (u32, u32),
 ) -> Result<usize, String> {
+    let year = read_year(out)?;
+    bind_regions_dir(regions, &year)?;
     let span = 1 << (12 - REGION_ZOOM);
     let squares = squares_within(
         out,

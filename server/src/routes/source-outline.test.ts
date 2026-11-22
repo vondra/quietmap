@@ -1,6 +1,7 @@
 // Whole source boundaries come from the requested year's read-only index, including separate parts.
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -8,11 +9,20 @@ import test from 'node:test'
 import Fastify from 'fastify'
 import { sourceOutlineRoutes } from './source-outline.ts'
 
+function markComplete(yearRoot: string, year: string): void {
+  const manifest = JSON.stringify({ year, as_of: `${year}-12-31` })
+  writeFileSync(join(yearRoot, 'year.json'), manifest)
+  const digest = createHash('sha256').update(manifest).digest('hex')
+  writeFileSync(join(yearRoot, 'complete'), `qmsq1\n${JSON.stringify({ manifest_sha256: digest, as_of: `${year}-12-31`, note: 'test' })}`)
+}
+
 test('outlines preserve every mapped part and distinguish absent geometry from unavailable data', async t => {
   const preparedDir = mkdtempSync(join(tmpdir(), 'source-outline-'))
   t.after(() => rmSync(preparedDir, { recursive: true, force: true }))
-  mkdirSync(join(preparedDir, '2026'))
-  const file = join(preparedDir, '2026', 'source-outlines.sqlite')
+  const yearRoot = join(preparedDir, '2026')
+  mkdirSync(yearRoot)
+  markComplete(yearRoot, '2026')
+  const file = join(yearRoot, 'source-outlines.sqlite')
   const database = new DatabaseSync(file)
   database.exec('CREATE TABLE outlines (id TEXT NOT NULL, geometry TEXT NOT NULL, PRIMARY KEY (id, geometry)) WITHOUT ROWID')
   const id = 'fedcba9876543210'
@@ -36,4 +46,23 @@ test('outlines preserve every mapped part and distinguish absent geometry from u
   for (const url of [`${id}?year=2024`, `${id}?year=../../2026`, 'not-an-id']) {
     assert.equal((await app.inject(`/api/source-outline/${url}`)).statusCode, 400)
   }
+})
+
+test('outlines refuse a year directory whose completion manifest names another year or is missing', async t => {
+  const preparedDir = mkdtempSync(join(tmpdir(), 'source-outline-bad-'))
+  t.after(() => rmSync(preparedDir, { recursive: true, force: true }))
+  const yearRoot = join(preparedDir, '2024')
+  mkdirSync(yearRoot)
+  const database = new DatabaseSync(join(yearRoot, 'source-outlines.sqlite'))
+  database.exec('CREATE TABLE outlines (id TEXT NOT NULL, geometry TEXT NOT NULL, PRIMARY KEY (id, geometry)) WITHOUT ROWID')
+  database.close()
+  await assert.rejects(async () => {
+    const app = Fastify()
+    await app.register(sourceOutlineRoutes, { preparedDir, years: ['2024'] })
+  })
+  markComplete(yearRoot, '2026')
+  await assert.rejects(async () => {
+    const app = Fastify()
+    await app.register(sourceOutlineRoutes, { preparedDir, years: ['2024'] })
+  }, /2026.*2024/)
 })

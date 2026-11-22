@@ -40,7 +40,7 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1)
 })
 
-await registerWeb(app, FRONTEND_DIST)
+await registerWeb(app, FRONTEND_DIST, config.years[0])
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, async () => {

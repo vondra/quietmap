@@ -12,7 +12,16 @@ import { generateSourceArtifacts } from './scripts/generate-datasets.ts'
 import { expandYearSources, readYears, yearFiles } from './scripts/year-sources.ts'
 
 const ABOUT_DIR = new URL('./src/about', import.meta.url).pathname
+const MAP_YEAR_FILE = new URL('./.generated/map-year.json', import.meta.url).pathname
 const ABOUT_INDEX = 'virtual:about-index'
+
+function readMapYear(years: ReturnType<typeof readYears>): string {
+  const year = JSON.parse(readFileSync(MAP_YEAR_FILE, 'utf8')) as unknown
+  if (typeof year !== 'string' || !/^\d{4}$/.test(year) || !years.some(entry => entry.manifest.built && entry.manifest.year === year)) {
+    throw new Error(`Invalid generated map year ${JSON.stringify(year)}`)
+  }
+  return year
+}
 
 /** The About pages (src/about): every path with its title. */
 function aboutIndex(): Record<string, { title: string }> {
@@ -22,13 +31,23 @@ function aboutIndex(): Record<string, { title: string }> {
   }))
 }
 
-/** The About pages' index for the frontend, and their paths for the server: any other /about path
- *  is a 404. */
+/** The About pages' index for the frontend, and their paths and map year for the server: any other
+ *  /about path is a 404 and any mismatched map year fails at startup. */
 function aboutPages(): Plugin {
   let years: ReturnType<typeof readYears> = []
+  let mapYear = ''
   return {
-    buildStart() { years = readYears() },
-    watchChange(id) { if (yearFiles().includes(id)) generateSourceArtifacts() },
+    buildStart() {
+      years = readYears()
+      mapYear = readMapYear(years)
+    },
+    watchChange(id) {
+      if (yearFiles().includes(id)) {
+        generateSourceArtifacts()
+        years = readYears()
+        mapYear = readMapYear(years)
+      }
+    },
     name: 'about-pages',
     enforce: 'pre',
     resolveId: id => (id === ABOUT_INDEX ? `\0${ABOUT_INDEX}` : undefined),
@@ -44,6 +63,7 @@ function aboutPages(): Plugin {
     generateBundle() {
       const pages = Object.keys(aboutIndex())
       this.emitFile({ type: 'asset', fileName: 'about-pages.json', source: JSON.stringify(pages) })
+      this.emitFile({ type: 'asset', fileName: 'map-year.json', source: JSON.stringify(mapYear) })
     },
   }
 }

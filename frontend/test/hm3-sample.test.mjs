@@ -61,7 +61,7 @@ test('HM3 prediction restores every byte across row boundaries and refuses other
 })
 
 test('the sampled tile zoom is the renderer\'s: rounded, one finer on HiDPI, clamped into the published band', () => {
-  const build = { latest: 'b1', byLayer: {}, zoom: 13 }
+  const build = { year: '2026', latest: 'b1', byLayer: {}, zoom: 13 }
   assert.equal(displayedTileZoom(build, 9.4, 1), 9)
   assert.equal(displayedTileZoom(build, 9.4, 2), 10)
   assert.equal(displayedTileZoom(build, 0.7, 1), 2)

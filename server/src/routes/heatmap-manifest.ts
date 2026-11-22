@@ -1,17 +1,18 @@
 // Publish the current generation at the HM3 decoder's format-specific manifest URL.
 //
-// The manifest `{build, zoom?, layers: {layer: {file, build?}}}` is MANIFEST_FILENAME in the
+// The manifest `{year, build, zoom?, layers: {layer: {file, build?}}}` is MANIFEST_FILENAME in the
 // tiles directory. The route projects only the fields needed to fetch tiles: generation, hashes
 // and publisher proofs never cross the public boundary. `zoom` is the zoom the world was painted
 // at (the deepest natively-servable zoom); a manifest without it serves at WORLD_BASE_ZOOM.
 
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { ALLOWED_LAYERS, LDEN_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, NDEN_LAYERS, WORLD_BASE_ZOOM } from './heatmap-shared.ts'
 import { HM3_MANIFEST_URL, HM3_VERSION } from '../../../frontend/src/lib/hm3-decoder.ts'
 
 const BUILD_ID = /^b\d+$/
+const YEAR_ID = /^\d{4}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const ARCHIVE_NAME = new RegExp(`^(${[...ALLOWED_LAYERS].join('|')})\\.(b\\d+)\\.pmtiles$`)
 
@@ -24,6 +25,7 @@ export type ManifestLayer = {
 }
 
 export type PmtilesManifest = {
+  year?: unknown
   build?: unknown
   zoom?: unknown
   layers?: Record<string, ManifestLayer>
@@ -32,6 +34,32 @@ export type PmtilesManifest = {
 
 export class ManifestMissingError extends Error {
   readonly code = 'QM_PMTILES_MANIFEST_MISSING'
+}
+
+/** Read and validate `tilesDir/year`, or return `null` when absent. */
+export async function readTilesDirYear(tilesDir: string): Promise<string | null> {
+  const path = join(tilesDir, 'year')
+  let raw: string
+  try {
+    raw = await readFile(path, 'utf8')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw e
+  }
+  const year = raw.trim()
+  if (!YEAR_ID.test(year)) throw new Error(`${path} contains invalid map year ${JSON.stringify(raw)}`)
+  return year
+}
+
+/** Require `tilesDir/year` to exist and equal `expectedYear` (never fails with ENOENT). */
+export async function requireTilesDirYear(tilesDir: string, expectedYear: string): Promise<void> {
+  const dirYear = await readTilesDirYear(tilesDir)
+  if (dirYear === null) {
+    throw new Error(`${tilesDir} is missing a year marker`)
+  }
+  if (dirYear !== expectedYear) {
+    throw new Error(`${tilesDir} is bound to year ${dirYear}, not ${expectedYear}`)
+  }
 }
 
 /** The zoom every archive in this manifest was painted at — the deepest zoom
@@ -45,9 +73,19 @@ export function manifestBaseZoom(manifest: PmtilesManifest): number {
 /** Structural validation of one already-parsed manifest. Archive presence on
  *  disk is deliberately NOT checked: a mid-sync directory still serves its pin
  *  and the tile route 404s the not-yet-synced archives. */
-export function validatePmtilesManifest(manifest: PmtilesManifest, manifestPath: string): void {
+export function validatePmtilesManifest(
+  manifest: PmtilesManifest,
+  manifestPath: string,
+  expectedYear?: string,
+): void {
   if (manifest.hm3_version !== HM3_VERSION) {
     throw new Error(`${manifestPath} does not contain HM3 version ${HM3_VERSION}`)
+  }
+  if (typeof manifest.year !== 'string' || !YEAR_ID.test(manifest.year)) {
+    throw new Error(`${manifestPath} has an invalid map year`)
+  }
+  if (expectedYear !== undefined && manifest.year !== expectedYear) {
+    throw new Error(`${manifestPath} is for year ${manifest.year}, not ${expectedYear}`)
   }
   if (typeof manifest.build !== 'string' || !BUILD_ID.test(manifest.build)) {
     throw new Error(`${manifestPath} has an invalid build id`)
@@ -79,6 +117,8 @@ export function validatePmtilesManifest(manifest: PmtilesManifest, manifestPath:
       if (entry.build !== match[2]) {
         throw new Error(`${manifestPath} layer ${layer} build does not match its archive file`)
       }
+    } else if (match[2] !== manifest.build) {
+      throw new Error(`${manifestPath} layer ${layer} archive build does not match manifest build`)
     }
     // bytes/sha256 are advisory: validated when present so a half-written
     // manifest still fails loud, ignored when absent.
@@ -97,7 +137,10 @@ export function validatePmtilesManifest(manifest: PmtilesManifest, manifestPath:
  *  was ever published. Deliberately uncached: the manifest is a few KiB and
  *  validation is pure structure (no archive stats), so every request sees a
  *  republish immediately. */
-export async function readValidatedPmtilesManifest(tilesDir: string): Promise<PmtilesManifest> {
+export async function readValidatedPmtilesManifest(
+  tilesDir: string,
+  expectedYear?: string,
+): Promise<PmtilesManifest> {
   const manifestPath = join(tilesDir, MANIFEST_FILENAME)
   let raw: string
   try {
@@ -108,8 +151,14 @@ export async function readValidatedPmtilesManifest(tilesDir: string): Promise<Pm
     }
     throw e
   }
+  if (expectedYear !== undefined) {
+    const dirYear = await readTilesDirYear(tilesDir)
+    if (dirYear !== null && dirYear !== expectedYear) {
+      throw new Error(`${tilesDir} is bound to year ${dirYear}, not ${expectedYear}`)
+    }
+  }
   const manifest = JSON.parse(raw) as PmtilesManifest
-  validatePmtilesManifest(manifest, manifestPath)
+  validatePmtilesManifest(manifest, manifestPath, expectedYear)
   return manifest
 }
 
@@ -125,15 +174,60 @@ function publicManifest(manifest: PmtilesManifest) {
       ...(typeof value.build === 'string' ? { build: value.build } : {}),
     }
   }
-  return { build: manifest.build, zoom: manifestBaseZoom(manifest), layers }
+  return { year: manifest.year, build: manifest.build, zoom: manifestBaseZoom(manifest), layers }
 }
 
-export async function heatmapManifestRoutes(app: FastifyInstance, { tilesDir }: { tilesDir: string }): Promise<void> {
+/** Check year binding of `tilesDir` at startup: an empty directory stays valid (404 until first
+ *  pack), while a mismatched `year` marker, unbound `.pmtiles` archives, or a manifest naming
+ *  another or missing year fails startup loudly. */
+async function verifyTilesDirYearAtStartup(tilesDir: string, expectedYear: string): Promise<void> {
+  const dirYear = await readTilesDirYear(tilesDir)
+  if (dirYear !== null && dirYear !== expectedYear) {
+    throw new Error(`${tilesDir} is bound to year ${dirYear}, not ${expectedYear}`)
+  }
+  if (dirYear === null) {
+    let entries: string[] = []
+    try {
+      entries = await readdir(tilesDir)
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+    }
+    if (entries.some(name => name.endsWith('.pmtiles'))) {
+      throw new Error(`${tilesDir} contains .pmtiles archives without a year marker`)
+    }
+  }
+  const manifestPath = join(tilesDir, MANIFEST_FILENAME)
+  let raw: string
+  try {
+    raw = await readFile(manifestPath, 'utf8')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw e
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return // a torn manifest fails closed with HTTP 500 on request
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const year = (parsed as PmtilesManifest).year
+    if (year !== expectedYear) {
+      throw new Error(`${manifestPath} is for year ${String(year)}, not ${expectedYear}`)
+    }
+  }
+}
+
+export async function heatmapManifestRoutes(
+  app: FastifyInstance,
+  { tilesDir, expectedYear }: { tilesDir: string; expectedYear: string },
+): Promise<void> {
+  await verifyTilesDirYearAtStartup(tilesDir, expectedYear)
   app.get(HM3_MANIFEST_URL, async (_req, reply) => {
     reply.header('Cache-Control', 'no-cache')
     let manifest
     try {
-      manifest = await readValidatedPmtilesManifest(tilesDir)
+      manifest = await readValidatedPmtilesManifest(tilesDir, expectedYear)
     } catch (e) {
       if (e instanceof ManifestMissingError) {
         return reply.code(404).send({ error: 'no build published' })

@@ -91,9 +91,12 @@ export async function rasterRoutes(app: FastifyInstance, options: RasterOptions)
     else running -= 1
   }
 
-  app.get<{ Params: { layer: string; z: string; x: string; y: string } }>(
+  app.get<{ Params: { layer: string; z: string; x: string; y: string }; Querystring: { year?: string } }>(
     '/api/raster/:layer/:z/:x/:y.png',
     async (request, reply) => {
+      if (request.query.year !== undefined && request.query.year !== options.year) {
+        return reply.code(400).send({ error: 'No such map year.' })
+      }
       const tile = parseRasterTile(request.params)
       if (!tile) return reply.code(400).send({ error: 'No such map tile.' })
       const slot = acquire()

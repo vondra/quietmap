@@ -7,11 +7,13 @@ use super::*;
 /// scores a map against it).
 pub(super) fn popup_reference(
     release: &Release,
+    year: &str,
     tile: TileId,
     pixels: usize,
     random: &mut SplitMix,
     out: &std::path::Path,
 ) -> Result<(), String> {
+    paint::year::bind_painted_dir(out, year)?;
     const SIDE: usize = 1024;
     let chosen: Vec<usize> = (0..pixels)
         .map(|_| (random.next_u64() % (SIDE * SIDE) as u64) as usize)

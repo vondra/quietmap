@@ -142,6 +142,7 @@ fn identical_quadrants_share_bytes_and_invalid_ranges_are_refused() {
 #[test]
 fn legacy_fixture_stays_readable_and_keeps_its_nden_streams_when_lden_is_added() {
     let old = tempfile::tempdir().unwrap();
+    crate::year::bind_painted_dir(old.path(), "2026").unwrap();
     let path = square_path(old.path(), 12, (9, 17));
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, include_bytes!("../tests/fixtures/square-v7.hm3")).unwrap();
@@ -155,6 +156,7 @@ fn legacy_fixture_stays_readable_and_keeps_its_nden_streams_when_lden_is_added()
         .map(|pixel| pixel.map(|v| if v >= SILENCE { v } else { v + 1 }))
         .collect();
     let new = tempfile::tempdir().unwrap();
+    crate::year::bind_painted_dir(new.path(), "2026").unwrap();
     write(
         new.path(),
         12,

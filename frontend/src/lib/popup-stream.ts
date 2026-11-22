@@ -1,5 +1,6 @@
 /** Streams one click's answer from `/api/popup`: every line replaces the previous answer. */
 import type { PopupError, PopupUpdate } from '../types/noise.ts'
+import { MAP_YEAR } from './map-year.ts'
 
 export interface PopupStreamCallbacks {
   /** Each streamed update, the whole answer so far; `partial` stays true until the last one. */
@@ -41,7 +42,7 @@ export async function streamPopup(
   callbacks: PopupStreamCallbacks,
   { source, piece }: { source?: string[]; piece?: number } = {},
 ): Promise<void> {
-  const params = new URLSearchParams({ lat: String(position.lat), lon: String(position.lng) })
+  const params = new URLSearchParams({ lat: String(position.lat), lon: String(position.lng), year: MAP_YEAR })
   if (source) params.set('source', source.join(','))
   if (piece != null) params.set('piece', String(piece))
   let last: PopupUpdate | null = null

@@ -1,10 +1,13 @@
 //! Merge completed square bundles by atomic byte copies, without decoding or replacing data.
 
 use crate::hm3::{PaintedSquare, square_path, squares};
+use crate::year::{bind_painted_dir, read_year};
 use std::fs::File;
 use std::path::Path;
 
 pub fn merge(source: &Path, destination: &Path, zoom: u32) -> Result<(), String> {
+    let year = read_year(source)?;
+    bind_painted_dir(destination, &year)?;
     for square in squares(source, zoom)? {
         PaintedSquare::open(source, zoom, square)?;
         let source_path = square_path(source, zoom, square);

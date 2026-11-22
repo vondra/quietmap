@@ -1,5 +1,6 @@
 // Opening a site's row draws its boundary; late responses cannot draw a site after it is closed.
 import { expect, test } from '@playwright/test'
+import { MAP_YEAR } from '../src/lib/map-year'
 import { popupUpdate, roadContributor } from './answers'
 import { canvasCenter, endPopup, installHermeticMap, mapUrl, pngCenterPixel, PHONE, POINT, sendPopupLine, SOURCE_DB } from './support'
 
@@ -23,7 +24,8 @@ for (const display of [
       let requests = 0
       let release!: () => void
       let held = Promise.resolve()
-      await page.route('**/api/source-outline/*', async route => {
+      await page.route('**/api/source-outline/**', async route => {
+        expect(new URL(route.request().url()).searchParams.get('year')).toBe(MAP_YEAR)
         requests++
         await held
         await route.fulfill({ json: outline }).catch(() => {})

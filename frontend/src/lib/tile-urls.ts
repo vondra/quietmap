@@ -14,6 +14,7 @@
 
 import { useSyncExternalStore } from 'react'
 import { HM3_MANIFEST_URL, type Metric } from './hm3-decoder.ts'
+import { MAP_YEAR } from './map-year.ts'
 
 // The toggleable noise layers of the heatmap, each its own tile tree. All share
 // the same HM3 format and loudness palette, so the tile fetch/decode
@@ -73,6 +74,7 @@ const MANIFEST_POLL_MS = 10 * 60 * 1000
  *  flips only that layer's URLs, and the untouched layers re-fetch straight
  *  from the browser's immutable cache. */
 export interface TileBuilds {
+  year: string
   latest: string
   byLayer: Record<string, string>
   /** The zoom the published world was painted at: the deepest level that
@@ -108,12 +110,12 @@ function snapshot(): TileBuilds | null {
 export function tileUrl(builds: TileBuilds, source: string, z: number, x: number, y: number): string {
   return source
     .split('+')
-    .map(layer => `/api/tiles/${builds.byLayer[layer] ?? builds.latest}/${layer}/${z}/${x}/${y}.bin`)
+    .map(layer => `/api/tiles/${builds.year}/${builds.byLayer[layer] ?? builds.latest}/${layer}/${z}/${x}/${y}.bin`)
     .join(LAYER_URL_SEPARATOR)
 }
 
 /**
- * Cache-identity string for a source: its own build, plus the published base
+ * Cache-identity string for a source: its year, its own build, plus the published base
  * zoom. Deck layer ids and composite signatures key on THIS, not on `latest` —
  * so a partial flip re-keys exactly the layer whose archive changed (the others
  * keep their deck tile cache), and a same-`latest` sequential partial still
@@ -121,16 +123,16 @@ export function tileUrl(builds: TileBuilds, source: string, z: number, x: number
  */
 export function buildKey(builds: TileBuilds, source: string): string {
   const layerBuilds = source.split('+').map(layer => builds.byLayer[layer] ?? builds.latest)
-  return `${source}:${layerBuilds.join(',')}|z${builds.zoom}`
+  return `${builds.year}:${source}:${layerBuilds.join(',')}|z${builds.zoom}`
 }
 
 /**
  * Resolve and track the current build. Fire once (non-blocking) at app boot;
  * re-polls every 10 minutes and when the tab becomes visible again.
  *
- * A session never downgrades to `null` once a build is known: a published
- * generation is immutable and stays servable, so a later manifest 404/error
- * keeps the last known build.
+ * A transient manifest 404/5xx or network error keeps the last known build (its
+ * immutable generation stays servable), whereas an explicit manifest for another
+ * year clears the snapshot so tiles from another map year never stay mounted.
  */
 export async function initTileBuild(): Promise<void> {
   if (pollingStarted) return
@@ -144,14 +146,30 @@ export async function initTileBuild(): Promise<void> {
 
 let pollingStarted = false
 
-async function refreshTileBuild(): Promise<void> {
+function setCurrentBuilds(next: TileBuilds | null): void {
+  if (JSON.stringify(next) !== JSON.stringify(currentBuilds)) {
+    currentBuilds = next
+    for (const cb of listeners) cb()
+  }
+}
+
+export function currentTileBuild(): TileBuilds | null {
+  return currentBuilds
+}
+
+export async function refreshTileBuild(expectedYear = MAP_YEAR): Promise<void> {
   try {
     const res = await fetch(HM3_MANIFEST_URL, { cache: 'no-cache' })
-    if (!res.ok) return // nothing published yet → stay as-is
+    if (!res.ok) return // transient failure or nothing published yet → keep snapshot
     const manifest = (await res.json()) as {
+      year?: unknown
       build?: unknown
       zoom?: unknown
       layers?: Record<string, { build?: unknown }>
+    }
+    if (typeof manifest.year !== 'string' || manifest.year !== expectedYear) {
+      setCurrentBuilds(null)
+      return
     }
     if (typeof manifest.build !== 'string' || !BUILD_ID.test(manifest.build)) return
     // A manifest without a usable base zoom is not servable at all: every tile
@@ -162,11 +180,7 @@ async function refreshTileBuild(): Promise<void> {
       byLayer[layer] =
         typeof entry?.build === 'string' && BUILD_ID.test(entry.build) ? entry.build : manifest.build
     }
-    const next: TileBuilds = { latest: manifest.build, byLayer, zoom: manifest.zoom as number }
-    if (JSON.stringify(next) !== JSON.stringify(currentBuilds)) {
-      currentBuilds = next
-      for (const cb of listeners) cb()
-    }
+    setCurrentBuilds({ year: manifest.year, latest: manifest.build, byLayer, zoom: manifest.zoom as number })
   } catch {
     // Network hiccup — keep the current builds; the next poll retries.
   }

@@ -89,7 +89,8 @@ fn run(arguments: &[String]) -> Result<(), String> {
     }
     let required = |name: &str| option(arguments, name).ok_or(format!("--{name} is required"));
     let parse = |name, default| number(arguments, name, default);
-    let release = Release::open(&PathBuf::from(required("prepared")?), required("year")?)?;
+    let year = required("year")?;
+    let release = Release::open(&PathBuf::from(required("prepared")?), year)?;
     if command == Some("compare") {
         return compare::compare_maps(
             &PathBuf::from(required("painted")?),
@@ -107,6 +108,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     if command == Some("popup") {
         return reference::popup_reference(
             &release,
+            year,
             tile,
             parse("pixels", 300)? as usize,
             &mut SplitMix(parse("seed", 1)?),
@@ -130,7 +132,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         );
     }
     if command == Some("etalon") {
-        return etalon::run(arguments, &square, &files, &weather);
+        return etalon::run(arguments, year, &square, &files, &weather);
     }
     eprintln!(
         "square {}/{}: {} candidates, read and built in {:.1} s",

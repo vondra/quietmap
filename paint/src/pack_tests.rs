@@ -27,8 +27,10 @@ fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
     let merged = tempfile::tempdir().unwrap();
     let published = tempfile::tempdir().unwrap();
     let cells = vec![[80; LAYERS + 1]; 1024 * 1024];
+    crate::year::bind_painted_dir(merged.path(), "2026").unwrap();
     for (worker, square) in [("a", (2, 2)), ("b", (3, 2))] {
         let root = workers.path().join(worker);
+        crate::year::bind_painted_dir(&root, "2026").unwrap();
         write(&root, 13, square, &cells).unwrap();
         let destination = square_path(merged.path(), 13, square);
         std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
@@ -46,9 +48,11 @@ fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
         assert!(hm3::painted(merged.path(), 13, (square.0, square.1 + 1)).unwrap());
     }
     pack(merged.path(), 13, published.path(), "b1", None).unwrap();
+    assert_eq!(crate::year::read_year(published.path()).unwrap(), "2026");
     let manifest_path = published.path().join("current.json");
     let manifest = std::fs::read(&manifest_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    assert_eq!(parsed["year"], "2026");
     assert_eq!(
         parsed["layers"].as_object().unwrap().len(),
         2 * (LAYERS + 1)
@@ -64,6 +68,16 @@ fn worker_bundles_merge_atomically_and_publication_preserves_their_streams() {
             assert!(
                 header.n_tile_contents().unwrap().get() < header.n_addressed_tiles().unwrap().get()
             );
+            let meta_offset = u64::from_le_bytes(archive[24..32].try_into().unwrap()) as usize;
+            let meta_length = u64::from_le_bytes(archive[32..40].try_into().unwrap()) as usize;
+            let mut meta_bytes = Vec::new();
+            std::io::Read::read_to_end(
+                &mut flate2::read::GzDecoder::new(&archive[meta_offset..meta_offset + meta_length]),
+                &mut meta_bytes,
+            )
+            .unwrap();
+            let meta: serde_json::Value = serde_json::from_slice(&meta_bytes).unwrap();
+            assert_eq!(meta["year"], "2026");
             let stream = square.compressed_tile(metric, number, 0, 0).unwrap();
             let data_offset = u64::from_le_bytes(archive[56..64].try_into().unwrap()) as usize;
             let data_length = u64::from_le_bytes(archive[64..72].try_into().unwrap()) as usize;
@@ -95,6 +109,7 @@ fn kept_regions_pack_the_same_archives_and_a_repainted_square_refolds_its_region
         cells
     };
     // Two squares in zoom-8 region (0, 0), one in region (1, 0).
+    crate::year::bind_painted_dir(merged.path(), "2026").unwrap();
     for (k, square) in [(2, 2), (3, 2), (20, 2)].into_iter().enumerate() {
         write(merged.path(), 13, square, &cells(60 + 9 * k as u8, k)).unwrap();
     }
@@ -136,6 +151,7 @@ fn kept_regions_pack_the_same_archives_and_a_repainted_square_refolds_its_region
 #[test]
 fn squares_without_lden_stay_out_of_the_lden_archives() {
     let merged = tempfile::tempdir().unwrap();
+    crate::year::bind_painted_dir(merged.path(), "2026").unwrap();
     let legacy = square_path(merged.path(), 12, (9, 17));
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     std::fs::write(&legacy, include_bytes!("../tests/fixtures/square-v7.hm3")).unwrap();
@@ -167,4 +183,59 @@ fn squares_without_lden_stay_out_of_the_lden_archives() {
     // Zoom 12 to 2: the Nden archive addresses both squares' tiles, the Lden one only the new one's.
     assert_eq!(tiles("total.b2.pmtiles"), 11 + 2);
     assert_eq!(tiles("lden-total.b2.pmtiles"), 11);
+}
+
+#[test]
+fn merge_pack_region_and_pack_refuse_mixed_years_and_interrupted_unmarked_tiles() {
+    let root = tempfile::tempdir().unwrap();
+    let cells = vec![[70; LAYERS + 1]; 512 * 512];
+    let tree_2024 = root.path().join("painted-2024");
+    let tree_2026 = root.path().join("painted-2026");
+    let unmarked = root.path().join("painted-unmarked");
+    crate::year::bind_painted_dir(&tree_2024, "2024").unwrap();
+    crate::year::bind_painted_dir(&tree_2026, "2026").unwrap();
+    write(&tree_2024, 12, (2, 2), &cells).unwrap();
+    write(&tree_2026, 12, (3, 2), &cells).unwrap();
+    write(&unmarked, 12, (4, 2), &cells).unwrap();
+
+    // Merge refuses unmarked source, unmarked populated dest, and mismatched years.
+    assert!(crate::merge::merge(&unmarked, &tree_2026, 12).is_err());
+    assert!(crate::merge::merge(&tree_2026, &unmarked, 12).is_err());
+    assert!(
+        crate::merge::merge(&tree_2024, &tree_2026, 12)
+            .unwrap_err()
+            .contains("bound to year 2026, not 2024")
+    );
+
+    // pack_region refuses unmarked source and mismatched region cache.
+    let regions = root.path().join("regions");
+    assert!(pack_region(&unmarked, 12, &regions, (0, 0)).is_err());
+    pack_region(&tree_2026, 12, &regions, (0, 0)).unwrap();
+    assert!(
+        pack_region(&tree_2024, 12, &regions, (0, 0))
+            .unwrap_err()
+            .contains("bound to year 2026, not 2024")
+    );
+
+    // pack refuses unmarked source, mismatched regions, mismatched published tiles, and
+    // an interrupted first pack leaving an unmarked .pmtiles archive.
+    let tiles = root.path().join("tiles");
+    assert!(pack(&unmarked, 12, &tiles, "b1", None).is_err());
+    assert!(pack(&tree_2024, 12, &tiles, "b1", Some(&regions)).is_err());
+    pack(&tree_2026, 12, &tiles, "b1", Some(&regions)).unwrap();
+    assert!(
+        pack(&tree_2024, 12, &tiles, "b2", None)
+            .unwrap_err()
+            .contains("bound to year 2026, not 2024")
+    );
+    assert!(!tiles.join("road.b2.pmtiles").exists());
+
+    let interrupted = root.path().join("interrupted-tiles");
+    std::fs::create_dir_all(&interrupted).unwrap();
+    std::fs::write(interrupted.join("road.b1.pmtiles"), b"leftover").unwrap();
+    assert!(
+        pack(&tree_2024, 12, &interrupted, "b2", None)
+            .unwrap_err()
+            .contains("without a year marker")
+    );
 }

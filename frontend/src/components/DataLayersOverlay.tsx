@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
 import { DATA_LAYERS, dataLayerStyleId, type DataLayerId } from '../lib/data-layers'
+import { MAP_YEAR } from '../lib/map-year'
 import { overlayAnchorId } from '../utils/overlay-anchor'
 
 export default function DataLayersOverlay({ layers }: { layers: DataLayerId[] }) {
@@ -34,7 +35,7 @@ export default function DataLayersOverlay({ layers }: { layers: DataLayerId[] })
       key={layer.id}
       id={dataLayerStyleId(layer.id)}
       type="raster"
-      tiles={[`/api/raster/${layer.id}/{z}/{x}/{y}.png`]}
+      tiles={[`/api/raster/${layer.id}/{z}/{x}/{y}.png?year=${MAP_YEAR}`]}
       tileSize={256}
       minzoom={layer.minzoom}
       maxzoom={16}

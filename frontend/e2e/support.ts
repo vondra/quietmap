@@ -1,6 +1,7 @@
 // Hermetic browser fixtures for heatmap cells, the basemap and streamed popup answers.
 import { devices, expect, type Locator, type Page } from '@playwright/test'
 import { HM3_MANIFEST_URL, HM3_SILENCE, HM3_VERSION, TILE_PX, paethPrediction } from '../src/lib/hm3-decoder'
+import { MAP_YEAR } from '../src/lib/map-year'
 
 export const FIXTURE_DB = 63
 export const SOURCE_DB = 60
@@ -193,6 +194,7 @@ export async function installHermeticMap(page: Page, point: PixelCenter): Promis
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
+      year: MAP_YEAR,
       build: 'b1',
       zoom: TILE_Z,
       layers: {
@@ -204,9 +206,9 @@ export async function installHermeticMap(page: Page, point: PixelCenter): Promis
       },
     }),
   }))
-  await page.route('**/api/tiles/b1/**/*.bin', route => {
-    const match = new URL(route.request().url()).pathname
-      .match(/^\/api\/tiles\/b1\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.bin$/)
+  const tilePattern = new RegExp(`^/api/tiles/${MAP_YEAR}/b1/([^/]+)/(\\d+)/(\\d+)/(\\d+)\\.bin$`)
+  await page.route(`**/api/tiles/${MAP_YEAR}/b1/**/*.bin`, route => {
+    const match = new URL(route.request().url()).pathname.match(tilePattern)
     const source = match?.[1]
     const atPoint = match != null
       && Number(match[2]) === TILE_Z && Number(match[3]) === point.tx && Number(match[4]) === point.ty
@@ -231,7 +233,7 @@ let documents = 0
 /** The row under the search field of the place opened by a tap on the map at POINT, in a new
  *  document each time (a query the map ignores). */
 export async function openPoint(page: Page) {
-  const tilePath = `/api/tiles/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const tilePath = `/api/tiles/${MAP_YEAR}/b1/road/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
   const tileLoaded = page.waitForResponse(response => new URL(response.url()).pathname === tilePath && response.status() === 200)
   await page.goto(`/?e2e=${++documents}${mapUrl(POINT).slice(1)}`)
   await tileLoaded

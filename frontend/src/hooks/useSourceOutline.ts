@@ -1,5 +1,6 @@
 // Load the opened industrial site's boundary; a late response never replaces another selection.
 import { useEffect, useState } from 'react'
+import { MAP_YEAR } from '../lib/map-year'
 import type { Contributor } from '../types/noise'
 
 export function useSourceOutline(source: Contributor | undefined): GeoJSON.FeatureCollection | null {
@@ -9,7 +10,7 @@ export function useSourceOutline(source: Contributor | undefined): GeoJSON.Featu
   useEffect(() => {
     if (!id) return
     const controller = new AbortController()
-    void fetch(`/api/source-outline/${id}`, { signal: controller.signal })
+    void fetch(`/api/source-outline/${id}?year=${MAP_YEAR}`, { signal: controller.signal })
       .then(async response => {
         if (!response.ok) return
         const outline = await response.json() as GeoJSON.FeatureCollection

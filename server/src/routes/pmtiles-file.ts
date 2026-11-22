@@ -75,15 +75,28 @@ export async function openArchiveServedAsStored(
   path: string,
   tileCompression: Compression,
   cachedDirectories: number,
+  expectedYear?: string,
 ): Promise<PMTiles> {
+  const source = new FileRangeSource(path)
   const pmtiles = new PMTiles(
-    new FileRangeSource(path),
+    source,
     new SharedPromiseCache(cachedDirectories, true, inflateDirectory),
     async tile => tile,
   )
   const header = await pmtiles.getHeader()
   if (header.tileCompression !== tileCompression) {
     throw new Error(`tile compression ${header.tileCompression} contradicts serving as ${tileCompression}`)
+  }
+  if (expectedYear !== undefined) {
+    if (header.jsonMetadataLength === 0) {
+      throw new Error(`${path} lacks metadata year`)
+    }
+    const raw = await source.getBytes(header.jsonMetadataOffset, header.jsonMetadataLength)
+    const inflated = await inflateDirectory(raw.data, header.internalCompression)
+    const metadata = JSON.parse(new TextDecoder('utf-8').decode(inflated)) as { year?: unknown }
+    if (metadata?.year !== expectedYear) {
+      throw new Error(`${path} is for year ${String(metadata?.year)}, not ${expectedYear}`)
+    }
   }
   return pmtiles
 }

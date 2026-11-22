@@ -1192,6 +1192,7 @@ version = "0.1.0"
 dependencies = [
  "brotli 8.0.4",
  "brotlic",
+ "flate2",
  "foldhash",
  "physics",
  "pmtiles",

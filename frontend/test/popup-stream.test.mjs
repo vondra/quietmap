@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { MAP_YEAR } from '../src/lib/map-year.ts'
 import { streamPopup } from '../src/lib/popup-stream.ts'
 
 const update = (seq, partial, lden = 60) => ({ seq, partial, total_lden: lden })
@@ -60,9 +61,9 @@ test('the request names the point, an opened row\'s parts and one of their piece
   await streamPopup({ lat: 50, lng: 14 }, new AbortController().signal, callbacks, { source })
   await streamPopup({ lat: 50, lng: 14 }, new AbortController().signal, callbacks, { source, piece: 0 })
   assert.deepEqual(requested, [
-    '/api/popup?lat=50&lon=14',
-    '/api/popup?lat=50&lon=14&source=98310618668d60db%2Ca2d8108c83a87fed',
-    '/api/popup?lat=50&lon=14&source=98310618668d60db%2Ca2d8108c83a87fed&piece=0',
+    `/api/popup?lat=50&lon=14&year=${MAP_YEAR}`,
+    `/api/popup?lat=50&lon=14&year=${MAP_YEAR}&source=98310618668d60db%2Ca2d8108c83a87fed`,
+    `/api/popup?lat=50&lon=14&year=${MAP_YEAR}&source=98310618668d60db%2Ca2d8108c83a87fed&piece=0`,
   ])
 })
 

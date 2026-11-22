@@ -13,9 +13,9 @@ import { HM3_MANIFEST_URL, HM3_VERSION } from '../../../frontend/src/lib/hm3-dec
 const dir = mkdtempSync(join(tmpdir(), 'tiles-manifest-route-test-'))
 after(() => rmSync(dir, { recursive: true, force: true }))
 
-async function buildApp() {
+async function buildApp(expectedYear = '2026') {
   const app = Fastify()
-  await app.register(heatmapManifestRoutes, { tilesDir: dir })
+  await app.register(heatmapManifestRoutes, { tilesDir: dir, expectedYear })
   return app
 }
 
@@ -24,15 +24,16 @@ const clearFixture = () => {
   for (const name of readdirSync(dir)) rmSync(join(dir, name), { force: true, recursive: true })
 }
 
-function validManifest(build = 'b546'): {
+function validManifest(build = 'b546', year = '2026'): {
+  year?: string
   build: string
   hm3_version: number
   zoom?: number
-  layers: Record<string, { file: string; build: string }>
+  layers: Record<string, { file: string; build?: string }>
 } {
-  const layers: Record<string, { file: string; build: string }> = {}
+  const layers: Record<string, { file: string; build?: string }> = {}
   for (const layer of ALLOWED_LAYERS) layers[layer] = { file: `${layer}.${build}.pmtiles`, build }
-  return { build, hm3_version: HM3_VERSION, layers }
+  return { year, build, hm3_version: HM3_VERSION, layers }
 }
 
 test('serves the manifest projected to the fetch coordinates', async () => {
@@ -41,11 +42,12 @@ test('serves the manifest projected to the fetch coordinates', async () => {
   const app = await buildApp()
   const res = await app.inject(HM3_MANIFEST_URL)
   assert.equal(res.statusCode, 200)
+  assert.equal(res.json().year, '2026')
   assert.equal(res.json().build, 'b546')
   assert.equal(res.json().zoom, WORLD_BASE_ZOOM)
   assert.equal(Object.keys(res.json().layers).length, ALLOWED_LAYERS.size)
   assert.equal(res.json().layers.total.file, 'total.b546.pmtiles')
-  assert.deepEqual(Object.keys(res.json()).sort(), ['build', 'layers', 'zoom'])
+  assert.deepEqual(Object.keys(res.json()).sort(), ['build', 'layers', 'year', 'zoom'])
   assert.equal(res.headers['cache-control'], 'no-cache')
   await app.close()
 })
@@ -136,6 +138,49 @@ test('a retired decoder endpoint stays absent and the current one refuses incomp
     const response = await app.inject(HM3_MANIFEST_URL)
     assert.equal(response.statusCode, 500)
     assert.deepEqual(response.json(), { error: 'manifest unreadable' })
+  } finally {
+    await app.close()
+  }
+})
+
+test('a layer omitting build must match the top-level build', async () => {
+  clearFixture()
+  const manifest = validManifest('b2')
+  manifest.layers.road = { file: 'road.b1.pmtiles' }
+  writeFileSync(pinPath, JSON.stringify(manifest))
+  const app = await buildApp()
+  const res = await app.inject(HM3_MANIFEST_URL)
+  assert.equal(res.statusCode, 500)
+  await app.close()
+})
+
+test('mismatched or missing year fails at startup and on hot-swap, and unbound archives fail at startup', async () => {
+  clearFixture()
+  writeFileSync(pinPath, JSON.stringify(validManifest('b1', '2024')))
+  await assert.rejects(() => buildApp('2026'), /2024.*2026/)
+
+  clearFixture()
+  const missingYear = validManifest('b1')
+  delete missingYear.year
+  writeFileSync(pinPath, JSON.stringify(missingYear))
+  await assert.rejects(() => buildApp('2026'), /not 2026/)
+
+  clearFixture()
+  writeFileSync(join(dir, 'year'), '2024\n')
+  await assert.rejects(() => buildApp('2026'), /bound to year 2024, not 2026/)
+
+  clearFixture()
+  writeFileSync(join(dir, 'road.b1.pmtiles'), 'unmarked')
+  await assert.rejects(() => buildApp('2026'), /without a year marker/)
+
+  clearFixture()
+  writeFileSync(join(dir, 'year'), '2026\n')
+  writeFileSync(pinPath, JSON.stringify(validManifest('b1', '2026')))
+  const app = await buildApp('2026')
+  try {
+    assert.equal((await app.inject(HM3_MANIFEST_URL)).statusCode, 200)
+    writeFileSync(pinPath, JSON.stringify(validManifest('b2', '2024')))
+    assert.equal((await app.inject(HM3_MANIFEST_URL)).statusCode, 500)
   } finally {
     await app.close()
   }

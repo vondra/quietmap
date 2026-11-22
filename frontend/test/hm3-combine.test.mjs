@@ -4,7 +4,7 @@ import test from 'node:test'
 
 import { combineLayerCells } from '../src/lib/hm3-combine.ts'
 import { HM3_NO_LEVEL, HM3_SILENCE } from '../src/lib/hm3-decoder.ts'
-import { HEATMAP_LAYERS, LAYER_URL_SEPARATOR, buildKey, publishes, sourceOf, tileUrl } from '../src/lib/tile-urls.ts'
+import { HEATMAP_LAYERS, LAYER_URL_SEPARATOR, buildKey, currentTileBuild, publishes, refreshTileBuild, sourceOf, tileUrl } from '../src/lib/tile-urls.ts'
 
 const cell = (...bytes) => combineLayerCells(bytes.map(byte => Uint8Array.of(byte)), 'nden')[0]
 const ldenCell = (...bytes) => combineLayerCells(bytes.map(byte => Uint8Array.of(byte)), 'lden')[0]
@@ -44,13 +44,44 @@ test('the layers on name one source: every layer the total, one itself, several 
   assert.equal(sourceOf([...HEATMAP_LAYERS], 'nden'), 'total')
   assert.equal(sourceOf(['road', 'aircraft'], 'lden'), 'lden-road+lden-aircraft')
   assert.equal(sourceOf([...HEATMAP_LAYERS], 'lden'), 'lden-total')
-  assert.equal(publishes({ latest: 'b2', byLayer: { total: 'b2' }, zoom: 13 }, 'lden'), false)
-  assert.equal(publishes({ latest: 'b2', byLayer: { total: 'b2', 'lden-total': 'b2' }, zoom: 13 }, 'lden'), true)
-  const builds = { latest: 'b2', byLayer: { road: 'b1', aircraft: 'b2' }, zoom: 13 }
+  assert.equal(publishes({ year: '2026', latest: 'b2', byLayer: { total: 'b2' }, zoom: 13 }, 'lden'), false)
+  assert.equal(publishes({ year: '2026', latest: 'b2', byLayer: { total: 'b2', 'lden-total': 'b2' }, zoom: 13 }, 'lden'), true)
+  const builds = { year: '2026', latest: 'b2', byLayer: { road: 'b1', aircraft: 'b2' }, zoom: 13 }
   assert.equal(
     tileUrl(builds, 'road+aircraft', 12, 2209, 1391),
-    ['/api/tiles/b1/road/12/2209/1391.bin', '/api/tiles/b2/aircraft/12/2209/1391.bin'].join(LAYER_URL_SEPARATOR),
+    ['/api/tiles/2026/b1/road/12/2209/1391.bin', '/api/tiles/2026/b2/aircraft/12/2209/1391.bin'].join(LAYER_URL_SEPARATOR),
   )
-  assert.equal(buildKey(builds, 'road+aircraft'), 'road+aircraft:b1,b2|z13')
-  assert.equal(buildKey(builds, 'road'), 'road:b1|z13')
+  assert.equal(buildKey(builds, 'road+aircraft'), '2026:road+aircraft:b1,b2|z13')
+  assert.equal(buildKey(builds, 'road'), '2026:road:b1|z13')
+})
+
+test('manifest refresh keeps snapshot on transient errors and clears it on an explicit year mismatch', async (t) => {
+  const manifest = (year, build = 'b1') => ({
+    ...(year ? { year } : {}),
+    build,
+    zoom: 13,
+    layers: { total: { build, file: `total.${build}.pmtiles` } },
+  })
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(manifest('2026', 'b1')), { status: 200 }))
+  await refreshTileBuild('2026')
+  assert.equal(currentTileBuild()?.year, '2026')
+  assert.equal(currentTileBuild()?.latest, 'b1')
+
+  // Transient 503 preserves the active immutable generation.
+  t.mock.restoreAll()
+  t.mock.method(globalThis, 'fetch', async () => new Response('', { status: 503 }))
+  await refreshTileBuild('2026')
+  assert.equal(currentTileBuild()?.latest, 'b1')
+
+  // An explicit manifest for another year clears the snapshot so wrong-year tiles never mount.
+  t.mock.restoreAll()
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(manifest('2024', 'b1')), { status: 200 }))
+  await refreshTileBuild('2026')
+  assert.equal(currentTileBuild(), null)
+
+  // Missing year also refuses to mount.
+  t.mock.restoreAll()
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(manifest(undefined, 'b2')), { status: 200 }))
+  await refreshTileBuild('2026')
+  assert.equal(currentTileBuild(), null)
 })

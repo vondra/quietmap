@@ -12,10 +12,11 @@ test('the map, its files and its About pages are served; nothing else pretends t
   await writeFile(join(frontend, 'index.html'), '<!doctype html><title>quiet-map-test</title>')
   await writeFile(join(frontend, 'known.js'), 'console.log("known")')
   await writeFile(join(frontend, 'about-pages.json'), JSON.stringify(['', 'data-sources', 'data-sources/europe', 'data-sources/europe/cz', 'validation', 'news']))
+  await writeFile(join(frontend, 'map-year.json'), JSON.stringify('2026'))
   t.after(async () => rm(frontend, { recursive: true, force: true }))
 
   const app = Fastify()
-  await registerWeb(app, frontend)
+  await registerWeb(app, frontend, '2026')
   t.after(async () => app.close())
 
   for (const url of ['/', '/?e2e=1', '/about', '/about/', '/about/validation', '/about/news/', '/about/data-sources/europe', '/about/data-sources/europe/cz']) {
@@ -45,10 +46,11 @@ test('404 is friendly HTML for browsers, plain JSON for API and non-HTML clients
   const frontend = await mkdtemp(join(tmpdir(), '0db-web-'))
   await writeFile(join(frontend, 'index.html'), '<!doctype html><title>quiet-map-test</title>')
   await writeFile(join(frontend, 'about-pages.json'), '[""]')
+  await writeFile(join(frontend, 'map-year.json'), JSON.stringify('2026'))
   t.after(async () => rm(frontend, { recursive: true, force: true }))
 
   const app = Fastify()
-  await registerWeb(app, frontend)
+  await registerWeb(app, frontend, '2026')
   t.after(async () => app.close())
 
   const browser = await app.inject({ url: '/no-such-page', headers: { accept: 'text/html' } })
@@ -66,4 +68,15 @@ test('404 is friendly HTML for browsers, plain JSON for API and non-HTML clients
     assert.match(response.headers['content-type'] ?? '', /application\/json/)
     assert.deepEqual(response.json(), { error: 'Not found' })
   }
+})
+
+test('registerWeb refuses a frontend built without or for another map year', async (t) => {
+  const frontend = await mkdtemp(join(tmpdir(), '0db-web-year-'))
+  await writeFile(join(frontend, 'index.html'), '<!doctype html>')
+  await writeFile(join(frontend, 'about-pages.json'), '[""]')
+  t.after(async () => rm(frontend, { recursive: true, force: true }))
+
+  await assert.rejects(() => registerWeb(Fastify(), frontend, '2026'))
+  await writeFile(join(frontend, 'map-year.json'), JSON.stringify('2024'))
+  await assert.rejects(() => registerWeb(Fastify(), frontend, '2026'), /2024.*2026/)
 })

@@ -13,7 +13,16 @@ import { NOT_FOUND_PAGE_HTML } from './not-found-page.ts'
  *  (frontend/src/lib/about-paths.ts). */
 const ABOUT_PATH = /^\/about(?:\/([^/].*?))?\/?$/
 
-export async function registerWeb(app: FastifyInstance, frontendDist: string): Promise<void> {
+export async function registerWeb(
+  app: FastifyInstance,
+  frontendDist: string,
+  expectedYear: string,
+): Promise<void> {
+  const mapYearPath = join(frontendDist, 'map-year.json')
+  const builtYear = JSON.parse(readFileSync(mapYearPath, 'utf8')) as unknown
+  if (typeof builtYear !== 'string' || !/^\d{4}$/.test(builtYear) || builtYear !== expectedYear) {
+    throw new Error(`${mapYearPath} is for year ${JSON.stringify(builtYear)}, not ${expectedYear}`)
+  }
   // The About pages the build found (frontend/src/about): only these paths open a page.
   const aboutPages = new Set(JSON.parse(readFileSync(join(frontendDist, 'about-pages.json'), 'utf8')) as string[])
   // preCompressed: the frontend build writes sibling .br files, served with

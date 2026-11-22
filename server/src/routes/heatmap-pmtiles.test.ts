@@ -14,9 +14,9 @@ import { HM3_VERSION, decodeHM3 } from '../../../frontend/src/lib/hm3-decoder.ts
 /** Minimal valid pmtiles v3 archive with ZERO tile entries — every getZxy
  *  misses. Layout: 127-byte header, gzip root directory, gzip '{}' metadata.
  *  Field offsets mirror the pmtiles JS lib's bytesToHeader. */
-function emptyArchive(): Buffer {
+function emptyArchive(metadataJson = JSON.stringify({ year: '2026' })): Buffer {
   const rootDir = gzipSync(Buffer.from([0])) // varint 0 = no entries
-  const metadata = gzipSync(Buffer.from('{}'))
+  const metadata = gzipSync(Buffer.from(metadataJson))
   const header = Buffer.alloc(127)
   header.write('PMTiles', 0, 'ascii')
   header.writeUInt8(3, 7) // spec version
@@ -35,11 +35,12 @@ function emptyArchive(): Buffer {
 
 const dir = mkdtempSync(join(tmpdir(), 'pmtiles-route-test-'))
 after(() => rmSync(dir, { recursive: true, force: true }))
+writeFileSync(join(dir, 'year'), '2026\n')
 writeFileSync(join(dir, 'road.b0.pmtiles'), emptyArchive())
 
-async function buildApp() {
+async function buildApp(tilesDir = dir, expectedYear = '2026') {
   const app = Fastify()
-  await app.register(heatmapPmtilesRoutes, { tilesDir: dir })
+  await app.register(heatmapPmtilesRoutes, { tilesDir, expectedYear })
   return app
 }
 
@@ -52,17 +53,19 @@ test('a stored predicted HM3 stream reaches the frontend verbatim with native Br
   const tile = brotliCompressSync(predicted)
   assert.ok(tile.length < 128)
   const root = gzipSync(Buffer.from([1, zxyToTileId(2, 0, 0), 1, tile.length, 1]))
+  const metadata = gzipSync(Buffer.from(JSON.stringify({ year: '2026' })))
   const header = Buffer.from(emptyArchive().subarray(0, 127))
   header.writeBigUInt64LE(BigInt(root.length), 16)
-  const dataOffset = 127 + root.length
-  header.writeBigUInt64LE(BigInt(dataOffset), 24)
-  header.writeBigUInt64LE(0n, 32)
+  header.writeBigUInt64LE(BigInt(127 + root.length), 24)
+  header.writeBigUInt64LE(BigInt(metadata.length), 32)
+  const dataOffset = 127 + root.length + metadata.length
+  header.writeBigUInt64LE(BigInt(dataOffset), 40)
   header.writeBigUInt64LE(BigInt(dataOffset), 56)
   header.writeBigUInt64LE(BigInt(tile.length), 64)
-  writeFileSync(join(dir, 'road.b4.pmtiles'), Buffer.concat([header, root, tile]))
+  writeFileSync(join(dir, 'road.b4.pmtiles'), Buffer.concat([header, root, metadata, tile]))
   const app = await buildApp()
   try {
-    const response = await app.inject({ url: '/api/tiles/b4/road/2/0/0.bin' })
+    const response = await app.inject({ url: '/api/tiles/2026/b4/road/2/0/0.bin' })
     assert.equal(response.statusCode, 200)
     assert.equal(response.headers['content-encoding'], 'br')
     assert.deepEqual(response.rawPayload, tile)
@@ -81,7 +84,7 @@ test('a stored predicted HM3 stream reaches the frontend verbatim with native Br
 
 test('miss is a cacheable empty 200, not a 204', async () => {
   const app = await buildApp()
-  const res = await app.inject({ url: '/api/tiles/b0/road/6/33/21.bin' })
+  const res = await app.inject({ url: '/api/tiles/2026/b0/road/6/33/21.bin' })
   assert.equal(res.statusCode, 200)
   assert.equal(res.rawPayload.length, 0)
   assert.equal(res.headers['cache-control'], 'public, max-age=31536000, immutable')
@@ -91,20 +94,43 @@ test('miss is a cacheable empty 200, not a 204', async () => {
   await app.close()
 })
 
-test('unpacked layer archive is 404, unknown build id is 404', async () => {
+test('unpacked layer archive is 404, unknown build id or mismatched year is 404', async () => {
   const app = await buildApp()
-  const noArchive = await app.inject({ url: '/api/tiles/b0/railway/6/33/21.bin' })
+  const noArchive = await app.inject({ url: '/api/tiles/2026/b0/railway/6/33/21.bin' })
   assert.equal(noArchive.statusCode, 404)
-  const badBuild = await app.inject({ url: '/api/tiles/evil/road/6/33/21.bin' })
+  const badBuild = await app.inject({ url: '/api/tiles/2026/evil/road/6/33/21.bin' })
   assert.equal(badBuild.statusCode, 404)
+  const wrongYear = await app.inject({ url: '/api/tiles/2024/b0/road/6/33/21.bin' })
+  assert.equal(wrongYear.statusCode, 404)
+  assert.equal(wrongYear.headers['cache-control'], 'no-store')
   await app.close()
+})
+
+test('archive or directory year mismatch fails closed with uncached 500', async (t) => {
+  const mismatchDir = mkdtempSync(join(tmpdir(), 'pmtiles-year-mismatch-'))
+  t.after(() => rmSync(mismatchDir, { recursive: true, force: true }))
+  writeFileSync(join(mismatchDir, 'year'), '2026\n')
+  writeFileSync(join(mismatchDir, 'road.b0.pmtiles'), emptyArchive(JSON.stringify({ year: '2024' })))
+  writeFileSync(join(mismatchDir, 'road.b1.pmtiles'), emptyArchive('{}'))
+  const app = await buildApp(mismatchDir, '2026')
+  t.after(() => app.close())
+  for (const build of ['b0', 'b1']) {
+    const res = await app.inject({ url: `/api/tiles/2026/${build}/road/6/33/21.bin` })
+    assert.equal(res.statusCode, 500, build)
+    assert.equal(res.headers['cache-control'], 'no-store')
+  }
+  writeFileSync(join(mismatchDir, 'road.b2.pmtiles'), emptyArchive(JSON.stringify({ year: '2026' })))
+  writeFileSync(join(mismatchDir, 'year'), '2024\n')
+  const wrongDir = await app.inject({ url: '/api/tiles/2026/b2/road/6/33/21.bin' })
+  assert.equal(wrongDir.statusCode, 500)
+  assert.equal(wrongDir.headers['cache-control'], 'no-store')
 })
 
 test('symlinked archive leaf fails closed before PMTiles open', async () => {
   const link = join(dir, 'road.b1.pmtiles')
   symlinkSync(join(dir, 'road.b0.pmtiles'), link)
   const app = await buildApp()
-  const res = await app.inject({ url: '/api/tiles/b1/road/6/33/21.bin' })
+  const res = await app.inject({ url: '/api/tiles/2026/b1/road/6/33/21.bin' })
   assert.equal(res.statusCode, 500)
   assert.equal(res.body, 'archive read failed')
   assert.equal(res.headers['cache-control'], 'no-store')
@@ -117,7 +143,7 @@ test('completed concurrent tile requests do not retain a deleted archive on disk
   const app = await buildApp()
   t.after(() => app.close())
   const responses = await Promise.all(Array.from({ length: 8 }, () =>
-    app.inject({ url: '/api/tiles/b2/road/6/33/21.bin' })))
+    app.inject({ url: '/api/tiles/2026/b2/road/6/33/21.bin' })))
   for (const response of responses) assert.equal(response.statusCode, 200)
   unlinkSync(path)
   const held = readdirSync('/proc/self/fd').some(fd => {
@@ -134,27 +160,28 @@ test('a failed leaf-directory read retries after the archive becomes readable ag
   const leaves = ids.map(id => gzipSync(Buffer.from([1, id, 1, tile.length, 1])))
   const root = gzipSync(Buffer.from([2, ids[0], ids[1] - ids[0], 0, 0,
     leaves[0].length, leaves[1].length, 1, leaves[0].length + 1]))
+  const metadata = gzipSync(Buffer.from(JSON.stringify({ year: '2026' })))
   const header = Buffer.from(emptyArchive().subarray(0, 127))
   header.writeBigUInt64LE(BigInt(root.length), 16)
   header.writeBigUInt64LE(BigInt(127 + root.length), 24)
-  header.writeBigUInt64LE(0n, 32)
+  header.writeBigUInt64LE(BigInt(metadata.length), 32)
   header.writeBigUInt64LE(16384n, 40)
   header.writeBigUInt64LE(BigInt(leaves[0].length + leaves[1].length), 48)
   header.writeBigUInt64LE(BigInt(16384 + leaves[0].length + leaves[1].length), 56)
   header.writeBigUInt64LE(BigInt(tile.length), 64)
   const path = join(dir, 'road.b3.pmtiles')
-  writeFileSync(path, Buffer.concat([header, root,
-    Buffer.alloc(16384 - 127 - root.length), ...leaves, tile]))
+  writeFileSync(path, Buffer.concat([header, root, metadata,
+    Buffer.alloc(16384 - 127 - root.length - metadata.length), ...leaves, tile]))
   const app = await buildApp()
   t.after(() => app.close())
-  const first = await app.inject({ url: '/api/tiles/b3/road/2/0/0.bin' })
+  const first = await app.inject({ url: '/api/tiles/2026/b3/road/2/0/0.bin' })
   assert.equal(first.statusCode, 200)
   assert.deepEqual(first.rawPayload, tile)
   renameSync(path, `${path}.held`)
-  const unavailable = await app.inject({ url: '/api/tiles/b3/road/2/0/1.bin' })
+  const unavailable = await app.inject({ url: '/api/tiles/2026/b3/road/2/0/1.bin' })
   assert.equal(unavailable.statusCode, 404)
   renameSync(`${path}.held`, path)
-  const recovered = await app.inject({ url: '/api/tiles/b3/road/2/0/1.bin' })
+  const recovered = await app.inject({ url: '/api/tiles/2026/b3/road/2/0/1.bin' })
   assert.equal(recovered.statusCode, 200)
   assert.deepEqual(recovered.rawPayload, tile)
 })

@@ -8,11 +8,11 @@ the optional sign-in and the streamed popup:
 |---|---|
 | `GET /api/popup?lat=&lon=[&year=][&source=ID,...[&piece=K]]` | one click, streamed as `application/x-ndjson` (below) |
 | `GET /api/source-outline/:id[?year=]` | the site's mapped parts as a GeoJSON FeatureCollection, empty without a boundary; `id` is 16 lowercase hex digits, `year` one of `QM_YEARS` (the first by default), otherwise 400; 503 when that year's outline file was absent at startup; `no-cache` |
-| `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{build, zoom, layers}` |
-| `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
+| `GET /api/tiles-manifest/7` | the published heatmap generation for the HM3 decoder: `{year, build, zoom, layers}` |
+| `GET /api/tiles/:year/:build/:layer/:z/:x/:y.bin` | one HM3 tile of the served map year, Brotli, immutable; a missing tile is an empty 200; another year is 404 (`no-store`) |
 | `GET /api/basemap/:z/:x/:y.mvt` | one vector tile of the standard base map as the archive of `QM_BASEMAP_DIR` stores it (MVT, gzip); a missing tile is 204; kept a day |
 | `GET /api/basemap/fonts/:fontstack/:range.pbf`, `GET /api/basemap/sprites/:file` | the glyphs of the base map's labels and the sprite sheet of its icons (`light.json`, `light.png` and their `@2x`); 404 for any other name; kept a day |
-| `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
+| `GET /api/raster/:layer/:z/:x/:y.png[?year=]` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year (`QM_YEARS`'s first entry; another `?year=` is 400): `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
 | `GET /api/search?q=&lat=&lon=`, `GET /api/reverse?lat=&lon=` | address suggestions and place names (public Photon geocoder) |
 | `GET /api/isochron?lat=&lng=&minutes=&modes=` | the area reachable from a point in `minutes` (a whole number from 1 to 120) on foot and by car (`modes`: `walk`, `car` or both, comma separated), drawn by the Valhalla router of `QM_VALHALLA_URL`: a GeoJSON FeatureCollection of one polygon a mode, each with `{mode, minutes}`, the car's first so that the walk's draws over it; a mode the router failed is left out and the others kept; only the point and the minutes leave; 400 for a wrong query, 502 when no mode was drawn; limited per client like the popup |
 | `GET /api/stay?swlat=&swlng=&nelat=&nelng=&checkin=&checkout=[&adults=][&type=][&minstars=][&minscore=]` | the places to stay with a room in a view (a box within ±180°) for a stay (calendar dates `YYYY-MM-DD`, check-in from today in UTC), hotels or the rest (`type=hotel`, `rental`, both when absent), from Stay22: `{listings, nights, currency, expiresIn, failure}`, each listing at its cheapest supplier's price for the whole stay, all of them gone after `expiresIn` seconds (Stay22's 55 minutes from when they were asked; kept in memory till then, never after, and `no-store`), `failure` saying what part of the search failed when the rest is answered (such an answer is not kept); the view (its middle 16° when wider) is answered for its box moved out to a grid of 1, 2 or 5 times a power of ten, at most a quarter of the view's longer side; 400 for a wrong query or one Stay22 refuses (in its words), 502 when Stay22 fails, 503 without a Stay22 account and, with `Retry-After`, when Stay22 is asked too often: the key's 150 calls a minute are spent, the visitor's 50 of them are (an IPv4 address or an IPv6 /64), four searches run, or Stay22 answered 429 (believed up to a minute); limited per client like the popup |
@@ -91,8 +91,10 @@ opened read-only at startup. The browser asks for an outline when the site's row
 | `QM_MAIL_KEY_FILE`, `QM_MAIL_FROM` | the file holding the mail API's key (Resend) and the sender of the sign-in mails, e.g. `Quiet Map <sign-in@quietmap.org>` |
 
 The server refuses to start without either binary, a year directory or the tiles directory, with a
-base map directory named that is none, with only one of the two Stay22 values, or with only some of
-the sign-in's four.
+base map directory named that is none, with only one of the two Stay22 values, with only some of
+the sign-in's four, or when the frontend bundle (`map-year.json`), the tiles directory (`year` or
+`current.json`) or a prepared outline database (`complete` and `year.json`) disagrees with
+`QM_YEARS`.
 
 How to build, run and test it is in the repository's `README.md`; its tests (`npm --prefix server
 run check`) run the popup route against a fake `qm-popup`, with Stay22 mocked.
