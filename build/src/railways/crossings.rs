@@ -1,8 +1,8 @@
 //! Match crossing through-train counts to physical corridor sections and aggregate per section/run.
 use super::{
     corridor::CorridorLayout,
-    crossing_resolve::{AggregatedFlow, recover_failed_service_gaps, resolve_section},
-    matcher::{Claims, FailedServiceLeg},
+    crossing_resolve::{AggregatedFlow, resolve_section},
+    matcher::Claims,
     model::RailModel,
     network::Network,
     square_intervals::Interval,
@@ -181,7 +181,6 @@ pub fn match_crossings(
     country: [u8; 2],
     squares: &HashSet<[u16; 2]>,
     existing_claims: &Claims,
-    failed_legs: &[FailedServiceLeg],
     yard_keys: &HashSet<([u16; 2], i64, i16)>,
 ) -> Vec<([u16; 2], Interval)> {
     let layout = CorridorLayout::build(network, country, yard_keys);
@@ -300,30 +299,6 @@ pub fn match_crossings(
     let active_runs = run_per_track.iter().filter(|r| r.is_some()).count();
 
     let piece_claims = index_piece_claims(existing_claims);
-    let recovered = recover_failed_service_gaps(
-        model,
-        network,
-        &layout,
-        &piece_claims,
-        failed_legs,
-        source_id,
-        country,
-    );
-    let mut gap_claims: HashMap<([u16; 2], i64, i16), Vec<&Interval>> = HashMap::new();
-    for (sq, iv) in &recovered {
-        gap_claims
-            .entry((*sq, iv.osm_id, iv.segment_idx))
-            .or_default()
-            .push(iv);
-    }
-    for list in gap_claims.values_mut() {
-        list.sort_by(|a, b| {
-            (a.source_id, a.country)
-                .cmp(&(b.source_id, b.country))
-                .then_with(|| a.from_m.total_cmp(&b.from_m))
-                .then_with(|| a.to_m.total_cmp(&b.to_m))
-        });
-    }
     let claims: Vec<([u16; 2], Interval)> = layout
         .sections
         .par_iter()
@@ -366,7 +341,6 @@ pub fn match_crossings(
                 network,
                 &layout.runs,
                 &piece_claims,
-                &gap_claims,
                 source_id,
                 country,
                 squares,

@@ -1,10 +1,9 @@
 //! Match normalized observations through one topology and emit category claims on original way intervals.
 use super::{
     leg_matcher::LegMatcher,
-    merge::{STATUS_KNOWN, STATUS_UNKNOWN},
     model::RailModel,
     movements::{self, Location, Movement, Record},
-    network::{Network, distance},
+    network::Network,
     service,
     source_routes::Routes,
     square_intervals::Interval,
@@ -16,54 +15,6 @@ use std::{
 };
 
 pub type Claims = HashMap<[u16; 2], Vec<(Interval, i64)>>;
-
-/// Aggregated shaped station leg whose graph walk failed, retained for crossing-section gap recovery.
-pub(super) struct FailedServiceLeg {
-    pub source_id: u16,
-    pub country: [u8; 2],
-    pub passenger: f64,
-    pub passenger_status: u8,
-    pub missing_calendar_estimate: [f64; 2],
-    pub shape: Vec<[f64; 2]>,
-    pub cum_m: Vec<f64>,
-    pub bbox: [f64; 4],
-}
-
-impl FailedServiceLeg {
-    pub(super) fn from_shape(
-        source_id: u16,
-        country: [u8; 2],
-        passenger: f64,
-        passenger_status: u8,
-        missing_calendar_estimate: [f64; 2],
-        shape: Vec<[f64; 2]>,
-    ) -> Self {
-        let mut cum_m = Vec::with_capacity(shape.len());
-        let mut total = 0.0;
-        let (mut min_lat, mut min_lon) = (f64::INFINITY, f64::INFINITY);
-        let (mut max_lat, mut max_lon) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
-        for (idx, &pt) in shape.iter().enumerate() {
-            if idx > 0 {
-                total += distance(shape[idx - 1], pt);
-            }
-            cum_m.push(total);
-            min_lat = min_lat.min(pt[0]);
-            max_lat = max_lat.max(pt[0]);
-            min_lon = min_lon.min(pt[1]);
-            max_lon = max_lon.max(pt[1]);
-        }
-        Self {
-            source_id,
-            country,
-            passenger,
-            passenger_status,
-            missing_calendar_estimate,
-            shape,
-            cum_m,
-            bbox: [min_lat, min_lon, max_lat, max_lon],
-        }
-    }
-}
 
 pub struct MatchedInputs {
     pub claims: Claims,
@@ -222,7 +173,6 @@ pub fn read(
         &halo_squares
     };
     let mut yard_bounds: Vec<[u16; 4]> = Vec::new();
-    let mut whole_line_crossing_countries: HashSet<String> = HashSet::new();
     for &source_id in crossing_groups.keys() {
         let source = model
             .source(source_id)
@@ -232,9 +182,6 @@ pub fn read(
             && intersects(bounds, squares)
         {
             yard_bounds.push(bounds_squares(bounds));
-            if model.stamps_whole_line(source_id) {
-                whole_line_crossing_countries.insert(source.owner.clone());
-            }
         }
     }
     let in_yard_bounds = |sq: [u16; 2]| {
@@ -273,9 +220,6 @@ pub fn read(
     } else {
         Vec::new()
     };
-    type FailedLegKey = (u16, [u8; 2], Vec<[u64; 2]>);
-    let mut failed_legs: Vec<FailedServiceLeg> = Vec::new();
-    let mut failed_leg_index: HashMap<FailedLegKey, usize> = HashMap::new();
     for ((source, country), movements) in groups {
         let scope = format!("{source}:{country}");
         let bounds = *model
@@ -302,44 +246,6 @@ pub fn read(
                     service::match_service(routes.as_ref().unwrap(), &mut matcher, stops, shape);
                 totals[usize::from(matched.matching)] += 1;
                 totals[3] += matched.failed;
-                if whole_line_crossing_countries.contains(country.as_str())
-                    && movement.passenger_status != STATUS_UNKNOWN
-                {
-                    let pax =
-                        movement.passenger.unwrap_or(0.0) + movement.missing_calendar_estimate[0];
-                    if pax > 0.0 {
-                        let iso: [u8; 2] = movement.country.as_bytes().try_into().unwrap();
-                        for leg_shape in matched.failed_shapes {
-                            let key = (
-                                movement.source_id,
-                                iso,
-                                leg_shape.iter().map(|p| p.map(f64::to_bits)).collect(),
-                            );
-                            if let Some(&pos) = failed_leg_index.get(&key) {
-                                let entry = &mut failed_legs[pos];
-                                entry.passenger += pax;
-                                entry.missing_calendar_estimate[0] +=
-                                    movement.missing_calendar_estimate[0];
-                                entry.missing_calendar_estimate[1] +=
-                                    movement.missing_calendar_estimate[1];
-                                if movement.passenger_status == STATUS_KNOWN {
-                                    entry.passenger_status = STATUS_KNOWN;
-                                }
-                            } else {
-                                let pos = failed_legs.len();
-                                failed_leg_index.insert(key, pos);
-                                failed_legs.push(FailedServiceLeg::from_shape(
-                                    movement.source_id,
-                                    iso,
-                                    pax,
-                                    movement.passenger_status,
-                                    movement.missing_calendar_estimate,
-                                    leg_shape,
-                                ));
-                            }
-                        }
-                    }
-                }
                 let offset = occurrence;
                 for passage in matched.passages {
                     occurrence = occurrence.max(offset + passage.occurrence + 1);
@@ -486,7 +392,6 @@ pub fn read(
             country,
             squares,
             &result.claims,
-            &failed_legs,
             &yard_keys,
         ) {
             result.claims.entry(square).or_default().push((claim, 0));
