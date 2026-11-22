@@ -54,6 +54,22 @@ pub(super) fn tokens_match(a: &Edge, b: &Edge) -> TokenRel {
     TokenRel::Conflict
 }
 
+fn edge_cells(edge: &Edge, mut visit: impl FnMut((i32, i32))) {
+    let [a, b] = edge.points;
+    let steps = ((b[0] - a[0]).abs().max((b[1] - a[1]).abs()) / (GRID_CELL_DEG * 0.5))
+        .ceil()
+        .max(1.0) as usize;
+    let mut prev = None;
+    for step in 0..=steps {
+        let frac = step as f64 / steps as f64;
+        let cell = grid_cell([a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac]);
+        if prev != Some(cell) {
+            visit(cell);
+            prev = Some(cell);
+        }
+    }
+}
+
 /// Spatial index rasterizing every eligible heavy-rail segment across all cells it crosses.
 pub(super) struct EdgeGrid {
     cells: HashMap<(i32, i32), Vec<usize>>,
@@ -63,21 +79,8 @@ impl EdgeGrid {
     pub(super) fn build(network: &Network, eligible: &[bool]) -> Self {
         let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
         for (edge_idx, edge) in network.edges.iter().enumerate() {
-            if !eligible[edge_idx] {
-                continue;
-            }
-            let [a, b] = edge.points;
-            let steps = ((b[0] - a[0]).abs().max((b[1] - a[1]).abs()) / (GRID_CELL_DEG * 0.5))
-                .ceil()
-                .max(1.0) as usize;
-            let mut prev = None;
-            for step in 0..=steps {
-                let frac = step as f64 / steps as f64;
-                let cell = grid_cell([a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac]);
-                if prev != Some(cell) {
-                    cells.entry(cell).or_default().push(edge_idx);
-                    prev = Some(cell);
-                }
+            if eligible[edge_idx] {
+                edge_cells(edge, |cell| cells.entry(cell).or_default().push(edge_idx));
             }
         }
         Self { cells }
@@ -89,36 +92,21 @@ impl EdgeGrid {
         min_idx: usize,
         radius_m: f64,
     ) -> Vec<usize> {
-        let [a, b] = edge.points;
-        let mid_lat = 0.5 * (a[0] + b[0]);
+        let mid_lat = 0.5 * (edge.points[0][0] + edge.points[1][0]);
         let dy = (radius_m / (GRID_CELL_DEG * 110_540.0)).ceil().max(1.0) as i32;
         let dx = (radius_m / (GRID_CELL_DEG * 111_320.0 * mid_lat.to_radians().cos().max(0.05)))
             .ceil()
             .max(1.0) as i32;
-        let steps = ((b[0] - a[0]).abs().max((b[1] - a[1]).abs()) / (GRID_CELL_DEG * 0.5))
-            .ceil()
-            .max(1.0) as usize;
         let mut out = Vec::new();
-        let mut prev = None;
-        for step in 0..=steps {
-            let frac = step as f64 / steps as f64;
-            let cell = grid_cell([a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac]);
-            if prev == Some(cell) {
-                continue;
-            }
-            prev = Some(cell);
+        edge_cells(edge, |cell| {
             for oy in -dy..=dy {
                 for ox in -dx..=dx {
                     if let Some(bucket) = self.cells.get(&(cell.0 + oy, cell.1 + ox)) {
-                        for &edge_idx in bucket {
-                            if edge_idx > min_idx {
-                                out.push(edge_idx);
-                            }
-                        }
+                        out.extend(bucket.iter().copied().filter(|&idx| idx > min_idx));
                     }
                 }
             }
-        }
+        });
         out.sort_unstable();
         out.dedup();
         out
@@ -343,6 +331,30 @@ pub(super) fn build_runs(
             sort_key,
         }
     };
+    let trace_chain = |visited: &mut [bool],
+                       mut cur_edge: usize,
+                       mut cur_node: usize,
+                       stop_at_nonsmooth: bool| {
+        let mut chain = Vec::new();
+        loop {
+            visited[cur_edge] = true;
+            let e = &network.edges[cur_edge];
+            let reversed = e.nodes[0] != cur_node;
+            chain.push((cur_edge, reversed));
+            let next_node = if reversed { e.nodes[0] } else { e.nodes[1] };
+            if stop_at_nonsmooth && !smooth_node(next_node) {
+                break;
+            }
+            match deg[next_node].iter().copied().find(|&n| n != cur_edge) {
+                Some(ne) if !visited[ne] => {
+                    cur_node = next_node;
+                    cur_edge = ne;
+                }
+                _ => break,
+            }
+        }
+        chain
+    };
     for (edge_idx, edge) in network.edges.iter().enumerate() {
         if !eligible[edge_idx] || visited[edge_idx] {
             continue;
@@ -359,25 +371,7 @@ pub(super) fn build_runs(
         } else {
             continue;
         };
-        let mut chain = Vec::new();
-        let (mut cur_node, mut cur_edge) = (start_node, edge_idx);
-        loop {
-            visited[cur_edge] = true;
-            let e = &network.edges[cur_edge];
-            let reversed = e.nodes[0] != cur_node;
-            chain.push((cur_edge, reversed));
-            let next_node = if reversed { e.nodes[0] } else { e.nodes[1] };
-            if !smooth_node(next_node) {
-                break;
-            }
-            match deg[next_node].iter().copied().find(|&n| n != cur_edge) {
-                Some(ne) if !visited[ne] => {
-                    cur_node = next_node;
-                    cur_edge = ne;
-                }
-                _ => break,
-            }
-        }
+        let mut chain = trace_chain(&mut visited, edge_idx, start_node, true);
         if edge_key(chain.last().unwrap().0) < edge_key(chain[0].0) {
             chain.reverse();
             for (_, rev) in &mut chain {
@@ -390,22 +384,12 @@ pub(super) fn build_runs(
         if !eligible[edge_idx] || visited[edge_idx] {
             continue;
         }
-        let mut chain = Vec::new();
-        let (mut cur_edge, mut cur_node) = (edge_idx, network.edges[edge_idx].nodes[0]);
-        loop {
-            visited[cur_edge] = true;
-            let e = &network.edges[cur_edge];
-            let reversed = e.nodes[0] != cur_node;
-            chain.push((cur_edge, reversed));
-            let next_node = if reversed { e.nodes[0] } else { e.nodes[1] };
-            match deg[next_node].iter().copied().find(|&n| n != cur_edge) {
-                Some(ne) if !visited[ne] => {
-                    cur_node = next_node;
-                    cur_edge = ne;
-                }
-                _ => break,
-            }
-        }
+        let mut chain = trace_chain(
+            &mut visited,
+            edge_idx,
+            network.edges[edge_idx].nodes[0],
+            false,
+        );
         let min_pos = (0..chain.len())
             .min_by_key(|&i| edge_key(chain[i].0))
             .unwrap_or(0);

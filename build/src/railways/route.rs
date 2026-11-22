@@ -19,6 +19,28 @@ struct Snap {
     distance: f64,
 }
 
+fn for_each_snap(
+    network: &Network,
+    point: [f64; 2],
+    allowed: &impl Fn(&Edge) -> bool,
+    mut visit_snap: impl FnMut(Snap),
+) {
+    for index in network.nearby(point, 300.0) {
+        let edge = &network.edges[index];
+        if !allowed(edge) {
+            continue;
+        }
+        let (distance, fraction) = project(point, edge.points[0], edge.points[1]);
+        if distance <= 300.0 {
+            visit_snap(Snap {
+                edge: index,
+                fraction,
+                distance,
+            });
+        }
+    }
+}
+
 fn snaps(
     network: &Network,
     point: [f64; 2],
@@ -26,37 +48,35 @@ fn snaps(
 ) -> Vec<(usize, Snap)> {
     let mut components = Vec::<(usize, Snap)>::new();
     let mut indices = HashMap::new();
-    for index in network.nearby(point, 300.0) {
-        let edge = &network.edges[index];
-        if !allowed(edge) {
-            continue;
-        }
-        let (distance, fraction) = project(point, edge.points[0], edge.points[1]);
-        if distance > 300.0 {
-            continue;
-        }
-        let component = network.components[edge.nodes[0]];
+    for_each_snap(network, point, allowed, |snap| {
+        let component = network.components[network.edges[snap.edge].nodes[0]];
         let position = *indices.entry(component).or_insert_with(|| {
             let at = components.len();
             components.push((
                 component,
                 Snap {
-                    edge: index,
-                    fraction,
                     distance: f64::INFINITY,
+                    ..snap
                 },
             ));
             at
         });
-        if distance < components[position].1.distance {
-            components[position].1 = Snap {
-                edge: index,
-                fraction,
-                distance,
-            };
+        if snap.distance < components[position].1.distance {
+            components[position].1 = snap;
         }
-    }
+    });
     components
+}
+
+fn collect_snaps(
+    network: &Network,
+    point: [f64; 2],
+    allowed: &impl Fn(&Edge) -> bool,
+) -> Vec<Snap> {
+    let mut out = Vec::new();
+    for_each_snap(network, point, allowed, |snap| out.push(snap));
+    out.sort_by(|a, b| a.distance.total_cmp(&b.distance).then(a.edge.cmp(&b.edge)));
+    out
 }
 
 fn visit(network: &Network, edge: usize, from: f64, to: f64) -> Visit {
@@ -67,30 +87,6 @@ fn visit(network: &Network, edge: usize, from: f64, to: f64) -> Visit {
         from,
         to,
     }
-}
-
-fn collect_snaps(
-    network: &Network,
-    point: [f64; 2],
-    allowed: &impl Fn(&Edge) -> bool,
-) -> Vec<Snap> {
-    let mut out = Vec::new();
-    for index in network.nearby(point, 300.0) {
-        let edge = &network.edges[index];
-        if !allowed(edge) {
-            continue;
-        }
-        let (distance, fraction) = project(point, edge.points[0], edge.points[1]);
-        if distance <= 300.0 {
-            out.push(Snap {
-                edge: index,
-                fraction,
-                distance,
-            });
-        }
-    }
-    out.sort_by(|a, b| a.distance.total_cmp(&b.distance).then(a.edge.cmp(&b.edge)));
-    out
 }
 
 pub(super) fn has_corridor_snap(network: &Network, point: [f64; 2], shape: &[[f64; 2]]) -> bool {

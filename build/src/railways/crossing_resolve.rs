@@ -33,51 +33,39 @@ fn project_leg_s(
         .clamp(to.s0, to.s1)
 }
 
-/// Distribute `pax_daily` across END periods respecting `0 <= pax[p] <= cap[p]` in every period,
-/// weighted by `weights`; zero-capacity periods stay zero and overflow spills to open periods.
+/// Distribute `pax_daily` across END periods respecting `0 <= pax[p] <= cap[p]`, weighted by `weights`.
 pub(super) fn allocate_passenger_in_periods(
     cap: [f64; 3],
     pax_daily: f64,
     weights: [f64; 3],
 ) -> [f64; 3] {
-    let cap_sum: f64 = cap.iter().sum();
-    let mut remaining = pax_daily.clamp(0.0, cap_sum);
+    let mut remaining = pax_daily.clamp(0.0, cap.iter().sum());
     let mut out = [0.0; 3];
-    if remaining <= 1e-12 {
-        return out;
-    }
     for _ in 0..3 {
-        let mut active_w = 0.0;
-        let mut headroom = 0.0;
-        for p in 0..3 {
-            let room = (cap[p] - out[p]).max(0.0);
-            if room > 1e-12 {
-                active_w += weights[p];
-                headroom += room;
-            }
-        }
+        let rooms = [0, 1, 2].map(|p| (cap[p] - out[p]).max(0.0));
+        let headroom: f64 = rooms.iter().sum();
         if remaining <= 1e-12 || headroom <= 1e-12 {
             break;
         }
-        let mut spilled = 0.0;
-        let mut distributed = 0.0;
+        let active_w: f64 = (0..3)
+            .filter(|&p| rooms[p] > 1e-12)
+            .map(|p| weights[p])
+            .sum();
+        let (mut spilled, mut distributed) = (0.0, 0.0);
         for p in 0..3 {
-            let room = (cap[p] - out[p]).max(0.0);
-            if room <= 1e-12 {
+            if rooms[p] <= 1e-12 {
                 continue;
             }
             let share = if active_w > 0.0 {
                 weights[p] / active_w
             } else {
-                room / headroom
+                rooms[p] / headroom
             };
             let want = remaining * share;
-            let add = want.min(room);
+            let add = want.min(rooms[p]);
             out[p] += add;
             distributed += add;
-            if want > room {
-                spilled += want - room;
-            }
+            spilled += (want - rooms[p]).max(0.0);
         }
         remaining = (remaining - distributed).max(0.0);
         if spilled <= 1e-12 {
@@ -110,55 +98,31 @@ impl AggregatedFlow {
     }
 }
 
-fn higher_rank_freight(
+#[allow(clippy::too_many_arguments)]
+fn winning_category(
     model: &RailModel,
     country: [u8; 2],
     source_id: u16,
     idx_vec: &[usize],
     domestic: &[RowTraffic],
     foreign: &[RowTraffic],
+    is_passenger: bool,
+    exclude_self: bool,
+    get: fn(&RowTraffic) -> CategoryFlow,
 ) -> Option<CategoryFlow> {
-    let dom = scope_winner(model, country, idx_vec, domestic, false, |t| t.freight);
-    if dom != 0
-        && dom != source_id
-        && !model.is_residual(dom)
-        && model.should_overwrite(source_id, dom)
-    {
-        return Some(scope_value(model, idx_vec, domestic, dom, |t| t.freight));
+    let ok = |src: u16, is_foreign: bool| {
+        src != 0
+            && (!exclude_self || src != source_id)
+            && !model.is_residual(src)
+            && (!is_foreign || !model.blocks_foreign_national(source_id, src))
+            && model.should_overwrite(source_id, src)
+    };
+    let dom = scope_winner(model, country, idx_vec, domestic, is_passenger, get);
+    if ok(dom, false) {
+        return Some(scope_value(model, idx_vec, domestic, dom, get));
     }
-    let for_ = scope_winner(model, country, idx_vec, foreign, false, |t| t.freight);
-    if for_ != 0
-        && for_ != source_id
-        && !model.is_residual(for_)
-        && !model.blocks_foreign_national(source_id, for_)
-        && model.should_overwrite(source_id, for_)
-    {
-        return Some(scope_value(model, idx_vec, foreign, for_, |t| t.freight));
-    }
-    None
-}
-
-fn winning_timetable(
-    model: &RailModel,
-    country: [u8; 2],
-    source_id: u16,
-    idx_vec: &[usize],
-    domestic: &[RowTraffic],
-    foreign: &[RowTraffic],
-) -> Option<CategoryFlow> {
-    let dom = scope_winner(model, country, idx_vec, domestic, true, |t| t.passenger);
-    if dom != 0 && !model.is_residual(dom) && model.should_overwrite(source_id, dom) {
-        return Some(scope_value(model, idx_vec, domestic, dom, |t| t.passenger));
-    }
-    let for_ = scope_winner(model, country, idx_vec, foreign, true, |t| t.passenger);
-    if for_ != 0
-        && !model.is_residual(for_)
-        && !model.blocks_foreign_national(source_id, for_)
-        && model.should_overwrite(source_id, for_)
-    {
-        return Some(scope_value(model, idx_vec, foreign, for_, |t| t.passenger));
-    }
-    None
+    let for_ = scope_winner(model, country, idx_vec, foreign, is_passenger, get);
+    ok(for_, true).then(|| scope_value(model, idx_vec, foreign, for_, get))
 }
 
 fn probe_leg_evidence(
@@ -180,10 +144,11 @@ fn probe_leg_evidence(
         edge.extent[0].max(edge.extent[1]),
     );
     let mut p = run.s_to_edge_extent(pos, edge, s_mid).clamp(e_lo, e_hi);
-    let near_cut = ivs
-        .iter()
-        .any(|iv| (iv.from_m - p).abs() < 1e-4 || (iv.to_m - p).abs() < 1e-4);
-    if near_cut && e_hi - e_lo > 1e-4 {
+    if e_hi - e_lo > 1e-4
+        && ivs
+            .iter()
+            .any(|iv| (iv.from_m - p).abs() < 1e-4 || (iv.to_m - p).abs() < 1e-4)
+    {
         let step = (0.25 * (e_hi - e_lo)).min(1e-3);
         p = if p + step < e_hi {
             p + step
@@ -200,26 +165,38 @@ fn probe_leg_evidence(
     (dom, for_, edge_idx)
 }
 
-fn scale_flow(flow: CategoryFlow, factor: f64) -> CategoryFlow {
+fn scale_leg_flow(
+    flow: CategoryFlow,
+    fallback_source: u16,
+    eligible: bool,
+    eligible_phys: f64,
+    slot_weight: f64,
+    phys_tracks: f64,
+) -> CategoryFlow {
+    if eligible_phys > 0.0 && !eligible {
+        return CategoryFlow {
+            periods: [0.0; 3],
+            missing_calendar_estimate: [0.0; 3],
+            status: STATUS_ESTIMATED,
+            source_id: if flow.source_id != 0 {
+                flow.source_id
+            } else {
+                fallback_source
+            },
+            matching: if flow.matching != 0 { flow.matching } else { 2 },
+            stop: 0,
+        };
+    }
+    let factor = slot_weight
+        / if eligible_phys > 0.0 {
+            eligible_phys
+        } else {
+            phys_tracks
+        };
     CategoryFlow {
         periods: flow.periods.map(|v| v * factor),
         missing_calendar_estimate: flow.missing_calendar_estimate.map(|v| v * factor),
         ..flow
-    }
-}
-
-fn zero_like(flow: CategoryFlow, fallback_source: u16) -> CategoryFlow {
-    CategoryFlow {
-        periods: [0.0; 3],
-        missing_calendar_estimate: [0.0; 3],
-        status: STATUS_ESTIMATED,
-        source_id: if flow.source_id != 0 {
-            flow.source_id
-        } else {
-            fallback_source
-        },
-        matching: if flow.matching != 0 { flow.matching } else { 2 },
-        stop: 0,
     }
 }
 
@@ -251,12 +228,12 @@ fn section_leg_cuts<'a>(
     let mut u_entries: Vec<(f64, Option<(usize, f64)>)> =
         vec![(ref_leg.s0, None), (ref_leg.s1, None)];
     let mut push_cut = |leg_idx: usize, leg: &SectionLeg, s: f64| {
-        if leg_idx == 0 {
-            u_entries.push((s, Some((0, s))));
+        let u = if leg_idx == 0 {
+            s
         } else {
-            let u = project_leg_s(network, runs, leg, s, ref_leg);
-            u_entries.push((u, Some((leg_idx, s))));
-        }
+            project_leg_s(network, runs, leg, s, ref_leg)
+        };
+        u_entries.push((u, Some((leg_idx, s))));
     };
     for (leg_idx, leg) in section.legs.iter().enumerate() {
         let run = &runs[leg.run_id];
@@ -275,8 +252,11 @@ fn section_leg_cuts<'a>(
             if let Some(ivs) = piece_claims.get(&(edge.square, edge.way, edge.segment)) {
                 for iv in ivs {
                     for m in [iv.from_m, iv.to_m] {
-                        let s = run.edge_extent_to_s(pos, edge, m).clamp(leg.s0, leg.s1);
-                        push_cut(leg_idx, leg, s);
+                        push_cut(
+                            leg_idx,
+                            leg,
+                            run.edge_extent_to_s(pos, edge, m).clamp(leg.s0, leg.s1),
+                        );
                     }
                 }
             }
@@ -285,55 +265,54 @@ fn section_leg_cuts<'a>(
     u_entries.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut cuts: Vec<(f64, Vec<(usize, f64)>)> = Vec::with_capacity(u_entries.len());
     for (u, anchor) in u_entries {
-        let can_merge = cuts.last().is_some_and(|(prev_u, anchors)| {
-            u - *prev_u <= 1e-4
-                && anchor.is_none_or(|(li, os)| {
-                    anchors
-                        .iter()
-                        .all(|&(ali, aos)| ali != li || (aos - os).abs() <= 1e-4)
-                })
-        });
-        if can_merge {
+        if let Some((prev_u, anchors)) = cuts.last_mut()
+            && u - *prev_u <= 1e-4
+            && anchor.is_none_or(|(li, os)| {
+                anchors
+                    .iter()
+                    .all(|&(ali, aos)| ali != li || (aos - os).abs() <= 1e-4)
+            })
+        {
             if let Some(a) = anchor {
-                cuts.last_mut().unwrap().1.push(a);
+                anchors.push(a);
             }
         } else {
             cuts.push((u, anchor.into_iter().collect()));
         }
     }
-    if cuts.last().map(|c| c.0).unwrap_or(ref_leg.s0) < ref_leg.s1 - 1e-4 {
+    if cuts.last().map_or(ref_leg.s0, |c| c.0) < ref_leg.s1 - 1e-4 {
         cuts.push((ref_leg.s1, Vec::new()));
     }
     if cuts.len() < 2 {
         cuts = vec![(ref_leg.s0, Vec::new()), (ref_leg.s1, Vec::new())];
     }
-    let mut leg_cuts: Vec<Vec<f64>> = Vec::with_capacity(section.legs.len());
-    for (leg_idx, leg) in section.legs.iter().enumerate() {
-        if leg_idx == 0 {
-            leg_cuts.push(cuts.iter().map(|(u, _)| *u).collect());
-            continue;
-        }
-        let mut pts = Vec::with_capacity(cuts.len());
-        pts.push(if leg.same_dir { leg.s0 } else { leg.s1 });
-        for (u, anchors) in &cuts[1..cuts.len() - 1] {
-            // Keep originating sibling cuts at their exact coordinate instead of round-tripping.
-            let mut s = if let Some(&(_, orig_s)) = anchors.iter().find(|&&(li, _)| li == leg_idx) {
-                orig_s
-            } else {
-                project_leg_s(network, runs, ref_leg, *u, leg)
-            };
-            let prev = *pts.last().unwrap();
-            s = if leg.same_dir {
-                s.clamp(prev, leg.s1)
-            } else {
-                s.clamp(leg.s0, prev)
-            };
-            pts.push(s);
-        }
-        pts.push(if leg.same_dir { leg.s1 } else { leg.s0 });
-        leg_cuts.push(pts);
-    }
-    leg_cuts
+    section
+        .legs
+        .iter()
+        .enumerate()
+        .map(|(leg_idx, leg)| {
+            if leg_idx == 0 {
+                return cuts.iter().map(|(u, _)| *u).collect();
+            }
+            let mut pts = Vec::with_capacity(cuts.len());
+            pts.push(if leg.same_dir { leg.s0 } else { leg.s1 });
+            for (u, anchors) in &cuts[1..cuts.len() - 1] {
+                // Keep originating sibling cuts at their exact coordinate instead of round-tripping.
+                let raw = anchors.iter().find(|&&(li, _)| li == leg_idx).map_or_else(
+                    || project_leg_s(network, runs, ref_leg, *u, leg),
+                    |&(_, s)| s,
+                );
+                let prev = *pts.last().unwrap();
+                pts.push(if leg.same_dir {
+                    raw.clamp(prev, leg.s1)
+                } else {
+                    raw.clamp(leg.s0, prev)
+                });
+            }
+            pts.push(if leg.same_dir { leg.s1 } else { leg.s0 });
+            pts
+        })
+        .collect()
 }
 
 struct LineTotals {
@@ -356,7 +335,7 @@ fn resolve_window_line_traffic(
     win_tt: Option<CategoryFlow>,
     high_frt: Option<CategoryFlow>,
 ) -> RowTraffic {
-    let estimated_flow = |periods: [f64; 3]| CategoryFlow {
+    let est = |periods: [f64; 3]| CategoryFlow {
         periods,
         missing_calendar_estimate: [0.0; 3],
         status: STATUS_ESTIMATED,
@@ -364,32 +343,30 @@ fn resolve_window_line_traffic(
         matching: 2,
         stop: 0,
     };
-    let pax_periods_for = |pax_line: f64| {
+    let split_sub = |sub: [f64; 3], target: f64, shares: [f64; 3]| {
         if totals.has_measured {
-            allocate_passenger_in_periods(totals.total_periods, pax_line, totals.pax_shares)
+            subtract_passenger_periods(totals.total_periods, sub, target)
         } else {
-            totals.pax_shares.map(|s| pax_line * s)
+            shares.map(|s| target * s)
         }
     };
     if let Some(raw_frt) = high_frt {
         let passenger = if let Some(raw_pax) = win_tt {
             raw_pax
         } else if totals.has_explicit_pax {
-            let frt_daily: f64 = raw_frt.periods.iter().sum();
-            let rem_daily = (totals.total_daily - frt_daily).max(0.0);
-            let pax_line = totals.known_pax_floor.clamp(0.0, rem_daily);
-            let pax_periods = if totals.has_measured {
+            let rem = (totals.total_daily - raw_frt.periods.iter().sum::<f64>()).max(0.0);
+            let pax_line = totals.known_pax_floor.clamp(0.0, rem);
+            let periods = if totals.has_measured {
                 let rem_cap =
                     [0, 1, 2].map(|p| (totals.total_periods[p] - raw_frt.periods[p]).max(0.0));
                 allocate_passenger_in_periods(rem_cap, pax_line, totals.pax_shares)
             } else {
                 totals.pax_shares.map(|s| pax_line * s)
             };
-            estimated_flow(pax_periods)
+            est(periods)
         } else {
-            let frt_daily: f64 = raw_frt.periods.iter().sum();
             let mut rem = if pax_eligible {
-                (totals.total_daily - frt_daily).max(0.0)
+                (totals.total_daily - raw_frt.periods.iter().sum::<f64>()).max(0.0)
             } else {
                 0.0
             };
@@ -399,12 +376,7 @@ fn resolve_window_line_traffic(
                     rem = cap.next_down().max(0.0);
                 }
             }
-            let pax_periods = if totals.has_measured {
-                subtract_passenger_periods(totals.total_periods, raw_frt.periods, rem)
-            } else {
-                totals.pax_shares.map(|s| rem * s)
-            };
-            estimated_flow(pax_periods)
+            est(split_sub(raw_frt.periods, rem, totals.pax_shares))
         };
         return RowTraffic {
             passenger,
@@ -412,17 +384,15 @@ fn resolve_window_line_traffic(
         };
     }
     if let Some(raw_pax) = win_tt {
-        let tt_daily: f64 = raw_pax.periods.iter().sum();
-        let effective_pax = tt_daily.max(totals.known_pax_floor);
+        let effective_pax = raw_pax
+            .periods
+            .iter()
+            .sum::<f64>()
+            .max(totals.known_pax_floor);
         let target_frt = (totals.total_daily - effective_pax).max(0.0);
-        let frt_line = if totals.has_measured {
-            subtract_passenger_periods(totals.total_periods, raw_pax.periods, target_frt)
-        } else {
-            totals.frt_shares.map(|s| target_frt * s)
-        };
         return RowTraffic {
             passenger: raw_pax,
-            freight: estimated_flow(frt_line),
+            freight: est(split_sub(raw_pax.periods, target_frt, totals.frt_shares)),
         };
     }
     let pax_line: f64 = carriers
@@ -432,31 +402,31 @@ fn resolve_window_line_traffic(
                 return p;
             }
             let base = c.passenger_cap.map_or(c.total, |cap| c.total.min(cap));
-            let mut est = base * prior_ratio;
+            let mut val = base * prior_ratio;
             if let Some(cap) = c.passenger_cap
-                && est >= cap
+                && val >= cap
                 && c.total > 0.0
             {
-                est = cap.next_down().max(0.0);
+                val = cap.next_down().max(0.0);
             }
-            est.min(c.total)
+            val.min(c.total)
         })
         .sum::<f64>()
         .clamp(0.0, totals.total_daily);
-    let pax_periods = pax_periods_for(pax_line);
-    let target_frt = (totals.total_daily - pax_line).max(0.0);
-    let frt_periods = if totals.has_measured {
-        [
-            (totals.total_periods[0] - pax_periods[0]).max(0.0),
-            (totals.total_periods[1] - pax_periods[1]).max(0.0),
-            (totals.total_periods[2] - pax_periods[2]).max(0.0),
-        ]
+    let pax_periods = if totals.has_measured {
+        allocate_passenger_in_periods(totals.total_periods, pax_line, totals.pax_shares)
     } else {
+        totals.pax_shares.map(|s| pax_line * s)
+    };
+    let frt_periods = if totals.has_measured {
+        [0, 1, 2].map(|p| (totals.total_periods[p] - pax_periods[p]).max(0.0))
+    } else {
+        let target_frt = (totals.total_daily - pax_line).max(0.0);
         totals.frt_shares.map(|s| target_frt * s)
     };
     RowTraffic {
-        passenger: estimated_flow(pax_periods),
-        freight: estimated_flow(frt_periods),
+        passenger: est(pax_periods),
+        freight: est(frt_periods),
     }
 }
 
@@ -477,10 +447,8 @@ pub(super) fn resolve_section(
     }
     let phys_tracks = section.phys_tracks.max(1) as f64;
     let shares = model.period_shares(country, 0);
-    let mut measured_line = [0.0; 3];
-    let mut unsplit_line = 0.0;
-    let mut known_pax_floor = 0.0;
-    let mut has_explicit_pax = false;
+    let (mut measured_line, mut unsplit_line, mut known_pax_floor, mut has_explicit_pax) =
+        ([0.0; 3], 0.0, 0.0, false);
     for c in carriers {
         for (sum, val) in measured_line.iter_mut().zip(c.measured_periods) {
             *sum += val;
@@ -491,11 +459,7 @@ pub(super) fn resolve_section(
             has_explicit_pax = true;
         }
     }
-    let total_periods = [
-        measured_line[0] + unsplit_line * shares.frt[0],
-        measured_line[1] + unsplit_line * shares.frt[1],
-        measured_line[2] + unsplit_line * shares.frt[2],
-    ];
+    let total_periods = [0, 1, 2].map(|p| measured_line[p] + unsplit_line * shares.frt[p]);
     let totals = LineTotals {
         total_periods,
         total_daily: total_periods.iter().sum(),
@@ -506,30 +470,32 @@ pub(super) fn resolve_section(
         frt_shares: shares.frt,
     };
     let leg_cuts = section_leg_cuts(section, runs, network, piece_claims);
-    let n_win = leg_cuts[0].len() - 1;
     let idx_vec: Vec<usize> = (0..section.legs.len()).collect();
-    let mut domestic = Vec::with_capacity(section.legs.len());
-    let mut foreign = Vec::with_capacity(section.legs.len());
-    let mut can_pax = Vec::with_capacity(section.legs.len());
-    let mut can_frt = Vec::with_capacity(section.legs.len());
-    type EdgeKey = ([u16; 2], i64, i16);
+    let (mut domestic, mut foreign, mut can_pax, mut can_frt) = (
+        Vec::with_capacity(section.legs.len()),
+        Vec::with_capacity(section.legs.len()),
+        Vec::with_capacity(section.legs.len()),
+        Vec::with_capacity(section.legs.len()),
+    );
     type ResolvedSpan = (f64, f64, RowTraffic);
-    let mut per_edge: HashMap<EdgeKey, Vec<ResolvedSpan>> = HashMap::new();
+    let mut per_edge: HashMap<([u16; 2], i64, i16), Vec<ResolvedSpan>> = HashMap::new();
 
-    for w in 0..n_win {
+    for w in 0..(leg_cuts[0].len() - 1) {
         domestic.clear();
         foreign.clear();
         can_pax.clear();
         can_frt.clear();
-        let (mut pax_prior, mut frt_prior) = (0.0_f64, 0.0_f64);
-        let (mut pax_phys, mut frt_phys) = (0.0_f64, 0.0_f64);
+        let (mut pax_prior, mut frt_prior, mut pax_phys, mut frt_phys) =
+            (0.0_f64, 0.0_f64, 0.0, 0.0);
         for (leg_idx, leg) in section.legs.iter().enumerate() {
             let s_mid = 0.5 * (leg_cuts[leg_idx][w] + leg_cuts[leg_idx][w + 1]);
             let (dom, for_, edge_idx) =
                 probe_leg_evidence(model, network, &runs[leg.run_id], s_mid, piece_claims);
             let e = &network.edges[edge_idx];
-            let allow_pax = carries_passengers(e.traffic_mode);
-            let allow_frt = carries_freight(e.traffic_mode);
+            let (allow_pax, allow_frt) = (
+                carries_passengers(e.traffic_mode),
+                carries_freight(e.traffic_mode),
+            );
             let (pp, fp) = model.default_traffic(e.rail_type, e.usage, country, e.traffic_mode);
             if allow_pax {
                 pax_prior = pax_prior.max(pp);
@@ -549,9 +515,28 @@ pub(super) fn resolve_section(
         } else {
             0.0
         };
-        let win_tt = winning_timetable(model, country, source_id, &idx_vec, &domestic, &foreign);
-        let high_frt =
-            higher_rank_freight(model, country, source_id, &idx_vec, &domestic, &foreign);
+        let win_tt = winning_category(
+            model,
+            country,
+            source_id,
+            &idx_vec,
+            &domestic,
+            &foreign,
+            true,
+            false,
+            |t| t.passenger,
+        );
+        let high_frt = winning_category(
+            model,
+            country,
+            source_id,
+            &idx_vec,
+            &domestic,
+            &foreign,
+            false,
+            true,
+            |t| t.freight,
+        );
         let line_flow = resolve_window_line_traffic(
             carriers,
             &totals,
@@ -561,33 +546,32 @@ pub(super) fn resolve_section(
             win_tt,
             high_frt,
         );
-        let zero_pax = zero_like(line_flow.passenger, source_id);
-        let zero_frt = zero_like(line_flow.freight, source_id);
         for (leg_idx, leg) in section.legs.iter().enumerate() {
-            let s_a = leg_cuts[leg_idx][w].min(leg_cuts[leg_idx][w + 1]);
-            let s_b = leg_cuts[leg_idx][w].max(leg_cuts[leg_idx][w + 1]);
+            let (s_a, s_b) = (
+                leg_cuts[leg_idx][w].min(leg_cuts[leg_idx][w + 1]),
+                leg_cuts[leg_idx][w].max(leg_cuts[leg_idx][w + 1]),
+            );
             if s_b - s_a <= 1e-4 {
                 continue;
             }
-            let passenger = if pax_phys > 0.0 {
-                if can_pax[leg_idx] {
-                    scale_flow(line_flow.passenger, leg.slot_weight / pax_phys)
-                } else {
-                    zero_pax
-                }
-            } else {
-                scale_flow(line_flow.passenger, leg.slot_weight / phys_tracks)
+            let resolved = RowTraffic {
+                passenger: scale_leg_flow(
+                    line_flow.passenger,
+                    source_id,
+                    can_pax[leg_idx],
+                    pax_phys,
+                    leg.slot_weight,
+                    phys_tracks,
+                ),
+                freight: scale_leg_flow(
+                    line_flow.freight,
+                    source_id,
+                    can_frt[leg_idx],
+                    frt_phys,
+                    leg.slot_weight,
+                    phys_tracks,
+                ),
             };
-            let freight = if frt_phys > 0.0 {
-                if can_frt[leg_idx] {
-                    scale_flow(line_flow.freight, leg.slot_weight / frt_phys)
-                } else {
-                    zero_frt
-                }
-            } else {
-                scale_flow(line_flow.freight, leg.slot_weight / phys_tracks)
-            };
-            let resolved = RowTraffic { passenger, freight };
             let run = &runs[leg.run_id];
             let start = run.edges.partition_point(|e| e.s1 <= s_a + 1e-6);
             for (offset, re) in run.edges[start..].iter().enumerate() {
@@ -614,7 +598,7 @@ pub(super) fn resolve_section(
     let mut out = Vec::new();
     for ((square, osm_id, segment_idx), mut spans) in per_edge {
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut merged: Vec<(f64, f64, RowTraffic)> = Vec::with_capacity(spans.len());
+        let mut merged: Vec<ResolvedSpan> = Vec::with_capacity(spans.len());
         for (lo, hi, rt) in spans {
             if let Some(prev) = merged.last_mut()
                 && (lo - prev.1).abs() <= 1e-3

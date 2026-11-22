@@ -250,17 +250,18 @@ pub(super) struct MergedPiece {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+    use crate::osm::region_input::{RegionFile, RegionInput};
 
-    #[test]
-    fn horn_matching_respects_source_country_at_border() {
-        let model: RailModel = serde_json::from_value(serde_json::json!({
+    pub(in super::super) fn test_model() -> RailModel {
+        serde_json::from_value(serde_json::json!({
             "network_bounds": {},
             "residuals": {},
             "spatial_priors": {},
             "sources": [
-                {"id": 111, "rank": 4, "edition": 2024, "owner": "US", "countries": ["US"], "residual": false, "whole_line": true}
+                {"id": 111, "rank": 4, "edition": 2024, "owner": "US", "countries": ["US"], "residual": false, "whole_line": true},
+                {"id": 112, "rank": 4, "edition": 2024, "owner": "CA", "countries": ["CA"], "residual": false, "whole_line": false}
             ],
             "type_priors": [[80.0, 20.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
             "usage_priors": [[80.0, 20.0], [30.0, 5.0], [0.0, 15.0], [40.0, 10.0]],
@@ -270,21 +271,74 @@ mod tests {
             "urban_periods": [0.6, 0.25, 0.15],
             "regional_freight_periods": []
         }))
-        .unwrap();
-        // Sweetgrass border geometry (088159P): CA segment 12 m north, US segment 15 m south.
-        let crossing = Crossing {
-            id: "088159P".into(),
-            lat: 48.998_058,
-            lon: -111.958_884,
-            soundings: [2.0, 1.0, 1.0],
-            speed_kmh: Some(60.0),
-            source_id: 111,
-            synth_osm: -1,
+        .unwrap()
+    }
+
+    pub(in super::super) fn us_ca_regions(border_lat: f64) -> Regions {
+        let rect = |y0: f64, y1: f64| {
+            vec![vec![vec![
+                [-113.0, y0],
+                [-111.0, y0],
+                [-111.0, y1],
+                [-113.0, y1],
+                [-113.0, y0],
+            ]]]
+        };
+        Regions::from_input(RegionFile {
+            regions: vec![
+                RegionInput {
+                    country: Some("US".into()),
+                    continent: 1,
+                    disputed: false,
+                    polygons: rect(48.0, border_lat),
+                },
+                RegionInput {
+                    country: Some("CA".into()),
+                    continent: 1,
+                    disputed: false,
+                    polygons: rect(border_lat, 50.0),
+                },
+            ],
+        })
+        .unwrap()
+    }
+
+    pub(in super::super) fn test_crossing(
+        id: &str,
+        lat: f64,
+        lon: f64,
+        soundings: [f64; 3],
+        speed_kmh: f64,
+        source_id: u16,
+        synth_osm: i64,
+    ) -> Crossing {
+        Crossing {
+            id: id.into(),
+            lat,
+            lon,
+            soundings,
+            speed_kmh: Some(speed_kmh),
+            source_id,
+            synth_osm,
             total_periods: None,
             passenger_daily: None,
             passenger_lt1: false,
             measured_periods: false,
-        };
+        }
+    }
+
+    #[test]
+    fn horn_matching_respects_source_country_at_border() {
+        let model = test_model();
+        let crossing = test_crossing(
+            "088159P",
+            48.998_058,
+            -111.958_884,
+            [2.0, 1.0, 1.0],
+            60.0,
+            111,
+            -1,
+        );
         let rows = [
             BaseRow {
                 start_lon: -111.9590,
@@ -303,45 +357,17 @@ mod tests {
                 country: *b"US",
             },
         ];
-        let matched = match_crossing(&model, &crossing, &rows);
-        assert_eq!(matched.map(|(row, _, _)| row), Some(1));
+        assert_eq!(
+            match_crossing(&model, &crossing, &rows).map(|(r, _, _)| r),
+            Some(1)
+        );
         assert_eq!(match_crossing(&model, &crossing, &rows[..1]), None);
     }
 
     #[test]
     fn border_horn_clips_at_country_boundary_and_never_merges_across_countries() {
-        use crate::osm::region_input::{RegionFile, RegionInput};
         let border_lat = 48.998_144;
-        let regions = Regions::from_input(RegionFile {
-            regions: vec![
-                RegionInput {
-                    country: Some("US".into()),
-                    continent: 1,
-                    disputed: false,
-                    polygons: vec![vec![vec![
-                        [-112.5, 48.5],
-                        [-111.5, 48.5],
-                        [-111.5, border_lat],
-                        [-112.5, border_lat],
-                        [-112.5, 48.5],
-                    ]]],
-                },
-                RegionInput {
-                    country: Some("CA".into()),
-                    continent: 1,
-                    disputed: false,
-                    polygons: vec![vec![vec![
-                        [-112.5, border_lat],
-                        [-111.5, border_lat],
-                        [-111.5, 49.5],
-                        [-112.5, 49.5],
-                        [-112.5, border_lat],
-                    ]]],
-                },
-            ],
-        })
-        .unwrap();
-        // Sweetgrass 088159P: north-south US segment ending 10.6 m south of the boundary.
+        let regions = us_ca_regions(border_lat);
         let rows = [BaseRow {
             start_lon: -111.958_932,
             start_lat: 48.997_872,
@@ -350,19 +376,15 @@ mod tests {
             rail_type: 0,
             country: *b"US",
         }];
-        let crossing = Crossing {
-            id: "088159P".into(),
-            lat: 48.998_048,
-            lon: -111.958_932,
-            soundings: [1.0, 0.3, 0.7],
-            speed_kmh: Some(64.37), // 40 mph -> 357.6 m full approach
-            source_id: 111,
-            synth_osm: -1,
-            total_periods: None,
-            passenger_daily: None,
-            passenger_lt1: false,
-            measured_periods: false,
-        };
+        let crossing = test_crossing(
+            "088159P",
+            48.998_048,
+            -111.958_932,
+            [1.0, 0.3, 0.7],
+            64.37,
+            111,
+            -1,
+        );
         let approaches = build_approaches(
             0,
             &crossing,
@@ -374,31 +396,13 @@ mod tests {
             true,
         );
         assert_eq!(approaches.len(), 2);
-        let south = approaches
-            .iter()
-            .find(|a| a.start_lat < a.end_lat)
-            .expect("south approach");
-        let north = approaches
-            .iter()
-            .find(|a| a.start_lat > a.end_lat)
-            .expect("north approach");
+        let south = approaches.iter().find(|a| a.start_lat < a.end_lat).unwrap();
+        let north = approaches.iter().find(|a| a.start_lat > a.end_lat).unwrap();
+        assert!((south.length_m - 357.61).abs() < 0.2);
         assert!(
-            (south.length_m - 357.61).abs() < 0.2,
-            "south={}",
-            south.length_m
-        );
-        assert!(
-            north.length_m > 9.5 && north.length_m < 12.0,
-            "retained domestic north={}",
-            north.length_m
-        );
-        assert!(
-            north.start_lat <= border_lat + 1e-7,
-            "north start {} must not cross boundary {border_lat}",
-            north.start_lat
+            north.length_m > 9.5 && north.length_m < 12.0 && north.start_lat <= border_lat + 1e-7
         );
 
-        // Two coincident approaches of different countries must never merge.
         let us_approach = Approach {
             crossing: 0,
             synth_osm: -1,
@@ -430,8 +434,6 @@ mod tests {
 
     #[test]
     fn cross_square_neighbor_approaches_deduplicate_without_double_emission() {
-        // Two equal-rate crossings 80 m apart across a square edge (as 350914N / 350915V):
-        // sorting by (synth_osm, approach_idx) gives one deterministic owner for the 320 m overlap.
         let make = |synth_osm, owned, lat0, lat1| Approach {
             crossing: 0,
             synth_osm,
@@ -450,23 +452,17 @@ mod tests {
         };
         let deg_80 = 80.0 / crate::osm::geometry::M_PER_DEG_LAT;
         let deg_400 = 400.0 / crate::osm::geometry::M_PER_DEG_LAT;
-        // Square A owns -160224 and sees neighbor -160225 (earlier synth_osm -> wins overlap).
-        let sq_a = [
+        let pa = merge_overlaps(&[
             make(-160225, false, 36.0, 36.0 + deg_400),
             make(-160224, true, 36.0 + deg_80, 36.0 + deg_80 + deg_400),
-        ];
-        // Square B owns -160225 and sees neighbor -160224.
-        let sq_b = [
+        ]);
+        let pb = merge_overlaps(&[
             make(-160225, true, 36.0, 36.0 + deg_400),
             make(-160224, false, 36.0 + deg_80, 36.0 + deg_80 + deg_400),
-        ];
-        let pa = merge_overlaps(&sq_a);
-        let pb = merge_overlaps(&sq_b);
-        assert_eq!(pa.len(), 1);
-        assert_eq!(pb.len(), 2);
+        ]);
+        assert_eq!((pa.len(), pb.len()), (1, 2));
         let len_a: f64 = pa.iter().map(|p| (p.frac1 - p.frac0) * 400.0).sum();
         let len_b: f64 = pb.iter().map(|p| (p.frac1 - p.frac0) * 400.0).sum();
-        assert!((len_a - 80.0).abs() < 1e-3, "sq_a emitted {len_a} m");
-        assert!((len_b - 400.0).abs() < 1e-3, "sq_b emitted {len_b} m");
+        assert!((len_a - 80.0).abs() < 1e-3 && (len_b - 400.0).abs() < 1e-3);
     }
 }

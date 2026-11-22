@@ -225,7 +225,7 @@ pub fn match_crossings(
         let cap = crossing.passenger_lt1.then_some(1.0);
         let section = &layout.sections[sec_idx];
         let k_phys = section.phys_tracks.max(1);
-        direct_obs[sec_idx].push(CrossingObs {
+        let obs = CrossingObs {
             crossing_id: &crossing.id,
             measured_periods,
             unsplit_daily,
@@ -234,57 +234,48 @@ pub fn match_crossings(
             passenger_cap: cap,
             has_measured: crossing.measured_periods,
             obs_tracks: k_phys,
-        });
+        };
+        direct_obs[sec_idx].push(obs);
         let (prop_runs, prop_tracks) = section_prop[sec_idx].get_or_insert_with(|| {
-            let mut seen_runs: Vec<usize> = Vec::with_capacity(section.legs.len());
+            let mut seen = Vec::with_capacity(section.legs.len());
             for leg in &section.legs {
-                if !seen_runs.contains(&leg.run_id) {
-                    seen_runs.push(leg.run_id);
+                if !seen.contains(&leg.run_id) {
+                    seen.push(leg.run_id);
                 }
             }
-            let bounded: Vec<bool> = seen_runs
+            if seen.len() <= 1 {
+                return (seen, k_phys);
+            }
+            let continuing: Vec<usize> = seen
                 .iter()
-                .map(|&rid| {
-                    seen_runs.len() > 1 && is_bounded_siding(rid, sec_idx, &layout, network)
-                })
+                .copied()
+                .filter(|&rid| !is_bounded_siding(rid, sec_idx, &layout, network))
                 .collect();
-            let cont_phys_f: f64 = if seen_runs.len() > 1 {
-                section
-                    .legs
-                    .iter()
-                    .filter(|leg| {
-                        let pos = seen_runs.iter().position(|&r| r == leg.run_id).unwrap();
-                        !bounded[pos]
-                    })
-                    .map(|leg| leg.slot_weight)
-                    .sum()
-            } else {
-                0.0
-            };
-            let cont_phys = cont_phys_f.round() as usize;
+            let cont_phys = section
+                .legs
+                .iter()
+                .filter(|leg| continuing.contains(&leg.run_id))
+                .map(|leg| leg.slot_weight)
+                .sum::<f64>()
+                .round() as usize;
             if cont_phys > 0 {
-                let runs = seen_runs
-                    .into_iter()
-                    .zip(bounded)
-                    .filter_map(|(rid, is_b)| (!is_b).then_some(rid))
-                    .collect();
-                (runs, cont_phys)
+                (continuing, cont_phys)
             } else {
-                (seen_runs, k_phys)
+                (seen, k_phys)
             }
         });
         let k = *prop_tracks as f64;
+        let scaled = CrossingObs {
+            measured_periods: obs.measured_periods.map(|v| v / k),
+            unsplit_daily: obs.unsplit_daily / k,
+            total: obs.total / k,
+            passenger: obs.passenger.map(|p| p / k),
+            passenger_cap: obs.passenger_cap.map(|c| c / k),
+            obs_tracks: *prop_tracks,
+            ..obs
+        };
         for &rid in prop_runs.iter() {
-            per_track_obs[rid].push(CrossingObs {
-                crossing_id: &crossing.id,
-                measured_periods: measured_periods.map(|v| v / k),
-                unsplit_daily: unsplit_daily / k,
-                total: total / k,
-                passenger: crossing.passenger_daily.map(|p| p / k),
-                passenger_cap: cap.map(|c| c / k),
-                has_measured: crossing.measured_periods,
-                obs_tracks: *prop_tracks,
-            });
+            per_track_obs[rid].push(scaled);
         }
     }
 

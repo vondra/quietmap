@@ -140,33 +140,11 @@ pub fn append(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::osm::geography::Regions;
     use crate::osm::geometry::lonlat_to_grid;
-    use crate::osm::region_input::{RegionFile, RegionInput};
     use arrow_array::{ArrayRef, Float32Array, Float64Array, Int32Array, UInt8Array, UInt16Array};
     use arrow_ipc::writer::FileWriter;
     use arrow_schema::{DataType, Field, Schema};
     use std::sync::Arc;
-
-    fn horn_test_model() -> RailModel {
-        serde_json::from_value(serde_json::json!({
-            "network_bounds": {},
-            "residuals": {},
-            "spatial_priors": {},
-            "sources": [
-                {"id": 111, "rank": 4, "edition": 2024, "owner": "US", "countries": ["US"], "residual": false, "whole_line": true},
-                {"id": 112, "rank": 4, "edition": 2024, "owner": "CA", "countries": ["CA"], "residual": false, "whole_line": false}
-            ],
-            "type_priors": [[80.0, 20.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
-            "usage_priors": [[80.0, 20.0], [30.0, 5.0], [0.0, 15.0], [40.0, 10.0]],
-            "mainline_freight": {},
-            "passenger_periods": [0.7, 0.2, 0.1],
-            "freight_periods": [0.4, 0.2, 0.4],
-            "urban_periods": [0.6, 0.25, 0.15],
-            "regional_freight_periods": []
-        }))
-        .unwrap()
-    }
 
     type TestRow = ([f64; 2], [f64; 2], [u8; 2]);
 
@@ -192,8 +170,7 @@ mod tests {
             Vec::new(),
         );
         for &([s_lon, s_lat], [e_lon, e_lat], country) in rows {
-            let (a, b) = lonlat_to_grid(s_lon, s_lat);
-            let (c, d) = lonlat_to_grid(e_lon, e_lat);
+            let ((a, b), (c, d)) = (lonlat_to_grid(s_lon, s_lat), lonlat_to_grid(e_lon, e_lat));
             sgx.push(a);
             sgy.push(b);
             egx.push(c);
@@ -202,61 +179,32 @@ mod tests {
             iso.push(u16::from_le_bytes(country));
         }
         let n = rows.len();
-        let cols: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from(sgx)),
-            Arc::new(Int32Array::from(sgy)),
-            Arc::new(Int32Array::from(egx)),
-            Arc::new(Int32Array::from(egy)),
-            Arc::new(Float32Array::from(len)),
-            Arc::new(UInt8Array::from(vec![0u8; n])),
-            Arc::new(UInt16Array::from(iso)),
-            Arc::new(UInt16Array::from(vec![0u16; n])),
-            Arc::new(UInt8Array::from(vec![0u8; n])),
-            Arc::new(Float64Array::from(vec![0.0; n])),
-        ];
-        RecordBatch::try_new(schema, cols).unwrap()
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(sgx)) as ArrayRef,
+                Arc::new(Int32Array::from(sgy)),
+                Arc::new(Int32Array::from(egx)),
+                Arc::new(Int32Array::from(egy)),
+                Arc::new(Float32Array::from(len)),
+                Arc::new(UInt8Array::from(vec![0u8; n])),
+                Arc::new(UInt16Array::from(iso)),
+                Arc::new(UInt16Array::from(vec![0u16; n])),
+                Arc::new(UInt8Array::from(vec![0u8; n])),
+                Arc::new(Float64Array::from(vec![0.0; n])),
+            ],
+        )
+        .unwrap()
     }
 
     #[test]
     fn non_whole_line_horns_keep_legacy_stamp_clip_and_neighbor_behavior() {
-        let model = horn_test_model();
+        let model = horn_geometry::tests::test_model();
         let border_lat = 49.0;
-        let regions = Regions::from_input(RegionFile {
-            regions: vec![
-                RegionInput {
-                    country: Some("US".into()),
-                    continent: 1,
-                    disputed: false,
-                    polygons: vec![vec![vec![
-                        [-113.0, 48.0],
-                        [-111.0, 48.0],
-                        [-111.0, border_lat],
-                        [-113.0, border_lat],
-                        [-113.0, 48.0],
-                    ]]],
-                },
-                RegionInput {
-                    country: Some("CA".into()),
-                    continent: 1,
-                    disputed: false,
-                    polygons: vec![vec![vec![
-                        [-113.0, border_lat],
-                        [-111.0, border_lat],
-                        [-111.0, 50.0],
-                        [-113.0, 50.0],
-                        [-113.0, border_lat],
-                    ]]],
-                },
-            ],
-        })
-        .unwrap();
-
-        // One US track ending 20 m south of the border, one CA track starting 20 m north.
-        let lon_us = -112.0;
-        let lon_ca = -111.9;
-        let d20 = 20.0 / 110_540.0;
-        let d500 = 500.0 / 110_540.0;
-        let base = base_batch(&[
+        let regions = horn_geometry::tests::us_ca_regions(border_lat);
+        let (lon_us, lon_ca) = (-112.0, -111.9);
+        let (d20, d150, d500) = (20.0 / 110_540.0, 150.0 / 110_540.0, 500.0 / 110_540.0);
+        let tracks = [
             (
                 [lon_us, border_lat - d500],
                 [lon_us, border_lat - d20],
@@ -267,82 +215,61 @@ mod tests {
                 [lon_ca, border_lat + d500],
                 *b"CA",
             ),
-        ]);
-        let us_own = Crossing {
-            id: "US1".into(),
-            lat: border_lat - d20,
-            lon: lon_us,
-            soundings: [2.0, 0.0, 0.0],
-            speed_kmh: Some(64.37),
-            source_id: 111,
-            synth_osm: -10,
-            total_periods: None,
-            passenger_daily: None,
-            passenger_lt1: false,
-            measured_periods: false,
-        };
-        let ca_own = Crossing {
-            id: "CA1".into(),
-            lat: border_lat + d20,
-            lon: lon_ca,
-            soundings: [3.0, 0.0, 0.0],
-            speed_kmh: Some(64.37),
-            source_id: 112,
-            synth_osm: -20,
-            total_periods: None,
-            passenger_daily: None,
-            passenger_lt1: false,
-            measured_periods: false,
-        };
+        ];
+        let base = base_batch(&tracks);
+        let us_own = horn_geometry::tests::test_crossing(
+            "US1",
+            border_lat - d20,
+            lon_us,
+            [2.0, 0.0, 0.0],
+            64.37,
+            111,
+            -10,
+        );
+        let ca_own = horn_geometry::tests::test_crossing(
+            "CA1",
+            border_lat + d20,
+            lon_ca,
+            [3.0, 0.0, 0.0],
+            64.37,
+            112,
+            -20,
+        );
 
-        // Neighbor square (97, 175) has higher-rate US (111) and CA (112) crossings 150 m away
-        // with 100 m approaches (18 km/h), overlapping only the inland approach of each own crossing.
-        let d150 = 150.0 / 110_540.0;
-        let nb_batch = base_batch(&[
-            (
-                [lon_us, border_lat - d500],
-                [lon_us, border_lat - d20],
-                *b"US",
-            ),
-            (
-                [lon_ca, border_lat + d20],
-                [lon_ca, border_lat + d500],
-                *b"CA",
-            ),
-        ]);
         let root = tempfile::tempdir().unwrap();
         let nb_dir = root.path().join("z9/97/175");
         std::fs::create_dir_all(&nb_dir).unwrap();
-        let file = std::fs::File::create(nb_dir.join("railways.arrow")).unwrap();
-        let mut writer = FileWriter::try_new(file, &nb_batch.schema()).unwrap();
-        writer.write(&nb_batch).unwrap();
+        let mut writer = FileWriter::try_new(
+            std::fs::File::create(nb_dir.join("railways.arrow")).unwrap(),
+            &base.schema(),
+        )
+        .unwrap();
+        writer.write(&base).unwrap();
         writer.finish().unwrap();
 
-        let mut all_crossings = HashMap::new();
-        all_crossings.insert(
+        let all_crossings = HashMap::from([(
             [97, 175],
             vec![
-                Crossing {
-                    id: "US_NB".into(),
-                    lat: border_lat - d20 - d150,
-                    lon: lon_us,
-                    soundings: [5.0, 0.0, 0.0],
-                    speed_kmh: Some(18.0),
-                    synth_osm: -11,
-                    ..us_own.clone()
-                },
-                Crossing {
-                    id: "CA_NB".into(),
-                    lat: border_lat + d20 + d150,
-                    lon: lon_ca,
-                    soundings: [7.0, 0.0, 0.0],
-                    speed_kmh: Some(18.0),
-                    synth_osm: -21,
-                    ..ca_own.clone()
-                },
+                horn_geometry::tests::test_crossing(
+                    "US_NB",
+                    border_lat - d20 - d150,
+                    lon_us,
+                    [5.0, 0.0, 0.0],
+                    18.0,
+                    111,
+                    -11,
+                ),
+                horn_geometry::tests::test_crossing(
+                    "CA_NB",
+                    border_lat + d20 + d150,
+                    lon_ca,
+                    [7.0, 0.0, 0.0],
+                    18.0,
+                    112,
+                    -21,
+                ),
             ],
-        );
-
+        )]);
         let out = append(
             &base,
             &model,
@@ -356,57 +283,42 @@ mod tests {
         )
         .unwrap();
 
-        let rt = super::super::write::col_u8(&out, "rail_type").unwrap();
-        let src = super::super::write::col_u16(&out, "passenger_source_id").unwrap();
-        let fm = super::super::write::col_u8(&out, "freight_matching").unwrap();
-        let len = super::super::write::col_f32(&out, "length_m").unwrap();
+        let (rt, src, fm, len) = (
+            super::super::write::col_u8(&out, "rail_type").unwrap(),
+            super::super::write::col_u16(&out, "passenger_source_id").unwrap(),
+            super::super::write::col_u8(&out, "freight_matching").unwrap(),
+            super::super::write::col_f32(&out, "length_m").unwrap(),
+        );
         let day = out
             .column_by_name("trains_passenger_day")
             .unwrap()
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-
-        let mut us_pieces = Vec::new();
-        let mut ca_pieces = Vec::new();
+        let (mut us_pieces, mut ca_pieces) = (Vec::new(), Vec::new());
         for i in 0..out.num_rows() {
-            if rt.value(i) != 6 {
-                continue;
-            }
-            let tup = (fm.value(i), len.value(i), day.value(i));
-            match src.value(i) {
-                111 => us_pieces.push(tup),
-                112 => ca_pieces.push(tup),
-                other => panic!("unexpected horn source {other}"),
+            if rt.value(i) == 6 {
+                let tup = (fm.value(i), len.value(i), day.value(i));
+                match src.value(i) {
+                    111 => us_pieces.push(tup),
+                    112 => ca_pieces.push(tup),
+                    other => panic!("unexpected horn source {other}"),
+                }
             }
         }
-        // US 111 (whole_line = true): stamped with MATCHING_GLOBAL_SECTION, clipped at border
-        // (~20 m north approach), and deduplicated against the higher-rate neighbor on its south
-        // approach (~257.6 m retained out of 357.6 m -> ~277.6 m total).
         assert!(!us_pieces.is_empty());
         assert!(
             us_pieces
                 .iter()
-                .all(|&(m, _, _)| m == super::super::encode::MATCHING_GLOBAL_SECTION),
-            "us_pieces={us_pieces:?}"
+                .all(|&(m, _, _)| m == super::super::encode::MATCHING_GLOBAL_SECTION)
         );
-        assert!(
-            us_pieces.iter().any(|&(_, l, _)| l > 15.0 && l < 25.0),
-            "US north approach should clip at border: {us_pieces:?}"
-        );
+        assert!(us_pieces.iter().any(|&(_, l, _)| l > 15.0 && l < 25.0));
         let us_total_len: f32 = us_pieces.iter().map(|&(_, l, _)| l).sum();
-        assert!(
-            (us_total_len - 277.6).abs() < 3.0,
-            "US south approach should lose 100 m overlap to higher-rate neighbor: {us_total_len} ({us_pieces:?})"
-        );
-
-        // CA 112 (whole_line = false): unstamped (0), unclipped (two full ~357.6 m approaches),
-        // and unaffected by the neighbor crossing.
-        assert_eq!(ca_pieces.len(), 2, "ca_pieces={ca_pieces:?}");
+        assert!((us_total_len - 277.6).abs() < 3.0);
+        assert_eq!(ca_pieces.len(), 2);
         for &(m, l, d) in &ca_pieces {
-            assert_eq!(m, 0, "CA horn must not carry MATCHING_GLOBAL_SECTION");
-            assert!((l - 357.61).abs() < 1.5, "CA horn must stay unclipped: {l}");
-            assert!((d - 1.5).abs() < 1e-9, "CA horn must ignore neighbor: {d}");
+            assert_eq!(m, 0);
+            assert!((l - 357.61).abs() < 1.5 && (d - 1.5).abs() < 1e-9);
         }
     }
 }
