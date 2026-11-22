@@ -373,8 +373,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    type TestRow = ([(i32, i32); 2], u8, u8, u8, u8, u16, f64);
+
     fn road_table(
-        rows: &[([(i32, i32); 2], u8, u8, u8, u8, u16, f64)],
+        rows: &[TestRow],
         measured: Option<ArrayRef>,
         located: Option<ArrayRef>,
     ) -> Table {
