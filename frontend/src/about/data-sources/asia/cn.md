@@ -14,7 +14,7 @@ Unsigned roads: a primary road 50 km/h in towns, 70 outside, a motorway 120, a r
 
 ## Railways
 
-No operator publishes a timetable. A community map of the mainland network on [ArcGIS Online](https://services7.arcgis.com/m6uLpqj7MgjPU371/) gives each national line a top speed and each metro line a service type; lines marked as not operating are skipped. Track within 500 m of a mapped line gets trains by speed:
+No operator publishes a timetable. On the 2026 map, a community map of the mainland network on [ArcGIS Online](https://services7.arcgis.com/m6uLpqj7MgjPU371/) gives each national line a top speed and each metro line a service type; lines marked as not operating are skipped (this undated snapshot is not used on the 2024 map, where lines take class defaults). Track within 500 m of a mapped line gets trains by speed:
 
 | Top speed | Passenger | Freight |
 |---|---:|---:|

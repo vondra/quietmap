@@ -545,8 +545,8 @@ a cell's activity can move onto neighbouring water outside its original footprin
 and north of 82.75° N it maps no land at all, so there the land reads as water. Speed is not modelled, so ships under way may be a
 few decibels louder. Activity is constant over the day, which overstates leisure boats at night.
 Outside European seas, Global Fishing Watch groups cargo, tanker, carrier, bunker and passenger ships
-as large ships and fishing, support, gear, seismic and other vessels as work boats. It has no leisure-boat
-class, so pleasure craft with an AIS transmitter fall under other vessels and count as work boats,
+as large ships and fishing, support, gear, seismic and other vessels as work boats. It has no separate
+leisure-boat class: pleasure craft with an AIS transmitter are not separated from work boats,
 while boats without AIS are missing.
 
 ## Industry

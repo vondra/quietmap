@@ -1,6 +1,6 @@
 ---
 title: Asia
-intro: Counted road traffic in Japan, Thailand, Saudi Arabia and Indonesia; timetables in India, Israel, Thailand and the UAE. Most other main roads and railways use class defaults; smaller roads are estimated from the buildings around them.
+intro: Counted road traffic in Japan, Thailand, Saudi Arabia and Indonesia; timetables in India, Israel, Thailand and the UAE (by year). Most other main roads use the global road model, smaller roads are estimated from the buildings around them, and railways without a timetable or network map use class defaults.
 ---
 
 <!-- SUBPAGES -->
@@ -9,14 +9,14 @@ intro: Counted road traffic in Japan, Thailand, Saudi Arabia and Indonesia; time
 
 Most of Asia publishes no open traffic counts. Road traffic by source:
 
-- Counts: Japan (national road census 2021, on half of the main-road length; the rest takes the census median of its class), Thailand (rural road counts 2024; the Department of Highways' traffic 2021 on national highways), Saudi Arabia (located ministry count stations, 2024), and Indonesia (Bina Marga daily traffic on some provincial roads, where admitted for the map year).
+- Counts: Japan (national road census 2021, on half of the main-road length; the rest takes the census median of its class), Thailand (rural road counts 2024; the Department of Highways' highway traffic table on national highways, labelled 2021 in the archived file and 2018 by the publisher), Saudi Arabia (located ministry count stations, 2024), and Indonesia (Bina Marga daily traffic on some provincial roads, where admitted for the map year).
 - Everywhere else (including China, India, the Philippines, Iran, Iraq, Turkey, Kazakhstan and Uzbekistan): the [global road model](/about/data-preparation) on main roads; smaller roads follow the buildings around them.
 
 Train counts by source:
 
-- Timetable: India, Israel, Thailand, the UAE. No timetable here includes freight.
-- Line map with speeds, converted to trains per day: China and India.
-- Counts assigned per corridor: Iran, Iraq, Turkey, Kazakhstan, Uzbekistan.
+- Timetable: Thailand (both map years), Israel (2024 map; its 2026 archive did not overlap the observation window), India and the UAE (2026 map; unavailable for 2024). No timetable here includes freight.
+- Line map with speeds, converted to trains per day (2026 map; unavailable for 2024): China and India.
+- Counts assigned per corridor (2026 map; unavailable for 2024): Iran, Iraq, Turkey, Kazakhstan, Uzbekistan.
 - Everywhere else: class defaults.
 
 ## The defaults
@@ -37,6 +37,6 @@ Homes emit their air conditioners: 2.37 per household in Japan, 1.46 in China, 0
 
 No Asian country has a wind turbine register or a national building register loaded: wind turbines are OpenStreetMap's, one without tagged values at 105 dB(A), the fleet median, on a 105 m hub. Building heights come from the global sources described in the [data preparation](/about/data-preparation).
 
-Ships along Asian coasts come from Global Fishing Watch, which has no class for yachts and pleasure boats; leisure traffic is missing. The Mediterranean and Black Sea coasts of Turkey, Syria, Lebanon, Israel and Georgia carry EMODnet 2024 instead, pleasure boats included; the Caspian Sea has almost no ship data.
+Ships along Asian coasts come from Global Fishing Watch, which has no separate class for yachts and pleasure boats: pleasure craft with AIS are not separated from work boats, and boats without AIS are missing. The Mediterranean and Black Sea coasts of Turkey, Syria, Lebanon, Israel and Georgia carry EMODnet 2024 instead, pleasure boats included; the Caspian Sea has almost no ship data.
 
 <!-- YEAR SOURCES -->

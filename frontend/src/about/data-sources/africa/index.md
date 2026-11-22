@@ -19,11 +19,12 @@ WHO region or the world.
 
 ## Railways
 
-No African country has a timetable feed. Algeria, Djibouti, DR Congo, Egypt, Ethiopia, Kenya,
-Morocco, Nigeria, Sudan and Tanzania use per-line estimates based on services reported by the
-operators. Elsewhere every track takes the world defaults described in the
-[railway method](/about/data-preparation). These can overstate lightly used lines. Surface metro
-sections are included; underground sections do not emit outdoor noise.
+No African country has a timetable feed. On the 2026 map, Algeria, Djibouti, DR Congo, Egypt,
+Ethiopia, Kenya, Morocco, Nigeria, Sudan and Tanzania use per-line estimates based on services
+reported by the operators (excluded from the 2024 map, where lines take class defaults). Elsewhere
+every track takes the world defaults described in the [railway method](/about/data-preparation).
+These can overstate lightly used lines. Surface metro sections are included; underground sections
+do not emit outdoor noise.
 
 ## Industry
 
@@ -40,9 +41,9 @@ generic industry. No wind turbine register is available for any African country.
 
 ## Aircraft
 
-Source: recorded flights. A year of [adsb.lol](https://adsb.lol/), September 2025 to
-August 2026, with the flights only [ADSBExchange](https://www.adsbexchange.com/) received
-added from 11 sample days. Both rely on volunteer ground receivers, which are sparse in much
+Source: recorded flights. A year of [adsb.lol](https://adsb.lol/) (September 2025 to August 2026
+on the 2026 map, with 11 [ADSBExchange](https://www.adsbexchange.com/) sample days; calendar year
+2024 on the 2024 map, with 12 sample days). Both rely on volunteer ground receivers, which are sparse in much
 of Africa; flights nobody records are missing, so aircraft noise is understated there —
 near Cairo, Casablanca, Accra and Lagos airports by 5 to 23 dB, at Lagos the most.
 
