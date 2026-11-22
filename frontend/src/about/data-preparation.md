@@ -193,8 +193,9 @@ junctions and the place's yearly air temperature.
   two-way road has two and a one-way carriageway carries at most 72,900, as the counted untagged ones
   do): a count or a publisher's estimated road count
   above that takes the model of its class, bounded by it (or is cut to lane capacity where mapped
-  buildings are too sparse to predict), while a class-median fallback (or an earlier national-table
-  estimate, such as India's 70,000 vehicles a day on two-lane trunk roads) is cut to it. A count under a
+  buildings are too sparse to predict), while a class-median fallback (or a national-table
+  estimate retained on the 2026 map, such as India's 70,000 vehicles a day on two-lane trunk roads)
+  is cut to it. A count under a
   fortieth of what the major roads' model predicts for its class, lanes and surroundings is not the
   road's (Warsaw's Trasa Łazienkowska carried 32 vehicles a carriageway a day, another road's count
   joined by its route number), nor is a national table's value or a country's default far under

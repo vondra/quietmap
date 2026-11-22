@@ -10,7 +10,7 @@ intro: Counted road traffic in Japan, Thailand, Saudi Arabia and Indonesia; time
 Most of Asia publishes no open traffic counts. Road traffic by source:
 
 - Counts: Japan (national road census 2021, on half of the main-road length; the rest takes the census median of its class), Thailand (rural road counts 2024; the Department of Highways' highway traffic table on national highways, labelled 2021 in the archived file and 2018 by the publisher), Saudi Arabia (located ministry count stations, 2024), and Indonesia (Bina Marga daily traffic on some provincial roads, where admitted for the map year).
-- Everywhere else (including China, India, the Philippines, Iran, Iraq, Turkey, Kazakhstan and Uzbekistan): the [global road model](/about/data-preparation) on main roads; smaller roads follow the buildings around them.
+- Everywhere else (including China, India, the Philippines, Iran, Iraq, Turkey, Kazakhstan and Uzbekistan; the 2026 map also retains national-table estimates on mapped Indian trunk corridors): the [global road model](/about/data-preparation) on main roads; smaller roads follow the buildings around them.
 
 Train counts by source:
 
