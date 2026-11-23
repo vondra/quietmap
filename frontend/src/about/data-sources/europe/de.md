@@ -26,7 +26,10 @@ Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-Train, tram and U-Bahn counts: the national DELFI timetable from [public-transport.earth](https://data.public-transport.earth/gtfs/de) covers 17 of the 365 days in the 2026 observation window. Its services are averaged over the window, with estimated traffic on the missing dates. The separate [gtfs.de](https://gtfs.de/en/feeds/de_full/) archive has no dates inside that window and adds no counts. The 2024 map uses its own archived long-distance, regional and local feeds. DB InfraGO publishes no freight paths. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train, tram and U-Bahn counts: on the 2026 map, the national DELFI timetable from [gtfs.de](https://gtfs.de/en/feeds/de_full/) and [public-transport.earth](https://data.public-transport.earth/gtfs/de), one busy Wednesday; on the 2024 map, archived 2024 long-distance, regional and local feeds (up to 31 of 366 days covered), averaged over 2024 with missing dates estimated from each operator's covered-day mean. DB InfraGO publishes no freight paths. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
+
+The Eisenbahn-Bundesamt measures passing trains 7.5 m from their own track. Its train lengths
+help define the model's typical trains. [German railway monitoring method](https://www.laerm-monitoring.de/Messverfahren).
 
 ## Industry
 
@@ -43,9 +46,5 @@ Terrain from the laser surveys of 15 Länder (DGM1, DGM5, via [hoehendaten.de](h
 ## Homes and places
 
 Homes mapped in OpenStreetMap: 4 heat pumps and 6 air conditioners per 100 homes. Church bells ring three times a day, with a Sunday peal; church clocks strike the quarters by day and in the evening. Mosques: only those with a mapped minaret call, once on Fridays.
-
-## Checked against
-
-The Eisenbahn-Bundesamt's railway monitors ([validation](/about/validation)).
 
 <!-- YEAR SOURCES -->

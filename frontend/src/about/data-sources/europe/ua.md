@@ -1,9 +1,9 @@
 ---
 title: Ukraine
-intro: Road traffic follows the global model and mapped buildings. Main roads and railways use Ukraine-specific defaults describing the country before the 2022 invasion.
+intro: Road traffic follows the global model and mapped buildings. On the 2026 map, railways use Ukraine-specific pre-2022 defaults (world defaults on the 2024 map).
 ---
 
-All values describe Ukraine before February 2022. No data is available on traffic near the front or in occupied areas.
+All Ukraine-specific railway defaults describe Ukraine before February 2022. No data is available on traffic near the front or in occupied areas.
 
 ## Roads
 
@@ -16,7 +16,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-No timetable is loaded. Default trains per day by track type:
+No timetable is loaded. On the 2026 map, default trains per day by track type (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)):
 
 | Track | Passenger | Freight |
 |---|---:|---:|

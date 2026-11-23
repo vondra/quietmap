@@ -1,6 +1,6 @@
 ---
 title: France
-intro: National road census (Cerema TMJA), street counts in ten cities, Estimated rail traffic; the archived SNCF timetables fall outside the 2026 observation window. Paris metro and city trams not covered; rail freight from the national train-kilometres.
+intro: National road census (Cerema TMJA), street counts in ten cities, SNCF national and Transilien timetables. Paris metro and city trams not covered; rail freight from the national train-kilometres.
 ---
 
 ## Roads
@@ -16,9 +16,9 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-The archived [SNCF timetables](https://data.sncf.com/) for national trains and Transilien start after the 2026 observation window. They contribute no scheduled services to that year; passenger counts use estimates calibrated against national train-kilometres. Earlier maps use only timetables available for their own year.
+Train counts: [SNCF timetables](https://data.sncf.com/) — on the 2026 map, the national feed (TGV, Intercités and TER) and the Transilien feed (RER and Transilien of the Paris region), one busy Wednesday; on the 2024 map, four archived 2024 feeds (SNCF national, regional and intercity covering 31–91 days, and Île-de-France covering 33 of 366 days), averaged over 2024 with missing dates estimated from each operator's covered-day mean.
 
-The Paris metro and city trams are not covered: no RATP feed is loaded. Their surface sections use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+The Paris metro and city trams are not covered: no RATP feed is loaded. Their surface sections use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Buildings and terrain
 
@@ -30,6 +30,7 @@ Homes mapped in OpenStreetMap: 20 heat pumps and 24 air conditioners per 100 hom
 
 ## Checked against
 
-Bruitparif's stations; Paris's street stations ([validation](/about/validation)).
+Bruitparif identified train noise at 23 sites around Paris. Published street measurements in Paris
+provide a separate check. [Railway noise](/about/validation#railway-noise) and [street measurements](/about/validation#map-against-microphone).
 
 <!-- YEAR SOURCES -->

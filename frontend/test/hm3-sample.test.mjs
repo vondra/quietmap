@@ -60,12 +60,12 @@ test('HM3 prediction restores every byte across row boundaries and refuses other
   assert.throws(() => decodeHM3(bytes.slice(1).buffer), /HM3 size/)
 })
 
-test('the sampled tile zoom is the renderer\'s: rounded, one finer on HiDPI, clamped into the published band', () => {
+test('the sampled tile zoom follows the renderer offset and stays in the published band', () => {
   const build = { latest: 'b1', byLayer: {}, zoom: 13 }
-  assert.equal(displayedTileZoom(build, 9.4, 1), 9)
-  assert.equal(displayedTileZoom(build, 9.4, 2), 10)
-  assert.equal(displayedTileZoom(build, 0.7, 1), 2)
-  assert.equal(displayedTileZoom(build, 15.2, 2), 13)
+  assert.equal(displayedTileZoom(build, 9.4, 0), 9)
+  assert.equal(displayedTileZoom(build, 9.4, 1), 10)
+  assert.equal(displayedTileZoom(build, 0.7, 0), 2)
+  assert.equal(displayedTileZoom(build, 15.2, 1), 13)
 })
 
 function predictedTile(cells) {

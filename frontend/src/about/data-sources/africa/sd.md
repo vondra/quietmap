@@ -14,7 +14,7 @@ Unsigned roads: a primary road 50 km/h in towns, 70 outside.
 
 ## Railways
 
-Train counts: no timetable. Per-line estimates based on services reported by Sudan Railways; a track takes the first matching row. The estimates do not reflect the war; current service is unknown.
+Train counts: no timetable. On the 2026 map, per-line estimates based on services reported by Sudan Railways; a track takes the first matching row (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)). The estimates do not reflect the war; current service is unknown.
 
 | Line | Passenger trains per day | Freight trains per day |
 |---|---:|---:|

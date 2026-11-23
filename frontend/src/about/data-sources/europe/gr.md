@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns and outside, a motorway 130.
 
 ## Railways
 
-Train counts: [community-made Hellenic Train timetable](https://jbb.ghsq.de/gtfs/gr-hellenic-train.gtfs.zip), averaged over the observation year; Hellenic Train publishes none itself. Where no count exists, the passenger defaults are scaled to the country's train-kilometres (Eurostat 2024). Greece publishes no goods train-kilometres: freight keeps the class defaults' national total, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors. The Athens metro and tram have no feed loaded; their surface tracks use the class default.
+Train counts: on the 2026 map, [community-made Hellenic Train timetable](https://jbb.ghsq.de/gtfs/gr-hellenic-train.gtfs.zip), one busy Wednesday; Hellenic Train publishes none itself. No 2024 archive is available, so the 2024 map uses class defaults. Where no count exists, the passenger defaults are scaled to the country's train-kilometres (Eurostat 2024). On the 2026 map, Greece publishes no 2024 goods train-kilometres and freight keeps the class defaults' national total; on the 2024 map it scales to Greece's latest published Eurostat figure (2017). In both years freight is drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways). The Athens metro and tram have no feed loaded; their surface tracks use the class default.
 
 ## Homes and places
 

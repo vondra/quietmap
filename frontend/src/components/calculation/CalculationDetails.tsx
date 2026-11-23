@@ -4,15 +4,15 @@ import { ABOUT_WEATHER } from '../../lib/about-paths'
 import type { BuildingAnswer, PopupUpdate } from '../../types/noise'
 import { fmtDbValue as level, fmtInt, fmtSone, wholePercents } from '../../utils/formatters'
 import { SOURCE_LABELS } from '../noise/labels'
-import { CAPTION, compassPoint, DETAIL_TEXT, DetailTable, lineRow } from '../noise/shared'
+import { CAPTION, compassPoint, DETAIL_TEXT, DetailTable, lineRow, PERIOD_LABELS_DETAIL } from '../noise/shared'
 import { REFLECTIONS } from '../noise/source/PathTable'
 import { HoverText } from '../ui/info-tip'
 
 /** END periods: their hours of the day and the penalty Lden adds, for each period's share. */
 const PERIODS = [
-  { key: 'ld', sone: 'day', name: 'Day', hours: 12, penalty: 0 },
-  { key: 'le', sone: 'evening', name: 'Evening', hours: 4, penalty: 5 },
-  { key: 'ln', sone: 'night', name: 'Night', hours: 8, penalty: 10 },
+  { key: 'ld', sone: 'day', name: PERIOD_LABELS_DETAIL[0], hours: 12, penalty: 0 },
+  { key: 'le', sone: 'evening', name: PERIOD_LABELS_DETAIL[1], hours: 4, penalty: 5 },
+  { key: 'ln', sone: 'night', name: PERIOD_LABELS_DETAIL[2], hours: 8, penalty: 10 },
 ] as const
 
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
@@ -111,7 +111,7 @@ export default function CalculationDetails({ data }: { data: PopupUpdate }) {
       <Section title="Layers" hint="Each layer's levels and its share of Lden">
         <div className="space-y-2">
           <DetailTable
-            head={['', 'Day', 'Evening', 'Night', 'Lden', 'Share']}
+            head={['', ...PERIOD_LABELS_DETAIL, 'Lden', 'Share']}
             rows={layers.map((layer, row) => [
               SOURCE_LABELS[layer.source_type] ?? layer.source_type,
               level(layer.ld),

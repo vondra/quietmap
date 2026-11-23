@@ -7,7 +7,7 @@ import { useMap } from 'react-map-gl/maplibre'
 
 import { TILE_PX, type Metric } from '../lib/hm3-decoder'
 import { PREVIEW_DELTA } from '../lib/hm3-compose'
-import { hiDpiTileZoomOffset } from '../lib/hm3-sample'
+import { displayedTileZoom } from '../lib/hm3-sample'
 import { lngLatToTileFloat } from '../lib/tile-math'
 import { MIN_ZOOM, WORLD_EXTENT, buildKey, publishes, tileUrl, useTileBuild, type HeatmapSource, type TileBuilds } from '../lib/tile-urls'
 import { loadTileProgressively, fetchAncestor, type HeatTile } from '../lib/progressive-tile-loader'
@@ -20,6 +20,7 @@ interface Props {
   /** The total or one layer; `null` hides the noise raster. */
   source: HeatmapSource | null
   metric: Metric
+  zoomOffset: number
   /** The total's quiet threshold in the selected quantity; null hides the green mask. */
   quietThreshold: number | null
 }
@@ -55,7 +56,7 @@ const MAX_CACHE_TILES = 192
  * static/CDN reader. Interleaved overlay + a
  * `beforeId` beneath the data layers and the first label layer keeps both on top.
  */
-export default function HeatmapOverlay({ source, metric, quietThreshold }: Props): null {
+export default function HeatmapOverlay({ source, metric, quietThreshold, zoomOffset }: Props): null {
   const { current: mapRef } = useMap()
   // Generation snapshot: a build flip re-renders and re-keys every layer; the
   // snapshot is passed explicitly into URL builders so no fetch closure ever
@@ -116,17 +117,6 @@ export default function HeatmapOverlay({ source, metric, quietThreshold }: Props
     tileTails.current.key = nextKey
   }, [])
   useEffect(() => () => dropTileTails(''), [dropTileTails])
-  // Retina/HiDPI: fetch one pyramid level finer so one data cell ≈ one device
-  // pixel on the zooms where a finer level exists. Costs 4× tiles for
-  // DPR ≥ 1.5 screens. Re-render if the window moves to a screen with
-  // different DPR.
-  const [dpr, setDpr] = useState(() => (typeof window === 'undefined' ? 1 : window.devicePixelRatio))
-  useEffect(() => {
-    const mq = window.matchMedia(`(resolution: ${dpr}dppx)`)
-    const onChange = () => setDpr(window.devicePixelRatio)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [dpr])
 
   // One interleaved MapboxOverlay (shares MapLibre's GL context).
   useEffect(() => {
@@ -168,8 +158,7 @@ export default function HeatmapOverlay({ source, metric, quietThreshold }: Props
           textureParameters: { minFilter: 'linear', magFilter: 'linear' },
         }))
       } else {
-        const zoomOffset = hiDpiTileZoomOffset(dpr)
-        // Offset is part of the registry key AND the layer id: a DPR flip must
+        // Offset is part of the registry key AND the layer id: a grid change must
         // re-key the layer (deck won't recompute tile selection on an options
         // change alone) and start a fresh loaded/tails registry with it.
         dropTileTails(`${buildKey(build, source)}-o${zoomOffset}`)
@@ -182,12 +171,12 @@ export default function HeatmapOverlay({ source, metric, quietThreshold }: Props
       dropTileTails('') // no source (or no build) removes the layer too
     }
     if (build !== null && quietThreshold !== null && publishes(build, metric)) {
-      layers.push(makeQuietZonesLayer(metric, quietThreshold, build, beforeId))
+      layers.push(makeQuietZonesLayer(metric, quietThreshold, build, beforeId, zoomOffset))
     }
     overlay.setProps({ layers })
-  }, [overlay, mapRef, build, source, metric, quietThreshold, onRefined, dropTileTails, dpr])
+  }, [overlay, mapRef, build, source, metric, quietThreshold, onRefined, dropTileTails, zoomOffset])
   applyRef.current = apply
-  // Slider, quantity and pixel-ratio changes need a repaint without a camera move.
+  // Slider, quantity and grid changes need a repaint without a camera move.
   useEffect(() => { apply() }, [apply])
 
   // Rebuild the over-zoom composite (only past the composite threshold, only when the base
@@ -244,7 +233,7 @@ export default function HeatmapOverlay({ source, metric, quietThreshold }: Props
     const prefetchRing = () => {
       window.clearTimeout(prefetchTimer.current)
       prefetchTimer.current = window.setTimeout(() => {
-        const z = Math.round(Math.min(Math.max(map.getZoom(), MIN_ZOOM), build.zoom))
+        const z = displayedTileZoom(build, map.getZoom(), zoomOffset)
         const pz = z - PREVIEW_DELTA
         if (pz < MIN_ZOOM) return
         const center = map.getCenter()
@@ -279,7 +268,7 @@ export default function HeatmapOverlay({ source, metric, quietThreshold }: Props
       window.clearTimeout(prefetchTimer.current)
       map.off('moveend', prefetchRing)
     }
-  }, [mapRef, build, source])
+  }, [mapRef, build, source, zoomOffset])
 
   // The heatmap's z-anchor (beforeId): beneath the data layers when any is on, else beneath the
   // labels and the app's own layers.
@@ -328,8 +317,6 @@ function makeHeatmapTileLayer(
     // The published base zoom is the native tile ceiling: deck requests no
     // index below it and over-zooms the deepest level itself past it.
     maxZoom: build.zoom,
-    // +1 on HiDPI screens: one data cell ≈ one device pixel wherever a finer
-    // pyramid level exists (maxZoom still clamps at the published data floor).
     zoomOffset,
     // Without an extent deck renders NOTHING once the computed tile zoom drops
     // below minZoom; with one it clamps to minZoom and scales the z2 world

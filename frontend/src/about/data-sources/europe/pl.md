@@ -17,7 +17,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Timetables are averaged over the observation year. The archived Polish Trains, Warsaw ZTM, Kraków and GZM feeds fall outside the 2026 window; those lines retain estimates. WKD contributes the 261 days its calendar covers:
+On the 2026 map, train counts come from five timetables, one busy Wednesday:
 
 | Feed | What it covers |
 |---|---|
@@ -27,9 +27,9 @@ Timetables are averaged over the observation year. The archived Polish Trains, W
 | [GZM](https://mkuran.pl/gtfs/gzm.zip) | Silesian trams |
 | [WKD](https://mkuran.pl/gtfs/wkd.zip) | Warsaw commuter railway |
 
-For 2024 the joint Polish Trains feed did not yet exist: the map reads the 2024 archives of Koleje Mazowieckie, PolRegio, PKP Intercity, Koleje Małopolskie, Koleje Śląskie and Koleje Dolnośląskie, with the Warsaw, Kraków, WKD and Silesian (23 summer days) feeds. No open 2024 archive was found for SKM Trójmiasto, Koleje Wielkopolskie, ŁKA, Arriva, Leo Express or RegioJet; track that no other timetable covers keeps the class defaults.
+On the 2024 map, the joint Polish Trains feed did not yet exist: the map reads the 2024 archives of Koleje Mazowieckie, PolRegio, PKP Intercity, Koleje Małopolskie, Koleje Śląskie and Koleje Dolnośląskie, with the Warsaw, Kraków, WKD and Silesian (23 summer days) feeds, averaged over 2024 with missing dates estimated from each operator's covered-day mean. No open 2024 archive was found for SKM Trójmiasto, Koleje Wielkopolskie, ŁKA, Arriva, Leo Express or RegioJet; track that no other timetable covers keeps the class defaults (scaled to Poland's latest published Eurostat passenger train-kilometres, 2017).
 
-Trams without a feed (Gdańsk, Poznań, Wrocław, Łódź and others) default to 120 per day on every track. The timetables are passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Trams without a feed (Gdańsk, Poznań, Wrocław, Łódź and others) default to 120 per day on every track. The timetables are passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Buildings and terrain
 

@@ -14,7 +14,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-No Turkish timetable is loaded. Train counts are assigned per corridor:
+No Turkish timetable is loaded. On the 2026 map, train counts are assigned per corridor (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)):
 
 | Track | Passenger | Freight |
 |---|---:|---:|
@@ -29,7 +29,7 @@ No Turkish timetable is loaded. Train counts are assigned per corridor:
 
 Tram track gets 350 trams per day in Istanbul and 250 elsewhere; light rail gets 500 and 400. Surface metro sections are included; see the [railway method](/about/data-preparation).
 
-These heavy-rail counts are then scaled to the country's train-kilometres (Eurostat 2024): passenger trains by 0.372, freight by 0.681.
+These heavy-rail counts are then scaled to the country's train-kilometres (Eurostat 2024): on the 2026 map, passenger trains by 0.372 and freight by 0.681; on the 2024 map, the world railway defaults are scaled to the same Eurostat 2024 train-kilometres.
 
 ## Industry
 

@@ -14,7 +14,7 @@ Most of Asia publishes no open traffic counts. Road traffic by source:
 
 Train counts by source:
 
-- Timetable: Thailand (both map years), Israel (2024 map; its 2026 archive did not overlap the observation window), India and the UAE (2026 map; unavailable for 2024). No timetable here includes freight.
+- Timetable: Thailand and Israel (both map years), India and the UAE (2026 map; unavailable for 2024). No timetable here includes freight.
 - Line map with speeds, converted to trains per day (2026 map; unavailable for 2024): China and India.
 - Counts assigned per corridor (2026 map; unavailable for 2024): Iran, Iraq, Turkey, Kazakhstan, Uzbekistan.
 - Everywhere else: class defaults.

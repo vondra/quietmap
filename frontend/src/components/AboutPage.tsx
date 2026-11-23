@@ -26,6 +26,11 @@ const COMPONENTS: Components = {
       {children}
     </abbr>
   ),
+  table: ({ children, ...props }) => (
+    <div className="my-3 overflow-x-auto">
+      <table {...props}>{children}</table>
+    </div>
+  ),
 }
 
 function Prose({ children }: { children: string }) {

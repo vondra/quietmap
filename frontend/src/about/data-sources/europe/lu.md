@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-The archived [national timetable](https://data.public.lu/en/datasets/horaires-et-arrets-des-transport-publics-gtfs/) for CFL trains and Luxtram starts after the 2026 observation window. That year uses estimated train counts; earlier maps use the calendar of their own archived feed. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train and tram counts: [national timetable](https://data.public.lu/en/datasets/horaires-et-arrets-des-transport-publics-gtfs/) (CFL trains, Luxtram), one busy Wednesday on the 2026 map; on the 2024 map, the archived 2024 national timetable (24 of 366 days covered), averaged over 2024 with missing dates estimated from each operator's covered-day mean. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Homes and places
 

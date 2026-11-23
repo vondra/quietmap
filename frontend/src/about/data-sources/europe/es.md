@@ -16,7 +16,7 @@ Unsigned roads: a primary road 30 km/h in towns, 80 outside, a motorway 120.
 
 ## Railways
 
-Timetables are averaged over the observation year. The archived Cercanías feed falls outside the 2026 window, so those lines retain estimates; the other feeds contribute the days their calendars cover. Renfe AV/LD/MD covers 144 days and FGC 147; missing dates use each operator’s covered-day mean, labelled as estimated:
+Train counts come from three timetables — one busy Wednesday on the 2026 map, and archived 2024 calendars averaged over 2024 on the 2024 map (Renfe AV/LD/MD 207 of 366 days, Cercanías 31, FGC 366; missing dates estimated from each operator's covered-day mean):
 
 | Feed | What it covers |
 |---|---|
@@ -24,7 +24,7 @@ Timetables are averaged over the observation year. The archived Cercanías feed 
 | [Renfe Cercanías](https://data.renfe.com/) | Commuter trains |
 | [FGC](https://www.fgc.cat/google/google_transit.zip) | Ferrocarrils de la Generalitat de Catalunya |
 
-The northern narrow-gauge lines (former Feve), Euskotren, and metros and trams outside these feeds use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+The northern narrow-gauge lines (former Feve), Euskotren, and metros and trams outside these feeds use the class default. The timetables are passenger-only. Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them, drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Industry
 

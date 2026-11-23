@@ -44,14 +44,14 @@ for (const device of ['desktop', 'phone'] as const) {
       expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height)
       await page.screenshot({ path: info.outputPath(`rail-count-${device}.png`) })
     })
-    test('the annual method explains incomplete calendars and zero-overlap feeds', async ({ page }, info) => {
+    test('the annual method explains both map years and calendar coverage', async ({ page }, info) => {
       await page.goto('/about/data-preparation#railways')
       const summary = page.locator('summary').filter({ hasText: 'How timetables become annual train counts' })
       const detail = page.locator('details').filter({ has: summary })
       await expect(detail).not.toHaveAttribute('open', '')
       await summary.click()
       await expect(detail).toContainText('including weekends')
-      await expect(detail).toContainText('17 of its 365 days')
+      await expect(detail).toContainText('busiest Wednesday')
       await expect(detail).toContainText('Each operator keeps its own observation horizon')
       await expect(detail).toContainText('On a matched line, a covered day with no scheduled service counts as zero.')
       await expect(detail).toContainText('A service with no departure on an incomplete calendar has no annual timetable estimate')
@@ -60,19 +60,22 @@ for (const device of ['desktop', 'phone'] as const) {
       await page.screenshot({ path: info.outputPath(`rail-method-${device}.png`) })
       expect(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
       await page.goto('/about/data-sources/europe/fr')
-      await expect(page.locator('main')).toContainText('contribute no scheduled services')
-      await expect(page.locator('main')).not.toContainText('Wednesday')
+      await expect(page.locator('main')).toContainText('one busy Wednesday')
+      await expect(page.locator('main')).toContainText('four archived 2024 feeds')
+      await expect(page.locator('main')).toContainText('Bruitparif identified train noise at 23 sites')
+      await expect(page.locator('main')).not.toContainText('contribute no scheduled services')
       for (const [country, text] of [
-        ['europe/fi', '150 of the 365 days'],
-        ['europe/be', 'covers 1 day in Brussels'],
-        ['europe/de', 'covers 17 of the 365 days'],
-        ['europe/cz', 'the other 104 days'],
-        ['europe/dk', 'No Danish feed was recovered for the 2024 map'],
-        ['asia/il', 'no service dates inside that year’s observation window'],
-        ['north-america/mx', 'Metro, Tren Ligero, Tren Suburbano and part of El Insurgente'],
+        ['europe/fi', '42 of 366 days in 2024'],
+        ['europe/be', '195 of 366 days covered in 2024'],
+        ['europe/de', 'archived 2024 long-distance, regional and local feeds'],
+        ['europe/cz', 'no 2024 CIS JR archive is available'],
+        ['europe/dk', 'no 2024 Danish archive was recovered'],
+        ['asia/il', '31 of 366 days covered'],
+        ['north-america/mx', 'Metro, Tren Ligero and Tren Suburbano'],
       ]) {
         await page.goto(`/about/data-sources/${country}`)
         await expect(page.locator('main')).toContainText(text)
+        await expect(page.locator('main')).not.toContainText('contributes no timetable counts')
       }
     })
   })

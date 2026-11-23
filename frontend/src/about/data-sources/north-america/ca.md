@@ -1,6 +1,6 @@
 ---
 title: Canada
-intro: Quebec DJMA 2024 traffic counts, timetables for VIA Rail and seven city systems, Transport Canada crossing train counts and horns, Natural Resources Canada wind turbine database. Uncounted main roads use class defaults; other roads are estimated from the buildings around them.
+intro: Quebec DJMA 2024 traffic counts, timetables for VIA Rail and seven city systems, Transport Canada crossing horns (and through-train counts on the 2024 map), Natural Resources Canada wind turbine database. Uncounted main roads use class defaults; other roads are estimated from the buildings around them.
 ---
 
 ## Roads
@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Eight archived timetables are selected by year. For 2026, VIA Rail covers 15 days, GO Transit one, STM 78 and Calgary seven of the 365-day observation window. The other four calendars do not overlap it. Days without timetable data use estimates.
+Passenger trains come from eight timetables: one busy Wednesday on the 2026 map, and archived 2024 calendars averaged over 2024 on the 2024 map (23 to 122 of 366 days covered by system; missing dates estimated from each operator's covered-day mean).
 
 | Operator | What it covers | Feed |
 |---|---|---|
@@ -30,7 +30,7 @@ Eight archived timetables are selected by year. For 2026, VIA Rail covers 15 day
 
 Surface metro sections are included; see the [railway method](/about/data-preparation).
 
-Freight and level-crossing horns: [Transport Canada Grade Crossings Inventory](https://open.canada.ca/data/en/dataset/d0f54727-6c0b-4e5a-aa04-ea1463cf9f4c), 2023 update (contains information licensed under the Open Government Licence – Canada). Non-spur crossings supply daily train counts along junction-free heavy-rail runs: where a timetable covers the line, its passenger trains are subtracted to leave freight; otherwise passenger operators' crossings count as passenger trains and freight carriers' as freight. Lines without a crossing count take the class default, 20 freight trains a day on a main line and 5 on a branch, and lines without a usage tag use the [unclassified railway default](/about/data-preparation). Public crossings with trains sound on approach; whistling cessation is not in the inventory, so every sounding crossing is labelled cessation-unknown.
+Freight and level-crossing horns: CN and CPKC publish no schedules. On the 2026 map, freight lines take the class default (20 freight trains a day on a main line, 5 on a branch), and the [Transport Canada Grade Crossings Inventory](https://open.canada.ca/data/en/dataset/d0f54727-6c0b-4e5a-aa04-ea1463cf9f4c) (2023 update; contains information licensed under the Open Government Licence – Canada) supplies level-crossing horns. On the 2024 map, non-spur crossings in the same inventory also supply daily train counts along junction-free heavy-rail runs: where a timetable covers the line, its passenger trains are subtracted to leave freight; otherwise four untimetabled passenger operators' crossings (EXO / Réseau de Transport Métropolitain, Alberta Prairie Railway and Prairie Dog Central Railway) count as passenger trains and other carriers' crossings count as freight, while lines without a crossing count keep the class default. Lines without a usage tag use the [unclassified railway default](/about/data-preparation). Public crossings with trains sound on approach; whistling cessation is not in the inventory, so every sounding crossing is labelled cessation-unknown.
 
 ## Industry
 

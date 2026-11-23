@@ -1,11 +1,11 @@
 ---
 title: New Zealand
-intro: NZTA state highway traffic and Auckland Transport street counts, both 2024. No train timetable is loaded; railways use class defaults.
+intro: NZTA state highway traffic and Auckland Transport street counts on the 2026 map (global road model on the 2024 map). No train timetable is loaded; railways use class defaults.
 ---
 
 ## Roads
 
-Traffic volumes, both 2024 editions:
+On the 2026 map, traffic volumes come from two sources (no dated road count dataset at or before the 2024 cutoff is admitted for the 2024 map, where all roads follow the global road model):
 
 - State highways: [NZTA Waka Kotahi open data portal](https://opendata-nzta.opendata.arcgis.com/). Each carriageway section has an estimated daily traffic and a heavy vehicle percentage.
 - Auckland streets: [Auckland Transport](https://data-atgis.opendata.arcgis.com/) count sites, each with a daily count and a heavy vehicle percentage.

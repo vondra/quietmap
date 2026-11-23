@@ -1,6 +1,6 @@
 ---
 title: South America
-intro: Traffic counts in four countries and the global road model elsewhere. No railway timetable covers the 2024 or 2026 map windows.
+intro: Traffic counts in four countries and the global road model elsewhere. The only train timetable is the Buenos Aires Subte's 2019 archive (2026 map only).
 ---
 
 <!-- SUBPAGES -->
@@ -11,7 +11,7 @@ All other countries — Bolivia, Brazil, Ecuador, Guyana, Paraguay, Suriname, Ur
 
 Where vehicle classes are not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy, and motorcycles come from national fleets (WHO 2023): 47 % of a town street's traffic in Colombia, 16 % in Argentina, 7.7 % in Brazil.
 
-Railways: the retained Buenos Aires Subte archive does not overlap the 2024 or 2026 observation windows, so it supplies no scheduled train counts; all lines use the [world railway defaults](/about/data-preparation) (80 passenger and 20 freight trains per day on main lines). Surface metro sections are included; see the [railway method](/about/data-preparation).
+Railways: on the 2026 map, the only timetable is the Buenos Aires Subte's 2019 archive (one busy Wednesday; only the Premetro runs on the surface). On the 2024 map, that archive does not overlap 2024 and supplies no scheduled train counts. All other lines (and all lines on the 2024 map) use the [world railway defaults](/about/data-preparation) (80 passenger and 20 freight trains per day on main lines). Surface metro sections are included; see the [railway method](/about/data-preparation).
 
 Industry: Chile, Bolivia, Brazil and Venezuela have national power plant registers; Chile adds tailings dams and Peru mine outlines. Elsewhere power plants come from Global Energy Monitor.
 

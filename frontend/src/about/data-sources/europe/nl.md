@@ -19,7 +19,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train, tram and metro counts: Dutch national timetable from [public-transport.earth](https://data.public-transport.earth/gtfs/nl), averaged over the observation year. In the 2026 window, HTM has 37 covered days and the other selected operators 82. Missing dates use each operator’s covered-day mean, labelled as estimated. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train, tram and metro counts: Dutch national timetable from [public-transport.earth](https://data.public-transport.earth/gtfs/nl), one busy Wednesday on the 2026 map; on the 2024 map, the archived 2024 national timetable (22 to 191 of 366 days covered by operator), averaged over 2024 with missing dates estimated from each operator's covered-day mean. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Industry
 

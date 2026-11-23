@@ -14,7 +14,7 @@ Unsigned roads: a primary road 60 km/h in towns and outside.
 
 ## Railways
 
-Train counts: no timetable. Per-line estimates based on services reported by ONCF; a track takes the first matching row.
+Train counts: no timetable. On the 2026 map, per-line estimates based on services reported by ONCF; a track takes the first matching row (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)).
 
 | Line | Passenger trains per day | Freight trains per day |
 |---|---:|---:|

@@ -458,7 +458,7 @@
         "prepared",
         "tent"
       ],
-      "description": "Per country, the factors on default passenger and freight trains that bring the prepared heavy-rail network to the national train-kilometres (Great Britain 2019), with the TEN-T tier weights inside the national freight total, fitted by the year run over the whole prepared railway network."
+      "description": "Per country, the factors on default passenger and freight trains that bring the heavy-rail network to the national train-kilometres (Great Britain 2019), with the TEN-T tier weights inside the national freight total; the 2026 factors were fitted on the earlier prepared network to 1.2 times the passenger train-kilometres and without Switzerland."
     },
     {
       "id": "motorcycles-who",
@@ -2452,7 +2452,7 @@
       "licence": "Public Domain (US DOT open data; dataset metadata license=Public Domain)",
       "public_ok": true,
       "depends_on": [],
-      "description": "FRA Highway-Rail Crossing Inventory (horns and train counts).",
+      "description": "FRA Highway-Rail Crossing Inventory (level-crossing horns on the 2026 map).",
       "conversion": {
         "sha256": "ae9075231df4ae06201772a3807d867c5602ad85059765136011e7b38151e13a",
         "cutoff": "2026-09-24"
@@ -2472,7 +2472,7 @@
       "licence": "Open Government Licence - Canada (ca-ogl-lgo)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Transport Canada Grade Crossings Inventory (horns and train counts)."
+      "description": "Transport Canada Grade Crossings Inventory (level-crossing horns on the 2026 map)."
     },
     {
       "id": "cz-cuzk-ruian-vfr-buildings",
@@ -5080,7 +5080,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 17 covered days, within 2026-08-15 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Publisher-labelled codesharing aliases are excluded; they describe trains already listed under their operating services."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ch-timetable-ch-switzerland-opentransportdata",
@@ -5096,7 +5096,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "at-timetable-at-austria-obb",
@@ -5112,7 +5112,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "nl-timetable-nl-netherlands",
@@ -5128,7 +5128,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 37–82 covered days, within 2026-06-11 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
     },
     {
       "id": "se-timetable-se-sweden",
@@ -5144,7 +5144,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 235 covered days, within 2026-01-09 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "no-timetable-no-norway",
@@ -5160,7 +5160,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 1–365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "fi-timetable-fi-finland-digitraffic",
@@ -5176,7 +5176,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 87 covered days, within 2026-06-06 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. Only passenger categories 102 and 109 are selected; the mixed archive’s type-100 non-passenger movements are excluded."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "be-timetable-be-belgium-sncb",
@@ -5192,7 +5192,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 142 covered days, within 2026-04-12 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "in-timetable-in-indian-railways-unofficial",
@@ -5208,7 +5208,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 2 covered days, within 2026-08-30 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "us-timetable-us-amtrak",
@@ -6104,7 +6104,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 15 covered days, within 2026-08-17 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "fr-timetable-fr-sncf-national",
@@ -6120,7 +6120,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "fr-timetable-fr-idf-sncf-transilien",
@@ -6136,7 +6136,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "lu-timetable-lu-luxembourg-atp-open-data",
@@ -6152,7 +6152,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "gr-timetable-gr-hellenic-train-community-timetable",
@@ -6168,7 +6168,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 55 covered days, within 2026-07-08 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "lv-timetable-lv-pv-latvia-vivi",
@@ -6184,7 +6184,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ee-timetable-ee-estonia-peatus",
@@ -6200,7 +6200,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 335–365 covered days, within 2025-09-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "bg-timetable-bg-sofia-sofia-traffic",
@@ -6216,7 +6216,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 80 covered days, within 2026-06-13 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "hr-timetable-hr-croatia-hz",
@@ -6232,7 +6232,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 267 covered days, within 2025-12-08 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "hu-timetable-hu-hungary-mav",
@@ -6248,7 +6248,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 200 covered days, within 2026-02-13 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "sk-timetable-sk-slovakia-zsr",
@@ -6264,7 +6264,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "au-timetable-au-vic-victoria-ptv",
@@ -6280,7 +6280,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "au-timetable-au-qld-queensland-translink",
@@ -6296,7 +6296,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ae-timetable-rta-dubai",
@@ -6312,7 +6312,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 122 covered days, within 2025-09-01 through 2025-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ar-timetable-subte-buenos-aires",
@@ -6328,7 +6328,7 @@
       "licence": "public-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "au-timetable-nsw-sydney",
@@ -6344,7 +6344,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "au-timetable-adelaide-metro",
@@ -6360,7 +6360,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 144 covered days, within 2026-04-10 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "au-timetable-transperth-wa",
@@ -6376,7 +6376,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "be-timetable-stib-brussels",
@@ -6392,7 +6392,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 1 covered day, within 2026-08-31 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "be-timetable-delijn-flanders",
@@ -6408,7 +6408,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 92 covered days, within 2026-06-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "be-timetable-tec-wallonia",
@@ -6424,7 +6424,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ca-timetable-via-rail",
@@ -6440,7 +6440,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 15 covered days, within 2026-08-17 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ca-timetable-go-transit",
@@ -6456,7 +6456,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 1 covered day, within 2026-08-31 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ca-timetable-ttc-toronto",
@@ -6472,7 +6472,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ca-timetable-stm-montreal",
@@ -6488,7 +6488,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 78 covered days, within 2026-06-15 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ca-timetable-translink-vancouver",
@@ -6504,7 +6504,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ca-timetable-oc-transpo",
@@ -6520,7 +6520,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ca-timetable-calgary-transit",
@@ -6536,7 +6536,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 7 covered days, within 2026-08-25 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "ca-timetable-edmonton-ets",
@@ -6552,7 +6552,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "de-timetable-de-full",
@@ -6568,7 +6568,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "dk-timetable-rejseplanen",
@@ -6584,7 +6584,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "es-timetable-fgc-catalunya",
@@ -6600,7 +6600,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 147 covered days, within 2026-04-07 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
     },
     {
       "id": "fi-timetable-fintraffic-vr",
@@ -6616,7 +6616,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 150 covered days, within 2026-04-04 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "fi-timetable-hsl-helsinki",
@@ -6632,7 +6632,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "fi-timetable-tampere",
@@ -6648,7 +6648,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 3 covered days, within 2026-08-29 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "fi-timetable-foli-turku",
@@ -6680,7 +6680,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 145 covered days, within 2026-04-09 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday. The archive’s aggregate feed_info bounds overstate or misdate its service calendars and are ignored."
     },
     {
       "id": "il-timetable-mot-unified",
@@ -6696,7 +6696,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "it-timetable-toscana-trenitalia",
@@ -6712,7 +6712,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 229 covered days, within 2026-01-15 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "it-timetable-trenord-lombardia",
@@ -6728,7 +6728,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 217 covered days, within 2026-01-27 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "it-timetable-gtt-piemonte",
@@ -6744,7 +6744,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 147 covered days, within 2026-04-07 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "it-timetable-ferrotramviaria-puglia",
@@ -6760,7 +6760,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 122 covered days, within 2025-09-01 through 2025-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "it-timetable-trenitalia-sardegna",
@@ -6776,7 +6776,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 87 covered days, within 2026-06-06 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "mx-timetable-cdmx-semovi",
@@ -6792,7 +6792,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 122 covered days, within 2025-09-01 through 2025-12-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "mx-timetable-toluca-movimex",
@@ -6824,7 +6824,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "pl-timetable-warsaw-ztm",
@@ -6840,7 +6840,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "pl-timetable-krakow-tram",
@@ -6856,7 +6856,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "pl-timetable-wkd-warszawa",
@@ -6872,7 +6872,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "pl-timetable-silesia-gzm",
@@ -6888,7 +6888,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "pt-timetable-cp-comboios",
@@ -6904,7 +6904,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 261 covered days, within 2025-12-14 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "pt-timetable-metro-porto",
@@ -6920,7 +6920,23 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
+    },
+    {
+      "id": "pt-timetable-metro-sul-tejo",
+      "kind": "prepare-timetable",
+      "region": "PT",
+      "publisher": "MTS",
+      "url": "https://mts.pt/imt/MTS-20240129.zip",
+      "observed": {
+        "start": "2024-01-29",
+        "end": "2025-09-07"
+      },
+      "published": null,
+      "licence": "open-data",
+      "public_ok": true,
+      "depends_on": [],
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday from the retained 2024–2025 archive."
     },
     {
       "id": "pt-timetable-carris-metropolitana",
@@ -6952,7 +6968,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 150 covered days, within 2026-04-04 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "th-timetable-namtang",
@@ -6968,7 +6984,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 243 covered days, within 2026-01-01 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "id": "fine-dem-cz",
@@ -8748,7 +8764,7 @@
       },
       "published": null,
       "depends_on": [],
-      "description": "Archived service calendars integrated over all 365 days of the flow window, including exceptions and weekends. Selected operators have 144 covered days, within 2026-04-10 through 2026-08-31. Each operator’s covered-day mean estimates its missing dates; seasonal variants stay together."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "kind": "prepare-timetable",
@@ -8764,7 +8780,7 @@
       },
       "published": null,
       "depends_on": [],
-      "description": "Archived timetable retained for provenance. No selected rail or tram service calendar overlaps this map's 365-day flow window; it contributes no timetable counts, and lines retain their declared estimates."
+      "description": "Passenger timetable; the 2026 map uses one busy Wednesday."
     },
     {
       "region": "world",
@@ -9463,7 +9479,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Original CIS path bitmap calendars, integrated over the entire declared flow window. Published 5–10 November 2025; passenger traffic codes 11 and C1–C4."
+      "description": "National Czech railway timetable (CIS JR); the 2026 map uses Wednesday 8 April 2026."
     },
     {
       "id": "rail-prior-observations",
@@ -9630,6 +9646,7 @@
         "pl-timetable-silesia-gzm",
         "pt-timetable-cp-comboios",
         "pt-timetable-metro-porto",
+        "pt-timetable-metro-sul-tejo",
         "pt-timetable-carris-metropolitana",
         "se-timetable-gtfs-sverige-2",
         "th-timetable-namtang",
@@ -9643,7 +9660,7 @@
         "rail-prior-observations",
         "cz-osm-railway-stations"
       ],
-      "description": "Rail movements integrate all admitted service dates and exceptions over the flow window. Missing dates are estimated from the same operator’s covered-day mean, with that component retained separately; absent timetables use the declared class or corridor estimates."
+      "description": "Outside the United States, the 2026 map counts passenger trains from one busy Wednesday per timetable (Wednesday 8 April 2026 for Czech CIS JR); in the United States, it averages each archived timetable's covered days in the flow window, weekends included. Lines without a timetable take declared class or corridor estimates."
     },
     {
       "id": "facility-model",
@@ -10132,15 +10149,7 @@
       "description": "Recorded carriageway fit on 739122 km of counted roads; local street fit on 4546 DfT counters. Earlier unmeasured terminal priors and trip-rate assumptions are identified in the model provenance."
     }
   ],
-  "unavailable": [
-    {
-      "id": "pt-timetable-metro-sul-tejo",
-      "kind": "prepare-timetable",
-      "region": "PT",
-      "description": "The retained archive’s regular service calendar ends in September before almost all of this flow window; sparse holiday dates and a feed_info end in 2030 do not establish current service. No valid calendar was recovered for this window; the railway class estimate remains.",
-      "depends_on": []
-    }
-  ],
+  "unavailable": [],
   "validity": {
     "legal-speeds-osm": {
       "start": "2026-09-21",
@@ -15904,6 +15913,47 @@
       {
         "format": "gtfs",
         "input": "pt-timetable-metro-porto",
+        "source_id": 2067,
+        "country": "PT",
+        "directories": [
+          "."
+        ],
+        "rail_route_types": [
+          2,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ],
+        "tram_route_types": [
+          0,
+          900,
+          901,
+          902,
+          903,
+          904,
+          905,
+          906,
+          1,
+          400,
+          401,
+          402,
+          403,
+          404,
+          405
+        ],
+        "excluded_route_names": [],
+        "ignore_feed_window": false
+      },
+      {
+        "format": "gtfs",
+        "input": "pt-timetable-metro-sul-tejo",
         "source_id": 2067,
         "country": "PT",
         "directories": [

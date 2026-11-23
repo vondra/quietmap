@@ -140,6 +140,32 @@ async function expectGreen(page: Page) {
 
 for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', () => {
   if (phone) test.use({ ...PHONE, deviceScaleFactor: 2 })
+  test('a shared quiet zone uses the finer total on both screens and starts at zoom five', async ({ page }) => {
+    await installHermeticMap(page, POINT)
+    const quiet = uniformTile(false, 60), loud = uniformTile(false, 100)
+    await page.route('**/api/tiles/b1/total/**/*.bin', route => {
+      const zoom = Number(new URL(route.request().url()).pathname.split('/')[5])
+      return route.fulfill({ contentType: 'application/octet-stream', body: [5, 6, 11].includes(zoom) ? quiet : loud })
+    })
+    for (const zoom of [10, 5]) {
+      const total = page.waitForResponse(`**/api/tiles/b1/total/${zoom + 1}/**/*.bin`)
+      await page.goto(mapUrl(POINT, '', zoom) + '&qc=1&panel=none')
+      await Promise.all([expectGreen(page), total])
+    }
+    await page.goto(mapUrl(POINT, '', 4) + '&qc=1&panel=none')
+    await afterPaint(page)
+    await expect.poll(() => centrePixel(page)).toEqual([0, 0, 0, 255])
+    if (!phone) {
+      const all = mapUrl(POINT, 'road,railway,industrial,building,ship,aircraft', 10) + '&panel=none'
+      await page.goto(all + '&qc=1')
+      const { x, y } = await canvasCenter(page)
+      await page.mouse.move(x, y)
+      await expect(page.getByTestId('heatmap-hover')).toHaveText('0.50 sone')
+      await page.goto(all)
+      await page.mouse.move(x + 1, y)
+      await expect(page.getByTestId('heatmap-hover')).toHaveText('2.0 sone')
+    }
+  })
   test('a reachable area keeps stay pins clear whether drawn late or opened from its address', async ({ page }) => {
     await fixtures(page)
     const stayPoint = [POINT.lat, POINT.lng + 0.002] as const

@@ -14,7 +14,7 @@ Unsigned roads: a primary road 60 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-No open timetable. Counts are assigned for four corridors out of Tehran; all other track gets 3 passenger and 5 freight trains per day, industrial sidings 5 freight.
+No open timetable. On the 2026 map, counts are assigned for four corridors out of Tehran, all other track gets 3 passenger and 5 freight trains per day, and industrial sidings 5 freight (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)):
 
 | Corridor (track within 9 km) | Passenger | Freight |
 |---|---:|---:|

@@ -4,20 +4,14 @@ import { fetchSourceTile, type SourceTile } from './hm3-combine.ts'
 import { lngLatToTileFloat } from './tile-math.ts'
 import { MIN_ZOOM, WORLD_EXTENT, type TileBuilds } from './tile-urls.ts'
 
-/** One pyramid level finer on HiDPI screens, where one data cell ≈ one device
- *  pixel wherever a finer level exists — the renderer's TileLayer `zoomOffset`. */
-export function hiDpiTileZoomOffset(devicePixelRatio: number): number {
-  return devicePixelRatio >= 1.5 ? 1 : 0
-}
-
 /**
  * The tile zoom the heatmap paints at a viewport zoom — deck's TileLayer rule
- * for HeatmapOverlay's layer: round the viewport zoom, add the HiDPI offset,
+ * for HeatmapOverlay's layer: round the viewport zoom, add the layer's offset,
  * clamp into the published band (deck under-zooms to MIN_ZOOM with a world
  * extent and never requests past the base zoom).
  */
-export function displayedTileZoom(build: TileBuilds, viewZoom: number, devicePixelRatio: number): number {
-  return Math.min(build.zoom, Math.max(MIN_ZOOM, Math.round(viewZoom) + hiDpiTileZoomOffset(devicePixelRatio)))
+export function displayedTileZoom(build: TileBuilds, viewZoom: number, zoomOffset: number): number {
+  return Math.min(build.zoom, Math.max(MIN_ZOOM, Math.round(viewZoom) + zoomOffset))
 }
 
 /** One HM3 cell: the tile index at zoom `z` and the cell inside it. */

@@ -14,7 +14,7 @@ Unsigned roads: a primary road 60 km/h in towns, 100 outside, a motorway 140.
 
 ## Railways
 
-No open timetable. Train counts are assigned per corridor:
+No open timetable. On the 2026 map, train counts are assigned per corridor (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)):
 
 | Track | Passenger | Freight |
 |---|---:|---:|

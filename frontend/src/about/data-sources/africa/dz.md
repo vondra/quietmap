@@ -14,7 +14,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train counts: no timetable. Per-line estimates based on services reported by SNTF; a track takes the first matching row.
+Train counts: no timetable. On the 2026 map, per-line estimates based on services reported by SNTF; a track takes the first matching row (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)).
 
 | Line | Passenger trains per day | Freight trains per day |
 |---|---:|---:|

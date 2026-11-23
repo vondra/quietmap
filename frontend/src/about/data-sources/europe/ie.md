@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-Train, DART and Luas counts: [Transport for Ireland timetable](https://www.transportforireland.ie/transitData/Data/GTFS_All.zip), averaged over the observation year. The selected operators cover 145 of the 365 days in the 2026 window. Missing dates use each operator’s covered-day mean, labelled as estimated. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
+Train, DART and Luas counts: [Transport for Ireland timetable](https://www.transportforireland.ie/transitData/Data/GTFS_All.zip), one busy Wednesday on the 2026 map; on the 2024 map, the archived 2024 timetable (32–121 of 366 days covered by operator), averaged over 2024 with missing dates estimated from each operator's covered-day mean. The timetable is passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Buildings and terrain
 

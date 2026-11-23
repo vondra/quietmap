@@ -294,6 +294,7 @@ In squares with too few mapped buildings, uncounted roads keep the fixed estimat
 country, and local streets the estimate of the prepared road tables.
 
 <!-- NATIONAL CLASS PRIORS -->
+
 Directional counts are kept as published; counts of both directions are shared between
 carriageways, and a divided main road whose other carriageway is missing takes half.
 
@@ -307,29 +308,40 @@ is estimated, and much of it runs at night. Where no timetable is published, as 
 Japan, Korea, Great Britain and Brazil, a line takes its class's default: in their cities, where
 trains run every few minutes, the railway reads 5 to 10 dB too quiet.
 
-For the 2026 map, train counts come from <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
+Train counts come from <abbr title="General Transit Feed Specification, the format of public timetables">GTFS</abbr>
 feeds and national timetables, every train routed along the track network and every tram and
-metro counted at its stops, averaged over the year's observation window. Freight comes from
-defaults calibrated in 28 European countries and Turkey against official goods
-train-kilometres ([Eurostat](https://ec.europa.eu/eurostat/web/transport/database) 2024; the United
-Kingdom 2019), and in the United States and Canada from
+metro counted at its stops: on the 2026 map, outside the United States, the trains of each
+timetable's busiest Wednesday (Wednesday 8 April 2026 for Czechia's national timetable; and in the
+United States, the mean of the days of the year to 31 August 2026 that its archived timetables
+cover, weekends included); on the 2024 map, the mean over all 366 days of 2024, weekends
+included, with missing calendar dates estimated from each operator's covered-day mean. Freight
+comes from defaults calibrated in 28 European countries (32 on the 2024 map) and Turkey against
+official goods train-kilometres
+([Eurostat](https://ec.europa.eu/eurostat/web/transport/database) 2024; the United Kingdom 2019;
+on the 2024 map, each country's latest published Eurostat year up to 2024), and on the 2024 map in
+the United States and Canada from
 [<abbr title="US Federal Railroad Administration">FRA</abbr>](https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6)
 and [Transport Canada](https://open.canada.ca/data/en/dataset/d0f54727-6c0b-4e5a-aa04-ea1463cf9f4c)
-level-crossing counts after subtracting passenger trains. At public level crossings in the United
-States and Canada, locomotives sound their horns.
+level-crossing counts after subtracting passenger trains (class defaults on the 2026 map). At
+public level crossings in the United States and Canada, locomotives sound their horns.
 
 <details>
 <summary>How timetables become annual train counts</summary>
 
-Service calendars and their additions and cancellations are counted for every day of the
-observation window, including weekends. The sum is divided by the number of days in that window.
-A timetable that covers only part of the window contributes its recorded departures. For the
-missing dates, the map uses that same timetable's mean daily service on its covered dates,
-and keeps this estimated part separate. On a matched line, a covered day with no scheduled
-service counts as zero. A service with no departure on an incomplete calendar has no annual
-timetable estimate and keeps the declared class or corridor model. Zero service remains zero
-when the calendar covers the entire observation window. Lines with no matched timetable also
-retain their class or corridor estimates.
+The calendar-averaging rules below apply to the 2024 map and to the 54 United States timetables on
+the 2026 map. Outside the United States, the 2026 map was built from each timetable's busiest
+Wednesday (Wednesday 8 April 2026 for Czechia's national timetable), so DELFI, SNCF, Transilien,
+Denmark and Luxembourg all supply scheduled counts on the 2026 map.
+
+Where calendar averaging applies, service calendars and their additions and cancellations are
+counted for every day of the observation window, including weekends. The sum is divided by the
+number of days in that window. A timetable that covers only part of the window contributes its
+recorded departures. For the missing dates, the map uses that same timetable's mean daily service
+on its covered dates, and keeps this estimated part separate. On a matched line, a covered day
+with no scheduled service counts as zero. A service with no departure on an incomplete calendar
+has no annual timetable estimate and keeps the declared class or corridor model. Zero service
+remains zero when the calendar covers the entire observation window. Lines with no matched
+timetable also retain their class or corridor estimates.
 
 Each operator keeps its own observation horizon and its own estimate, even when several
 operators share one feed. Without a complete declared feed window, its horizon runs from the
@@ -355,11 +367,8 @@ Observed and calendar-estimated trains use the same modelled day, evening and ni
 and the same source factor. Class estimates keep their national factors; the annual result
 is not forced to a national total.
 
-For 2026, the window is 1 September 2025 through 31 August 2026. The archived German DELFI
-calendar covers 17 of its 365 days; Switzerland and Austria cover 261. The archived SNCF,
-Transilien, Danish and Luxembourg feeds start after the window, so their scheduled services do
-not contribute to this year's mean. Their lines retain estimates. The United States' timetables,
-Amtrak's and 53 commuter, metro and light-rail feeds, are archives of the Mobility Database: the
+For 2026 in the United States, the window is 1 September 2025 through 31 August 2026:
+Amtrak's and 53 commuter, metro and light-rail feeds are archives of the Mobility Database — the
 last stored before the window's end that covers four weeks of it, or the days a shorter publishing
 horizon covers, or for SunRail and Sacramento a later archive that still covers part of it.
 
@@ -402,8 +411,10 @@ the one its trains run on is counted as that track's (St. Louis files MetroLink 
   than 89 km/h; the trains of a period are spread along the line as CNOSSOS-EU spreads them.
 - **The counts.** A stretch of track between two switches carries one count. Each year's build
   scales the default trains on its own prepared network. Default freight is scaled so that a
-  country's lines carry its goods train-kilometres less the counted freight; a country that
-  publishes none (Belgium, Greece) keeps the defaults' total. In the countries of the
+  country's lines carry its goods train-kilometres less the counted freight; on the 2026 map,
+  Belgium and Greece publish no 2024 figure and keep the defaults' total, while on the 2024 map
+  each country uses its latest published Eurostat year up to 2024 (including Belgium 2011 and
+  Greece 2017). In the countries of the
   <abbr title="Trans-European Transport Network, the EU's main transport corridors">TEN-T</abbr>
   maps, a line takes the tier of its own country's TEN-T line, and freight is weighted 4 on a core
   corridor, 2 on another TEN-T line and 0.5 off them within the country's total. Default passenger
@@ -413,29 +424,32 @@ the one its trains run on is counted as that track's (St. Louis files MetroLink 
   Where the timetables alone reach the national total, the defaults stand. The 2026 factors
   were fitted before this, on the earlier prepared network, to 1.2 times the passenger
   train-kilometres and without Switzerland. In the EU, Switzerland, Norway and Great Britain
-  37.6 % of freight runs between 22 and 06 h, as counted at the German monitors. Lines mapped as
+  37.6 % of freight runs between 22 and 06 h, as counted at the German monitors (36.8 % between 23
+  and 07 h). Lines mapped as
   passenger-only take no default freight, nor do lines run at 250 km/h or more that are not mapped
   as carrying freight: high-speed lines carry passengers. A high-speed line that posts no speed
   runs at its line's posted speed, else at 250 km/h, the median of the world's posted high-speed
   lines.
 - **Metro and crossings.** Above-ground metro uses the light-rail model; track underground emits
-  nothing outdoors. In the United States and Canada, open at-grade crossings in FRA Form 6180.71 and
-  Transport Canada's inventory also supply through-train counts along junction-free heavy-rail runs,
-  shared across physical main tracks; passenger trains from timetables or the crossing record are
-  subtracted to leave freight. At a level crossing, horns sound over up to a quarter mile
-  before the crossing, for half the crossing's trains in each direction; US quiet zones stay silent,
-  and partial ones at night.
+  nothing outdoors. On the 2024 map, in the United States and Canada, open at-grade crossings in
+  FRA Form 6180.71 and Transport Canada's inventory also supply through-train counts along
+  junction-free heavy-rail runs, shared across physical main tracks; passenger trains from
+  timetables or the crossing record are subtracted to leave freight. At a level crossing, horns
+  sound over up to a quarter mile before the crossing, for half the crossing's trains in each
+  direction; US quiet zones stay silent, and partial ones at night.
 
 </details>
 
 <details>
 <summary>Default trains a day</summary>
 
-Where no count or national estimate exists; six countries have main-line freight defaults of their
-own (Germany 24.5 trains a day, Switzerland 31.4). The country factors above then scale them: a
-French main line carries 23 passenger trains a day, a German one 7 to 54 freight trains by its
-TEN-T tier. Main, branch and industrial use must be mapped; other lines take the unclassified row.
-Parallel tracks share their line's count.
+Where no count or national estimate exists, tracks start from the world defaults below; on the
+2026 map, six countries have main-line freight defaults of their own (Germany 24.5 trains a day,
+Switzerland 31.4), while on the 2024 map every country starts from the world 20. The country
+factors above then scale them: on the 2026 map, a French main line carries 23 passenger trains a
+day (38 on the 2024 map), and a German one 7 to 54 freight trains by its TEN-T tier. Main, branch
+and industrial use must be mapped; other lines take the unclassified row. Parallel tracks share
+their line's count.
 
 | Railway | Passenger | Freight |
 |---|---:|---:|

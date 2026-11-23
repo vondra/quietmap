@@ -3,9 +3,9 @@ title: Validation
 intro: How close the map comes to real measurements.
 ---
 
-We compare the map's 2026 outdoor noise levels with microphone readings. Each comparison uses the
-sound sources and hours in the table. The map calculates at 4 m above ground. Microphone heights
-vary. For Prague and Germany's railways we use approximate locations.
+We compare the map's 2026 outdoor noise levels with microphone readings. Each comparison below
+gives the sound sources and hours. The map calculates at 4 m above ground. Microphone heights
+vary. The Prague airport microphone positions are approximate.
 
 For aircraft alone in Prague, Minneapolis–St Paul and Zurich, half the readings in each comparison
 are within 1.0 to 2.2 dB of the map. In the streets of Paris, Barcelona, Madrid and Dublin, half
@@ -37,7 +37,6 @@ the current version, November 2026.
 | Madrid: [Ayuntamiento de Madrid](https://datos.madrid.es/dataset/211356-0-contaminacion-acustica) (CC BY 4.0), Lden 2025 | 31 | +2.3 dB | 3.3 dB |
 | Dublin: [Dublin City Council](https://data.smartdublin.ie/sonitus-api) (CC BY), Lden 2025 | 14 | −4.4 dB | 5.7 dB |
 | Poland's roads: [Chief Inspectorate of Environmental Protection](https://dane.gov.pl/pl/dataset/1404) (CC BY 4.0), 06–22 h, 2018–2024, at 5,351 points | 6,616 | +0.1 dB | 3.0 dB |
-| Germany's railways: [Eisenbahn-Bundesamt](https://www.laerm-monitoring.de/Jahresbericht), trains only, approximate trackside positions, 06–22 and 22–06 h, 2023 | 19 | −0.4 and −3.2 dB | 1.7 and 3.3 dB |
 | Prague airport: [Letiště Praha](https://www.prg.aero/en/noise-air-traffic-and-noise-airport-operations), aircraft only, positions read from the airport map, 06–22 and 22–06 h, January 2026 | 14 and 13 | −0.3 and +1.0 dB | 1.8 and 1.8 dB |
 | Minneapolis–St Paul airport: [Metropolitan Airports Commission](https://www.macnoise.com), aircraft only, DNL 2025–26 | 39 | +0.2 dB | 1.0 dB |
 | Zurich airport: [Flughafen Zürich](https://report.flughafen-zuerich.ch/2024/ar/en/laerm), aircraft only, 06–22 h, 2024 | 4 | −2.2 dB | 2.2 dB |
@@ -50,9 +49,34 @@ In Zurich, the four points use the mast positions in [Empa's survey, table 12](h
 Three fall on buildings, where the map uses a façade. The airport's [December 2024 bulletin](https://media.flughafen-zuerich.ch/-/jssmedia/airport/portal/dokumente/das-unternehmen/politics-and-responsibility/noise-and-sound-insulation/2412_lrmbulletin_dezember.pdf)
 shows the sites and lists 9 to 12 months of daytime readings per mast during equipment replacement.
 
-On Germany's railways the map samples 7.5 m from the track near each named town. The distance
-along the line to the microphone is uncertain. The same monitoring report supplies the map's
-typical train, which limits this comparison as an independent check.
+## Railway noise
+
+Bruitparif could distinguish trains from other sound at 23 of its 26 sites. It analysed one day
+per site in November 2019. For the French night (22:00–06:00), the median absolute difference
+between those measurements and the map's 2026 annual averages was 4.4 dB.
+
+The two largest differences were on opposite sides of Paris. In
+[Villemomble](/#lat=48.87648&lng=2.52&z=16&d=48.87648,2.52&ro=railway&calc=1) the railway noise
+works out to 51.2 dB on the map against 64.9 dB measured. At
+[Versailles](/#lat=48.80516&lng=2.15998&z=16&d=48.80516,2.15998&ro=railway&calc=1)
+it was 57.9 dB on the map against 42.1 dB measured. Both microphones recorded the hours
+before 06:00 and after 22:00 on 5 November 2019.
+
+At Villemomble the map estimates 4.7 trains across the two tracks during those hours.
+Bruitparif recorded 42 train passages in those hours and identified freight as the main source of night noise.
+SNCF supplied an annual average of 30 trains per night for this section.
+
+Open either point and scroll to **Layers** in the detailed calculation. In the **Railways**
+row at Versailles the evening level is 62.4 dB and the night level is 56.6 dB. To estimate
+the French night we take one hour at the evening level and seven at the night level, averaged by sound energy.
+Across the 23 sites the signed median was +1.8 dB. For the four microphones on façades we use
+Bruitparif's levels with the 3 dB façade reflection removed.
+[Bruitparif field report, results and site photographs](https://www.bruitparif.fr/pages/En-tete/400%20Nos%20publications/700%20Rapports%20d%27%C3%A9tude/2020-06-07%20-%20Rapport%20-%20Campagne%20de%20mesure%20du%20bruit%20ferroviaire%20r%C3%A9alis%C3%A9e%20en%20novembre%202019.pdf#page=18).
+
+Germany's 19 monitors tell us about the trains themselves. Each passing train is measured
+7.5 m from its own track, using a different microphone for the other track. We use their train
+data in the model. A resident beside the line hears both tracks from one place.
+[German railway monitoring method](https://www.laerm-monitoring.de/Messverfahren).
 
 ## Quiet places
 

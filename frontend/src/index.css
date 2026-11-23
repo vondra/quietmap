@@ -251,11 +251,11 @@ html, body {
   .about-prose .about-sections p { @apply mt-0 mb-1 text-xs font-medium text-foreground; }
   .about-prose .about-sections ul { @apply my-0 list-none pl-0 sm:columns-2 sm:gap-8; }
   .about-prose .about-sections li { @apply my-0 break-inside-avoid py-0.5 pl-0; }
-  .about-prose p { @apply my-3; }
+  .about-prose p { @apply my-3; overflow-wrap: anywhere; }
   .about-prose a { @apply text-primary underline underline-offset-2 hover:decoration-2; }
   .about-prose ul { @apply my-3 list-disc pl-6; }
   .about-prose ol { @apply my-3 list-decimal pl-6; }
-  .about-prose li { @apply my-1 pl-1; }
+  .about-prose li { @apply my-1 pl-1; overflow-wrap: anywhere; }
   .about-prose li::marker { @apply text-muted-foreground; }
   .about-prose strong { @apply font-semibold text-foreground; }
   .about-prose details { @apply my-3; }
@@ -268,7 +268,7 @@ html, body {
     @apply absolute bottom-full left-0 z-20 mb-1 w-64 max-w-[80vw] rounded-md border border-border bg-popover p-2
       text-xs font-normal leading-snug text-popover-foreground shadow-md;
   }
-  .about-prose table { @apply my-3 w-full text-sm; }
+  .about-prose table { @apply w-full text-sm; }
   .about-prose thead { @apply border-b border-border; }
   .about-prose th { @apply py-1 pr-3 text-left font-semibold text-foreground; }
   .about-prose td { @apply py-1 pr-3 align-top; }

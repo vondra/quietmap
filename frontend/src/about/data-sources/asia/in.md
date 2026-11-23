@@ -14,9 +14,9 @@ Unsigned roads: a primary road 60 km/h in towns, 50 outside, a motorway 120.
 
 ## Railways
 
-Lines in the [community-built Indian Railways timetable](https://github.com/Neo2308/indianrailways-gtfs) get its passenger train counts. Its archive covers only 2 of the 365 days in the 2026 observation window; the other dates use the mean service on those two days, labelled as estimated. This cannot establish seasonal or weekday variation. The timetable is unofficial and has no freight; freight comes from the network map below.
+On the 2026 map, lines in the [community-built Indian Railways timetable](https://github.com/Neo2308/indianrailways-gtfs) get its passenger train counts (one busy Wednesday). The timetable is unofficial and has no freight; freight comes from the network map below.
 
-Other lines use the official railway network map on [Esri Living Atlas India](https://livingatlas.esri.in/), which gives speed, gauge and railway zone. Track within 500 m of a mapped line gets trains by location and speed:
+On the 2026 map, other lines use the official railway network map on [Esri Living Atlas India](https://livingatlas.esri.in/), which gives speed, gauge and railway zone (neither the timetable nor this undated network map is available for 2024, where all lines use class defaults). Track within 500 m of a mapped line gets trains by location and speed:
 
 | Line | Passenger | Freight |
 |---|---:|---:|

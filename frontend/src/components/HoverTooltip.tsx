@@ -11,6 +11,7 @@ import MapHoverBox from './MapHoverBox'
 interface Props {
   /** The source the map shows: the total or one layer; `null` reads nothing. */
   source: HeatmapSource | null
+  zoomOffset: number
 }
 
 /**
@@ -19,14 +20,14 @@ interface Props {
  * painted pixel blends neighbouring cells by linear filtering and quantises to half a phon) and
  * costs a ~15 KB pyramid tile at world zoom instead of a base-zoom tile per hover region.
  */
-export default function HoverTooltip({ source }: Props) {
+export default function HoverTooltip({ source, zoomOffset }: Props) {
   const { current: mapRef } = useMap()
   const build = useTileBuild()
   const hover = useMapHover(mapRef, source !== null)
 
   const cell = useMemo(
-    () => (hover && build ? hm3CellAt(hover.lng, hover.lat, displayedTileZoom(build, hover.zoom, window.devicePixelRatio)) : null),
-    [hover, build],
+    () => (hover && build ? hm3CellAt(hover.lng, hover.lat, displayedTileZoom(build, hover.zoom, zoomOffset)) : null),
+    [hover, build, zoomOffset],
   )
   // The tile changes far less often than the cell: it is loaded once per tile × source ×
   // generation (primitive deps, so a mousemove inside one tile re-uses the sample) and held here
