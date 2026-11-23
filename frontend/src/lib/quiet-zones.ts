@@ -10,26 +10,30 @@ const QUIET_RGBA = [...QUIET_RGB, 110] as const // @ ~0.43
 
 // Display floor for the wash — zoomed further out the green blobs read as
 // noise, not places (the `total` data itself goes down to z2).
-const MIN_ZOOM = 5
+const MIN_VIEW_ZOOM = 5
 
 type QuietTile = { cells: Uint8Array }
 
 /** The total's green mask, after the noise heatmap and before its shared data/label anchor. */
-export function makeQuietZonesLayer(metric: Metric, threshold: number, build: TileBuilds, beforeId: string | undefined) {
+export function makeQuietZonesLayer(
+  metric: Metric, threshold: number, build: TileBuilds, beforeId: string | undefined, zoomOffset: number,
+) {
   const maxByte = cellByte(metric, threshold)
   const total = sourceOf(HEATMAP_LAYERS, metric)!
   return new TileLayer<QuietTile | null>({
-    // Generation snapshot in the id: a flip re-keys the layer so deck drops
-    // its tile cache instead of masking stale-generation tiles.
+    // A generation flip must discard cached tiles for the previous total.
     id: `quiet-zones-${buildKey(build, total)}`,
     ...(beforeId ? { beforeId } : {}),
-    // Deliberately NO `extent` prop: without one deck renders nothing below
-    // minZoom, which is exactly the z5 display floor above — an extent would
-    // clamp-and-render the green wash at world zooms instead.
-    minZoom: MIN_ZOOM,
+    // Without an extent, deck hides the wash below this zoom after adding the offset.
+    minZoom: MIN_VIEW_ZOOM + zoomOffset,
+    zoomOffset,
     // deck upscales the base texture for deeper viewport zooms.
     maxZoom: build.zoom,
     tileSize: TILE_PX,
+    // Two 24-tile desktop views. A slider change rebuilds a 1 MiB mask per cached tile.
+    maxCacheSize: 48,
+    // A loaded child's transparent cells must not show green through from a coarser parent.
+    refinementStrategy: 'no-overlap',
     // getTileData returns the raw decoded cells (threshold-independent), so a
     // threshold change keeps the tile cache instead of refetching. The object
     // wrapper is required — deck.gl's TileLayer mishandles a bare typed array

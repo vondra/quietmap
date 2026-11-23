@@ -10,6 +10,7 @@ import DetailPopup from './DetailPopup'
 import FlightTrackLayer from './FlightTrackLayer'
 import SegmentFanLayer from './SegmentFanLayer'
 import HeatmapOverlay from './HeatmapOverlay'
+import { useMediaQuery } from '../hooks/useMediaQuery'
 import { HEATMAP_LAYERS, publishes, sourceOf, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
 import AboutControl from './AboutControl'
@@ -82,6 +83,9 @@ export default function MapView({
 }: MapViewProps) {
   const bm = basemap ?? DEFAULT_BASEMAP
   const activeQuietThreshold = quietClustersEnabled ? quietThreshold ?? QUIET_THRESHOLD_DEFAULT[metric] : null
+  const denseScreen = useMediaQuery('(min-resolution: 1.5dppx), (-webkit-min-device-pixel-ratio: 1.5)')
+  // A shared quiet-area cutoff needs the same finer grid on every screen.
+  const tileZoomOffset = denseScreen || activeQuietThreshold !== null ? 1 : 0
   const [flyToPos, setFlyToPos] = useState<{ lat: number; lng: number } | null>(null)
   const mapStyle = useMemo(() => basemapStyle(bm, window.location.origin), [bm])
 
@@ -193,11 +197,11 @@ export default function MapView({
         onError={() => onGeolocateActiveChange?.(false)}
       />
       {/* Noise and quiet zones share the map's context below data layers and labels. */}
-      <HeatmapOverlay source={heatmapSource} metric={metric}
+      <HeatmapOverlay source={heatmapSource} metric={metric} zoomOffset={tileZoomOffset}
         quietThreshold={activeQuietThreshold} />
       <DataLayersOverlay layers={dataLayers ?? []} />
       <FlyToLocation location={selectedLocation ?? null} onArrived={handleArrived} />
-      <HoverTooltip source={heatmapSource} />
+      <HoverTooltip source={heatmapSource} zoomOffset={tileZoomOffset} />
       <DetailPopup
         isCurrentDetailPosition={isCurrentDetailPosition}
         detailPosition={detailPosition ?? null}

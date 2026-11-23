@@ -65,6 +65,19 @@ The map shows any of the noise layers together: roads, railways, industry, build
 aircraft. All six show the painted total, one alone its own loudness, and two to five an estimate
 from each layer's own. Quiet zones wash green every place where the total stays at or below a
 chosen loudness, from 0.25 to 4 sone, or a chosen Lden, from 20 to 55 dB.
+At the same zoom, phones and computers use the same grid for quiet zones. Green means the
+six mapped sources together stay within your limit in that cell. Zooming in shows smaller
+areas, so the green boundary can move.
+
+Dublin protects [Blessington Street Basin](/#lat=53.357153&lng=-6.270895&z=13&d=53.357153,-6.270895&m=lden&qc=1&qt=55).
+In the [regional view](/#lat=53.357153&lng=-6.270895&z=8&m=lden&qc=1&qt=55&panel=none),
+the cell over the park microphone reads 54.5 dB and turns green at a 55 dB limit.
+At the microphone itself, the six mapped sources give 52 dB Lden for 2026.
+The microphone records all outdoor sound that reaches it. From Dublin City Council's
+7,777 hourly measurements there we calculate 59.7 dB Lden for 2025.
+[Dublin's quiet areas](https://dublincityairandnoise.ie/information/dublin-noise-management) ·
+[Monitoring site](https://dublincityairandnoise.ie/monitor/DCC-012) ·
+[Hourly data (CC BY)](https://data.gov.ie/dataset/sonitus).
 
 <details>
 <summary>How two to five layers are combined</summary>
