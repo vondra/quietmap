@@ -177,6 +177,18 @@ pub fn parse_fra(path: &Path, source_id: u16) -> Result<Vec<Crossing>, String> {
     stream_fra(path, source_id, None)
 }
 
+/// Canadian commuter and tourist passenger operators with positive TC counts on heavy rail and no timetable feed;
+/// VIA Rail and GO Transit stay at `0.0` so `resolve_window_line_traffic` keeps `(total - timetable)` freight.
+fn is_tc_untimetabled_passenger_only(company: &str) -> bool {
+    matches!(
+        company,
+        "Alberta Prairie Railway"
+            | "EXO"
+            | "Prairie Dog Central Railway"
+            | "Réseau de Transport Métropolitain"
+    )
+}
+
 pub fn parse_tc(path: &Path, source_id: u16) -> Result<Vec<Crossing>, String> {
     let mut reader = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
@@ -189,15 +201,21 @@ pub fn parse_tc(path: &Path, source_id: u16) -> Result<Vec<Crossing>, String> {
         .map(|h| h.trim().to_string())
         .collect();
     let c_id = column(&headers, "TC Number", path)?;
+    let c_company = column(&headers, "Railway Company", path)?;
     let c_access = column(&headers, "Access", path)?;
+    let c_spur = column(&headers, "Spur Name", path)?;
     let c_lat = column(&headers, "Latitude", path)?;
     let c_lon = column(&headers, "Longitude", path)?;
     let c_trains = column(&headers, "Trains Daily", path)?;
     let c_speed = column(&headers, "Train Max Speed (mph)", path)?;
+    let c_tracks = column(&headers, "Tracks", path)?;
     let mut out = Vec::new();
     for (row, record) in reader.records().enumerate() {
         let record = record.map_err(|err| format!("reads {}: {err}", path.display()))?;
-        if record.get(c_access) != Some("Public") {
+        let access = record.get(c_access).unwrap_or("");
+        let is_public = access == "Public";
+        let is_private = access == "Private";
+        if !is_public && !is_private {
             continue;
         }
         let (Some(lat), Some(lon)) = (num(&record, c_lat), num(&record, c_lon)) else {
@@ -209,23 +227,41 @@ pub fn parse_tc(path: &Path, source_id: u16) -> Result<Vec<Crossing>, String> {
         {
             continue;
         }
-        // Daily total, no day/night split: flat 12/4/8 across END periods.
-        // Canada remains horns-only until a reliable passenger split is available.
-        let daily = non_neg_num(&record, c_trains).unwrap_or(0.0);
-        if daily < 1.0 {
+        // Daily total, no day/night split: flat 12/4/8 for horns; unsplit flow (`measured_periods = false`).
+        let Some(daily) = non_neg_num(&record, c_trains).filter(|&v| v > 0.0) else {
+            continue;
+        };
+        let periods = flat_end_periods(daily);
+        let soundings = if is_public { periods } else { [0.0; 3] };
+        let company = record.get(c_company).unwrap_or("");
+        let spur = record.get(c_spur).unwrap_or("");
+        let has_tracks = non_neg_num(&record, c_tracks).is_some_and(|t| t >= 1.0);
+        let has_flow =
+            (spur.is_empty() || spur == "-") && has_tracks && company != "Edmonton Transit System";
+        if !has_flow && soundings.iter().all(|&s| s <= 0.0) {
             continue;
         }
+        let (total_periods, passenger_daily) = if has_flow {
+            let pax = if is_tc_untimetabled_passenger_only(company) {
+                daily
+            } else {
+                0.0
+            };
+            (Some(periods), Some(pax))
+        } else {
+            (None, None)
+        };
         let mph = non_neg_num(&record, c_speed).filter(|v| *v > 0.0);
         out.push(Crossing {
             id: record.get(c_id).unwrap_or("").to_string(),
             lat,
             lon,
-            soundings: flat_end_periods(daily),
+            soundings,
             speed_kmh: mph.map(|v| v * 1.609344),
             source_id,
             synth_osm: -(TC_OSM_OFFSET + row as i64 + 1),
-            total_periods: None,
-            passenger_daily: None,
+            total_periods,
+            passenger_daily,
             passenger_lt1: false,
             measured_periods: false,
         });

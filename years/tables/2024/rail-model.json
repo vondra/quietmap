@@ -22,14 +22,14 @@
     },
     {
       "id": 112,
-      "rank": 6,
+      "rank": 4,
       "edition": 2023,
       "owner": "CA",
       "countries": [
         "CA"
       ],
       "residual": false,
-      "whole_line": false
+      "whole_line": true
     },
     {
       "id": 2004,
@@ -407,6 +407,12 @@
       7.0
     ],
     "2015:CA": [
+      41.0,
+      -141.5,
+      84.5,
+      -51.5
+    ],
+    "112:CA": [
       41.0,
       -141.5,
       84.5,

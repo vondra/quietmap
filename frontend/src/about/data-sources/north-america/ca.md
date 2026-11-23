@@ -1,6 +1,6 @@
 ---
 title: Canada
-intro: Quebec DJMA 2024 traffic counts, timetables for VIA Rail and seven city systems, Transport Canada crossing horns, Natural Resources Canada wind turbine database. Uncounted main roads and freight use class defaults; other roads are estimated from the buildings around them.
+intro: Quebec DJMA 2024 traffic counts, timetables for VIA Rail and seven city systems, Transport Canada crossing train counts and horns, Natural Resources Canada wind turbine database. Uncounted main roads use class defaults; other roads are estimated from the buildings around them.
 ---
 
 ## Roads
@@ -30,9 +30,7 @@ Eight archived timetables are selected by year. For 2026, VIA Rail covers 15 day
 
 Surface metro sections are included; see the [railway method](/about/data-preparation).
 
-Freight: CN and CPKC publish no schedules; their lines take the class default, 20 freight trains a day on a main line and 5 on a branch. Lines without a usage tag use the [unclassified railway default](/about/data-preparation).
-
-Level-crossing horns: [Transport Canada Grade Crossings Inventory](https://open.canada.ca/data/en/dataset/d0f54727-6c0b-4e5a-aa04-ea1463cf9f4c), 2023 update (contains information licensed under the Open Government Licence – Canada). Public crossings with trains sound on approach; whistling cessation is not in the inventory, so every sounding crossing is labelled cessation-unknown.
+Freight and level-crossing horns: [Transport Canada Grade Crossings Inventory](https://open.canada.ca/data/en/dataset/d0f54727-6c0b-4e5a-aa04-ea1463cf9f4c), 2023 update (contains information licensed under the Open Government Licence – Canada). Non-spur crossings supply daily train counts along junction-free heavy-rail runs: where a timetable covers the line, its passenger trains are subtracted to leave freight; otherwise passenger operators' crossings count as passenger trains and freight carriers' as freight. Lines without a crossing count take the class default, 20 freight trains a day on a main line and 5 on a branch, and lines without a usage tag use the [unclassified railway default](/about/data-preparation). Public crossings with trains sound on approach; whistling cessation is not in the inventory, so every sounding crossing is labelled cessation-unknown.
 
 ## Industry
 
