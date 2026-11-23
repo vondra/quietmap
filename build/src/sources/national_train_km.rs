@@ -71,6 +71,12 @@ pub(super) fn from_eurostat(
             .ok_or_else(|| anyhow!("JSON-stat has no {name} dimension"))
     };
     let (geo, time, train) = (position("geo")?, position("time")?, position("train")?);
+    for bound in [*years.start(), *years.end()] {
+        ensure!(
+            categories[time].contains_key(bound.to_string().as_str()),
+            "JSON-stat time has no {bound}"
+        );
+    }
     let values = dataset["value"].as_object().context("JSON-stat value")?;
     let mut countries = BTreeMap::<[u8; 2], NationalTrainKm>::new();
     for (code, &geo_index) in &categories[geo] {
@@ -180,5 +186,6 @@ mod tests {
         assert_eq!(national[b"GR"].freight, None);
         assert_eq!(national[b"GB"].freight, Some((2019, 33_941_000.0 / 365.0)));
         assert_eq!(national[b"GB"].passenger, None);
+        assert!(from_eurostat(&dataset, 2004..=2024).is_err());
     }
 }

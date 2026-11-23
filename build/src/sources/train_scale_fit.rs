@@ -303,7 +303,7 @@ pub fn fit(inputs: &YearInputs, output: &Path) -> Result<()> {
             "passenger_observed": train_km.passenger[0], "passenger_guessed": train_km.passenger[1],
             "freight_observed": train_km.freight_observed, "freight_guessed_by_tier": train_km.freight_guessed},
             "national": {"passenger": published.passenger, "freight": published.freight}}));
-        if guessed <= 0.0 || (published == NationalTrainKm::default() && !covered) {
+        if guessed <= 0.0 || published == NationalTrainKm::default() {
             continue;
         }
         let weights = if covered {
