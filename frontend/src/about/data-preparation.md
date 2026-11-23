@@ -849,7 +849,8 @@ Year admission and paths: `build/src/year.rs`; dated tables: `build/src/source_t
 Raster preparation: `build/src/rasters/` reads the year's named GDAL rasters. The manifest gives
 each band's projection, vertical datum, missing-data value and overlap priority. A national
 terrain model holds no height on another country's land in the year's country polygons
-(`osm-regions`); terrain is averaged before conversion to EGM2008; coverage edges on land, borders among
+(`osm-regions`); terrain is averaged before conversion to EGM2008 and tile-seam trenches are filled
+from their rims; coverage edges on land, borders among
 them, blend continuously, and a model holds to its last node at the shore. Tree density is
 area-averaged; a newer survey takes precedence over the older baseline where available. Each
 survey loses only forest cleared after its observation year and before the map's cutoff.
