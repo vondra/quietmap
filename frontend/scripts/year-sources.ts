@@ -97,13 +97,13 @@ export function renderYearSources(page: string, years: NamedYear[]): string {
     const inputs = manifest.inputs.filter(input => local(input.region) && !INTERMEDIATE_KINDS.has(input.kind)
       && (input.kind !== 'prepare-road-counts' || selectedRoadCount(input))
       && (input.kind !== 'prepare-road-network' || !conversion || conversion.depends_on.includes(input.id)))
-    const noRoadCounts = scope.length === 2 && !inputs.some(selectedRoadCount)
+    const noRoadCounts = scope.length === 2 && scope !== 'AQ' && !inputs.some(selectedRoadCount)
     // public_ok governs redistribution of records, not attribution of their publisher.
     const lines = inputs.map(inputLine)
     return [
       `### ${escapeMarkdown(name)}`,
       `Map state: immediately before **${manifest.as_of}**.${scope === 'world' ? ` Flows: **${manifest.flows.start} to ${manifest.flows.end}**, excluding the last day.${flowExclusions(manifest)}` : ''}`,
-      noRoadCounts ? 'No road count at or before this year is used for this country. Traffic follows the [global model](/about/data-preparation) and the demand from mapped buildings.' : '',
+      noRoadCounts ? 'No road count at or before this year is used for this country. Traffic follows the [global model](/about/data-preparation) and mapped buildings, or any 2026 country or network table described under Roads above.' : '',
       lines.length ? lines.join('\n\n') : 'No separate local dataset; the world and regional sources apply.',
     ].filter(Boolean).join('\n\n')
   })

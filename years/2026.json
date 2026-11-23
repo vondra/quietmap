@@ -626,7 +626,7 @@
       "depends_on": [
         "rural-speed-survey"
       ],
-      "description": "Free-flow car (0.845) and heavy-vehicle (0.799) speeds as fractions of the rural single-carriageway speed limit, SPE0102 (2024: 50.67 and 47.93 mph on 60 mph roads)."
+      "description": "Free-flow car (0.845) and heavy-vehicle (0.799) speeds as fractions of the rural single-carriageway speed limit, SPE0102 (2024: 50.67 and 47.93 mph on 60 mph roads); the served 2026 map applies 0.845 to cars only."
     },
     {
       "id": "freight-periods-eba",

@@ -120,14 +120,27 @@ obsolete footprint lookup index is not produced.
 A road gets louder with more vehicles, more lorries and higher speed: twice the traffic adds about
 3 dB. Speed is the signed limit, else the country's legal limit for the road's class.
 
-Traffic is where the map is least sure. A located count gives the strongest local evidence; a
-route-wide count is less precise. Where no admitted count reaches a road, the map estimates
-traffic from its class and, where a fitted model is available, the trips made by nearby buildings.
-A side street can carry the trips its own buildings make. The country’s source page identifies
-which counts and models are used; a road classification alone is not a traffic count.
+Traffic is where the map is least sure. On the 2026 map, of the world's 5.8 million km of
+motorways, trunk and primary roads, 31 % have official traffic figures: counts cover 18 %, such as
+the 148,831 vehicles a day the
+[<abbr title="Highway Performance Monitoring System, the US federal road traffic database">HPMS</abbr>](https://www.fhwa.dot.gov/policyinformation/hpms.cfm)
+gives New York's Brooklyn–Queens Expressway (2022), and national estimates cover the rest, in
+China, India and a few other countries; another 14 % take their traffic from a model trained on the
+counted roads (predicting traffic from the trips buildings within 1, 5 and 15 km make), and the
+remaining 54 % have only an average for their road class in their country (October 2026). On the
+2024 map (the annual builder below), road classifications and manually drawn city boxes are not
+used: located counts give the strongest local evidence, route-wide counts are less precise, and
+where no admitted count reaches a road, the global road model and nearby buildings supply the
+estimate. In both years, a side street nobody counted carries the trips its own buildings make, and
+in a town a residential street that a bus line runs along carries at least what an unclassified
+street there carries. The country’s source page identifies which counts, tables and models apply in
+each year.
 
 <details>
 <summary>Road observations and historical traffic</summary>
+
+The annual road builder below prepares the 2024 map and subsequent annual builds (the served 2026
+map kept the earlier country tables and network estimates documented on the country pages).
 
 A road observation keeps the period actually counted, its location or route, the direction and count scope, the source, and a separate value or missing flag for each vehicle class. A reported zero stays zero; a missing class is inferred and remains marked estimated. A published group, such as all trucks, keeps its total while the selected year’s class model estimates its parts. Measured vehicle classes retain that status even when the count is shared between carriageways or continued along the road. A count of one direction, both directions and a whole street cross-section have different meanings when divided between mapped carriageways.
 
@@ -146,7 +159,13 @@ The emission follows <abbr title="Common Noise Assessment Methods in Europe, the
 from the traffic, the vehicle mix, the speed, the surface and the gradient, with acceleration at
 junctions and the place's yearly air temperature.
 
-- **Traffic without a count.** Secondary, tertiary and unclassified roads with only a class
+- **Traffic without a count.** On the 2026 map, secondary and tertiary roads with only a class
+  estimate follow a model of the trips nearby buildings make fitted on 13 European countries (and
+  where a country's default stands instead — Russia, Turkey, Japan, Iran, Ukraine — it is kept),
+  and in a town an unclassified street or a residential street that a bus, trolleybus or coach line
+  runs along carries at least what Great Britain's, France's and Sweden's counted unclassified
+  streets carry among as many trips within 2 km. On the 2024 map, secondary, tertiary and
+  unclassified roads with only a class
   estimate follow a law of the trips their buildings make within 1, 2 or 5 km, whichever predicts
   the counts best, fitted with every country weighed alike and the trips held at the counted
   roads' 90th percentile on the year's random samples and on the whole networks that cover most
@@ -159,19 +178,19 @@ junctions and the place's yearly air temperature.
   within 1, 5 and 15 km, their lanes and one-way carriageways, fitted on counts of every design
   (stations on major roads read within the whole networks' range), in the countries whose counts it
   predicts better, held out, than the other countries' class constants do; elsewhere the class
-  estimate stays. No country's law is shifted to its own counts. Where a country's default
-  stands instead (Russia, Turkey, Japan, Iran, Ukraine), it is kept. A street carries the trips its
+  estimate stays. No country's law is shifted to its own counts. A street carries the trips its
   buildings make, OpenStreetMap's and Overture's, routed along the street network to the nearest
   main road. A hotel makes 2.45 car trips a room a day: ITE's measured 8.17 vehicle trips a room
   (Trip Generation, 9th edition, land use 310) at an assumed half occupancy and 60 % by car, two
   factors without a measured source. Its rooms come from its floor, at the floor a room of the
   year's mapped hotels, hostels, motels and guest houses that state their rooms: 85 m² in 2026.
-  In a town, an unclassified street, and a residential street that a bus, trolleybus or
-  coach line runs along, carries at least what counted unclassified streets that stand for their
-  class (Great Britain's random sample) carry among as many trips around it (a one-way residential street what a
-  two-way one carries): a line mostly runs along a through street that its class misses. In Great
-  Britain's random sample of counted minor roads, 592 residential streets with a line carry 1,820
-  vehicles a day in the median; the trips routed down them read 8.2 dB low, this rule 0.5 dB.
+  On the 2024 map, in a town, an unclassified street, and a residential street that a bus,
+  trolleybus or coach line runs along, carries at least what counted unclassified streets that stand
+  for their class (Great Britain's random sample) carry among as many trips around it (a one-way
+  residential street what a two-way one carries): a line mostly runs along a through street that its
+  class misses. In Great Britain's random sample of counted minor roads, 592 residential streets
+  with a line carry 1,820 vehicles a day in the median; the trips routed down them read 8.2 dB low,
+  this rule 0.5 dB.
 - **A count beside its road.** A count that a dataset put on a service road, side lane, street or
   ramp beside the counted road, within 10 % of that road's own and within 30 m of it, or on a side
   lane of the road's name with its very count, belongs to the road: the way takes the model of its
@@ -221,12 +240,13 @@ junctions and the place's yearly air temperature.
   pace or faster than any country's limit (140 km/h) counts as unsigned: Barcelona's Passeig de
   Maragall was signed 4. On a two-way road outside towns, other than a motorway, at or above its
   country's open-road limit of 80 km/h or more (or at 80 km/h or more where no national rural limit
-  is listed), cars drive at 0.845 of it and medium and heavy vehicles (lorries and buses) at 0.799
-  of it (still under their cap): DfT's measured free-flow shares on 60 mph national-limit single
-  carriageways for cars (Great Britain) and for heavy goods vehicles (England and Wales only, where
-  HGVs over 7.5 t have a 50 mph limit; Scotland did not raise that limit), applied to medium and
-  heavy vehicles including buses as a proxy. Lorries and buses drive at most 80 km/h, or 90 to 100
-  in ten countries in the 2024 map (90 to 105 in thirteen countries in the 2026 map).
+  is listed), cars drive at 0.845 of it; on the 2024 map, medium and heavy vehicles (lorries and
+  buses) also drive at 0.799 of it (still under their cap) — DfT's measured free-flow shares on
+  60 mph national-limit single carriageways for cars (Great Britain) and for heavy goods vehicles
+  (England and Wales only, where HGVs over 7.5 t have a 50 mph limit; Scotland did not raise that
+  limit), applied to medium and heavy vehicles including buses as a proxy (the 2026 map applies the
+  0.845 rural factor to cars only). Lorries and buses drive at most 80 km/h, or 90 to 100 in ten
+  countries in the 2024 map (90 to 105 in thirteen countries in the 2026 map).
 - **Buses and bridges.** Uncounted roads also carry the buses of the lines mapped on them, a line at
   most twice, for its two directions, however many of its variants are mapped. One line direction
   carries 30 buses a day where 100,000 trips a day begin or end within 2 km; a street's buses grow
@@ -565,9 +585,11 @@ hold water, by their share of it (the open sea where it maps no land), never ove
 a cell's activity can move onto neighbouring water outside its original footprint. South of 60° S
 and north of 82.75° N it maps no land at all, so there the land reads as water. Speed is not modelled, so ships under way may be a
 few decibels louder. Activity is constant over the day, which overstates leisure boats at night.
-Outside European seas, Global Fishing Watch groups cargo, tanker, carrier, bunker and passenger ships
-as large ships and fishing, support, gear, seismic and other vessels as work boats. It has no separate
-leisure-boat class: pleasure craft with an AIS transmitter are not separated from work boats,
+On the 2026 map, outside European seas every vessel that is not a work boat counts as a large ship,
+moored yachts too: a marina can read as loud as a port, up to 75 dB Lden at Marina del Rey. On the
+2024 map, Global Fishing Watch groups cargo, tanker, carrier, bunker and passenger ships as large
+ships and fishing, support, gear, seismic and other vessels as work boats; it has no separate
+leisure-boat class, so pleasure craft with an AIS transmitter are not separated from work boats,
 while boats without AIS are missing.
 
 ## Industry
