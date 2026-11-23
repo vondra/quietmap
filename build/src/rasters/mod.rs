@@ -11,6 +11,7 @@ mod distance;
 mod forest;
 pub(crate) mod ground;
 mod runtime;
+mod seams;
 mod source;
 mod warp;
 

@@ -294,10 +294,10 @@ fn a_national_model_holds_only_its_own_countrys_land_and_fades_in_from_the_borde
 
 #[test]
 fn a_height_no_ground_has_keeps_the_model_beneath_and_its_coverage() {
-    // CA-MRDEM-30's tile seams hold rows of -578 to -912 m on Lake Nipigon; one such node failed its
-    // whole square. A feathered national model at 200 m over a world model of 100 m, with one
-    // impossible node inside its coverage: that node keeps the world model and opens no hole in the
-    // coverage, so every other node holds the model's full weight as without it.
+    // A feathered national model at 200 m over a world model of 100 m, with one out-of-range
+    // ceiling node inside its coverage: that node keeps the world model and opens no hole in the
+    // coverage, so every other node holds the model's full weight as without it; a negative seam
+    // trench (-912 m, or -485.8 m with resampling shoulders) is filled from its own 200 m rim.
     let root = tempfile::tempdir().unwrap();
     let step = 1.0 / NODES_PER_DEGREE as f64;
     let grid = ([-20.5 * step, 20.5 * step], step, 61, 41);
@@ -330,17 +330,76 @@ fn a_height_no_ground_has_keeps_the_model_beneath_and_its_coverage() {
             .map(|code| f64::from(u16::from_le_bytes([code[0], code[1]])) / 5.0 - 500.0)
             .collect()
     };
-    let mut seam = vec![200.0; 61 * 41];
-    seam[20 * 61 + 30] = -912.0; // the window's node 10; heights ignore the band's scale tag
-    let with_seam = heights("seam.tif", seam);
+    let mut ceiling_spike = vec![200.0; 61 * 41];
+    ceiling_spike[20 * 61 + 30] = 20_000.0; // the window's node 10; heights ignore the band's scale tag
+    let with_ceiling_spike = heights("ceiling.tif", ceiling_spike);
     let without = heights("clean.tif", vec![200.0; 61 * 41]);
-    assert_eq!(with_seam[10], 100.0, "{with_seam:?}");
+    assert_eq!(with_ceiling_spike[10], 100.0, "{with_ceiling_spike:?}");
     assert!(
         (0..24)
             .filter(|&node| node != 10)
-            .all(|node| with_seam[node] == without[node]),
-        "{with_seam:?} {without:?}"
+            .all(|node| with_ceiling_spike[node] == without[node]),
+        "{with_ceiling_spike:?} {without:?}"
     );
+    let mut seam = vec![200.0; 61 * 41];
+    seam[20 * 61 + 29] = -45.0;
+    seam[20 * 61 + 30] = -485.8;
+    seam[20 * 61 + 31] = -912.0;
+    assert_eq!(heights("seam.tif", seam), without);
+}
+
+#[test]
+fn seam_trenches_at_any_depth_fill_from_their_rims_while_mines_and_gorges_stay() {
+    let (rows, columns) = (41, 41);
+
+    // 1. Narrow inland tile-border trench running edge to edge (+15.4 m core and +480..520 m
+    // shoulders on a 770 m plateau, open at both ends so only pass 2 repairs it) and a wide
+    // closed steep-walled seam basin (8 x 10 nodes at -274.6 m on the same plateau, repaired by
+    // pass 1).
+    let mut plateau = vec![770.0; rows * columns];
+    for c in 0..columns {
+        plateau[10 * columns + c] = 520.0;
+        plateau[11 * columns + c] = 15.4;
+        plateau[12 * columns + c] = 480.0;
+    }
+    for r in 22..30 {
+        for c in 15..25 {
+            plateau[r * columns + c] = -274.6;
+        }
+    }
+    seams::clean(&mut plateau, rows, columns);
+    assert!(
+        plateau.iter().all(|&h| (h - 770.0).abs() < 1e-9),
+        "min={} max={}",
+        plateau.iter().copied().fold(f64::INFINITY, f64::min),
+        plateau.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+    );
+
+    // 2. Terraced open-pit mine (-320 m floor rising at 40 m per node to +200 m): untouched.
+    let mut mine = vec![200.0; rows * columns];
+    for r in 0..rows {
+        for c in 0..columns {
+            let dist = ((r as f64 - 20.0).hypot(c as f64 - 20.0)).floor();
+            mine[r * columns + c] = (-320.0 + 40.0 * dist).min(200.0);
+        }
+    }
+    let expected_mine = mine.clone();
+    seams::clean(&mut mine, rows, columns);
+    assert_eq!(mine, expected_mine);
+
+    // 3. Open river gorge (5-node-wide canyon floor at 230 m between 800 m walls running to both
+    // edges of the window): untouched.
+    let mut gorge = vec![800.0; rows * columns];
+    for r in 0..rows {
+        gorge[r * columns + 18] = 450.0;
+        for c in 19..=21 {
+            gorge[r * columns + c] = 230.0;
+        }
+        gorge[r * columns + 22] = 450.0;
+    }
+    let expected_gorge = gorge.clone();
+    seams::clean(&mut gorge, rows, columns);
+    assert_eq!(gorge, expected_gorge);
 }
 
 #[test]

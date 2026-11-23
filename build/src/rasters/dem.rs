@@ -1,6 +1,8 @@
 //! Average bare-earth models, each on its own country's land, transform each node to EGM2008, and
 //! feather coverage edges.
-use super::{blend, config::Band, countries::Countries, datum, distance, source::Source, warp};
+use super::{
+    blend, config::Band, countries::Countries, datum, distance, seams, source::Source, warp,
+};
 use tiles::terrain::Window;
 
 pub fn expanded(window: Window, padding: u32) -> Window {
@@ -15,13 +17,11 @@ pub fn expanded(window: Window, padding: u32) -> Window {
 /// The band's code: 0.2 m steps from 500 m below the sea, so a u16 holds -500 to 12,606.8 m.
 const CODE_FLOOR_M: f64 = -500.0;
 const CODES_PER_M: f64 = 5.0;
-const CODE_CEILING_M: f64 = CODE_FLOOR_M + 65534.0 / CODES_PER_M;
+pub(super) const CODE_CEILING_M: f64 = CODE_FLOOR_M + 65534.0 / CODES_PER_M;
 
-/// A height the code cannot hold is no ground: its floor lies below the lowest shore, the Dead Sea's
-/// at 430 m below the sea, and its ceiling above the highest summit. CA-MRDEM-30 holds a row of -578
-/// to -912 m across Lake Nipigon (50.242 N, 88.37 W) and one of -618 to -695 m off Vancouver Island
-/// (50.647 N, 127.99 W), its tiles' seams. Such a node keeps the model beneath it but still counts as
-/// its model's coverage, so the feather keeps its weights.
+/// A height the band's code cannot hold is no ground: seam and void trenches inside the range are
+/// filled from their rims by `seams::clean`, while an out-of-range node keeps the model beneath it
+/// and still counts as its model's coverage so the feather keeps its weights.
 pub(super) fn is_ground(height: f64) -> bool {
     (CODE_FLOOR_M..=CODE_CEILING_M).contains(&height)
 }
@@ -128,8 +128,9 @@ pub fn build(sources: &[Source], countries: &Countries, window: Window) -> Resul
         .iter()
         .filter(|s| s.spec.feather_nodes > 0 && s.intersects(work))
     {
-        let sampled = read(source, work, countries, &mut labels)?;
+        let mut sampled = read(source, work, countries, &mut labels)?;
         if sampled.iter().any(|h| h.is_finite()) {
+            seams::clean(&mut sampled, work.rows as usize, work.columns as usize);
             fine.push((source.spec.input.as_str(), sampled));
         }
     }
@@ -154,7 +155,9 @@ pub fn build(sources: &[Source], countries: &Countries, window: Window) -> Resul
             };
             fine.swap_remove(index).1
         } else {
-            read(source, work, countries, &mut labels)?
+            let mut sampled = read(source, work, countries, &mut labels)?;
+            seams::clean(&mut sampled, work.rows as usize, work.columns as usize);
+            sampled
         };
         let halo = source.spec.feather_nodes;
         if halo > 0 {
