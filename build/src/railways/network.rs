@@ -167,9 +167,9 @@ impl Network {
                 let kind = col_u8(batch, "rail_type")?;
                 let usage = col_u8(batch, "usage")?;
                 let service = col_u8(batch, "service")?;
-                let traffic_mode = batch
-                    .column_by_name("traffic_mode")
-                    .and_then(|c| c.as_any().downcast_ref::<arrow_array::UInt8Array>());
+                // Match write::expand_rows: reject extracts missing traffic_mode even in
+                // off-selection squares whose edges feed global crossing allocation.
+                let traffic_mode = col_u8(batch, "traffic_mode")?;
                 let country = col_u16(batch, "country_iso")?;
                 let length = col_f32(batch, "length_m")?;
                 let ref_col = batch
@@ -236,7 +236,7 @@ impl Network {
                         square,
                         rail_type: kind.value(row),
                         usage: usage.value(row),
-                        traffic_mode: traffic_mode.map_or(0, |col| col.value(row)),
+                        traffic_mode: traffic_mode.value(row),
                         country: country.value(row).to_le_bytes(),
                         corridor,
                         corridor_name,
@@ -379,3 +379,7 @@ pub fn distance_to_line(point: [f64; 2], line: &[[f64; 2]]) -> f64 {
         .map(|pair| project(point, pair[0], pair[1]).0)
         .fold(f64::INFINITY, f64::min)
 }
+
+#[cfg(test)]
+#[path = "network_tests.rs"]
+mod tests;
