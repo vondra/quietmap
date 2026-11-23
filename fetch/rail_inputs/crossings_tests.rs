@@ -297,24 +297,70 @@ fn fra_parser_deduplicates_repeated_ids_and_separates_horns_from_flows() {
 }
 
 #[test]
-fn tc_parser_stays_horns_only_and_drops_blanks() {
+fn tc_parser_emits_mainline_flows_separates_spur_horns_and_marks_untimetabled_passenger_lines() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tc.csv");
     let body = "\
-TC Number,Access,Latitude,Longitude,Trains Daily,Train Max Speed (mph)
-TC001,Public,43.65,-79.38,-,50
-TC002,Public,43.65,-79.38,12,60
+TC Number,Railway Company,Access,Subdivision,Spur Name,Latitude,Longitude,Trains Daily,Train Max Speed (mph),Tracks
+TC001,Canadian National Railway,Public,Kingston - CN,-,43.65,-79.38,-,50,2
+TC002,Canadian National Railway,Public,Kingston - CN,-,43.65,-79.38,12,60,2
+TC003,Canadian Pacific Railway,Private,Shuswap,-,50.80,-119.30,33,45,1
+TC004,Big Sky Railway,Private,Elrose,-,51.20,-108.00,0.14,25,1
+TC005,Canadian National Railway,Public,Dundas,Talbot,43.00,-81.20,6,15,1
+TC006,Canadian National Railway,Private,Lulu Island Industrial,Queensboro,49.19,-122.94,4,10,1
+TC007,Edmonton Transit System,Public,Lrt Line,-,53.57,-113.45,150,35,2
+TC008,GO Transit,Public,Oakville - GO,-,43.45,-79.68,110,70,3
+TC009,EXO,Public,Parc,-,45.65,-73.85,14,50,1
+TC010,Alberta Prairie Railway,Public,Stettler,-,52.32,-112.71,1,25,1
 ";
     File::create(&path)
         .unwrap()
         .write_all(body.as_bytes())
         .unwrap();
-    let parsed = parse_tc(&path, 112).unwrap();
-    assert_eq!(parsed.len(), 1);
-    assert_eq!(parsed[0].id, "TC002");
-    assert!((parsed[0].soundings.iter().sum::<f64>() - 12.0).abs() < 1e-9);
-    assert_eq!(parsed[0].total_periods, None);
-    assert_eq!(parsed[0].passenger_daily, None);
-    assert!(!parsed[0].passenger_lt1);
-    assert!(!parsed[0].measured_periods);
+    let parsed: BTreeMap<String, Crossing> = parse_tc(&path, 112)
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.id.clone(), c))
+        .collect();
+    assert_eq!(parsed.len(), 8);
+    assert!(!parsed.contains_key("TC001"));
+    assert!(!parsed.contains_key("TC006"));
+
+    let cn = &parsed["TC002"];
+    assert!((cn.soundings.iter().sum::<f64>() - 12.0).abs() < 1e-9);
+    assert!((cn.total_periods.unwrap().iter().sum::<f64>() - 12.0).abs() < 1e-9);
+    assert_eq!(cn.passenger_daily, Some(0.0));
+    assert!(!cn.measured_periods);
+
+    let cp_priv = &parsed["TC003"];
+    assert_eq!(cp_priv.soundings, [0.0; 3]);
+    assert!((cp_priv.total_periods.unwrap().iter().sum::<f64>() - 33.0).abs() < 1e-9);
+    assert_eq!(cp_priv.passenger_daily, Some(0.0));
+
+    let weekly = &parsed["TC004"];
+    assert_eq!(weekly.soundings, [0.0; 3]);
+    assert!((weekly.total_periods.unwrap().iter().sum::<f64>() - 0.14).abs() < 1e-9);
+    assert_eq!(weekly.passenger_daily, Some(0.0));
+
+    let spur_pub = &parsed["TC005"];
+    assert!((spur_pub.soundings.iter().sum::<f64>() - 6.0).abs() < 1e-9);
+    assert_eq!(spur_pub.total_periods, None);
+    assert_eq!(spur_pub.passenger_daily, None);
+
+    let lrt = &parsed["TC007"];
+    assert!((lrt.soundings.iter().sum::<f64>() - 150.0).abs() < 1e-9);
+    assert_eq!(lrt.total_periods, None);
+    assert_eq!(lrt.passenger_daily, None);
+
+    let go = &parsed["TC008"];
+    assert!((go.total_periods.unwrap().iter().sum::<f64>() - 110.0).abs() < 1e-9);
+    assert_eq!(go.passenger_daily, Some(0.0));
+
+    let exo = &parsed["TC009"];
+    assert!((exo.total_periods.unwrap().iter().sum::<f64>() - 14.0).abs() < 1e-9);
+    assert_eq!(exo.passenger_daily, Some(14.0));
+
+    let apr = &parsed["TC010"];
+    assert!((apr.total_periods.unwrap().iter().sum::<f64>() - 1.0).abs() < 1e-9);
+    assert_eq!(apr.passenger_daily, Some(1.0));
 }

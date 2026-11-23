@@ -112,5 +112,30 @@ fn us_commuter_and_metro_timetables_feed_every_years_movements() {
             model.should_overwrite(111, 100) && model.should_overwrite(111, 2079),
             "{year}: timetables outrank FRA crossings"
         );
+        let tc_object = plan
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                RailObject::TcCrossings { input, source_id } => Some((input.as_str(), *source_id)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{year}: missing Transport Canada crossings object"));
+        assert_eq!(tc_object.1, 112, "{year}: TC source id");
+        assert!(
+            manifest.admitted(tc_object.0).unwrap(),
+            "{year}: TC crossings must be admitted"
+        );
+        assert!(model.network_bounds.contains_key("112:CA"), "{year}");
+        assert!(model.source_applies_to_row(112, *b"CA"), "{year}");
+        assert!(!model.source_applies_to_row(112, *b"US"), "{year}");
+        assert!(model.stamps_whole_line(112), "{year}: whole-line sharing");
+        assert!(
+            model.should_overwrite(0, 112),
+            "{year}: TC outranks class priors"
+        );
+        assert!(
+            model.should_overwrite(112, 100) && model.should_overwrite(112, 2015),
+            "{year}: timetables outrank TC crossings"
+        );
     }
 }

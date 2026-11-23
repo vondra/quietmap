@@ -1488,7 +1488,7 @@
       "licence": "Open Government Licence - Canada (ca-ogl-lgo)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Transport Canada Grade Crossings Inventory (horns)."
+      "description": "Transport Canada Grade Crossings Inventory (horns and train counts)."
     },
     {
       "id": "world-wri-global-power-plant-database",
