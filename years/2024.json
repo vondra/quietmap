@@ -5289,14 +5289,14 @@
       "publisher": "Eurostat",
       "url": "https://ec.europa.eu/eurostat/databrowser/view/rail_tf_trainmv/default/table",
       "observed": {
-        "start": "2019",
+        "start": "2004",
         "end": "2024"
       },
       "published": null,
       "licence": "Published aggregate observations; publisher terms apply",
       "public_ok": true,
       "depends_on": [],
-      "description": "National passenger and goods train-kilometres (Eurostat rail_tf_trainmv, thousand train-km); each country's latest year in the interval, Great Britain 2019, the United Kingdom's last Eurostat year."
+      "description": "National passenger and goods train-kilometres (Eurostat rail_tf_trainmv, thousand train-km); for each country and train type, the latest published year in the interval."
     },
     {
       "id": "motorcycle-fleets",
@@ -7141,7 +7141,7 @@
       "publisher": "Quiet Map",
       "url": "https://quietmap.org/about/data-preparation",
       "observed": {
-        "start": "2019",
+        "start": "2004",
         "end": "2024"
       },
       "published": null,
@@ -7152,7 +7152,7 @@
         "prepared",
         "tent"
       ],
-      "description": "Per country, the factors on default passenger and freight trains that bring the prepared heavy-rail network to the national train-kilometres (Great Britain 2019), with the TEN-T tier weights inside the national freight total, fitted by the year run over the whole prepared railway network."
+      "description": "Per country, the factors on default passenger and freight trains that bring the prepared heavy-rail network to the national train-kilometres (for each country and train type, the latest published year in the interval), with the TEN-T tier weights inside the national freight total, fitted by the year run over the whole prepared railway network."
     },
     {
       "id": "practice-history-legal-speeds",
