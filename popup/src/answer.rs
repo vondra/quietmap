@@ -434,12 +434,13 @@ pub fn answer(
         }
         let station = station.expect("chosen after the first read");
         if aircraft_events.is_none() {
-            let (events, read) = crate::aircraft::events::events_at(
+            let (events, event_reads, event_bytes) = crate::aircraft::events::events_at(
                 &release.year_root,
                 frame.to_mercator(station.position),
             )?;
             aircraft_events = Some(events);
-            (reads, bytes) = (reads + usize::from(read > 0), bytes + read);
+            reads += event_reads;
+            bytes += event_bytes;
         }
         if horizons.is_none() {
             // Every flight ring uses the same complete terrain horizon; otherwise an early
