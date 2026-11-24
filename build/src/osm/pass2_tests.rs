@@ -20,24 +20,29 @@ fn outer_building_keeps_its_independent_source_family() {
         )]
         .into(),
     };
+    let empty = Tags::new();
     assert!(super::relation_covers_kind(
         1,
         &FeatureType::Building,
+        &empty,
         &manifest
     ));
     assert!(!super::relation_covers_kind(
         1,
         &FeatureType::Industrial,
+        &empty,
         &manifest
     ));
     assert!(!super::relation_covers_kind(
         1,
         &FeatureType::Leisure,
+        &empty,
         &manifest
     ));
     assert!(!super::relation_covers_kind(
         3,
         &FeatureType::Building,
+        &empty,
         &manifest
     ));
 }

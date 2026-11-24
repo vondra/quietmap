@@ -28,10 +28,14 @@ impl Spiller {
                 |key| tags.get(key).map(String::as_str),
                 ring.is_some_and(classify::is_a_closed_ring),
             );
-        if matches!(
+        let horticulture_zone = *ftype == FeatureType::Building
+            && !classify::has_a_building(|k| tags.get(k).map(String::as_str))
+            && tags.get("landuse").map(String::as_str) == Some("greenhouse_horticulture");
+        if (matches!(
             ftype,
             FeatureType::Industrial | FeatureType::WindTurbine | FeatureType::Leisure
-        ) && osm_kind != "node"
+        ) || horticulture_zone)
+            && osm_kind != "node"
             && !ring.is_some_and(|ring| {
                 if leisure_line {
                     ring.len() >= 2

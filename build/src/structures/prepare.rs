@@ -123,11 +123,87 @@ pub(super) fn surveyed_roof(
     Ok(measured)
 }
 
+#[derive(Default)]
+pub(super) struct HorticultureZones {
+    outers: crate::rings::RingIndex,
+    holes: crate::rings::RingIndex,
+    empty: bool,
+}
+
+impl HorticultureZones {
+    pub(super) fn from_osm(raw_osm: Vec<OsmBuilding>) -> (Self, Vec<OsmBuilding>) {
+        let mut outers = crate::rings::RingIndex::default();
+        let mut holes = crate::rings::RingIndex::default();
+        let mut empty = true;
+        let mut osm = Vec::with_capacity(raw_osm.len());
+        for (idx, building) in raw_osm.into_iter().enumerate() {
+            if building.ground_activity
+                && matches!(
+                    building.building_use,
+                    crate::osm::spill::BUILDING_USE_OUTDOOR
+                        | crate::osm::spill::BUILDING_USE_HORTICULTURE_HOLE
+                )
+            {
+                if let Some(bytes) = building.row.emission_geometry.as_deref()
+                    && let Some(ring) = super::decode_wall(bytes)
+                {
+                    if building.building_use == crate::osm::spill::BUILDING_USE_OUTDOOR {
+                        outers.add(idx as u64, vec![vec![ring]]);
+                        empty = false;
+                    } else {
+                        holes.add(idx as u64, vec![vec![ring]]);
+                    }
+                }
+                continue;
+            }
+            osm.push(building);
+        }
+        (
+            Self {
+                outers,
+                holes,
+                empty,
+            },
+            osm,
+        )
+    }
+
+    pub(super) fn contains_point(&self, point: (i32, i32)) -> bool {
+        !self.empty && self.outers.holding(point).count() > self.holes.holding(point).count()
+    }
+
+    pub(super) fn contains_footprint(&self, centroid: (i32, i32), geometry: Option<&[u8]>) -> bool {
+        if self.empty {
+            return false;
+        }
+        if self.contains_point(centroid) {
+            return true;
+        }
+        let Some(parts) = geometry.and_then(super::decode_parts) else {
+            return false;
+        };
+        parts.iter().filter_map(|rings| rings.first()).any(|ring| {
+            let vertices = if ring.len() > 1 && ring.first() == ring.last() {
+                &ring[..ring.len() - 1]
+            } else {
+                ring.as_slice()
+            };
+            !vertices.is_empty()
+                && 2 * vertices
+                    .iter()
+                    .filter(|&&pt| self.contains_point(pt))
+                    .count()
+                    > vertices.len()
+        })
+    }
+}
+
 pub(super) struct HeightEvidence<'a> {
     pub(super) measured: &'a [Observation],
     pub(super) measured_index: FootprintIndex,
     pub(super) raster: &'a [HeightRaster],
     pub(super) model: &'a HeightModel,
+    pub(super) horticulture: Option<&'a HorticultureZones>,
 }
 
 impl HeightEvidence<'_> {
@@ -184,11 +260,15 @@ impl HeightEvidence<'_> {
                 .storeys(floors, (!(ground || open)).then_some(height)),
         );
         row.ordinal = ordinal;
+        let outdoor_use = matches!(
+            building_use,
+            crate::osm::spill::BUILDING_USE_OPEN_ROOF | crate::osm::spill::BUILDING_USE_OUTDOOR
+        );
         row.envelope = match building_use {
-            0 => 1,
+            0 | crate::osm::spill::BUILDING_USE_UNTYPED_YES => 1,
             1 => 2,
             2 => 3,
-            3 => 0,
+            _ if outdoor_use => 0,
             _ => 5,
         };
         if let Some(footprint) = footprint {
@@ -199,17 +279,33 @@ impl HeightEvidence<'_> {
                 row.emission_centroid = Some(row.centroid);
             }
             row.centroid = geometry::lonlat_to_grid(longitude, latitude);
-            row.envelope = if building_use == 3 {
-                0
-            } else {
-                footprint.envelope
-            };
+            row.envelope = if outdoor_use { 0 } else { footprint.envelope };
         } else if osm_geometry.is_some() {
             let mut bytes = Vec::new();
             bytes.extend(1u32.to_le_bytes());
             bytes.extend(1u32.to_le_bytes());
             bytes.extend(row.emission_geometry.as_ref().unwrap());
             row.geometry = Some(bytes);
+        }
+        let untyped_yes = building_use == crate::osm::spill::BUILDING_USE_UNTYPED_YES
+            && row.building_type == Some(0)
+            && row.house_number.as_deref().unwrap_or("").is_empty();
+        let overture_allows_greenhouse = footprint.is_none_or(|f| matches!(f.envelope, 0 | 3 | 5));
+        let in_horticulture = self.horticulture.is_some_and(|h| {
+            h.contains_footprint(row.centroid, row.geometry.as_deref())
+                || row.emission_centroid.is_some_and(|c| h.contains_point(c))
+        });
+        if (untyped_yes && (row.envelope == 0 || (in_horticulture && overture_allows_greenhouse)))
+            || (row.osm_id.is_none() && in_horticulture && matches!(row.envelope, 0 | 3 | 5))
+        {
+            row.envelope = 0;
+            row.building_type = Some(crate::osm::ids::SETTLEMENT_SILENT);
+        }
+        if row.envelope == 0 && row.height_source == 2 {
+            row.height_m = row
+                .height_m
+                .min(crate::low_profile::LowProfileLookup::LOW_HEIGHT_M as i16);
+            row.storeys = Some(1);
         }
         Ok(row)
     }
@@ -238,10 +334,24 @@ pub(super) fn square(
         families[row.kind as usize].push(row);
     }
     let [footprints, measured, walls, attributes] = families;
-    let mut osm = prepare_rows::read_osm(&osm_directory.join("buildings.arrow"))?;
+    let (horticulture, mut osm) = HorticultureZones::from_osm(prepare_rows::read_osm(
+        &osm_directory.join("buildings.arrow"),
+    )?);
     let attributes = NationalAttributes::new(&attributes);
     for building in &mut osm {
-        attributes.apply(building);
+        let untyped_in_horticulture = building.building_use
+            == crate::osm::spill::BUILDING_USE_UNTYPED_YES
+            && building.row.building_type == Some(0)
+            && building
+                .row
+                .house_number
+                .as_deref()
+                .unwrap_or("")
+                .is_empty()
+            && horticulture.contains_point(building.row.centroid);
+        if !untyped_in_horticulture {
+            attributes.apply(building);
+        }
     }
     let (geometries, pairs) = match_footprints(&osm, &footprints)?;
     let evidence = HeightEvidence {
@@ -254,6 +364,7 @@ pub(super) fn square(
         measured: &measured,
         raster: rasters,
         model,
+        horticulture: Some(&horticulture),
     };
     let mut rows = Vec::with_capacity(osm.len() + footprints.len());
     let mut used = vec![false; footprints.len()];

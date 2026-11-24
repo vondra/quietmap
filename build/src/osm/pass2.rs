@@ -170,14 +170,19 @@ fn apply_way(
             if let Some(assembled) = assembler.assemble(rel_id, manifest) {
                 let relations::AssembledRelation {
                     rings,
+                    inner_rings,
                     tags,
                     feature_types: types,
                 } = assembled;
                 for ftype in types {
                     let extracted_tags = relations::spill_tags_for_assembled(&ftype, &tags);
-                    // New source contracts retain every outer part. Other
-                    // families keep their existing first-part behavior.
-                    let count = if matches!(ftype, FeatureType::Industrial | FeatureType::Leisure) {
+                    let horticulture = matches!(ftype, FeatureType::Building)
+                        && is_horticulture_zone(&extracted_tags);
+                    // New source contracts and horticulture zones retain every outer part.
+                    // Other families keep their existing first-part behavior.
+                    let count = if matches!(ftype, FeatureType::Industrial | FeatureType::Leisure)
+                        || horticulture
+                    {
                         rings.len()
                     } else {
                         1
@@ -195,10 +200,33 @@ fn apply_way(
                         let (clat, clon) = centroid(ring);
                         let square = crate::osm::geometry::square_of(clat, clon);
                         let safe_ring = ring_for_spill(ring, &mut stats.antimeridian_rings_omitted);
-                        spiller.emit_polygon(
-                            &ftype, square, rel_id, "relation", clat, clon, tags, safe_ring,
-                        )?;
+                        let squares = if horticulture {
+                            squares_of_ring(safe_ring, square)
+                        } else {
+                            vec![square]
+                        };
+                        for sq in squares {
+                            spiller.emit_polygon(
+                                &ftype, sq, rel_id, "relation", clat, clon, tags, safe_ring,
+                            )?;
+                        }
                         stats.features_total += 1;
+                    }
+                    if horticulture {
+                        let mut hole_tags = extracted_tags.clone();
+                        hole_tags.insert("qm:horticulture_hole".to_string(), "1".to_string());
+                        for hole in &inner_rings {
+                            let (clat, clon) = centroid(hole);
+                            let square = crate::osm::geometry::square_of(clat, clon);
+                            let safe_ring =
+                                ring_for_spill(hole, &mut stats.antimeridian_rings_omitted);
+                            for sq in squares_of_ring(safe_ring, square) {
+                                spiller.emit_polygon(
+                                    &ftype, sq, rel_id, "relation", clat, clon, &hole_tags,
+                                    safe_ring,
+                                )?;
+                            }
+                        }
                     }
                 }
                 stats.rels_assembled += 1;
@@ -239,11 +267,18 @@ fn apply_way(
         } else {
             ring_for_spill(&coords, &mut stats.antimeridian_rings_omitted)
         };
-        if !relation_covers_kind(way.id, &ftype, manifest) {
-            spiller.emit_polygon(&ftype, square, way.id, "way", clat, clon, &way.tags, ring)?;
+        if !relation_covers_kind(way.id, &ftype, &way.tags, manifest) {
+            let squares = if ftype == FeatureType::Building && is_horticulture_zone(&way.tags) {
+                squares_of_ring(ring, square)
+            } else {
+                vec![square]
+            };
+            for sq in squares {
+                spiller.emit_polygon(&ftype, sq, way.id, "way", clat, clon, &way.tags, ring)?;
+            }
         }
         for (kind, tags) in &way.additional {
-            if !relation_covers_kind(way.id, kind, manifest) {
+            if !relation_covers_kind(way.id, kind, tags, manifest) {
                 spiller.emit_polygon(kind, square, way.id, "way", clat, clon, tags, ring)?;
             }
         }
@@ -258,15 +293,23 @@ fn apply_way(
 }
 
 /// Suppress only the family represented by an assembled outer relation. A
-/// building member can carry a separate power/sport feature absent on its parent.
-fn relation_covers_kind(id: i64, kind: &FeatureType, manifest: &RelationManifest) -> bool {
+/// building member can carry a separate power/sport feature absent on its parent,
+/// and a real building way is not suppressed by a landuse=greenhouse_horticulture relation.
+fn relation_covers_kind(
+    id: i64,
+    kind: &FeatureType,
+    way_tags: &Tags,
+    manifest: &RelationManifest,
+) -> bool {
+    let way_has_building = *kind == FeatureType::Building
+        && classify::has_a_building(|k| way_tags.get(k).map(String::as_str));
     manifest.way_to_relations.get(&id).is_some_and(|parents| {
         parents.iter().any(|(id, role)| {
             (role.is_empty() || role == "outer")
-                && manifest
-                    .relations
-                    .get(id)
-                    .is_some_and(|relation| relation.feature_types.contains(kind))
+                && manifest.relations.get(id).is_some_and(|relation| {
+                    relation.feature_types.contains(kind)
+                        && !(way_has_building && is_horticulture_zone(&relation.tags))
+                })
         })
     })
 }

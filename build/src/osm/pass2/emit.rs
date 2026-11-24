@@ -147,6 +147,42 @@ pub(crate) fn ring_for_spill<'a>(
     }
 }
 
+pub(crate) fn is_horticulture_zone(tags: &Tags) -> bool {
+    !classify::has_a_building(|k| tags.get(k).map(String::as_str))
+        && tags.get("landuse").map(String::as_str) == Some("greenhouse_horticulture")
+}
+
+/// Every zoom-9 square overlapping a ring's bounding box so cross-border horticulture zones reach
+/// all squares holding their footprints.
+pub(crate) fn squares_of_ring(
+    ring: Option<&[[f64; 2]]>,
+    fallback: crate::osm::geometry::Square,
+) -> Vec<crate::osm::geometry::Square> {
+    let Some(ring) = ring.filter(|r| !r.is_empty()) else {
+        return vec![fallback];
+    };
+    let (mut min_lat, mut max_lat) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut min_lon, mut max_lon) = (f64::INFINITY, f64::NEG_INFINITY);
+    for &[lat, lon] in ring {
+        min_lat = min_lat.min(lat);
+        max_lat = max_lat.max(lat);
+        min_lon = min_lon.min(lon);
+        max_lon = max_lon.max(lon);
+    }
+    if max_lon - min_lon > 180.0 {
+        return vec![fallback];
+    }
+    let nw = crate::osm::geometry::square_of(max_lat, min_lon);
+    let se = crate::osm::geometry::square_of(min_lat, max_lon);
+    let mut out = Vec::new();
+    for y in nw.y.min(se.y)..=nw.y.max(se.y) {
+        for x in nw.x.min(se.x)..=nw.x.max(se.x) {
+            out.push(crate::osm::geometry::Square { x, y });
+        }
+    }
+    out
+}
+
 /// One tag set per outer part: every closed part keeps the facility's full
 /// nameplate byte-identical and carries its area fraction in
 /// `qm:facility_share`, so readers evaluate the facility's sound power once

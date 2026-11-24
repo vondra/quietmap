@@ -20,11 +20,15 @@ impl LowProfileLookup {
     const GRID: f64 = 2000.0;
     const MATCH_M: f64 = 15.0;
     const AREA_RATIO: (f32, f32) = (0.4, 2.5);
-    /// One floor, the structures builder's floor height.
-    const LOW_HEIGHT_M: f32 = 3.0;
+    /// One floor, the structures builder's floor height and surveyed greenhouse/shed median.
+    pub const LOW_HEIGHT_M: f32 = 3.0;
     /// Settlement classes 7 (garage, carport, parking) and 10 (silent: shed, roof, hut,
     /// greenhouse, container), the structurally low tail.
     const LOW_CLASSES: [u8; 2] = [7, 10];
+
+    pub fn is_low_class(building_type: u8) -> bool {
+        Self::LOW_CLASSES.contains(&building_type)
+    }
 
     /// Records one OSM building; any other class is ignored, so the class rule stays here.
     pub fn insert_if_low(&mut self, building_type: u8, lat: f64, lon: f64, area_m2: f32) {

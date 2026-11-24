@@ -739,8 +739,10 @@ deliveries, building sites, garden machinery, music and festivals.
   unless the place is tagged without outdoor seating. The guests sit 1.5 m in front of the nearest
   wall of the building the place is mapped in where that spot lies in no building (in front of a
   party wall it lies in the neighbour); walled in on every side, in front of the nearest wall.
-- **What screens.** A wall without a height stands 4 m. Open car parks, carports, open roofs and
-  underground footprints do not screen.
+- **What screens.** A wall without a height stands 4 m; a greenhouse, or a mapped garage or shed,
+  without a measured or mapped height stands at most 3 m, and a point inside a greenhouse or under a
+  grandstand is outdoors. Open car parks, carports, canopies, open roofs and underground footprints
+  do not screen.
 
 </details>
 

@@ -89,7 +89,7 @@ pub(super) fn write_buildings(
     // Centroids of the REAL buildings in this square (the rows something stands
     // on). A functional-AREA source that geometrically contains one of these is
     // suppressed below. A clean area with no buildings inside survives as the
-    // only source.
+    // only source. Horticulture zones and their holes stay for structures prepare.
     let eligible_rows = rows.iter().filter(|row| row.len() >= 14);
     let real_centroids: Vec<(i32, i32)> = eligible_rows
         .clone()
@@ -100,12 +100,21 @@ pub(super) fn write_buildings(
     for row in eligible_rows {
         // TSV: sq(0) osm_id(1) c_gx(2) c_gy(3) btype(4) buse(5) height(6) floors(7)
         //      name(8) street(9) housenumber(10) opening_hours(11) area_source(12) ring(13)
+        let raw_buse: u8 = row[5].parse().unwrap_or(0);
+        let is_horticulture_poly = row[12].parse()
+            == Ok(crate::osm::spill::GROUND_IS_A_FUNCTIONAL_AREA)
+            && matches!(
+                raw_buse,
+                crate::osm::spill::BUILDING_USE_OUTDOOR
+                    | crate::osm::spill::BUILDING_USE_HORTICULTURE_HOLE
+            );
         let ring = decode_tsv_ring(&row[13]);
         // Overlap and POI queries share one preparation, only if either needs it.
         let footprint = LazyCell::new(|| ring.as_deref().and_then(PreparedRing::new));
         // Overlap suppression: a functional-area source wrapping real buildings.
-        // A car park BELOW them wraps nothing and stays.
+        // A car park BELOW them wraps nothing and stays; horticulture polygons stay for structures.
         if row[12].parse() == Ok(crate::osm::spill::GROUND_IS_A_FUNCTIONAL_AREA)
+            && !is_horticulture_poly
             && !real_centroids.is_empty()
             && footprint
                 .as_ref()
@@ -126,12 +135,17 @@ pub(super) fn write_buildings(
         let bt = downgrade_oversized_restaurant(bt, area_opt);
         let c_gx = parse_grid_cell(&row[2]);
         let c_gy = parse_grid_cell(&row[3]);
+        let use_code = if raw_buse == crate::osm::spill::BUILDING_USE_UNTYPED_YES && bt != 0 {
+            0
+        } else {
+            raw_buse
+        };
 
         osm_id.append_value(row[1].parse().unwrap_or(0));
         cgx.append_value(c_gx);
         cgy.append_value(c_gy);
         btype.append_value(bt);
-        buse.append_value(row[5].parse().unwrap_or(0));
+        buse.append_value(use_code);
         let h: f32 = row[6].parse().unwrap_or(0.0);
         if h > 0.0 {
             height.append_value(h);

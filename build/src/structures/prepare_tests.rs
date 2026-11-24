@@ -3,7 +3,7 @@
 use super::{
     height_model::{HeightModel, screening_metres},
     observations::{FOOTPRINT, Observation},
-    prepare::{HeightEvidence, match_footprints},
+    prepare::{HeightEvidence, HorticultureZones, match_footprints},
     prepare_geometry::{self as geometry, FootprintIndex},
     prepare_rows::{OsmBuilding, StructureRow},
 };
@@ -91,6 +91,7 @@ fn overture_without_osm_identity_is_a_real_screening_row() {
         measured_index: FootprintIndex::new(vec![]).unwrap(),
         raster: &[],
         model: &model,
+        horticulture: None,
     };
     let footprint = footprint(
         "POLYGON ((14 50,14.001 50,14.001 50.001,14 50.001,14 50),(14.0002 50.0002,14.0008 50.0002,14.0008 50.0008,14.0002 50.0008,14.0002 50.0002))",
@@ -155,6 +156,7 @@ fn ground_activity_never_borrows_a_nearby_footprint() {
         measured_index: FootprintIndex::new(vec![]).unwrap(),
         raster: &[],
         model: &model,
+        horticulture: None,
     };
     let row = evidence
         .building(
@@ -318,6 +320,162 @@ fn national_attributes_keep_floor_evidence_activity_classes_and_first_equal_matc
     building.row.floors = Some(0);
     NationalAttributes::new(&points).apply(&mut building);
     assert_eq!(building.row.floors, Some(0));
+
+    building.ground_activity = false;
+    building.building_use = crate::osm::spill::BUILDING_USE_OUTDOOR;
+    building.row.floors = Some(0);
+    NationalAttributes::new(&points).apply(&mut building);
+    assert_eq!(building.row.floors, Some(0));
+}
+
+#[test]
+fn outdoor_greenhouse_use_preserves_outdoor_envelope_and_caps_default_height() {
+    let model = model();
+    // Outer horticulture field [-15.625..-15.615, 27.755..27.765], with a hole
+    // [-15.622..-15.618, 27.757..27.761] and an island [-15.621..-15.619, 27.758..27.760].
+    let zone_ring = |wkt: &str, use_code: u8| {
+        let g = Geometry::new_from_wkt(wkt).unwrap();
+        let parts = geometry::snapped_parts(&g).unwrap();
+        OsmBuilding {
+            row: StructureRow {
+                osm_id: Some(1),
+                emission_geometry: Some(parts[8..].to_vec()),
+                ..Default::default()
+            },
+            building_use: use_code,
+            ground_activity: true,
+        }
+    };
+    let (horticulture, remaining_osm) = HorticultureZones::from_osm(vec![
+        zone_ring(
+            "POLYGON ((-15.625 27.755,-15.615 27.755,-15.615 27.765,-15.625 27.765,-15.625 27.755))",
+            crate::osm::spill::BUILDING_USE_OUTDOOR,
+        ),
+        zone_ring(
+            "POLYGON ((-15.622 27.757,-15.618 27.757,-15.618 27.761,-15.622 27.761,-15.622 27.757))",
+            crate::osm::spill::BUILDING_USE_HORTICULTURE_HOLE,
+        ),
+        zone_ring(
+            "POLYGON ((-15.621 27.758,-15.619 27.758,-15.619 27.760,-15.621 27.760,-15.621 27.758))",
+            crate::osm::spill::BUILDING_USE_OUTDOOR,
+        ),
+    ]);
+    assert!(remaining_osm.is_empty());
+
+    let evidence = HeightEvidence {
+        measured: &[],
+        measured_index: FootprintIndex::new(vec![]).unwrap(),
+        raster: &[],
+        model: &model,
+        horticulture: Some(&horticulture),
+    };
+
+    // 1. Unmatched Overture industrial footprint (owner's Gran Canaria case) on the island inside
+    // the hole -> outdoor (0), silent (10), capped to 3 m and 1 storey.
+    let mut ign_on_island = footprint(
+        "POLYGON ((-15.6205 27.7585,-15.6195 27.7585,-15.6195 27.7595,-15.6205 27.7595,-15.6205 27.7585))",
+    );
+    ign_on_island.height_m = None;
+    ign_on_island.envelope = 3;
+    let row = evidence
+        .building(
+            StructureRow::default(),
+            None,
+            u8::MAX,
+            false,
+            Some(&ign_on_island),
+            Some(0),
+        )
+        .unwrap();
+    assert_eq!(row.envelope, 0);
+    assert_eq!(row.building_type, Some(10));
+    assert_eq!(row.height_source, 2);
+    assert_eq!(row.height_m, 3);
+    assert_eq!(row.storeys, Some(1));
+
+    // 2. Footprint inside the hole (outside the island) stays enclosed industrial at 9 m.
+    let mut in_hole = footprint(
+        "POLYGON ((-15.6218 27.7572,-15.6212 27.7572,-15.6212 27.7578,-15.6218 27.7578,-15.6218 27.7572))",
+    );
+    in_hole.height_m = None;
+    in_hole.envelope = 3;
+    let hole_row = evidence
+        .building(
+            StructureRow::default(),
+            None,
+            u8::MAX,
+            false,
+            Some(&in_hole),
+            Some(1),
+        )
+        .unwrap();
+    assert_eq!(hole_row.envelope, 3);
+    assert_eq!(hole_row.height_m, 9);
+
+    // 3. Warehouse outside the field sharing only one corner with the field boundary stays 9 m.
+    let mut one_corner = footprint(
+        "POLYGON ((-15.615 27.755,-15.614 27.755,-15.614 27.754,-15.615 27.754,-15.615 27.755))",
+    );
+    one_corner.height_m = None;
+    one_corner.envelope = 3;
+    let corner_row = evidence
+        .building(
+            StructureRow::default(),
+            None,
+            u8::MAX,
+            false,
+            Some(&one_corner),
+            Some(2),
+        )
+        .unwrap();
+    assert_eq!(corner_row.envelope, 3);
+    assert_eq!(corner_row.height_m, 9);
+
+    // 4. Untyped OSM building=yes inside the field becomes outdoor/silent unless it carries a
+    // house number or matches an Overture house (envelope 1).
+    let mut field_fp = footprint(
+        "POLYGON ((-15.624 27.756,-15.623 27.756,-15.623 27.757,-15.624 27.757,-15.624 27.756))",
+    );
+    field_fp.height_m = None;
+    field_fp.envelope = 5;
+    let untyped_gh = evidence
+        .building(
+            StructureRow {
+                osm_id: Some(50),
+                building_type: Some(0),
+                floors: Some(0),
+                ..Default::default()
+            },
+            None,
+            crate::osm::spill::BUILDING_USE_UNTYPED_YES,
+            false,
+            Some(&field_fp),
+            Some(3),
+        )
+        .unwrap();
+    assert_eq!(untyped_gh.envelope, 0);
+    assert_eq!(untyped_gh.building_type, Some(10));
+    assert_eq!(untyped_gh.height_m, 3);
+
+    field_fp.envelope = 1;
+    let matched_house = evidence
+        .building(
+            StructureRow {
+                osm_id: Some(51),
+                building_type: Some(0),
+                floors: Some(0),
+                ..Default::default()
+            },
+            None,
+            crate::osm::spill::BUILDING_USE_UNTYPED_YES,
+            false,
+            Some(&field_fp),
+            Some(4),
+        )
+        .unwrap();
+    assert_eq!(matched_house.envelope, 1);
+    assert_eq!(matched_house.building_type, Some(0));
+    assert_eq!(matched_house.height_m, 9);
 }
 
 #[test]

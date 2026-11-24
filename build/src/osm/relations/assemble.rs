@@ -5,6 +5,7 @@ use super::*;
 /// Accumulates way geometries for relation assembly.
 pub struct AssembledRelation {
     pub rings: Vec<Vec<[f64; 2]>>,
+    pub inner_rings: Vec<Vec<[f64; 2]>>,
     pub tags: Tags,
     pub feature_types: Vec<FeatureType>,
 }
@@ -56,13 +57,19 @@ impl RelationAssembler {
     pub fn assemble(&self, rel_id: i64, manifest: &RelationManifest) -> Option<AssembledRelation> {
         let info = manifest.relations.get(&rel_id)?;
 
-        // Collect outer rings' coordinates
+        let horticulture =
+            info.tags.get("landuse").map(String::as_str) == Some("greenhouse_horticulture");
+        // Collect outer rings' coordinates (and inner hole rings for horticulture zones)
         let mut outer_coords: Vec<Vec<[f64; 2]>> = Vec::new();
+        let mut inner_coords: Vec<Vec<[f64; 2]>> = Vec::new();
         for (way_id, role) in &info.member_ways {
-            if (role == "outer" || role.is_empty())
-                && let Some(coords) = self.way_geoms.get(way_id)
-            {
+            let Some(coords) = self.way_geoms.get(way_id) else {
+                continue;
+            };
+            if role == "outer" || role.is_empty() {
                 outer_coords.push(coords.clone());
+            } else if horticulture && role == "inner" {
+                inner_coords.push(coords.clone());
             }
         }
 
@@ -70,14 +77,26 @@ impl RelationAssembler {
             return None;
         }
 
-        // Try to merge outer ways into a single ring
-        let merged = merge_outer_rings(outer_coords);
+        // Try to merge outer ways into closed rings
+        let mut merged = merge_outer_rings(outer_coords);
+        if horticulture {
+            merged.retain(|ring| crate::osm::classify::is_a_closed_ring(ring));
+        }
         if merged.is_empty() {
             return None;
         }
+        let inner_rings = if horticulture {
+            merge_outer_rings(inner_coords)
+                .into_iter()
+                .filter(|ring| crate::osm::classify::is_a_closed_ring(ring))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         Some(AssembledRelation {
             rings: merged,
+            inner_rings,
             tags: info.tags.clone(),
             feature_types: info.feature_types.clone(),
         })
