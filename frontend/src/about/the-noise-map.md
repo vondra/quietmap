@@ -294,8 +294,12 @@ or, as Lden, under 15 dB, which no layer of the map shows; it batches the select
 graphics card and applies the sampling weights to their spectra.
 A pixel inside a building shows the building's loudest façade, as the popup
 inside it does: of the receivers 0.1 m in front of its walls, a party wall's left out, the three
-whose painted pixel in front is loudest are computed like pixels, without the building's own
-reflection, and the loudest of them counts. Both choices go by the ground sources, as the popup's
+whose painted pixel in front is loudest (with a home's own plant removed from the outdoor pixel's
+building layer before ranking) are computed like pixels, without the building's
+own reflection and without a home's own modelled plant among the exact sources or corner residuals
+(the shared background hum still holds the faint quiet remainder across the lattice), and the
+loudest of them counts. Both
+choices go by the ground sources, as the popup's
 do: the flights do not pick the façade. A building crossing a painting square's boundary ranks all its exposed
 receivers by the popup's rule, using the 100 ground-source pieces with the greatest bound at any
 façade. Its chosen receiver computes every loud ground source and the flights exactly; only its

@@ -176,6 +176,15 @@ impl Piece {
     }
 }
 
+/// Whether a `Layer::Building` display `building_type` is a home's statistical outdoor plant
+/// (`physics::emission::settlement::is_home` / `build/src/sources/building.rs::class_label`).
+pub fn is_home_building_type(building_type: &str) -> bool {
+    matches!(
+        building_type,
+        "residential_house" | "residential_multi" | "default"
+    )
+}
+
 /// The deck under a piece on a bridge: its altitude (m) at the piece's two ends.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Deck {

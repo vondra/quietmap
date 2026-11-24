@@ -2,10 +2,12 @@
 //! 7c533e17): of the CNOSSOS-EU 2.8 façade receivers, the one where the sources with the greatest
 //! bound at any façade sum to the highest Lden wins (ties to the first in canonical order); the
 //! ring loop then answers there with every source. At a façade the own building still screens what
-//! stands behind it, and its footprint does not count for the reflection bonus (2.8).
+//! stands behind it, its footprint does not count for the reflection bonus (2.8), and a home's own
+//! statistical outdoor plant (`residential_house`, `residential_multi`, `default`) leaves its own
+//! façade's level.
 
 use crate::answer::RECEIVER_HEIGHT_M;
-use crate::candidates::{Attributes, Candidate};
+use crate::candidates::{Attributes, Candidate, SourceAttribute};
 use crate::evaluate::{Receiver, Scratch, received_energy};
 use crate::obstacles::{FacadeReceiver, Footprint, Scene};
 use crate::scene::Ground;
@@ -63,7 +65,26 @@ fn facade_at(
     })
 }
 
-/// The loudest façade of `footprint` over the candidates collected so far (all layers).
+/// Whether `source` at `point` (click metres) is the receiving home `footprint`'s own statistical
+/// outdoor plant and should leave that home's own façade level.
+///
+/// Ownership is resolved against the currently loaded exteriors of `footprint.id` via
+/// [`Scene::footprint_owns_point`]: a single-part home matches by id alone (so concave or courtyard
+/// centroids drop), while a multi-part record assigns each point to its containing part (solid
+/// interior, then courtyard ring, else nearest exterior for slightly shifted centroids).
+pub fn is_own_home_plant(
+    footprint: &Footprint,
+    source: &SourceAttribute,
+    point: [f64; 2],
+    obstacles: &Scene<'_>,
+) -> bool {
+    source.home_plant
+        && source.footprint_id == footprint.id
+        && obstacles.footprint_owns_point(footprint, point)
+}
+
+/// The loudest façade of `footprint` over the candidates collected so far (all layers; callers
+/// exclude a home's own `home_plant` beforehand).
 #[allow(clippy::too_many_arguments)]
 pub fn loudest_facade(
     footprint: &Footprint,

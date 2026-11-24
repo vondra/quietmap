@@ -3,13 +3,19 @@
 //! painted outdoor pixel in front is loudest are painted as points of their blocks, and the loudest
 //! of them from the ground sources gives every pixel of the building its level.
 
+use crate::blocks::meets;
 use crate::exact::{LAYERS, Point};
 use crate::levels::Painted;
-use crate::paint::{PASS_BLOCKS, metres_at, pixel_of, runs_within, shortest_pixel_side_metres};
+use crate::paint::{
+    PASS_BLOCKS, metres_at, pixel_of, rectangle_at, runs_within, shortest_pixel_side_metres,
+};
 use crate::passes::PASSES_AT_ONCE;
 use crate::points::PointPainter;
 use crate::quiet::QuietBlocks;
 use crate::square::Square;
+use physics::bands::lden_energy;
+use popup::candidates::GROUND_REACH_M;
+use popup::evaluate::{Scratch, received_energy};
 use popup::obstacles::{BuildingParts, Footprint};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -117,60 +123,107 @@ pub(crate) fn facade_candidates(
 ) -> Result<Vec<FacadeCandidate>, String> {
     // A pixel's shorter side (m): half of it in front of a receiver lies in the pixel it faces.
     let pixel_m = shortest_pixel_side_metres(square, n);
-    let in_front = |position: [f64; 2], bearing_deg: f64| -> f64 {
-        let (east, north) = bearing_deg.to_radians().sin_cos();
-        let front = [
-            position[0] + 0.5 * pixel_m * east,
-            position[1] + 0.5 * pixel_m * north,
-        ];
-        let painted = pixel_of(square, n, front).and_then(|at| pixels[at].as_ref());
-        painted.map_or(0.0, |(layers, _)| ground_energy(layers))
+    let own_energy_at = |at: usize, own: &[u32], scratch: &mut Scratch| -> Result<f64, String> {
+        let centre = metres_at(square, n, (at % n) as f64 + 0.5, (at / n) as f64 + 0.5);
+        let point = Point::at(square, centre)?;
+        let receiver = point.receiver(square);
+        let reflection = point.reflection();
+        let mut total = 0.0;
+        for &index in own {
+            let mut candidate = square.candidates[index as usize].clone();
+            candidate.distance_m = candidate.distance_from(centre);
+            if candidate.distance_m > GROUND_REACH_M {
+                continue;
+            }
+            let source = &square.attributes[candidate.attribute];
+            let received = received_energy(&receiver, &candidate, source, scratch)?;
+            total += lden_energy(&received) * reflection;
+        }
+        Ok(total)
     };
     let chosen: Vec<Vec<FacadeCandidate>> = buildings
         .par_iter()
         .enumerate()
-        .map(|(index, pixels)| -> Result<_, String> {
-            let building = &pixels.footprint;
-            let receivers = square.obstacles.facade_receivers(building)?;
-            if receivers.is_empty() {
-                return Ok(Vec::new());
-            }
-            if building
-                .rings
-                .iter()
-                .flat_map(|ring| &ring.points)
-                .any(|&position| pixel_of(square, n, position).is_none())
-            {
-                let point = crate::boundary_facades::choose(square, building, &receivers)?;
-                let pixel = crate::boundary_facades::background_pixel(square, n, point.position);
-                return Ok(vec![FacadeCandidate {
-                    building: index,
-                    point,
-                    pixel,
-                    exact: true,
-                }]);
-            }
-            let mut ranked: Vec<(f64, [f64; 2], usize)> = Vec::new();
-            for receiver in receivers {
-                if let Some(pixel) = pixel_of(square, n, receiver.position) {
-                    let estimate = in_front(receiver.position, receiver.outward_bearing_deg);
-                    ranked.push((estimate, receiver.position, pixel));
+        .map_init(
+            Scratch::default,
+            |scratch, (index, building_pixels)| -> Result<_, String> {
+                let building = &building_pixels.footprint;
+                let receivers = square.obstacles.facade_receivers(building)?;
+                if receivers.is_empty() {
+                    return Ok(Vec::new());
                 }
-            }
-            // A stable sort: equal estimates keep the canonical order.
-            ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-            ranked.truncate(FACADE_CANDIDATES);
-            (ranked.into_iter())
-                .map(|(_, position, pixel)| {
-                    Ok(FacadeCandidate {
+                let excluded = square.own_home_plant_candidates(building);
+                if building
+                    .rings
+                    .iter()
+                    .flat_map(|ring| &ring.points)
+                    .any(|&position| pixel_of(square, n, position).is_none())
+                {
+                    let point =
+                        crate::boundary_facades::choose(square, building, &receivers, excluded)?;
+                    let pixel =
+                        crate::boundary_facades::background_pixel(square, n, point.position);
+                    return Ok(vec![FacadeCandidate {
                         building: index,
-                        point: Point::on_facade(square, position, building.id)?,
+                        point,
                         pixel,
-                        exact: false,
+                        exact: true,
+                    }]);
+                }
+                let mut own_cache: HashMap<usize, f64> = HashMap::new();
+                let mut ranked: Vec<(f64, [f64; 2], usize)> = Vec::new();
+                for receiver in receivers {
+                    if let Some(pixel) = pixel_of(square, n, receiver.position) {
+                        let (east, north) = receiver.outward_bearing_deg.to_radians().sin_cos();
+                        let front = [
+                            receiver.position[0] + 0.5 * pixel_m * east,
+                            receiver.position[1] + 0.5 * pixel_m * north,
+                        ];
+                        let estimate = match pixel_of(square, n, front)
+                            .and_then(|at| pixels[at].as_ref().map(|(layers, _)| (at, *layers)))
+                        {
+                            Some((at, mut adjusted)) => {
+                                let bldg = Layer::Building as usize;
+                                if adjusted[bldg] > 0.0
+                                    && let Some(own) = excluded.as_deref()
+                                {
+                                    let own_energy = match own_cache.get(&at) {
+                                        Some(&cached) => cached,
+                                        None => {
+                                            let computed = own_energy_at(at, own, scratch)?;
+                                            own_cache.insert(at, computed);
+                                            computed
+                                        }
+                                    };
+                                    adjusted[bldg] = (adjusted[bldg] - own_energy).max(0.0);
+                                }
+                                ground_energy(&adjusted)
+                            }
+                            None => 0.0,
+                        };
+                        ranked.push((estimate, receiver.position, pixel));
+                    }
+                }
+                // A stable sort: equal estimates keep the canonical order.
+                ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+                ranked.truncate(FACADE_CANDIDATES);
+                (ranked.into_iter())
+                    .map(|(_, position, pixel)| {
+                        Ok(FacadeCandidate {
+                            building: index,
+                            point: Point::on_facade(
+                                square,
+                                position,
+                                building.id,
+                                excluded.clone(),
+                            )?,
+                            pixel,
+                            exact: false,
+                        })
                     })
-                })
-                .collect()
-        })
+                    .collect()
+            },
+        )
         .collect::<Result<_, String>>()?;
     Ok(chosen.into_iter().flatten().collect())
 }
@@ -183,11 +236,30 @@ pub(crate) fn building_levels(
     quiet: &QuietBlocks,
     candidates: Vec<FacadeCandidate>,
 ) -> Result<HashMap<usize, Painted>, String> {
-    let (boundary, mut candidates): (Vec<_>, Vec<_>) = candidates
-        .into_iter()
-        .partition(|candidate| candidate.exact);
     let (n, side) = (painter.grid.pixels, painter.grid.block);
     let block_of = |pixel: usize| (pixel / n / side) * (n / side) + (pixel % n) / side;
+    // Boundary façades, plus the rare home (>100 m) with an excluded cell outside this façade
+    // block's 3x3 neighbourhood, run through exact loud pairs so no excluded cell can sit in a
+    // block's corner residual (`left_out`).
+    let needs_exact = |candidate: &FacadeCandidate| {
+        if candidate.exact {
+            return true;
+        }
+        let Some(excluded) = candidate.point.excluded_sources.as_deref() else {
+            return false;
+        };
+        let blocks = n / side;
+        let at = block_of(candidate.pixel);
+        let (i, j) = (at % blocks, at / blocks);
+        let b = side as f64;
+        let (x, y) = (i as f64 * b, j as f64 * b);
+        let (low, high) = rectangle_at(painter.square, n, x - b, y - b, x + 2.0 * b, y + 2.0 * b);
+        excluded.iter().any(|&index| {
+            let [a, b] = painter.square.candidates[index as usize].ends_m;
+            !meets(a, b, low, high)
+        })
+    };
+    let (exact, mut candidates): (Vec<_>, Vec<_>) = candidates.into_iter().partition(needs_exact);
     candidates.sort_by_key(|c| block_of(c.pixel));
     // The candidates' blocks in order, each with its candidates' range and their pairs at most.
     let mut blocks: Vec<(usize, Range<usize>)> = Vec::new();
@@ -232,8 +304,7 @@ pub(crate) fn building_levels(
     let painted = (painted.into_iter()).flat_map(|(_, (points_run, paint))| {
         building_indices[points_run].iter().copied().zip(paint)
     });
-    let mut levels = loudest_by_ground(painted);
-    let (building_indices, points, pixels) = boundary.into_iter().fold(
+    let (exact_buildings, points, pixels) = exact.into_iter().fold(
         (Vec::new(), Vec::new(), Vec::new()),
         |(mut building_indices, mut points, mut pixels), candidate| {
             building_indices.push(candidate.building);
@@ -242,7 +313,7 @@ pub(crate) fn building_levels(
             (building_indices, points, pixels)
         },
     );
-    let paint = crate::etalon::paint_points(
+    let exact_paint = crate::etalon::paint_points(
         painter.square,
         n,
         &points,
@@ -254,8 +325,13 @@ pub(crate) fn building_levels(
         ),
         painter.batch,
     )?;
-    levels.extend(building_indices.into_iter().zip(paint));
-    Ok(levels)
+    Ok(loudest_by_ground(
+        painted.chain(
+            exact_buildings
+                .into_iter()
+                .zip(exact_paint.into_iter().map(Some)),
+        ),
+    ))
 }
 
 /// Per building the paint of its loudest candidate from the ground sources (the flights apart),

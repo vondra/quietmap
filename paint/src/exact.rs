@@ -13,6 +13,7 @@ use physics::bound::{ReceiverBound, receiver_bound};
 use physics::weather::PlaceWeather;
 use popup::evaluate::{Bands, Receiver, Scratch, period_sums, received_bands};
 use rayon::prelude::*;
+use std::sync::Arc;
 use tiles::sources::Layer;
 
 pub const LAYERS: usize = Layer::ALL.len();
@@ -29,6 +30,9 @@ pub struct Point {
     pub altitude_m: f64,
     /// The building it stands in (0: none), whose walls do not screen it.
     pub own_footprint: u64,
+    /// Sorted candidate indices excluded at this receiver (a home's own statistical outdoor plant
+    /// at its own façade; `None` for outdoor points, corners and non-home buildings).
+    pub excluded_sources: Option<Arc<[u32]>>,
     /// Its receiver reflection (dB), which every ground source's energy there takes.
     pub reflection_db: f64,
     /// What decides which sources count there (`popup::candidates::counts`).
@@ -45,10 +49,18 @@ impl Point {
     }
 
     /// Building `footprint`'s façade receiver at `position`, as a click inside the building is
-    /// answered (`popup::building`): outdoors, its reflection without the façade's own.
-    pub fn on_facade(square: &Square, position: [f64; 2], footprint: u64) -> Result<Self, String> {
+    /// answered (`popup::building`): outdoors (`own_footprint = 0` so own walls still screen),
+    /// reflection without the façade's own, and excluding `excluded_sources` (own home plant).
+    pub fn on_facade(
+        square: &Square,
+        position: [f64; 2],
+        footprint: u64,
+        excluded_sources: Option<Arc<[u32]>>,
+    ) -> Result<Self, String> {
         let reflection_db = square.obstacles.reflection_db(position, Some(footprint))?;
-        Self::with_receiver_properties(square, position, 0, reflection_db)
+        let mut point = Self::with_receiver_properties(square, position, 0, reflection_db)?;
+        point.excluded_sources = excluded_sources;
+        Ok(point)
     }
 
     /// A point with a known footprint and reflection, sharing the terrain and weather construction.
@@ -63,6 +75,7 @@ impl Point {
             position,
             altitude_m: square.ground.at(position)?.height_m + popup::answer::RECEIVER_HEIGHT_M,
             own_footprint,
+            excluded_sources: None,
             reflection_db,
             bound: receiver_bound(
                 weather.favourable.maximum(),
@@ -70,6 +83,13 @@ impl Point {
                 weather.alpha_db_per_km,
             ),
         })
+    }
+
+    /// Whether candidate `index` is excluded at this receiver.
+    pub fn excludes_candidate(&self, index: u32) -> bool {
+        self.excluded_sources
+            .as_deref()
+            .is_some_and(|excluded| excluded.binary_search(&index).is_ok())
     }
 
     /// The weather at this point.
@@ -241,7 +261,10 @@ pub(crate) fn loud_pairs(square: &Square, points: &[Point]) -> Vec<Pair> {
             let point = &points[k];
             square.index.reaching(point.position, point.position, near);
             near.iter()
-                .filter(|&&index| square.loud(index, point.position, &point.bound))
+                .filter(|&&index| {
+                    !point.excludes_candidate(index)
+                        && square.loud(index, point.position, &point.bound)
+                })
                 .map(|&index| Pair::new(k as u32, index))
                 .collect::<Vec<_>>()
         })

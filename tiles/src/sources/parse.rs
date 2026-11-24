@@ -1,7 +1,7 @@
 //! Reading a sources tile in place: pieces, attributes and decks decode on demand, a display only
 //! for the contributors the panel shows.
 
-use super::display::read_record;
+use super::display::{read_record, read_text};
 use super::{
     ATTRIBUTE_BYTES, Attribute, BANDS, DECK_BYTES, EMISSION_BYTES, Emission, HEADER_BYTES,
     LEVEL_OFFSET_DB, LINE_BYTES, Layer, MAGIC, POINT_BYTES, Piece,
@@ -202,10 +202,32 @@ impl<'a> Sources<'a> {
         Layer::from_code(self.attribute_record(index)?[0])
     }
 
+    /// An attribute's footprint id alone, without decoding its emission (0: none).
+    pub fn footprint_id(&self, index: u32) -> Result<u64, FormatError> {
+        let record = self.attribute_record(index)?;
+        Ok(u64::from_le_bytes(record[8..16].try_into().unwrap()))
+    }
+
     /// An attribute's group key alone, without decoding its emission.
     pub fn group_key(&self, index: u32) -> Result<u64, FormatError> {
         let record = self.attribute_record(index)?;
         Ok(u64::from_le_bytes(record[16..24].try_into().unwrap()))
+    }
+
+    /// The `building_type` display text of a `Layer::Building` attribute without decoding the rest
+    /// of its display record; `None` for other layers or missing/null fields.
+    pub fn building_type(&self, index: u32) -> Result<Option<&'a str>, FormatError> {
+        let record = self.attribute_record(index)?;
+        if Layer::from_code(record[0])? != Layer::Building {
+            return Ok(None);
+        }
+        read_text(
+            Layer::Building,
+            self.displays,
+            self.strings,
+            u32_at(record, 28) as usize,
+            1,
+        )
     }
 
     /// The display fields of an attribute as the positional JSON array of its layer.

@@ -309,6 +309,37 @@ fn a_shared_emission_and_text_are_stored_once() {
 }
 
 #[test]
+fn building_type_reads_without_decoding_whole_display() {
+    let attributes = [
+        road(),
+        building(11, json!(["", "residential_house"])),
+        building(12, json!(["St Vitus", "church_bells"])),
+        building(13, json!([])),
+        building(14, json!(["", null])),
+    ];
+    let pieces: Vec<Piece> = (0..attributes.len())
+        .map(|attribute| Piece {
+            ends: [[attribute as i16, 0], [attribute as i16, 0]],
+            attribute: attribute as u32,
+        })
+        .collect();
+    let bytes = encode(&pieces, &attributes, &[]);
+    let parsed = Sources::parse(&bytes).unwrap();
+    assert_eq!(parsed.building_type(0).unwrap(), None);
+    assert_eq!(parsed.building_type(1).unwrap(), Some("residential_house"));
+    assert_eq!(parsed.building_type(2).unwrap(), Some("church_bells"));
+    assert_eq!(parsed.building_type(3).unwrap(), None);
+    assert_eq!(parsed.building_type(4).unwrap(), None);
+    assert_eq!(parsed.footprint_id(1).unwrap(), 11);
+    assert!(is_home_building_type("residential_house"));
+    assert!(is_home_building_type("residential_multi"));
+    assert!(is_home_building_type("default"));
+    assert!(!is_home_building_type("church_bells"));
+    assert!(!is_home_building_type("food_retail"));
+    assert!(!is_home_building_type("kitchen_extract"));
+}
+
+#[test]
 #[should_panic(expected = "display field lanes cannot hold")]
 fn a_display_value_its_field_cannot_hold_is_refused() {
     let mut wide = road();

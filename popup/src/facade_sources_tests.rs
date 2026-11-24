@@ -27,6 +27,7 @@ fn the_ranking_by_ceiling_equals_bounding_every_candidate() {
                 platform_half_width_m: 0.0,
                 exclusion_radius_m: 0.0,
                 footprint_id: 0,
+                home_plant: false,
                 group_key: 0,
                 energy,
                 lden_power: lden_energy(&energy.map(|bands: [f64; BANDS]| bands.iter().sum())),
