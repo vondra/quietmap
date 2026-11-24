@@ -11,7 +11,8 @@ use std::path::Path;
 fn envelope(class: Option<&str>, subtype: Option<&str>) -> u8 {
     match class {
         Some(
-            "carport" | "roof" | "greenhouse" | "glasshouse" | "bridge_structure" | "grandstand",
+            "carport" | "roof" | "canopy" | "greenhouse" | "glasshouse" | "bridge_structure"
+            | "grandstand",
         ) => 0,
         Some(
             "allotment_house" | "apartments" | "beach_hut" | "boathouse" | "bungalow" | "cabin"
@@ -149,7 +150,7 @@ pub fn convert(
                             floors,
                             building_type: None,
                             envelope: envelope(class, text(&batch, "subtype", i)),
-                            open_roof: matches!(class, Some("carport" | "roof")),
+                            open_roof: matches!(class, Some("carport" | "roof" | "canopy")),
                             owned: true,
                         },
                     )?;

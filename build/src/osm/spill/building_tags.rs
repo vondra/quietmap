@@ -49,6 +49,9 @@ pub(super) fn building_type_from_tags(tags: &Tags) -> u8 {
     if matches!(get("landuse"), Some("retail" | "commercial")) {
         return 1;
     }
+    if get("landuse") == Some("greenhouse_horticulture") && !classify::has_a_building(get) {
+        return ids::SETTLEMENT_SILENT;
+    }
     // farm_auxiliary + livestock → real farm building, not a silent shed.
     if get("building") == Some("farm_auxiliary")
         && (tags.contains_key("animal") || get("livestock").is_some())
@@ -238,32 +241,58 @@ pub(super) fn building_type(val: &str) -> u8 {
         // SILENT tail: uninhabited / unheated / infra structures.
         // `farm_auxiliary` is ambiguous (many are sheds) → SILENT unless the
         // livestock check above overrides it to farm.
-        "shed" | "roof" | "hut" | "outbuilding" | "greenhouse" | "static_caravan"
-        | "carport_roof" | "ruins" | "ruin" | "construction" | "collapsed" | "service"
-        | "allotment_house" | "boathouse" | "bunker" | "tent" | "container" | "storage_tank"
-        | "silo" | "hangar" | "conservatory" | "ger" | "farm_auxiliary" | "transformer_tower"
-        | "water_tower" | "no" | "bridge" | "tower" | "toilets" | "elevator" | "tech_cab"
-        | "guardhouse" | "gatehouse" | "pavilion" | "abandoned" | "stairs" | "staircase"
-        | "chimney" | "demolished" | "forestry" | "signal_box" | "security_booth" | "shelter"
-        | "proposed" | "ship" => ids::SETTLEMENT_SILENT,
+        "shed" | "roof" | "canopy" | "hut" | "outbuilding" | "greenhouse" | "glasshouse"
+        | "static_caravan" | "carport_roof" | "ruins" | "ruin" | "construction" | "collapsed"
+        | "service" | "allotment_house" | "boathouse" | "bunker" | "tent" | "container"
+        | "storage_tank" | "silo" | "hangar" | "conservatory" | "ger" | "farm_auxiliary"
+        | "transformer_tower" | "water_tower" | "no" | "bridge" | "tower" | "toilets"
+        | "elevator" | "tech_cab" | "guardhouse" | "gatehouse" | "pavilion" | "abandoned"
+        | "stairs" | "staircase" | "chimney" | "demolished" | "forestry" | "signal_box"
+        | "security_booth" | "shelter" | "proposed" | "ship" => ids::SETTLEMENT_SILENT,
         "yes" | "" => 0, // default to residential-apartments
         _ => 0,
     }
 }
 
-/// The envelope-use code: residential 0, commercial 1, industrial 2, outdoor 3.
-/// A parking function alone cannot distinguish an open carport from a garage.
+/// Open roof without walls (`carport`, `carport_roof`, `roof`, `canopy`): outdoor and non-screening.
+pub(crate) const BUILDING_USE_OPEN_ROOF: u8 = 3;
+/// Outdoor structure with frame/walls (`greenhouse`, `glasshouse`, `grandstand`, `bridge`, or
+/// `landuse=greenhouse_horticulture`): outdoor envelope, screens at its height (capped when unmeasured).
+pub(crate) const BUILDING_USE_OUTDOOR: u8 = 4;
+/// Transient spill marker for an untyped `building=yes` with no `building:use`; resolved in
+/// `write_buildings` to `BUILDING_USE_OUTDOOR` inside `landuse=greenhouse_horticulture`, else `0`.
+pub(crate) const BUILDING_USE_UNTYPED_YES: u8 = 5;
+/// Inner ring (hole) of a `landuse=greenhouse_horticulture` multipolygon relation.
+pub(crate) const BUILDING_USE_HORTICULTURE_HOLE: u8 = 6;
+
+/// The envelope-use code: residential 0, commercial 1, industrial 2, open roof 3, outdoor 4,
+/// untyped `building=yes` 5, horticulture hole 6.
 pub(super) fn building_use(tags: &Tags) -> u8 {
     let tag = |key: &str| tags.get(key).map(String::as_str);
-    if matches!(tag("building"), Some("carport" | "roof"))
-        || (tag("amenity") == Some("parking") && tag("parking") == Some("carports"))
+    if tag("qm:horticulture_hole") == Some("1") {
+        return BUILDING_USE_HORTICULTURE_HOLE;
+    }
+    if matches!(
+        tag("building"),
+        Some("carport" | "carport_roof" | "roof" | "canopy")
+    ) || (tag("amenity") == Some("parking") && tag("parking") == Some("carports"))
     {
-        return 3;
+        return BUILDING_USE_OPEN_ROOF;
+    }
+    if matches!(
+        tag("building"),
+        Some("greenhouse" | "glasshouse" | "grandstand" | "bridge")
+    ) || (!classify::has_a_building(tag) && tag("landuse") == Some("greenhouse_horticulture"))
+    {
+        return BUILDING_USE_OUTDOOR;
     }
     match tag("building:use").unwrap_or("") {
         "residential" => 0,
         "commercial" | "retail" | "office" => 1,
         "industrial" => 2,
+        _ if tag("building") == Some("yes") && tag("addr:housenumber").unwrap_or("").is_empty() => {
+            BUILDING_USE_UNTYPED_YES
+        }
         _ => 0,
     }
 }

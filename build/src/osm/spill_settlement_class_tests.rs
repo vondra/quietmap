@@ -91,8 +91,10 @@ fn silent_tail_routed_out_of_residential() {
     for v in [
         "shed",
         "roof",
+        "canopy",
         "hut",
         "greenhouse",
+        "glasshouse",
         "ruins",
         "construction",
         "carport_roof",
@@ -103,7 +105,47 @@ fn silent_tail_routed_out_of_residential() {
             "{v} must be SILENT"
         );
     }
+    assert_eq!(building_type("grandstand"), 9);
     assert_eq!(building_type("some_unknown_value"), 0);
+}
+
+#[test]
+fn greenhouse_horticulture_and_light_roofs_classify_to_outdoor_and_open_uses() {
+    let tags = |pairs: &[(&str, &str)]| -> Tags {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).into(), (*v).into()))
+            .collect()
+    };
+    let zone = tags(&[("landuse", "greenhouse_horticulture")]);
+    assert_eq!(building_type_from_tags(&zone), st::SETTLEMENT_SILENT);
+    assert_eq!(ground_state(&zone), GROUND_IS_A_FUNCTIONAL_AREA);
+    assert_eq!(building_use(&zone), BUILDING_USE_OUTDOOR);
+
+    let hole = tags(&[
+        ("landuse", "greenhouse_horticulture"),
+        ("qm:horticulture_hole", "1"),
+    ]);
+    assert_eq!(building_use(&hole), BUILDING_USE_HORTICULTURE_HOLE);
+
+    for open in ["carport", "carport_roof", "roof", "canopy"] {
+        let t = tags(&[("building", open)]);
+        assert_eq!(building_use(&t), BUILDING_USE_OPEN_ROOF, "{open}");
+    }
+    for outdoor in ["greenhouse", "glasshouse", "grandstand", "bridge"] {
+        let t = tags(&[("building", outdoor)]);
+        assert_eq!(building_use(&t), BUILDING_USE_OUTDOOR, "{outdoor}");
+    }
+    assert_eq!(
+        building_use(&tags(&[("building", "yes")])),
+        BUILDING_USE_UNTYPED_YES
+    );
+    assert_eq!(
+        building_use(&tags(&[("building", "yes"), ("addr:housenumber", "12")])),
+        0
+    );
+    assert_eq!(building_use(&tags(&[("building", "apartments")])), 0);
+    assert_eq!(building_use(&tags(&[("building", "tower")])), 0);
 }
 
 #[test]

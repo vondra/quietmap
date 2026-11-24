@@ -220,6 +220,14 @@ impl<'b> Rows<'b> {
             self.area.value(row)
         };
         let per_building = height_is_per_building(self.height_source.value(row));
+        if !per_building
+            && ((!self.envelope.is_null(row)
+                && self.envelope.value(row) == EnvelopeClass::Outdoor as u8)
+                || (!self.building_type.is_null(row)
+                    && LowProfileLookup::is_low_class(self.building_type.value(row))))
+        {
+            return Ok(raw_height.min(LowProfileLookup::LOW_HEIGHT_M));
+        }
         Ok(lookup.capped_height(raw_height, per_building, lat, lon, area_m2))
     }
 

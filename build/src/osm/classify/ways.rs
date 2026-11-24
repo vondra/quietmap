@@ -188,7 +188,10 @@ pub(crate) fn is_functional_area<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> b
         tag("tourism"),
     )
     .is_some()
-        || matches!(tag("landuse"), Some("retail" | "commercial"))
+        || matches!(
+            tag("landuse"),
+            Some("retail" | "commercial" | "greenhouse_horticulture")
+        )
 }
 
 /// `building=no` states that there is NO building here, so it must read as an

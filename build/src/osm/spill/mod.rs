@@ -264,7 +264,10 @@ mod building_tags;
 mod polygons;
 mod segments;
 mod site_tags;
-pub(crate) use building_tags::{GROUND_HOLDS_A_BUILDING, GROUND_IS_A_FUNCTIONAL_AREA};
+pub(crate) use building_tags::{
+    BUILDING_USE_HORTICULTURE_HOLE, BUILDING_USE_OPEN_ROOF, BUILDING_USE_OUTDOOR,
+    BUILDING_USE_UNTYPED_YES, GROUND_HOLDS_A_BUILDING, GROUND_IS_A_FUNCTIONAL_AREA,
+};
 use building_tags::{building_type_from_tags, building_use, ground_state};
 pub use building_tags::{poi_class, poi_class_from_tags};
 use site_tags::{parse_height, parse_power_kw, site_subtype_from_tags, site_type_from_tags};

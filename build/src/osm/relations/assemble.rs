@@ -7,6 +7,8 @@ pub struct AssembledRelation {
     pub rings: Vec<Vec<[f64; 2]>>,
     /// Closed inner hole rings assigned to each outer ring (parallel to `rings`).
     pub holes_per_ring: Vec<Vec<Vec<[f64; 2]>>>,
+    /// All closed inner hole rings (retained for horticulture zones).
+    pub inner_rings: Vec<Vec<[f64; 2]>>,
     pub tags: Tags,
     pub feature_types: Vec<FeatureType>,
 }
@@ -58,17 +60,19 @@ impl RelationAssembler {
     pub fn assemble(&self, rel_id: i64, manifest: &RelationManifest) -> Option<AssembledRelation> {
         let info = manifest.relations.get(&rel_id)?;
 
+        let horticulture =
+            info.tags.get("landuse").map(String::as_str) == Some("greenhouse_horticulture");
         let keep_holes = info.feature_types.contains(&FeatureType::Industrial)
             && crate::osm::classify::is_active_military_range_map(&info.tags);
 
-        // Collect outer rings' coordinates, plus inner holes only for active military ranges.
+        // Collect outer rings' coordinates, plus inner holes for active military ranges and horticulture zones.
         let mut outer_coords: Vec<Vec<[f64; 2]>> = Vec::new();
         let mut inner_coords: Vec<Vec<[f64; 2]>> = Vec::new();
         for (way_id, role) in &info.member_ways {
             if let Some(coords) = self.way_geoms.get(way_id) {
                 if role == "outer" || role.is_empty() {
                     outer_coords.push(coords.clone());
-                } else if keep_holes && role == "inner" {
+                } else if (keep_holes || horticulture) && role == "inner" {
                     inner_coords.push(coords.clone());
                 }
             }
@@ -80,26 +84,41 @@ impl RelationAssembler {
 
         // Merge outer ways into rings; when keeping holes, assign each closed inner hole to the
         // smallest (immediate) enclosing outer ring so nested islands keep their own holes.
-        let merged = merge_outer_rings(outer_coords);
+        let mut merged = merge_outer_rings(outer_coords);
+        if horticulture {
+            merged.retain(|ring| crate::osm::classify::is_a_closed_ring(ring));
+        }
         if merged.is_empty() {
             return None;
         }
+        let merged_inners: Vec<Vec<[f64; 2]>> =
+            if (keep_holes || horticulture) && !inner_coords.is_empty() {
+                merge_outer_rings(inner_coords)
+                    .into_iter()
+                    .filter(|ring| crate::osm::classify::is_a_closed_ring(ring))
+                    .collect()
+            } else {
+                Vec::new()
+            };
         let mut holes_per_ring: Vec<Vec<Vec<[f64; 2]>>> = vec![Vec::new(); merged.len()];
-        if keep_holes && !inner_coords.is_empty() {
+        if keep_holes && !merged_inners.is_empty() {
             let outer_areas: Vec<f64> = merged.iter().map(|r| ring_area_deg2(r)).collect();
-            for inner in merge_outer_rings(inner_coords) {
-                if !crate::osm::classify::is_a_closed_ring(&inner) {
-                    continue;
-                }
-                if let Some(host) = immediate_enclosing_outer(&merged, &outer_areas, &inner) {
-                    holes_per_ring[host].push(inner);
+            for inner in &merged_inners {
+                if let Some(host) = immediate_enclosing_outer(&merged, &outer_areas, inner) {
+                    holes_per_ring[host].push(inner.clone());
                 }
             }
         }
+        let inner_rings = if horticulture {
+            merged_inners
+        } else {
+            Vec::new()
+        };
 
         Some(AssembledRelation {
             rings: merged,
             holes_per_ring,
+            inner_rings,
             tags: info.tags.clone(),
             feature_types: info.feature_types.clone(),
         })

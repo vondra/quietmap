@@ -22,7 +22,13 @@ impl<'a> NationalAttributes<'a> {
     }
 
     pub fn apply(&self, building: &mut OsmBuilding) {
-        if building.ground_activity {
+        if building.ground_activity
+            || matches!(
+                building.building_use,
+                crate::osm::spill::BUILDING_USE_OUTDOOR
+                    | crate::osm::spill::BUILDING_USE_HORTICULTURE_HOLE
+            )
+        {
             return;
         }
         let (longitude, latitude) =

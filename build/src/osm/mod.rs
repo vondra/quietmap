@@ -6,7 +6,7 @@ mod finalize;
 pub(crate) mod geography;
 mod geography_output;
 pub(crate) mod geometry;
-mod ids;
+pub(crate) mod ids;
 pub(crate) mod junctions;
 mod microsegment;
 mod model_nodes;
@@ -17,7 +17,7 @@ mod poi_join;
 pub(crate) mod region_input;
 mod relations;
 mod speed_rules;
-mod spill;
+pub(crate) mod spill;
 mod transport;
 pub(crate) use transport::year_sibling_path;
 

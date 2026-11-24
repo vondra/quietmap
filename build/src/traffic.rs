@@ -350,6 +350,9 @@ fn read_buildings(
             bytes("storeys")?,
             bytes("floors")?,
         );
+        let envelopes = batch
+            .column_by_name("envelope_class")
+            .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
         let centroid = [integers("centroid_gx")?, integers("centroid_gy")?];
         let emission = [
             integers("emission_centroid_gx")?,
@@ -378,7 +381,11 @@ fn read_buildings(
                     mapped_footprint_m2(cell(areas, row)),
                 )
             } else {
-                (0, footprint_area_m2(outlines.value(row)))
+                let outdoor = envelopes.is_some_and(|env| !env.is_null(row) && env.value(row) == 0);
+                (
+                    if outdoor { 10 } else { 0 },
+                    footprint_area_m2(outlines.value(row)),
+                )
             };
             let (dwellings, trips) = building_load(tables, building_type, storey_count, area);
             if dwellings > 0.0 || trips > 0.0 {
