@@ -81,9 +81,7 @@ const KINDS_TOOLTIP = 'Each kind\'s share of the aircraft noise here (Lden).\n'
   + 'Propeller aircraft: turboprops and light aircraft.\n'
   + 'Airport ground operations: taxiing and take-off rolls.'
 
-const FLIGHTS_TOOLTIP = 'Flights of an average day of the year (ADS-B), each counted once,\n'
-  + 'at its loudest moment here, outdoors in the open. In the air only:\n'
-  + 'take-off rolls are the airport ground operations.'
+const FLIGHTS_TOOLTIP = 'Estimated flights on an average day of the year. Nearby grid points count each airborne flight (ADS-B) once, at its loudest moment outdoors. Take-off rolls are included in airport ground operations.'
 
 const PEAK_TOOLTIP = 'The flight\'s loudest moment here (LAmax)'
 
@@ -104,7 +102,7 @@ function FlightsByPeakTable({ events }: { events: AircraftEvents }) {
             <th scope="col" className="pl-2 text-right">All</th>
             <th scope="col" className="pl-2 text-right"><HoverText title="Of them at night (23–07)">At night</HoverText></th>
             <th scope="col" className="pl-2 text-right"><HoverText title="Their mean height above the ground here">Height</HoverText><br />km</th>
-            <th scope="col" className="w-full pl-2 text-left"><HoverText title="The type flying most of them">Type</HoverText></th>
+            <th scope="col" className="w-full pl-2 text-left"><HoverText title="The most common type at the grid point contributing the most flights to this row">Type</HoverText></th>
           </tr>
         </thead>
         <tbody>

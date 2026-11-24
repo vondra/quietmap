@@ -35,6 +35,12 @@ map. An industrial site shows its mapped boundary where one is available. At Gre
 | Flights a day, Loudest flights | In the aircraft row: the flights of an average day whose loudest moment here reaches 50, 60 and 70 dB, and the ten loudest flights |
 | Detailed calculation | The whole place: each period and layer, the weather, the façade the point is answered at, and the levels exceeded 5 to 90 % of the time |
 
+**Flights a day** comes from a grid of points about 380 m apart in London and 580 m in Mexico
+City. Halfway between two points on a grid line, the popup shows their average. Between grid
+lines it uses the four surrounding points, giving more weight to the nearer ones. The height is
+an average weighted by flights. The example aircraft type comes from the point contributing the
+most flights to that row.
+
 <p>
 <img src="click.jpg" width="1740" height="1040" alt="The popup at Greenwich in London, under the search field's open place: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
 <img src="calculation.jpg" width="1740" height="1588" alt="The same point's detailed calculation: the receiver, each period, each layer and the weather" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0">
