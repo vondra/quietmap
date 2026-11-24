@@ -289,14 +289,18 @@ pub fn read(
                 .iter()
                 .find(|movement| matches!(movement.location, Location::StationPair { .. }))
                 .unwrap();
+            // A fallback-vintage timetable cannot prove absence of service on unmatched target-year tracks.
+            let fallback = movements
+                .iter()
+                .any(|movement| movement.attributes.contains_key("fallback_vintage"));
             for (index, edge) in graph.edges.iter().enumerate() {
                 if edge.traversal_only {
                     continue;
                 }
                 let observed = pairs.edges.get(&index);
-                let residual = model
-                    .residuals
-                    .get(&scope)
+                let residual = (!fallback)
+                    .then(|| model.residuals.get(&scope))
+                    .flatten()
                     .filter(|_| !pairs.quarantine.contains(&index));
                 if observed.is_none() && residual.is_none() {
                     continue;

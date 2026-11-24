@@ -1,6 +1,6 @@
 ---
 title: DR Congo
-intro: On the 2026 map, country-specific road and rail estimates; road volumes are scaled ×2.5 in Kinshasa and ×1.4 in 10 other cities. On the 2024 map, roads follow the global road model and railways use world defaults.
+intro: On the 2026 map, country-specific road and rail estimates; road volumes are scaled ×2.5 in Kinshasa and ×1.4 in 10 other cities. On the 2024 map, roads follow the global road model and railways reuse these per-line estimates as a declared fallback vintage.
 ---
 
 ## Roads
@@ -27,7 +27,7 @@ Unsigned roads: a primary road 50 km/h in towns and outside, a motorway 120.
 
 ## Railways
 
-Train counts: no timetable. On the 2026 map, per-line estimates based on services reported by SNCC; a track takes the first matching row (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)).
+Train counts: no timetable. Per-line estimates based on services reported by SNCC (also applied as a declared fallback vintage, +2 years, on the 2024 map); a track takes the first matching row.
 
 | Line | Passenger trains per day | Freight trains per day |
 |---|---:|---:|

@@ -98,20 +98,57 @@ fn first_containing_national_area_follows_points_without_overriding_stronger_evi
 }
 
 #[test]
-fn future_snapshots_and_outside_intervals_do_not_classify_historical_sites() {
-    for (observed, start, end) in [
-        ("2003-01-01", None, None),
-        ("2001-01-01", Some("2003-01-01"), None),
-        ("2001-01-01", None, Some("2001-12-01")),
-    ] {
-        let mut input = observation(3511);
-        input.observed_on = observed.into();
-        input.operating_from = start.map(str::to_owned);
-        input.operating_until = end.map(str::to_owned);
+fn outside_intervals_do_not_classify_or_silence_while_undated_later_registers_classify_with_unknown_operation()
+ {
+    // Future opening is skipped before matching: neither classifies nor silences an existing tenant.
+    let mut future_open = observation(2410);
+    future_open.observed_on = "2003-01-01".into();
+    future_open.operating_from = Some("2003-01-01".into());
+    let mut sites = vec![area(0.01, 0)];
+    classify(&mut sites, &[future_open.clone()]);
+    assert_eq!((sites[0].activity, sites[0].operating_state), (0, 0));
+    let mut earlier_tenant = observation(3511);
+    earlier_tenant.identity = "register/earlier".into();
+    earlier_tenant.evidence_identity = "register/earlier".into();
+    let mut sites = vec![area(0.01, 0)];
+    classify(&mut sites, &[earlier_tenant, future_open]);
+    assert_eq!((sites[0].activity, sites[0].operating_state), (3511, 1));
+
+    // Pre-cutoff closure does not classify and marks the site inactive.
+    let mut closed_before = observation(3511);
+    closed_before.operating_until = Some("2001-12-01".into());
+    let mut sites = vec![area(0.01, 0)];
+    classify(&mut sites, &[closed_before]);
+    assert_eq!((sites[0].activity, sites[0].operating_state), (0, 2));
+
+    // Undated later active or blank register classifies the mapped footprint, keeping operation unknown.
+    for state in [0_u8, 1] {
+        let mut undated = observation(3511);
+        undated.observed_on = "2003-01-01".into();
+        undated.operating_state = state;
         let mut sites = vec![area(0.01, 0)];
-        classify(&mut sites, &[input]);
-        assert_eq!(sites[0].activity, 0);
+        classify(&mut sites, &[undated]);
+        assert_eq!((sites[0].activity, sites[0].operating_state), (3511, 0));
     }
+
+    // Undated later retired record neither classifies nor silences the earlier footprint.
+    let mut undated_retired = observation(3511);
+    undated_retired.observed_on = "2003-01-01".into();
+    undated_retired.operating_state = 2;
+    let mut sites = vec![area(0.01, 0)];
+    classify(&mut sites, &[undated_retired]);
+    assert_eq!((sites[0].activity, sites[0].operating_state), (0, 0));
+
+    // Post-cutoff closure establishes operation at cutoff and classifies even when the later snapshot
+    // excluded retired rows from classification_admitted.
+    let mut closed_after = observation(3511);
+    closed_after.observed_on = "2003-06-01".into();
+    closed_after.operating_until = Some("2002-06-01".into());
+    closed_after.operating_state = 2;
+    closed_after.classification_admitted = 0;
+    let mut sites = vec![area(0.01, 0)];
+    classify(&mut sites, &[closed_after]);
+    assert_eq!((sites[0].activity, sites[0].operating_state), (3511, 1));
 }
 
 #[test]

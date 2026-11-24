@@ -1,16 +1,16 @@
 ---
 title: New Zealand
-intro: NZTA state highway traffic and Auckland Transport street counts on the 2026 map (global road model on the 2024 map). No train timetable is loaded; railways use class defaults.
+intro: NZTA state highway traffic and Auckland Transport street counts (with the 2026 NZTA carriageway snapshot as a fallback vintage on the 2024 map). No train timetable is loaded; railways use class defaults.
 ---
 
 ## Roads
 
-On the 2026 map, traffic volumes come from two sources (no dated road count dataset at or before the 2024 cutoff is admitted for the 2024 map, where all roads follow the global road model):
+Traffic volumes come from two sources:
 
-- State highways: [NZTA Waka Kotahi open data portal](https://opendata-nzta.opendata.arcgis.com/). Each carriageway section has an estimated daily traffic and a heavy vehicle percentage.
-- Auckland streets: [Auckland Transport](https://data-atgis.opendata.arcgis.com/) count sites, each with a daily count and a heavy vehicle percentage.
+- State highways: [NZTA Waka Kotahi open data portal](https://opendata-nzta.opendata.arcgis.com/). Each carriageway section has an estimated daily traffic and a heavy vehicle percentage. On the 2024 map, because no dated 2024 carriageway archive exists and the relative-year monitoring table has unanchored column dates, the April 2026 carriageway snapshot stands as a declared fallback vintage (+2 years).
+- Auckland streets: [Auckland Transport](https://data-atgis.opendata.arcgis.com/) count sites, each with a dated daily count and a heavy vehicle percentage; the 2024 map keeps only counts dated before 2025-01-01 (taking the latest eligible count at each site).
 
-An OSM motorway, trunk, primary, secondary or tertiary road takes the nearest count within 200 m with a compatible road class. On the 2026 map, the heavy share is the published percentage; one fifth of it is assigned to medium trucks and 1 % of the traffic to motorcycles, assumed splits. Where no junction lies between them, an uncounted stretch of a counted road carries the count of its neighbour.
+An OSM motorway, trunk, primary, secondary or tertiary road takes the nearest count within 200 m with a compatible road class. On the 2026 map, the heavy share is the published percentage; one fifth of it is assigned to medium trucks and 1 % of the traffic to motorcycles, assumed splits. On the 2024 map, the published heavy-vehicle total is retained and the 2024 class model estimates its medium and heavy parts and the missing motorcycle count. Where no junction lies between them, an uncounted stretch of a counted road carries the count of its neighbour.
 
 Local streets, Auckland's included, have no counts loaded and carry the trips their buildings make. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a model of the trips made within 5 km, fitted on European counts ([method](/about/data-preparation)).
 

@@ -125,8 +125,7 @@
   },
   "110": {
     "inputs": [
-      "cz-czptt-timetable-train-sequences-osm-stations",
-      "cz-czptt-timetable-train-sequences-osm-stations-jr2026"
+      "cz-cis-service-calendar"
     ],
     "measurement": ""
   },
@@ -220,7 +219,21 @@
     "inputs": [
       "id-bina-marga-toll-regional-lhrt-national-roads",
       "id-bina-marga-toll-regional-lhrt-national-roads-0",
-      "id-bina-marga-toll-regional-lhrt-national-roads-0-3"
+      "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+      "road-counts-id-jalan-daerah-page-00000-geojson",
+      "road-counts-id-jalan-daerah-page-02000-geojson",
+      "road-counts-id-jalan-daerah-page-04000-geojson",
+      "road-counts-id-jalan-daerah-page-06000-geojson",
+      "road-counts-id-jalan-daerah-page-08000-geojson",
+      "road-counts-id-jalan-daerah-page-10000-geojson",
+      "road-counts-id-jalan-daerah-page-12000-geojson",
+      "road-counts-id-jalan-daerah-page-14000-geojson",
+      "road-counts-id-jalan-daerah-page-16000-geojson",
+      "road-counts-id-jalan-daerah-page-18000-geojson",
+      "road-counts-id-jalan-daerah-page-20000-geojson",
+      "road-counts-id-jalan-daerah-page-22000-geojson",
+      "road-counts-id-jalan-daerah-page-24000-geojson",
+      "road-counts-id-jalan-daerah-page-28000-geojson"
     ],
     "measurement": "derived"
   },
@@ -471,34 +484,52 @@
     "model": "road"
   },
   "9013": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9180": {
     "model": "road"
   },
   "9181": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9231": {
     "model": "road"
   },
   "9232": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9263": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9364": {
     "model": "road"
   },
   "9365": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9368": {
     "model": "road"
   },
   "9369": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9392": {
     "inputs": [
@@ -510,13 +541,19 @@
     "model": "road"
   },
   "9399": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9404": {
     "model": "road"
   },
   "9405": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9484": {
     "inputs": [
@@ -529,7 +566,10 @@
     "model": "road"
   },
   "9505": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9528": {
     "inputs": [
@@ -541,13 +581,19 @@
     "model": "road"
   },
   "9567": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9643": {
     "model": "road"
   },
   "9644": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9705": {
     "inputs": [
@@ -560,7 +606,10 @@
     "model": "road"
   },
   "9730": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9752": {
     "inputs": [
@@ -579,31 +628,46 @@
     "model": "road"
   },
   "9793": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9804": {
     "model": "road"
   },
   "9805": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9818": {
     "model": "road"
   },
   "9819": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9834": {
     "model": "road"
   },
   "9835": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9860": {
     "model": "road"
   },
   "9861": {
-    "model": "rail"
+    "inputs": [
+      "rail-prior-observations"
+    ],
+    "measurement": "proxy"
   },
   "9862": {
     "model": "transition"
@@ -650,7 +714,21 @@
     "inputs": [
       "id-bina-marga-toll-regional-lhrt-national-roads",
       "id-bina-marga-toll-regional-lhrt-national-roads-0",
-      "id-bina-marga-toll-regional-lhrt-national-roads-0-3"
+      "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+      "road-counts-id-jalan-daerah-page-00000-geojson",
+      "road-counts-id-jalan-daerah-page-02000-geojson",
+      "road-counts-id-jalan-daerah-page-04000-geojson",
+      "road-counts-id-jalan-daerah-page-06000-geojson",
+      "road-counts-id-jalan-daerah-page-08000-geojson",
+      "road-counts-id-jalan-daerah-page-10000-geojson",
+      "road-counts-id-jalan-daerah-page-12000-geojson",
+      "road-counts-id-jalan-daerah-page-14000-geojson",
+      "road-counts-id-jalan-daerah-page-16000-geojson",
+      "road-counts-id-jalan-daerah-page-18000-geojson",
+      "road-counts-id-jalan-daerah-page-20000-geojson",
+      "road-counts-id-jalan-daerah-page-22000-geojson",
+      "road-counts-id-jalan-daerah-page-24000-geojson",
+      "road-counts-id-jalan-daerah-page-28000-geojson"
     ],
     "measurement": "proxy"
   },

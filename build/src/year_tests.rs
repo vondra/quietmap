@@ -84,6 +84,7 @@ fn fitted_tables_require_every_training_input_and_reject_cycles() {
 #[test]
 fn practices_cover_the_instant_before_as_of() {
     let mut m = manifest();
+    m.inputs[0].kind = Kind::ChurchBells;
     m.validity.insert(
         "counts".into(),
         Interval {
@@ -91,6 +92,7 @@ fn practices_cover_the_instant_before_as_of() {
             end: "2001-01-01".into(),
         },
     );
+    m.validate().unwrap();
     assert!(m.admitted("counts").unwrap());
     m.validity.get_mut("counts").unwrap().end = "2000-12-31".into();
     assert!(m.admitted("counts").unwrap());
@@ -199,4 +201,118 @@ fn historical_preparation_admission_is_separate_from_release_completion() {
     );
     let reference = Manifest::read(&root.join("2026.json")).unwrap();
     assert!(reference.admitted("prepared").unwrap());
+}
+
+#[test]
+fn admission_distinguishes_snapshots_structures_and_activity_with_explicit_fallback() {
+    let mut m = manifest();
+    let entry = |id: &str, kind: &str, end: &str| -> Input {
+        serde_json::from_value(json!({
+            "id": id,
+            "kind": kind,
+            "region": "CZ",
+            "publisher": "Authority",
+            "url": "https://example.org/data",
+            "observed": {"start": end, "end": end},
+            "published": null,
+            "licence": "CC0",
+            "public_ok": true,
+            "depends_on": [],
+            "description": "Test input."
+        }))
+        .unwrap()
+    };
+    m.inputs
+        .push(entry("snapshot-later", "prepare-osm", "2002"));
+    m.inputs
+        .push(entry("structure-later", "barriers", "2002-06-01"));
+    m.inputs
+        .push(entry("activity-later", "prepare-timetable", "2002-06-01"));
+    let mut fallback = entry("activity-fallback", "prepare-timetable", "2002-06-01");
+    fallback.fallback_vintage = Some(FallbackVintage {
+        reason: "No 2000 timetable archive exists; 2002 schedule used as fallback.".into(),
+    });
+    m.inputs.push(fallback);
+    m.validate().unwrap();
+    assert!(!m.admitted("snapshot-later").unwrap());
+    assert!(m.admitted("structure-later").unwrap());
+    assert!(!m.admitted("activity-later").unwrap());
+    assert!(m.admitted("activity-fallback").unwrap());
+    assert_eq!(Kind::PrepareOsm.admission(), Admission::Snapshot);
+    assert_eq!(Kind::Barriers.admission(), Admission::Structure);
+    assert_eq!(Kind::PrepareTimetable.admission(), Admission::Activity);
+
+    // validity is rejected on Snapshot, Structure and non-practice Activity inputs.
+    for (id, kind) in [
+        ("snapshot-later", "prepare-osm"),
+        ("structure-later", "barriers"),
+        ("crossings-later", "prepare-crossings"),
+        ("counts-later", "prepare-road-counts"),
+    ] {
+        let mut bad = manifest();
+        bad.inputs.push(entry(id, kind, "2002"));
+        bad.validity.insert(
+            id.into(),
+            Interval {
+                start: "2000".into(),
+                end: "2002".into(),
+            },
+        );
+        assert!(
+            bad.validate().is_err(),
+            "{id} ({kind}) must reject validity"
+        );
+    }
+
+    // A Snapshot cannot bypass its own observation cutoff by declaring an admitted dependency.
+    let mut snap_dep = manifest();
+    let mut derived_snap = entry("snapshot-with-dep", "prepare-osm", "2002");
+    derived_snap.depends_on = vec!["counts".into()];
+    snap_dep.inputs.push(derived_snap);
+    snap_dep.validate().unwrap();
+    assert!(!snap_dep.admitted("snapshot-with-dep").unwrap());
+
+    // fallback_vintage rejects structures, pre-cutoff observations, derived inputs, validity combos, and blank reasons.
+    let fb = || {
+        Some(FallbackVintage {
+            reason: "Nearest later vintage.".into(),
+        })
+    };
+    let mut bad_structure = manifest();
+    let mut wall = entry("wall", "barriers", "2002");
+    wall.fallback_vintage = fb();
+    bad_structure.inputs.push(wall);
+    assert!(bad_structure.validate().is_err());
+
+    let mut bad_early = manifest();
+    bad_early.inputs[0].fallback_vintage = fb();
+    assert!(bad_early.validate().is_err());
+
+    let mut bad_derived = manifest();
+    let mut derived = entry("derived", "road-period-shares", "2002");
+    derived.depends_on = vec!["counts".into()];
+    derived.fallback_vintage = fb();
+    bad_derived.inputs.push(derived);
+    assert!(bad_derived.validate().is_err());
+
+    let mut bad_combo = manifest();
+    let mut combo = entry("combo", "prepare-timetable", "2002");
+    combo.fallback_vintage = fb();
+    bad_combo.inputs.push(combo);
+    bad_combo.validity.insert(
+        "combo".into(),
+        Interval {
+            start: "2000".into(),
+            end: "2002".into(),
+        },
+    );
+    assert!(bad_combo.validate().is_err());
+
+    let mut bad_reason = manifest();
+    let mut blank = entry("blank", "prepare-timetable", "2002");
+    blank.fallback_vintage = Some(FallbackVintage {
+        reason: "   ".into(),
+    });
+    bad_reason.inputs.push(blank);
+    assert!(bad_reason.validate().is_err());
 }

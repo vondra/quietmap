@@ -1,6 +1,6 @@
 ---
 title: Iraq
-intro: No open counts or timetable. On the 2026 map, road traffic is assigned by road class and city and train counts by corridor; on the 2024 map, roads follow the global road model and railways use world defaults.
+intro: No open counts or timetable. On the 2026 map, road traffic is assigned by road class and city and train counts by corridor; on the 2024 map, roads follow the global road model and railways reuse these corridor estimates as a declared fallback vintage.
 ---
 
 ## Roads
@@ -27,7 +27,7 @@ Unsigned roads: a primary road 60 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-No timetable. On the 2026 map, track within 12 km of the Baghdad to Basra line gets 3 passenger and 4 freight trains per day and all other track gets 1 and 1 (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)). Parts of the network are not in service.
+No timetable. Track within 12 km of the Baghdad to Basra line gets 3 passenger and 4 freight trains per day and all other track gets 1 and 1 (also applied as a declared fallback vintage, +2 years, on the 2024 map). Parts of the network are not in service.
 
 ## Industry
 

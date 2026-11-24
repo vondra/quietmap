@@ -15,7 +15,7 @@ Unsigned roads: a primary road 80 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-On the 2026 map, train counts come from the [Dubai RTA timetable on Dubai Pulse](https://www.dubaipulse.gov.ae/dataset/73765e8f-e8c4-443c-9687-288072ed9d12/resource/11515bd3-bdba-466f-ab65-f057bd123ab5/download/gtfs.7z) (one busy Wednesday): no current feed was available, so the 2025 archive is used, and only the Dubai Tram is taken from it. No 2024 archive is available, so the 2024 map uses class defaults.
+On the 2026 map, train counts come from the [Dubai RTA timetable on Dubai Pulse](https://www.dubaipulse.gov.ae/dataset/73765e8f-e8c4-443c-9687-288072ed9d12/resource/11515bd3-bdba-466f-ab65-f057bd123ab5/download/gtfs.7z) (one busy Wednesday): no current feed was available, so the 2025 archive is used, and only the Dubai Tram is taken from it. Because no 2024 archive is available, the same 2025 archive stands as a declared fallback vintage (+1 year) on the 2024 map, averaged over its own service calendar.
 
 Surface metro sections are included; see the [railway method](/about/data-preparation).
 

@@ -1,6 +1,6 @@
 ---
 title: Kazakhstan
-intro: No open counts or timetable. On the 2026 map, road traffic is assigned by road class and city and train counts per corridor; on the 2024 map, roads follow the global road model and railways use world defaults.
+intro: No open counts or timetable. On the 2026 map, road traffic is assigned by road class and city and train counts per corridor; on the 2024 map, roads follow the global road model and railways reuse these corridor estimates as a declared fallback vintage.
 ---
 
 ## Roads
@@ -27,7 +27,7 @@ Unsigned roads: a primary road 60 km/h in towns, 100 outside, a motorway 140.
 
 ## Railways
 
-No open timetable. On the 2026 map, train counts are assigned per corridor (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)):
+No open timetable. Train counts are assigned per corridor (also applied as a declared fallback vintage, +2 years, on the 2024 map):
 
 | Track | Passenger | Freight |
 |---|---:|---:|

@@ -1,6 +1,6 @@
 ---
 title: India
-intro: On the 2026 map, road traffic follows the official Bharatmala network and train counts come from a community timetable and the official network map; on the 2024 map, roads follow the global road model and railways use world defaults.
+intro: On the 2026 map, road traffic follows the official Bharatmala network (global road model on the 2024 map); train counts come from a community timetable (applied as a fallback vintage on 2024) and the official network map.
 ---
 
 ## Roads
@@ -31,9 +31,9 @@ Unsigned roads: a primary road 60 km/h in towns, 50 outside, a motorway 120.
 
 ## Railways
 
-On the 2026 map, lines in the [community-built Indian Railways timetable](https://github.com/Neo2308/indianrailways-gtfs) get its passenger train counts (one busy Wednesday). The timetable is unofficial and has no freight; freight comes from the network map below.
+On the 2026 map, lines in the [community-built Indian Railways timetable](https://github.com/Neo2308/indianrailways-gtfs) get its passenger train counts (one busy Wednesday); because no 2024 archive exists, the 2026 timetable stands as a declared fallback vintage (+2 years) on the 2024 map, averaged over its own service calendar. The timetable is unofficial and has no freight; freight comes from the network map below.
 
-On the 2026 map, other lines use the official railway network map on [Esri Living Atlas India](https://livingatlas.esri.in/), which gives speed, gauge and railway zone (neither the timetable nor this undated network map is available for 2024, where all lines use class defaults). Track within 500 m of a mapped line gets trains by location and speed:
+Other lines use the official railway network map on [Esri Living Atlas India](https://livingatlas.esri.in/), which gives speed, gauge and railway zone (admitted for both map years as railway network structure). Track within 500 m of a mapped line gets trains by location and speed:
 
 | Line | Passenger | Freight |
 |---|---:|---:|

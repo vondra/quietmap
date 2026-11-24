@@ -5,9 +5,13 @@ use crate::{
     roads::observation::{CountBasis, Observation},
     year::YearInputs,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use chrono::NaiveDate;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 fn count(value: &serde_json::Value) -> Result<Option<f64>> {
     // A negative published percentage cannot describe vehicles; keep its total and missing split.
@@ -32,10 +36,34 @@ pub(super) fn convert(
     inputs: &YearInputs,
     path: &Path,
 ) -> Result<Vec<Observation>> {
+    let input = recipe.source.input(inputs)?;
+    let (first, last) = input.observed.bounds().map_err(anyhow::Error::msg)?;
+    let cutoff = NaiveDate::parse_from_str(&inputs.manifest.as_of, "%Y-%m-%d")?;
     let mut rows = Vec::new();
+    let mut auckland_latest =
+        BTreeMap::<(i64, i64, String), (NaiveDate, usize, Observation)>::new();
     let ramps = regex::Regex::new(r"-R\d+\b|\bRMP\b")?;
     for (index, feature) in records::pages(path, &recipe.files)?.into_iter().enumerate() {
         let fields = &feature["properties"];
+        let observed_day = if !recipe.carriageways {
+            let raw = records::text(&fields["count_date"]);
+            let date_part = raw.split('T').next().unwrap_or(raw.as_str()).trim();
+            let day = NaiveDate::parse_from_str(date_part, "%Y-%m-%d")
+                .map_err(|error| anyhow!("invalid Auckland count_date {raw:?}: {error}"))?;
+            if !records::admitted_date(
+                day,
+                day,
+                first,
+                last,
+                cutoff,
+                input.fallback_vintage.is_some(),
+            ) {
+                continue;
+            }
+            Some(day)
+        } else {
+            None
+        };
         let estimate = if recipe.carriageways {
             count(&fields["trafficADTEst"])?
         } else {
@@ -84,6 +112,10 @@ pub(super) fn convert(
                 CountBasis::StreetCrossSection
             },
         )?;
+        if let Some(day) = observed_day {
+            row.observed_start = day.to_string();
+            row.observed_end = day.to_string();
+        }
         row.measured = !estimate.is_some_and(|v| v.round() > 0.0);
         row.total = Some(total.round());
         records::observe_heavy_group(
@@ -97,7 +129,31 @@ pub(super) fn convert(
         );
         row.geometry = vec![vec![point]];
         row.search_radius_m = recipe.search_radius_m;
-        rows.push(row);
+        if let Some(day) = observed_day {
+            // Multiple historical survey years at the same Auckland site tie in road matching;
+            // keep only the latest eligible observation for each (coordinate, road_name) site.
+            let key = (
+                (point[0] * 1e6).round() as i64,
+                (point[1] * 1e6).round() as i64,
+                records::text(&fields["road_name"]).trim().to_uppercase(),
+            );
+            let replace = auckland_latest
+                .get(&key)
+                .is_none_or(|(prev_day, prev_idx, _)| (day, index) > (*prev_day, *prev_idx));
+            if replace {
+                auckland_latest.insert(key, (day, index, row));
+            }
+        } else {
+            rows.push(row);
+        }
+    }
+    if !auckland_latest.is_empty() {
+        let mut selected: Vec<(usize, Observation)> = auckland_latest
+            .into_values()
+            .map(|(_, idx, row)| (idx, row))
+            .collect();
+        selected.sort_by_key(|(idx, _)| *idx);
+        rows.extend(selected.into_iter().map(|(_, row)| row));
     }
     Ok(rows)
 }

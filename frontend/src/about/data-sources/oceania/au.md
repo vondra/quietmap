@@ -1,6 +1,6 @@
 ---
 title: Australia
-intro: Passenger rail timetables for five states (four on the 2024 map). No traffic counts are loaded; main roads use class defaults. Freight rail uses class defaults.
+intro: Passenger rail timetables for five states (four 2024 archives plus New South Wales as a 2026 fallback vintage on the 2024 map). No traffic counts are loaded; main roads use class defaults. Freight rail uses class defaults.
 ---
 
 ## Roads
@@ -23,7 +23,7 @@ Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-On the 2026 map, passenger trains come from all five state timetables below (one busy Wednesday). On the 2024 map, 2024 archives are averaged over 2024 for four states — Victoria (95 of 366 days), Queensland (61), South Australia (120) and Western Australia (91), with missing dates estimated from each operator's covered-day mean; no 2024 New South Wales archive is available, so New South Wales lines use class defaults.
+On the 2026 map, passenger trains come from all five state timetables below (one busy Wednesday). On the 2024 map, 2024 archives are averaged over 2024 for four states — Victoria (95 of 366 days), Queensland (61), South Australia (120) and Western Australia (91), with missing dates estimated from each operator's covered-day mean; because no 2024 New South Wales archive is available, the September 2026 Transport for NSW timetable stands as a declared fallback vintage (+2 years), averaged over its own service calendar.
 
 | State | Feed | What we read |
 |---|---|---|

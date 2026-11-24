@@ -1,9 +1,9 @@
 ---
 title: Ukraine
-intro: No open counts or timetable. On the 2026 map, main roads and railways use Ukraine-specific defaults describing the country before the 2022 invasion (global road model and world railway defaults on the 2024 map).
+intro: No open counts or timetable. On the 2026 map, main roads and railways use Ukraine-specific defaults describing the country before the 2022 invasion; on the 2024 map, roads follow the global road model and railways reuse these pre-2022 track defaults as a declared fallback vintage.
 ---
 
-On the 2026 map, all Ukraine-specific values describe Ukraine before February 2022. No data is available on traffic near the front or in occupied areas.
+All Ukraine-specific road (2026 map) and railway values describe Ukraine before February 2022. No data is available on traffic near the front or in occupied areas.
 
 ## Roads
 
@@ -28,7 +28,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-No timetable is loaded. On the 2026 map, default trains per day by track type (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)):
+No timetable is loaded. Default trains per day by track type (describing pre-2022 traffic; also applied as a declared fallback vintage, +2 years, on the 2024 map):
 
 | Track | Passenger | Freight |
 |---|---:|---:|

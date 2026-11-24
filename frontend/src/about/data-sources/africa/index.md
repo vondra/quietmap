@@ -26,9 +26,9 @@ world.
 
 ## Railways
 
-No African country has a timetable feed. On the 2026 map, Algeria, Djibouti, DR Congo, Egypt,
+No African country has a timetable feed. Algeria, Djibouti, DR Congo, Egypt,
 Ethiopia, Kenya, Morocco, Nigeria, Sudan and Tanzania use per-line estimates based on services
-reported by the operators (excluded from the 2024 map, where lines take class defaults). Elsewhere
+reported by the operators (2026 table, also applied as a declared fallback vintage on the 2024 map). Elsewhere
 every track takes the world defaults described in the [railway method](/about/data-preparation).
 These can overstate lightly used lines. Surface metro sections are included; underground sections
 do not emit outdoor noise.

@@ -28,6 +28,7 @@ pub(super) fn observations(
         "unadmitted count input"
     );
     let (start, end) = input.observed.bounds().map_err(anyhow::Error::msg)?;
+    let cutoff = chrono::NaiveDate::parse_from_str(&inputs.manifest.as_of, "%Y-%m-%d")?;
     let country = publisher.country.as_bytes();
     ensure!(
         country.len() == 2
@@ -197,7 +198,14 @@ pub(super) fn observations(
                 .ok_or_else(|| anyhow!("invalid count year"))?;
             let to = chrono::NaiveDate::from_ymd_opt(year, 12, 31)
                 .ok_or_else(|| anyhow!("invalid count year"))?;
-            if from < start || to > end {
+            if !super::records::admitted_date(
+                from,
+                to,
+                start,
+                end,
+                cutoff,
+                input.fallback_vintage.is_some(),
+            ) {
                 continue;
             }
             (from, to)

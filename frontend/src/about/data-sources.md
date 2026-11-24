@@ -5,8 +5,10 @@ intro: Where every number on the map comes from, with links, licences and dates.
 
 The map is computed from open data: OpenStreetMap for the roads, railways, buildings and sites, and
 public traffic counts, timetables, flight tracks, ship positions, terrain models and registries for
-what they carry and how they stand. Where nobody counted, a documented model or default stands in; the region
-and country pages below say which is which.
+what they carry and how they stand. Where nobody counted, a documented model or default stands in;
+where a historical map year uses a nearest-later fallback vintage for an activity dataset, its
+source entry and popup citation state the vintage gap explicitly. The region and country pages below
+say which is which.
 
 Each version of the map is built once for the whole world. The 2026 map uses the OpenStreetMap
 planet of September 2026 and flights from September 2025 to August 2026, with corrections built in
@@ -107,8 +109,8 @@ the European Union and ESA; all rights reserved).
 - Industry: [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase) (WRI),
   [Global Energy Monitor](https://globalenergymonitor.org/) trackers and the registers named on the
   region and country pages; the base levels calibrated on the Czech strategic noise maps of 2022
-- Wind turbines standing today: OpenStreetMap and eight national and regional registers,
-  credited on the pages of [the United States](/about/data-sources/north-america/us),
+- Wind turbines: OpenStreetMap and eight national and regional registers (filtered to the map
+  cutoff on historical map years), credited on the pages of [the United States](/about/data-sources/north-america/us),
   [Canada](/about/data-sources/north-america/ca), [Germany](/about/data-sources/europe/de),
   [Denmark](/about/data-sources/europe/dk), [Sweden](/about/data-sources/europe/se),
   [Norway](/about/data-sources/europe/no), [Spain](/about/data-sources/europe/es) (Castilla-La Mancha)

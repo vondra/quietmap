@@ -1,6 +1,6 @@
 ---
 title: Egypt
-intro: On the 2026 map, country-specific road and rail estimates, including trams and light rail. On the 2024 map, roads follow the global road model and railways use world defaults.
+intro: On the 2026 map, country-specific road and rail estimates, including trams and light rail. On the 2024 map, roads follow the global road model and railways reuse these per-line estimates as a declared fallback vintage.
 ---
 
 ## Roads
@@ -29,7 +29,7 @@ Unsigned roads: a primary road 60 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Train counts: no timetable. On the 2026 map, per-line estimates based on services reported by Egyptian National Railways; a track takes the first matching row (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)).
+Train counts: no timetable. Per-line estimates based on services reported by Egyptian National Railways (also applied as a declared fallback vintage, +2 years, on the 2024 map); a track takes the first matching row.
 
 | Line | Passenger trains per day | Freight trains per day |
 |---|---:|---:|

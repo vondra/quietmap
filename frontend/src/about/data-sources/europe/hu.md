@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-Train counts: on the 2026 map, MÁV timetable from a [community mirror](https://gtfs.menetbrand.com/download/mav/), one busy Wednesday; no 2024 Hungarian archive is available, so uncovered lines on the 2024 map use class defaults (apart from cross-border trains in neighbouring countries' 2024 timetables), scaled to Hungary's latest published Eurostat passenger train-kilometres (2014). Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
+Train counts: on the 2026 map, MÁV timetable from a [community mirror](https://gtfs.menetbrand.com/download/mav/), one busy Wednesday; because no 2024 Hungarian archive is available, the 2026 MÁV timetable stands as a declared fallback vintage (+2 years) on the 2024 map, averaged over its own service calendar alongside cross-border 2024 timetables, with remaining uncovered lines scaled to Hungary's latest published Eurostat passenger train-kilometres (2014). Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Homes and places
 

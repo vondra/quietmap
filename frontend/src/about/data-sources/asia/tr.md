@@ -1,6 +1,6 @@
 ---
 title: Turkey
-intro: No open counts or timetable. On the 2026 map, road traffic is assigned by road class and city and train counts per corridor; on the 2024 map, roads follow the global road model and railways use world defaults.
+intro: No open counts or timetable. On the 2026 map, road traffic is assigned by road class and city and train counts per corridor; on the 2024 map, roads follow the global road model and railways reuse these corridor estimates as a declared fallback vintage.
 ---
 
 ## Roads
@@ -27,7 +27,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-No Turkish timetable is loaded. On the 2026 map, train counts are assigned per corridor (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)):
+No Turkish timetable is loaded. Train counts are assigned per corridor (also applied as a declared fallback vintage, +2 years, on the 2024 map):
 
 | Track | Passenger | Freight |
 |---|---:|---:|
@@ -42,7 +42,7 @@ No Turkish timetable is loaded. On the 2026 map, train counts are assigned per c
 
 Tram track gets 350 trams per day in Istanbul and 250 elsewhere; light rail gets 500 and 400. Surface metro sections are included; see the [railway method](/about/data-preparation).
 
-These heavy-rail counts are then scaled to the country's train-kilometres (Eurostat 2024): on the 2026 map, passenger trains by 0.372 and freight by 0.681; on the 2024 map, the world railway defaults are scaled to the same Eurostat 2024 train-kilometres.
+These heavy-rail counts are then scaled to the country's train-kilometres (Eurostat 2024): on the 2026 map, passenger trains by 0.372 and freight by 0.681; on the 2024 map, the same fallback corridor counts are scaled to Eurostat 2024 train-kilometres.
 
 ## Industry
 

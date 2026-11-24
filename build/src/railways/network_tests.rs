@@ -166,3 +166,110 @@ fn off_selection_square_without_traffic_mode_is_rejected() {
         .is_ok()
     );
 }
+
+#[test]
+fn fallback_vintage_station_pairs_do_not_apply_unmatched_track_residuals() {
+    let dir = tempfile::tempdir().unwrap();
+    let pt = (50.08, 14.43);
+    let sq = geometry::square_of(pt.0, pt.1);
+    write_square(dir.path(), [sq.x, sq.y], pt.0, pt.1, true);
+    let model: RailModel = serde_json::from_value(serde_json::json!({
+        "network_bounds": {"110:CZ": [49.5, 14.0, 50.5, 15.0]},
+        "residuals": {"110:CZ": {"source_id": 9863, "passenger": 2.0, "freight": 1.0}},
+        "spatial_priors": {},
+        "sources": [
+            {"id": 110, "rank": 1, "edition": 2024, "owner": "CZ", "countries": ["CZ"], "residual": false, "whole_line": true},
+            {"id": 9863, "rank": 9, "edition": 2024, "owner": "CZ", "countries": ["CZ"], "residual": true, "whole_line": false}
+        ],
+        "type_priors": [[80.0, 20.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+        "usage_priors": [[80.0, 20.0], [30.0, 5.0], [0.0, 15.0], [40.0, 10.0]],
+        "mainline_freight": {},
+        "passenger_periods": [0.7, 0.2, 0.1],
+        "freight_periods": [0.5, 0.17, 0.33],
+        "urban_periods": [0.7, 0.25, 0.05],
+        "regional_freight_periods": []
+    }))
+    .unwrap();
+    let write_flows = |path: &Path, attributes: std::collections::BTreeMap<String, String>| {
+        // Station pair far from the edge leaves the edge unmatched so residual eligibility is tested.
+        use crate::railways::movements::{Location, Movement, Record, Stop, write_record};
+        let mut out = File::create(path).unwrap();
+        write_record(
+            &mut out,
+            &Record::Window {
+                version: crate::railways::movements::STREAM_VERSION,
+                start: "2024-01-01".into(),
+                end: "2025-01-01".into(),
+            },
+        )
+        .unwrap();
+        write_record(
+            &mut out,
+            &Record::Movement(Box::new(Movement {
+                id: "cz/1".into(),
+                source_id: 110,
+                country: "CZ".into(),
+                passenger: Some(10.0),
+                freight: None,
+                passenger_status: 2,
+                freight_status: 0,
+                matching: 2,
+                rail_types: vec![0],
+                coverage: Default::default(),
+                missing_calendar_estimate: [0.0, 0.0],
+                attributes,
+                location: Location::StationPair {
+                    from: Stop {
+                        source_id: "1".into(),
+                        id: "A".into(),
+                        latitude: 50.4,
+                        longitude: 14.9,
+                    },
+                    to: Stop {
+                        source_id: "2".into(),
+                        id: "B".into(),
+                        latitude: 50.45,
+                        longitude: 14.95,
+                    },
+                },
+            })),
+        )
+        .unwrap();
+    };
+    let selected = HashSet::from([[sq.x, sq.y]]);
+    let regular_flows = dir.path().join("regular.jsonl");
+    write_flows(&regular_flows, Default::default());
+    let regular = crate::railways::matcher::read(
+        &model,
+        dir.path(),
+        &regular_flows,
+        "2024-01-01",
+        "2025-01-01",
+        &selected,
+    )
+    .unwrap();
+    assert_eq!(regular.claims[&[sq.x, sq.y]].len(), 1);
+    assert_eq!(regular.claims[&[sq.x, sq.y]][0].0.source_id, 9863);
+
+    let fallback_flows = dir.path().join("fallback.jsonl");
+    write_flows(
+        &fallback_flows,
+        std::collections::BTreeMap::from([(
+            "fallback_vintage".into(),
+            "2025-12-14..2026-12-12".into(),
+        )]),
+    );
+    let fallback = crate::railways::matcher::read(
+        &model,
+        dir.path(),
+        &fallback_flows,
+        "2024-01-01",
+        "2025-01-01",
+        &selected,
+    )
+    .unwrap();
+    assert!(
+        fallback.claims.get(&[sq.x, sq.y]).is_none_or(Vec::is_empty),
+        "fallback timetable must not stamp residual traffic on unmatched edges"
+    );
+}

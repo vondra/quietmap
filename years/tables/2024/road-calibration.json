@@ -1134,5 +1134,6 @@
       12
     ],
     "observation_shares": {}
-  }
+  },
+  "fallback_period_shares": "road-period-shares-fallback"
 }

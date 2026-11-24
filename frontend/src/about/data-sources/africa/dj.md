@@ -1,6 +1,6 @@
 ---
 title: Djibouti
-intro: World defaults for main roads; on the 2026 map the Addis Ababa to Djibouti railway uses a line estimate of 16 trains per day, as in Ethiopia (world defaults on the 2024 map).
+intro: World defaults for main roads; the Addis Ababa to Djibouti railway uses a line estimate of 16 trains per day, as in Ethiopia (applied as a declared fallback vintage on the 2024 map).
 ---
 
 ## Roads
@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 100 outside (cars drive 84 on a
 
 ## Railways
 
-Train counts: no timetable. On the 2026 map, the only working line is the Djibouti end of the Addis Ababa to Djibouti railway; it carries the same estimate as the Ethiopian side, 4 passenger and 12 freight trains per day, based on services reported by Ethio-Djibouti Railway, and service tracks carry no traffic (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)).
+Train counts: no timetable. The only working line is the Djibouti end of the Addis Ababa to Djibouti railway; it carries the same estimate as the Ethiopian side, 4 passenger and 12 freight trains per day, based on services reported by Ethio-Djibouti Railway, and service tracks carry no traffic (also applied as a declared fallback vintage, +2 years, on the 2024 map).
 
 ## Industry
 

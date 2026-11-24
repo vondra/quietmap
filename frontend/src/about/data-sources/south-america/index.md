@@ -5,7 +5,7 @@ intro: Traffic counts in four countries; on the 2026 map, estimates from the nat
 
 <!-- SUBPAGES -->
 
-Argentina, Chile, Colombia and Peru publish traffic counts. Colombia also counts trucks and buses per section; the other three publish daily totals and their vehicle classes are estimated. On the 2026 map, counts reach 66 % of the motorway, trunk and primary length in Colombia, 62 % in Argentina, 6 % in Peru and 3 % in Chile; Chile's counts date from 2024 and 2025 (2022 and 2023 on the 2024 map) and Argentina's from 2017–18.
+Argentina, Chile, Colombia and Peru publish traffic counts. Colombia also counts trucks and buses per section; the other three publish daily totals and their vehicle classes are estimated. On the 2026 map, counts reach 66 % of the motorway, trunk and primary length in Colombia, 62 % in Argentina, 6 % in Peru and 3 % in Chile; Chile's counts date from 2024 and 2025 (2022 to 2024 on the 2024 map) and Argentina's from 2017–18.
 
 On the 2026 map, Bolivia, Ecuador, Paraguay and Venezuela (and uncounted network roads in Argentina, Chile, Colombia and Peru) estimate main-road volumes from national road-register attributes (surface, road type, administration), doubled inside manually drawn boxes around the largest cities and multiplied by 1.4 in a second list of cities, with regional vehicle-mix tables on the country pages; Brazil, Uruguay, Guyana and Suriname use class defaults, while unmatched main roads in Chile and Colombia (10 % and 21 % of their length) follow the building-demand model. Several government servers are unreachable from abroad, so some layers come from community mirrors.
 

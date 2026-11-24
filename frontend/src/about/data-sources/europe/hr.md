@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns and outside, a motorway 130.
 
 ## Railways
 
-Train counts: on the 2026 map, [HŽ Putnički prijevoz timetable](https://www.hzpp.hr/), one busy Wednesday; no 2024 archive is available, so the 2024 map uses class defaults. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways). Trams in Zagreb and Osijek have no feed loaded and default to 120 per day on every track.
+Train counts: on the 2026 map, [HŽ Putnički prijevoz timetable](https://www.hzpp.hr/), one busy Wednesday; because no 2024 archive is available, the 2025/2026 timetable stands as a declared fallback vintage (+1 to +2 years) on the 2024 map, averaged over its own service calendar. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways). Trams in Zagreb and Osijek have no feed loaded and default to 120 per day on every track.
 
 ## Homes and places
 

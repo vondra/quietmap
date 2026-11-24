@@ -17,12 +17,22 @@ fn coverage_for_operator(
     coverages: &OperatorCoverage,
     operator: &str,
 ) -> Coverage {
+    if options.fallback_vintage.is_some() {
+        return Coverage::default();
+    }
     #[cfg(test)]
     if options.frozen_comparison {
         return Coverage::default();
     }
-    let _ = options;
     coverages[operator]
+}
+
+fn fallback_attributes(options: &Options) -> BTreeMap<String, String> {
+    let mut attributes = BTreeMap::new();
+    if let Some(vintage) = options.fallback_vintage {
+        attributes.insert("fallback_vintage".into(), vintage.to_string());
+    }
+    attributes
 }
 
 pub(super) fn normalize(
@@ -68,7 +78,7 @@ pub(super) fn normalize(
             .collect::<Result<Vec<_>, _>>();
         let mut observation = Movement {
             missing_calendar_estimate: [0.0; 2],
-            attributes: Default::default(),
+            attributes: fallback_attributes(options),
             id: format!("{}/{}", options.identity, trip.id),
             source_id: options.source_id,
             country: options.country.to_string(),
@@ -138,7 +148,7 @@ pub(super) fn normalize(
         };
         let movement = Movement {
             missing_calendar_estimate: [0.0; 2],
-            attributes: Default::default(),
+            attributes: fallback_attributes(options),
             id: if operator.is_empty() {
                 format!("{}/{}", options.identity, id)
             } else {

@@ -1,6 +1,6 @@
 ---
 title: China
-intro: Mainland China. On the 2026 map, road traffic and train counts are assigned by road class and line speed from community network maps; on the 2024 map, roads follow the global road model and railways use world defaults.
+intro: Mainland China. On the 2026 map, road traffic and train counts are assigned by road class and line speed from community network maps; on the 2024 map, roads follow the global road model while railways use the same network map with mainland metros filtered by opening and closing dates.
 ---
 
 ## Roads
@@ -28,7 +28,7 @@ Unsigned roads: a primary road 50 km/h in towns, 70 outside, a motorway 120, a r
 
 ## Railways
 
-No operator publishes a timetable. On the 2026 map, a community map of the mainland network on [ArcGIS Online](https://services7.arcgis.com/m6uLpqj7MgjPU371/) gives each national line a top speed and each metro line a service type; lines marked as not operating are skipped (this undated snapshot is not used on the 2024 map, where lines take class defaults). Track within 500 m of a mapped line gets trains by speed:
+No operator publishes a timetable. A community map of the mainland network on [ArcGIS Online](https://services7.arcgis.com/m6uLpqj7MgjPU371/) gives each national line a top speed and each metro line a service type; lines marked as not operating are skipped, and on the 2024 map mainland metro lines are filtered by their published opening and closing dates (retaining lines open before 2025-01-01). Track within 500 m of a mapped line gets trains by speed:
 
 | Top speed | Passenger | Freight |
 |---|---:|---:|

@@ -15,7 +15,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside, a motorway 120.
 
 ## Railways
 
-On the 2026 map, train and light-rail counts come from the feeds below, one busy Wednesday. On the 2024 map, 2024 archives of CP Comboios de Portugal (349 of 366 days) and Metro do Porto (114 days) are averaged over 2024 with missing dates estimated from each operator's covered-day mean; Metro Sul do Tejo is not admitted for 2024 and uses class defaults.
+On the 2026 map, train and light-rail counts come from the feeds below, one busy Wednesday. On the 2024 map, 2024 archives of CP Comboios de Portugal (349 of 366 days) and Metro do Porto (114 days) are averaged over 2024 with missing dates estimated from each operator's covered-day mean; Metro Sul do Tejo's incomplete archive is not admitted for 2024 and uses class defaults.
 
 | Feed | What it covers |
 |---|---|

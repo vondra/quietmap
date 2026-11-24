@@ -1,6 +1,6 @@
 ---
 title: Kenya
-intro: No traffic counts or timetable. On the 2026 map, roads and railways use Kenya-specific class and line estimates; on the 2024 map, roads follow the global road model and railways use world defaults.
+intro: No traffic counts or timetable. On the 2026 map, roads and railways use Kenya-specific class and line estimates; on the 2024 map, roads follow the global road model and railways reuse these per-line estimates as a declared fallback vintage.
 ---
 
 ## Roads
@@ -27,7 +27,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside.
 
 ## Railways
 
-Train counts: no timetable. On the 2026 map, per-line estimates based on services reported by Kenya Railways; a track takes the first matching row (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)).
+Train counts: no timetable. Per-line estimates based on services reported by Kenya Railways (also applied as a declared fallback vintage, +2 years, on the 2024 map); a track takes the first matching row.
 
 | Line | Passenger trains per day | Freight trains per day |
 |---|---:|---:|

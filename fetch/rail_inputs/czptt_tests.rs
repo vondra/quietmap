@@ -44,6 +44,7 @@ fn every_path_uses_the_complete_window_regardless_of_archive_order() {
             super::date("2024-03-04").unwrap(),
             1,
             "CZ",
+            None,
         )
         .unwrap();
         assert_eq!(rows.len(), 2);
@@ -60,6 +61,28 @@ fn every_path_uses_the_complete_window_regardless_of_archive_order() {
             .unwrap();
         assert_eq!(inside.passenger, Some(2.0 / 7.0));
         assert_eq!(inside.coverage.missing_fraction(), 3.0 / 7.0);
+
+        // Fallback vintage divides by covered days (4), drops zero paths, emits default coverage and stamps attribute.
+        let fallback = super::convert(
+            &archive_path,
+            &station_path,
+            super::date("2024-02-26").unwrap(),
+            super::date("2024-03-04").unwrap(),
+            1,
+            "CZ",
+            Some("2024-02-27..2024-03-01"),
+        )
+        .unwrap();
+        assert_eq!(fallback.len(), 1);
+        assert_eq!(fallback[0].passenger, Some(0.5));
+        assert_eq!(fallback[0].coverage, Default::default());
+        assert_eq!(
+            fallback[0]
+                .attributes
+                .get("fallback_vintage")
+                .map(String::as_str),
+            Some("2024-02-27..2024-03-01")
+        );
     }
 }
 
@@ -93,6 +116,7 @@ fn unresolved_cis_paths_keep_their_count_and_resolved_timing_points_stay_ordered
         Default::default(),
         1,
         "CZ",
+        None,
     )
     .unwrap();
     assert_eq!(rows.len(), 2);

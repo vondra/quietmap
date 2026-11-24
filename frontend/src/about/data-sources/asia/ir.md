@@ -1,6 +1,6 @@
 ---
 title: Iran
-intro: No open counts or timetable. On the 2026 map, road traffic is assigned by road class and city and train counts for four corridors out of Tehran; on the 2024 map, roads follow the global road model and railways use world defaults.
+intro: No open counts or timetable. On the 2026 map, road traffic is assigned by road class and city and train counts for four corridors out of Tehran; on the 2024 map, roads follow the global road model and railways reuse these corridor estimates as a declared fallback vintage.
 ---
 
 ## Roads
@@ -27,7 +27,7 @@ Unsigned roads: a primary road 60 km/h in towns, 90 outside (cars drive 76 on a 
 
 ## Railways
 
-No open timetable. On the 2026 map, counts are assigned for four corridors out of Tehran, all other track gets 3 passenger and 5 freight trains per day, and industrial sidings 5 freight (excluded from the 2024 map, where lines use the [world railway defaults](/about/data-preparation)):
+No open timetable. Counts are assigned for four corridors out of Tehran, all other track gets 3 passenger and 5 freight trains per day, and industrial sidings 5 freight (also applied as a declared fallback vintage, +2 years, on the 2024 map):
 
 | Corridor (track within 9 km) | Passenger | Freight |
 |---|---:|---:|

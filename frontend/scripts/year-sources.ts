@@ -4,6 +4,7 @@ import { basename, join } from 'node:path'
 import { INPUT_KINDS, INTERMEDIATE_KINDS, type InputKind } from './input-kinds.ts'
 
 export interface Interval { start: string; end: string }
+export interface FallbackVintage { reason: string }
 export interface SourceInput {
   id: string
   kind: InputKind
@@ -17,6 +18,7 @@ export interface SourceInput {
   depends_on: string[]
   description: string
   conversion?: Record<string, unknown>
+  fallback_vintage?: FallbackVintage
 }
 export interface YearManifest {
   year: string
@@ -45,12 +47,23 @@ export function validatePublicManifest(manifest: YearManifest): void {
     if (!REGIONS[input.region.split(':')[0]]) throw new Error(`Unknown About region ${input.region}`)
     if (Object.values(input).some(value => typeof value === 'string' && PRIVATE_SOURCE_TEXT.test(value))) throw new Error(`Private or unpinned source text in ${input.id}`)
   }
-  const fields = ['id', 'kind', 'region', 'publisher', 'url', 'observed', 'published', 'licence', 'public_ok', 'depends_on', 'description', 'conversion']
+  const fields = ['id', 'kind', 'region', 'publisher', 'url', 'observed', 'published', 'licence', 'public_ok', 'depends_on', 'description', 'conversion', 'fallback_vintage']
   for (const input of manifest.inputs) {
     if (Object.keys(input).some(key => !fields.includes(key))) throw new Error(`Non-public field in ${input.id}`)
     if (!input.observed?.start || !input.observed.end) throw new Error(`Missing observation interval in ${input.id}`)
     if (!/^https?:\/\/[^\s]+$/.test(input.url)) throw new Error(`Invalid public URL in ${input.id}`)
     if (/latest/i.test(input.url)) throw new Error(`Moving source URL in ${input.id}`)
+    if (input.fallback_vintage !== undefined) {
+      if (typeof input.fallback_vintage !== 'object' || input.fallback_vintage === null
+        || Object.keys(input.fallback_vintage).some(key => key !== 'reason')
+        || typeof input.fallback_vintage.reason !== 'string'
+        || !input.fallback_vintage.reason.trim()) {
+        throw new Error(`Invalid fallback_vintage in ${input.id}`)
+      }
+      if (PRIVATE_SOURCE_TEXT.test(input.fallback_vintage.reason)) {
+        throw new Error(`Private or unpinned source text in ${input.id}`)
+      }
+    }
   }
 }
 export function readSourceManifests(): NamedYear[] {
@@ -72,12 +85,25 @@ function escapeMarkdown(text: string): string {
 export function observedLabel(interval: Interval): string {
   return interval.start === interval.end ? interval.end : `${interval.start} to ${interval.end}`
 }
-function inputLine(input: SourceInput): string {
+export function fallbackGapLabel(mapYear: string, interval: Interval): string {
+  const year = Number(mapYear)
+  const startGap = Number(interval.start.slice(0, 4)) - year
+  const endGap = Number(interval.end.slice(0, 4)) - year
+  const plural = (n: number) => `${n === 1 ? 'year' : 'years'}`
+  if (startGap <= 0 && endGap > 0) return `up to +${endGap} ${plural(endGap)}`
+  if (startGap === endGap) return `+${endGap} ${plural(endGap)}`
+  return `+${startGap} to +${endGap} years`
+}
+function inputLine(input: SourceInput, manifest: YearManifest): string {
   const publisher = escapeMarkdown(input.publisher)
   const url = /^https?:\/\//.test(input.url) ? input.url.replace(/\)/g, '%29').replace(/\s/g, '%20') : ''
   const label = url ? `[${publisher}](${url})` : publisher
   const publication = input.published ? ` Published ${escapeMarkdown(input.published)}.` : ' Publication date not recorded.'
-  return `- ${label} · **${escapeMarkdown(observedLabel(input.observed))}**.${publication} ${escapeMarkdown(input.description)} Licence: ${escapeMarkdown(input.licence)}.`
+  const reason = input.fallback_vintage ? escapeMarkdown(input.fallback_vintage.reason) : ''
+  const fallback = input.fallback_vintage
+    ? ` Fallback vintage (${escapeMarkdown(fallbackGapLabel(manifest.year, input.observed))} after ${escapeMarkdown(manifest.year)}): ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`
+    : ''
+  return `- ${label} · **${escapeMarkdown(observedLabel(input.observed))}**.${publication} ${escapeMarkdown(input.description)}${fallback} Licence: ${escapeMarkdown(input.licence)}.`
 }
 
 /** Only the list is generated. Method text stays on its country or region page, shared
@@ -99,7 +125,7 @@ export function renderYearSources(page: string, years: NamedYear[]): string {
       && (input.kind !== 'prepare-road-network' || !conversion || conversion.depends_on.includes(input.id)))
     const noRoadCounts = scope.length === 2 && scope !== 'AQ' && !inputs.some(selectedRoadCount)
     // public_ok governs redistribution of records, not attribution of their publisher.
-    const lines = inputs.map(inputLine)
+    const lines = inputs.map(input => inputLine(input, manifest))
     return [
       `### ${escapeMarkdown(name)}`,
       `Map state: immediately before **${manifest.as_of}**.${scope === 'world' ? ` Flows: **${manifest.flows.start} to ${manifest.flows.end}**, excluding the last day.${flowExclusions(manifest)}` : ''}`,

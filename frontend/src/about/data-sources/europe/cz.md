@@ -6,7 +6,7 @@ intro: National road census, city counts in Prague and Brno, passenger timetable
 ## Roads
 
 - Motorways and classified roads: [Road and Motorway Directorate (ŘSD)](https://scitani.rsd.cz/) national census 2020 (cars, vans, trucks, buses, motorcycles).
-- Prague: [TSK Praha](https://tsk-praha.cz/) traffic intensities 2025.
+- Prague: [TSK Praha](https://tsk-praha.cz/) traffic intensities 2025 (on the 2024 map, applied as a declared fallback vintage, +1 year, where no 2024 workbook exists).
 - Brno: [city detectors](https://data.brno.cz/datasets/intenzita-dopravy-intenzita-vozidel-vehicle-traffic-intensity)
   and the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
@@ -20,7 +20,7 @@ Unsigned roads: a primary road 50 km/h in towns, 90 outside (cars drive 76 on a 
 
 On the 2026 map, train counts are derived from the national timetable
 ([CIS JR](https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/)), one Wednesday (8 April 2026), routed along
-OpenStreetMap tracks; lines without any scheduled service default to 2 passenger and 1 freight train per day. On the 2024 map, no 2024 CIS JR archive is available, so Czech railway lines take class defaults scaled to national train-kilometres (apart from cross-border trains in neighbouring countries' 2024 timetables).
+OpenStreetMap tracks; lines without any scheduled service default to 2 passenger and 1 freight train per day. On the 2024 map, no 2024 CIS JR archive is available, so the 2025/2026 CIS JR timetable stands as a declared fallback vintage (+1 to +2 years), averaged over its own service calendar without assigning zero-service residuals to unmatched tracks (cross-border 2024 archives continue to cover neighbouring services).
 
 The public timetable is passenger-only. Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
