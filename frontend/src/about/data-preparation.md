@@ -633,7 +633,7 @@ facility that opens on or after the map cutoff is skipped before matching so it 
 nor silences an earlier mapped tenant. A site retired after the cutoff was operating at the cutoff,
 and a newer closure record cannot silence another tenant described by a different register.
 Conflicting evidence stays unknown. An undated record from a later structure register still
-classifies a matching earlier mapped footprint while leaving its historical operating state unknown
+classifies a matching earlier mapped footprint while its operation remains unknown
 (never inventing confirmation that the site was running). Names can suggest a sector but do not
 measure its sound. The registers are listed under [sources by year](/about/data-sources#sources-by-year).
 
