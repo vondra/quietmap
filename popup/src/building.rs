@@ -68,10 +68,10 @@ fn facade_at(
 /// Whether `source` at `point` (click metres) is the receiving home `footprint`'s own statistical
 /// outdoor plant and should leave that home's own façade level.
 ///
-/// A single-part building matches by `footprint.id` alone so concave or courtyard homes whose
-/// centroid lies outside their walls are still excluded. When one input record groups separate
-/// physical buildings under one id (`!footprint.single_part`), the source must also lie inside
-/// `footprint`'s exterior (and outside its courtyards) so building A's plant stays audible on B.
+/// Ownership is resolved against the currently loaded exteriors of `footprint.id` via
+/// [`Scene::footprint_owns_point`]: a single-part home matches by id alone (so concave or courtyard
+/// centroids drop), while a multi-part record assigns each point to its containing part (solid
+/// interior, then courtyard ring, else nearest exterior for slightly shifted centroids).
 pub fn is_own_home_plant(
     footprint: &Footprint,
     source: &SourceAttribute,
@@ -80,10 +80,11 @@ pub fn is_own_home_plant(
 ) -> bool {
     source.home_plant
         && source.footprint_id == footprint.id
-        && (footprint.single_part || obstacles.footprint_contains(footprint, point))
+        && obstacles.footprint_owns_point(footprint, point)
 }
 
-/// The loudest façade of `footprint` over the candidates collected so far (all layers).
+/// The loudest façade of `footprint` over the candidates collected so far (all layers; callers
+/// exclude a home's own `home_plant` beforehand).
 #[allow(clippy::too_many_arguments)]
 pub fn loudest_facade(
     footprint: &Footprint,
@@ -94,31 +95,6 @@ pub fn loudest_facade(
     obstacles: &Scene<'_>,
     weather: PlaceWeather,
 ) -> Result<Facade, String> {
-    let external: Vec<&Candidate>;
-    let candidates = if candidates.iter().any(|candidate| {
-        is_own_home_plant(
-            footprint,
-            &attributes[candidate.attribute],
-            candidate.ends_m[0],
-            obstacles,
-        )
-    }) {
-        external = candidates
-            .iter()
-            .copied()
-            .filter(|candidate| {
-                !is_own_home_plant(
-                    footprint,
-                    &attributes[candidate.attribute],
-                    candidate.ends_m[0],
-                    obstacles,
-                )
-            })
-            .collect();
-        &external[..]
-    } else {
-        candidates
-    };
     let facades = receivers
         .iter()
         .enumerate()

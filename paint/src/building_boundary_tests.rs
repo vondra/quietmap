@@ -192,21 +192,36 @@ fn multi_part_home_excludes_only_its_own_parts_plant_across_tiles() {
             serde_json::json!("residential_house"),
         ],
     };
-    // Loud home plant inside detached building A (tiles[0], x=-8000, y=0) alone.
+    // Loud home plant inside detached building A (tiles[0], x=-8000, y=0), plus an even louder
+    // own plant inside split building B (tiles[1], x=-15500, y=0 — right on B's east side):
+    // A drops A, B drops B while still hearing A identically across both tiles!
     write_tiles(
         &year,
         Kind::Sources,
-        &[(
-            tiles[0],
-            encode_sources(
-                &[Piece {
-                    ends: [[-8000, 0]; 2],
-                    attribute: 0,
-                }],
-                &[home_attr(1, 95.0)],
-                &[],
+        &[
+            (
+                tiles[0],
+                encode_sources(
+                    &[Piece {
+                        ends: [[-8000, 0]; 2],
+                        attribute: 0,
+                    }],
+                    &[home_attr(1, 95.0)],
+                    &[],
+                ),
             ),
-        )],
+            (
+                tiles[1],
+                encode_sources(
+                    &[Piece {
+                        ends: [[-15_500, 0]; 2],
+                        attribute: 0,
+                    }],
+                    &[home_attr(2, 102.0)],
+                    &[],
+                ),
+            ),
+        ],
     )
     .unwrap();
     let release = Release::open(root.path(), "2026").unwrap();
@@ -229,12 +244,22 @@ fn multi_part_home_excludes_only_its_own_parts_plant_across_tiles() {
     let outdoor_beside_a = 32 * grid.pixels + 19;
     let left_b = 32 * grid.pixels + grid.pixels - 1;
     let right_b = 32 * grid.pixels;
-    // Detached A excludes its own plant (no other source exists -> SILENCE = 254).
-    assert_eq!(painted[0].lden[detached][bldg], crate::levels::SILENCE);
-    // Outdoor pixel beside A hears A's plant loud and clear.
+    let outdoor_east_of_b = 32 * grid.pixels + 4;
+    // Detached A excludes its own plant (still hears B's distant plant, much quieter than A's own).
+    assert!(painted[0].lden[detached][bldg] < crate::levels::SILENCE);
     assert!(painted[0].lden[outdoor_beside_a][bldg] < crate::levels::SILENCE);
-    // Split building B (sharing footprint_id 7!) still hears A's plant identically on both tiles.
+    assert!(
+        painted[0].lden[outdoor_beside_a][bldg] > painted[0].lden[detached][bldg] + 10,
+        "outdoor pixel beside A must hear A's own plant far louder than A's facade hears distant B"
+    );
+    // Split building B excludes its own 102 dB east plant (so B's pixels are far quieter than the
+    // outdoor pixel just east of B) while still hearing A's plant identically on both tiles.
     assert!(painted[0].lden[left_b][bldg] < crate::levels::SILENCE);
+    assert!(painted[1].lden[outdoor_east_of_b][bldg] < crate::levels::SILENCE);
+    assert!(
+        painted[1].lden[outdoor_east_of_b][bldg] > painted[1].lden[right_b][bldg] + 10,
+        "split B must drop its own 102 dB plant while the outdoor pixel east of B still hears it"
+    );
     assert_eq!(painted[0].lden[left_b], painted[1].lden[right_b]);
     assert_eq!(painted[0].nden[left_b], painted[1].nden[right_b]);
 }

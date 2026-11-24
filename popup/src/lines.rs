@@ -110,6 +110,7 @@ fn group_pieces(
     let mut group = vec![u16::MAX; sources.attribute_count()];
     let mut check_part = vec![false; sources.attribute_count()];
     let mut any = false;
+    let mut any_check = false;
     for (index, position) in group.iter_mut().enumerate() {
         let key = sources
             .group_key(index as u32)
@@ -129,10 +130,8 @@ fn group_pieces(
                         .map_err(|error| error.to_string())?
                         .is_some_and(is_home_building_type);
                 if own_home {
-                    if footprint.single_part {
-                        continue;
-                    }
                     check_part[index] = true;
+                    any_check = true;
                 }
             }
             *position = sorted[at].1;
@@ -142,6 +141,12 @@ fn group_pieces(
     if !any {
         return Ok(Vec::new());
     }
+    let parts = any_check
+        .then(|| {
+            excluded_home
+                .map(|(footprint, obstacles)| obstacles.building_parts(footprint.id).into_vec())
+        })
+        .flatten();
     let mut pieces = Vec::new();
     for index in 0..sources.piece_count() {
         let piece = sources.piece(index).map_err(|error| error.to_string())?;
@@ -150,9 +155,10 @@ fn group_pieces(
             let ends = piece.ends.map(|local| tile.global(local));
             if check_part[piece.attribute as usize]
                 && let Some((footprint, obstacles)) = excluded_home
+                && let Some(parts) = parts.as_deref()
             {
                 let point = frame.metres_of_steps([ends[0].x as f64, ends[0].y as f64]);
-                if obstacles.footprint_contains(footprint, point) {
+                if obstacles.footprint_owns_point_among(parts, footprint, point) {
                     continue;
                 }
             }

@@ -14,14 +14,18 @@ pub(crate) fn choose(
 ) -> Result<Point, String> {
     // The first canonical receiver gives both squares the same weather for the ranking.
     let (lat, lon) = square.frame.to_mercator(receivers[0].position).to_degrees();
+    let excluded = excluded_sources.as_deref();
     let candidates: Vec<_> = square
         .candidates
         .iter()
-        .filter(|candidate| {
-            receivers
-                .iter()
-                .any(|receiver| candidate.distance_from(receiver.position) <= GROUND_REACH_M)
+        .enumerate()
+        .filter(|&(index, candidate)| {
+            excluded.is_none_or(|list| list.binary_search(&(index as u32)).is_err())
+                && receivers
+                    .iter()
+                    .any(|receiver| candidate.distance_from(receiver.position) <= GROUND_REACH_M)
         })
+        .map(|(_, candidate)| candidate)
         .collect();
     let facade = popup::building::loudest_facade(
         building,

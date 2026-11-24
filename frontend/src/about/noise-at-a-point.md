@@ -200,7 +200,8 @@ The façade point loudest by Lden from the 100 pieces of ground sources with the
 the building (flights do not choose it), among receivers placed as
 <abbr title="Common Noise Assessment Methods in Europe, the EU's method for road, railway and industrial noise">CNOSSOS-EU</abbr>
 places them: every 5 m or less along each façade, 0.1 m in front of the wall and 4 m up, the
-façade's own reflection and a home's own modelled plant left out.
+façade's own reflection left out. Quiet Map also leaves a home's own modelled heat-pump and
+air-conditioning plant out when ranking and evaluating its façades.
 
 Sources are ranked first by a cheap ceiling that omits air absorption. A source is skipped only
 when its ceiling falls below the hundredth full bound at the façades; equal bounds keep their

@@ -44,7 +44,6 @@ fn a_building_reads_its_loudest_facade() {
             id: 7,
             height_m: 10.0,
             envelope: tiles::obstacles::EnvelopeClass::Residential,
-            single_part: true,
             rings: Vec::new(),
         },
         pixels,
@@ -451,4 +450,146 @@ fn home_pixels_match_a_tile_with_own_home_plant_removed_and_pick_the_road_wall()
         out_without[Layer::Building as usize],
         crate::levels::SILENCE
     );
+}
+
+/// A large multi-cell home spanning beyond a façade block's 3x3 neighbourhood (where a distant own
+/// cell would otherwise remain in `left_out`) with a non-zero `exclusion_radius_m` next to a shop
+/// matches deleting the home's own sources: no distant cell leaks back via `left_out`, and
+/// pre-ranking with `OwnSources::free_field_at_pixel` does not over-subtract and erase the shop.
+#[test]
+fn large_multi_cell_home_does_not_leak_via_left_out_or_over_subtract_neighbour_in_prerank() {
+    use crate::paint::paint_pixels;
+    use tiles::obstacles::{EnvelopeClass, Outline, OutlineKind, encode as encode_obstacles};
+
+    let tile = TileId { x: 2212, y: 1387 };
+    let grid = Grid {
+        pixels: 64,
+        block: 4,
+        hum_spacing: 16,
+    };
+    let weather_bytes = encode_weather(&vec![
+        WeatherNode {
+            percent: [[50u8; SECTORS]; PERIODS],
+            ..WeatherNode::default()
+        };
+        ROWS * COLUMNS
+    ]);
+    let weather = WeatherTable::parse(&weather_bytes).unwrap();
+    // On a 64x64 grid with block=4, 1 block = 2048 steps (~385 m). A building spanning x in
+    // [-10_000, +10_000] covers ~10 blocks horizontally, so cells at +9_500 lie outside the 3x3
+    // block neighbourhood of the west façade at -10_000!
+    let outline = Outline {
+        footprint_id: 77,
+        kind: OutlineKind::Exterior,
+        envelope: EnvelopeClass::Residential,
+        height_m: 14.0,
+        vertices: vec![
+            [-10_000, -600],
+            [10_000, -600],
+            [10_000, 600],
+            [-10_000, 600],
+            [-10_000, -600],
+        ],
+    };
+    // Neighbouring shop just west of the west façade (-10_800, 0).
+    let shop = Attribute {
+        layer: Layer::Building,
+        height_m: 4.0,
+        ground_percent: 50,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 0.0,
+        footprint_id: 78,
+        group_key: 1,
+        emission: [[74.0; BANDS]; PERIODS],
+        display: vec![
+            serde_json::json!("corner shop"),
+            serde_json::json!("food_retail"),
+        ],
+    };
+    // Home's own multi-cell plant with large exclusion_radius_m (20 m) and two cells: one near the
+    // west façade and one far east (+9_500, >3 blocks away, loud at corners yet under 25 dB).
+    let own_near = Attribute {
+        layer: Layer::Building,
+        height_m: 4.0,
+        ground_percent: 50,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 20.0,
+        footprint_id: 77,
+        group_key: 2,
+        emission: [[84.0; BANDS]; PERIODS],
+        display: vec![
+            serde_json::json!(""),
+            serde_json::json!("residential_multi"),
+        ],
+    };
+    let own_far = Attribute {
+        layer: Layer::Building,
+        height_m: 4.0,
+        ground_percent: 50,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 20.0,
+        footprint_id: 77,
+        group_key: 2,
+        emission: [[92.0; BANDS]; PERIODS],
+        display: vec![
+            serde_json::json!(""),
+            serde_json::json!("residential_multi"),
+        ],
+    };
+    let shop_piece = Piece {
+        ends: [[-10_800, 0]; 2],
+        attribute: 0,
+    };
+    let near_piece = Piece {
+        ends: [[-9_500, 0]; 2],
+        attribute: 1,
+    };
+    let far_piece = Piece {
+        ends: [[9_500, 0]; 2],
+        attribute: 2,
+    };
+
+    let paint_case = |include_own: bool| {
+        let root = tempfile::tempdir().unwrap();
+        let year = root.path().join("2026");
+        std::fs::create_dir(&year).unwrap();
+        std::fs::write(year.join("weather"), &weather_bytes).unwrap();
+        tiles::mark_year_complete(&year, br#"{"year":"2026","as_of":"2027-01-01"}"#, "test")
+            .unwrap();
+        write_tiles(
+            &year,
+            Kind::Obstacles,
+            &[(tile, encode_obstacles(std::slice::from_ref(&outline)))],
+        )
+        .unwrap();
+        let sources = if include_own {
+            encode_sources(
+                &[shop_piece, near_piece, far_piece],
+                &[shop.clone(), own_near.clone(), own_far.clone()],
+                &[],
+            )
+        } else {
+            encode_sources(&[shop_piece], std::slice::from_ref(&shop), &[])
+        };
+        write_tiles(&year, Kind::Sources, &[(tile, sources)]).unwrap();
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let corners = corners_of(&square, grid, None).unwrap().unwrap();
+        let painted = paint_pixels(&square, grid, None, corners).unwrap();
+        let indoor_at = 32 * grid.pixels + 32;
+        (painted.lden[indoor_at], painted.nden[indoor_at])
+    };
+
+    let (with_lden, with_nden) = paint_case(true);
+    let (without_lden, without_nden) = paint_case(false);
+    assert_eq!(
+        with_lden, without_lden,
+        "large multi-cell home Lden drifted"
+    );
+    assert_eq!(
+        with_nden, without_nden,
+        "large multi-cell home Nden drifted"
+    );
+    assert!(with_lden[Layer::Building as usize] < crate::levels::SILENCE);
 }

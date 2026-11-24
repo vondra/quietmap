@@ -13,7 +13,6 @@ use physics::bound::{ReceiverBound, Spread, received_energy_bound, receiver_boun
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::weather::{PlaceWeather, WeatherTable};
 use popup::aircraft::rolls::{HeardPath, prepare as prepare_rolls};
-use popup::building::is_own_home_plant;
 use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect, loud};
 use popup::obstacles::{Footprint, Scene};
 use popup::release::{Release, RingFiles};
@@ -279,19 +278,18 @@ impl<'a> Square<'a> {
     }
 
     /// Sorted candidate indices of `footprint`'s own statistical home-plant sources to leave out
-    /// at `footprint`'s façades (`popup::building::is_own_home_plant`).
+    /// at `footprint`'s façades (same part-ownership rule as `popup::building::is_own_home_plant`).
     pub fn own_home_plant_candidates(&self, footprint: &Footprint) -> Option<Arc<[u32]>> {
         let candidates = self.home_plant_by_footprint.get(&footprint.id)?;
+        let parts = self.obstacles.building_parts(footprint.id).into_vec();
         let excluded: Vec<u32> = candidates
             .iter()
             .copied()
             .filter(|&index| {
-                let candidate = &self.candidates[index as usize];
-                is_own_home_plant(
+                self.obstacles.footprint_owns_point_among(
+                    &parts,
                     footprint,
-                    &self.attributes[candidate.attribute],
-                    candidate.ends_m[0],
-                    &self.obstacles,
+                    self.candidates[index as usize].ends_m[0],
                 )
             })
             .collect();

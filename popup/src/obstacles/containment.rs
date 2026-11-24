@@ -9,9 +9,6 @@ pub struct Footprint {
     pub id: u64,
     pub height_m: f64,
     pub envelope: EnvelopeClass,
-    /// Whether this record has only one physical exterior building (so its own home-plant source
-    /// matches by `id` even when a concave or courtyard home's centroid lies outside its walls).
-    pub single_part: bool,
     /// This building's closed exterior followed by its courtyards.
     pub rings: Vec<FootprintRing>,
 }
@@ -222,7 +219,6 @@ impl<'a> Scene<'a> {
                     id: winner.footprint_id,
                     height_m: winner.height_m,
                     envelope: winner.envelope,
-                    single_part: false,
                     rings: Vec::new(),
                 }),
         };

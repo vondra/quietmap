@@ -438,3 +438,186 @@ fn multi_part_home_excludes_only_its_own_part_and_courtyard_home_still_excludes_
 
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Multi-part home edge cases:
+/// 1) A shifted `emission_centroid` 0.3 m outside part A of a multi-part record (`id = 12`, parts
+///    A and B) belongs to nearest part A (excluded on A, kept on B, `whole_lines` matches).
+/// 2) A courtyard centroid in part A's hole of a multi-part record (`id = 13`, courtyard A and
+///    detached B) belongs to A (excluded on A, kept on B).
+/// 3) A sibling exterior of the same `footprint_id` (`id = 14`) first loaded in ring 2 keeps its
+///    own plant audible on the ring-0 building instead of being dropped by ring-1 state.
+#[test]
+fn multi_part_shifted_centroid_courtyard_and_ring2_sibling_resolve_part_ownership() {
+    let root = release_root("multipart-edges");
+    let ring2_tile = TileId {
+        x: TILE.x + 2,
+        y: TILE.y,
+    };
+    // Center tile outlines:
+    // id = 12: part A [-36..-24, -6..6] and part B [24..36, -6..6]
+    // id = 13: courtyard part A [-12..12, 48..72] (hole [-6..6, 54..66]) and part B [30..42, 54..66]
+    // id = 14: part A [-6..6, -66..-54] in center tile; sibling part B in ring2_tile!
+    let center_outlines = vec![
+        Outline {
+            footprint_id: 12,
+            kind: OutlineKind::Exterior,
+            envelope: EnvelopeClass::Residential,
+            height_m: 8.0,
+            vertices: box_ring(-30.0, 0.0, 6.0, 6.0),
+        },
+        Outline {
+            footprint_id: 12,
+            kind: OutlineKind::Exterior,
+            envelope: EnvelopeClass::Residential,
+            height_m: 8.0,
+            vertices: box_ring(30.0, 0.0, 6.0, 6.0),
+        },
+        Outline {
+            footprint_id: 13,
+            kind: OutlineKind::Exterior,
+            envelope: EnvelopeClass::Residential,
+            height_m: 10.0,
+            vertices: box_ring(0.0, 60.0, 12.0, 12.0),
+        },
+        Outline {
+            footprint_id: 13,
+            kind: OutlineKind::Hole,
+            envelope: EnvelopeClass::Residential,
+            height_m: 10.0,
+            vertices: box_ring(0.0, 60.0, 6.0, 6.0),
+        },
+        Outline {
+            footprint_id: 13,
+            kind: OutlineKind::Exterior,
+            envelope: EnvelopeClass::Residential,
+            height_m: 8.0,
+            vertices: box_ring(36.0, 60.0, 6.0, 6.0),
+        },
+        Outline {
+            footprint_id: 14,
+            kind: OutlineKind::Exterior,
+            envelope: EnvelopeClass::Residential,
+            height_m: 8.0,
+            vertices: box_ring(0.0, -60.0, 6.0, 6.0),
+        },
+    ];
+    let ring2_outlines = vec![Outline {
+        footprint_id: 14,
+        kind: OutlineKind::Exterior,
+        envelope: EnvelopeClass::Residential,
+        height_m: 8.0,
+        vertices: box_ring(-15_000.0 / steps_per_metre(), 0.0, 6.0, 6.0),
+    }];
+    write_tiles(
+        &root.join("2026"),
+        Kind::Obstacles,
+        &[
+            (TILE, encode_obstacles(&center_outlines)),
+            (ring2_tile, encode_obstacles(&ring2_outlines)),
+        ],
+    )
+    .unwrap();
+
+    // Sources:
+    // 401 (id 12): shifted 0.3 m outside part A's west wall (-36.3, 0) + normal piece inside B (30, 0).
+    // 402 (id 13): courtyard centroid of part A at (0, 60) inside A's hole.
+    // 403 (id 14, center): own plant inside part A at (0, -60).
+    // 404 (id 14, ring 2): sibling plant inside ring-2 part B at (-15_000 steps, 0).
+    let center_attrs = vec![
+        building_attr(12, 401, "residential_house", 76.0),
+        building_attr(13, 402, "residential_house", 78.0),
+        building_attr(14, 403, "residential_house", 75.0),
+    ];
+    let center_pieces = vec![
+        Piece {
+            ends: [[step(-36.3), 0]; 2],
+            attribute: 0,
+        },
+        Piece {
+            ends: [[step(30.0), 0]; 2],
+            attribute: 0,
+        },
+        Piece {
+            ends: [[0, step(60.0)]; 2],
+            attribute: 1,
+        },
+        Piece {
+            ends: [[0, step(-60.0)]; 2],
+            attribute: 2,
+        },
+    ];
+    let ring2_attrs = [building_attr(14, 404, "residential_house", 112.0)];
+    let ring2_pieces = [Piece {
+        ends: [[-15_000, 0]; 2],
+        attribute: 0,
+    }];
+    write_tiles(
+        &root.join("2026"),
+        Kind::Sources,
+        &[
+            (TILE, encode(&center_pieces, &center_attrs, &[])),
+            (ring2_tile, encode(&ring2_pieces, &ring2_attrs, &[])),
+        ],
+    )
+    .unwrap();
+    tiles::mark_year_complete(
+        &root.join("2026"),
+        br#"{"year":"2026","as_of":"2026-10-31"}"#,
+        "test",
+    )
+    .unwrap();
+
+    let release = Release::open(&root, "2026").unwrap();
+
+    // 1) Shifted centroid outside A: A drops A's shifted piece (keeps only B's 1 piece); B keeps A's
+    // shifted piece and drops B's own piece (1 piece highlighted in both directions!).
+    let in_12_a = click_at(&release, -30.0, 0.0);
+    let lines_401_a = in_12_a
+        .part_lines
+        .iter()
+        .find(|&&(k, _)| k == 401)
+        .map(|&(_, n)| n)
+        .unwrap_or(0);
+    assert_eq!(
+        lines_401_a, 1,
+        "part A must exclude its shifted centroid and highlight only B"
+    );
+    let in_12_b = click_at(&release, 30.0, 0.0);
+    let lines_401_b = in_12_b
+        .part_lines
+        .iter()
+        .find(|&&(k, _)| k == 401)
+        .map(|&(_, n)| n)
+        .unwrap_or(0);
+    assert_eq!(
+        lines_401_b, 1,
+        "part B must exclude B and keep A's shifted centroid"
+    );
+
+    // 2) Multi-part courtyard: click inside A's north wing (0, -51 m -> +51 steps south in tile)
+    // drops 402; click inside detached B (36, -60 m) keeps 402.
+    let in_13_a = click_at(&release, 0.0, -51.0);
+    assert!(
+        !in_13_a.contributor_keys.contains(&402),
+        "multi-part courtyard part A must exclude its own courtyard centroid"
+    );
+    let in_13_b = click_at(&release, 36.0, -60.0);
+    assert!(
+        in_13_b.contributor_keys.contains(&402),
+        "detached sibling part B must still hear part A's courtyard centroid"
+    );
+
+    // 3) Ring-2 sibling exterior (id 14): click inside center part A (0, +60 m north -> -60 steps)
+    // drops center own plant 403 while keeping ring-2 sibling 404!
+    let in_14_a = click_at(&release, 0.0, 60.0);
+    assert!(
+        !in_14_a.contributor_keys.contains(&403),
+        "center part A must exclude its own plant 403"
+    );
+    assert!(
+        in_14_a.contributor_keys.contains(&404),
+        "ring-2 sibling exterior must keep its plant 404 audible on center part A"
+    );
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
