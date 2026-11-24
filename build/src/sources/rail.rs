@@ -6,12 +6,12 @@ use super::rail_traffic::{column, run_trains};
 use super::tent::{FreightNetwork, Tier};
 use super::{Converted, fields, group_key, split_at_tile_edges};
 use crate::dev4::{Dev4, Square, Table, require_stamp, z30_corner_mercator_m, z30_to_global};
+use crate::railways::freight_eligibility::{table_freight_eligibility, utf8_value};
 use crate::source_tables::SourceTables;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Int32Type, Int64Type, UInt8Type, UInt16Type};
 use physics::bands::{BANDS, PERIOD_HOURS, PERIODS};
 use physics::emission::rail::{FreightRegion, RailType, line_emission_db};
-use std::collections::HashMap;
 use tiles::sources::{Attribute, GUESSED_TRAIN_SOURCES, Layer};
 
 /// Source height above the terrain: the wheel-rail contact (CNOSSOS-EU), a locomotive horn.
@@ -23,14 +23,6 @@ const RAIL_PLATFORM_HALF_WIDTH_M: f64 = 2.5;
 /// km-weighted median posted speed of the world's high-speed rows (111,860 km of dev4's 2026 rows,
 /// 250; 300 put Bangkok's Airport Rail Link, run at 160, 9 dB loud; evidence 2026-11-12, data-1).
 const HIGH_SPEED_DEFAULT_KMH: f64 = 250.0;
-/// A line run this fast or faster is built for high speed (the EU's category I, specially built
-/// lines "equipped for speeds generally equal to or greater than 250 km/h", Directive 96/48/EC):
-/// such lines carry passengers only unless mapped otherwise. dev4 gave its freight prior to every
-/// line not mapped passenger-only: the Shinkansen took 10 freight trains a day a track, 6.67 of them
-/// at night, on standard gauge no freight wagon of Japan's runs on.
-const HIGH_SPEED_LINE_KMH: f64 = 250.0;
-/// dev4's `traffic_mode` codes of OpenStreetMap's `railway:traffic_mode`: freight and mixed.
-const MAPPED_FREIGHT_MODES: [u8; 2] = [2, 3];
 fn usage_name(usage: u8) -> &'static str {
     match usage {
         0 => "main",
@@ -39,96 +31,6 @@ fn usage_name(usage: u8) -> &'static str {
         4 => "tourism",
         _ => "untagged",
     }
-}
-
-/// Whether a line run at `speed_kmh` takes guessed freight: below high speed, or mapped as carrying
-/// freight (`traffic_mode`).
-fn takes_guessed_freight(speed_kmh: f64, traffic_mode: u8) -> bool {
-    speed_kmh < HIGH_SPEED_LINE_KMH || MAPPED_FREIGHT_MODES.contains(&traffic_mode)
-}
-
-/// Whether each row of a square's railways, in table order, takes guessed freight
-/// ([`takes_guessed_freight`]) at the speed its line is built for: the row's posted speed or its
-/// high-speed line's, the higher, never the default (a Shinkansen's station approach is posted 120 on
-/// a line run at 285; `line_speeds` from [`high_speed_line_speeds`]). The emitter zeroes the others'
-/// guessed freight and the national fit leaves it out, so the fitted factors bring the emitted
-/// freight to the national train-km.
-pub(super) fn guessed_freight_rows(
-    table: &Table,
-    line_speeds: &HashMap<(String, String), f64>,
-) -> Result<Vec<bool>, String> {
-    let mut rows = Vec::new();
-    for batch in &table.batches {
-        let maxspeed = column(batch, "maxspeed")?.as_primitive::<UInt16Type>();
-        let traffic_mode = column(batch, "traffic_mode")?.as_primitive::<UInt8Type>();
-        let high_speed = column(batch, "highspeed")?.as_boolean();
-        let (names, refs) = (
-            column(batch, "name")?.as_string::<i32>(),
-            column(batch, "ref")?.as_string::<i32>(),
-        );
-        for row in 0..batch.num_rows() {
-            let line = (high_speed.value(row))
-                .then(|| {
-                    line_speeds.get(&(names.value(row).to_string(), refs.value(row).to_string()))
-                })
-                .flatten();
-            let built_for = line
-                .copied()
-                .unwrap_or(0.0)
-                .max(f64::from(maxspeed.value(row)));
-            rows.push(takes_guessed_freight(built_for, traffic_mode.value(row)));
-        }
-    }
-    Ok(rows)
-}
-
-/// The posted speed of each named high-speed line in the square, `(name, ref)` to the km-weighted
-/// median of its high-speed rows that post one: a row of the line that posts none runs at it.
-pub(super) fn high_speed_line_speeds(
-    table: &Table,
-) -> Result<HashMap<(String, String), f64>, String> {
-    let mut posted: HashMap<(String, String), Vec<(f64, f64)>> = HashMap::new();
-    for batch in &table.batches {
-        let i32s = |name| column(batch, name).map(|a| a.as_primitive::<Int32Type>());
-        let ends = [
-            (i32s("start_gx")?, i32s("start_gy")?),
-            (i32s("end_gx")?, i32s("end_gy")?),
-        ];
-        let maxspeed = column(batch, "maxspeed")?.as_primitive::<UInt16Type>();
-        let high_speed = column(batch, "highspeed")?.as_boolean();
-        let (names, refs) = (
-            column(batch, "name")?.as_string::<i32>(),
-            column(batch, "ref")?.as_string::<i32>(),
-        );
-        for row in 0..batch.num_rows() {
-            let (name, reference) = (names.value(row), refs.value(row));
-            if !high_speed.value(row) || maxspeed.value(row) == 0 || (name, reference) == ("", "") {
-                continue;
-            }
-            let line = (name.to_string(), reference.to_string());
-            let [a, b] = ends.map(|(x, y)| z30_corner_mercator_m(x.value(row), y.value(row)));
-            posted.entry(line).or_default().push((
-                f64::from(maxspeed.value(row)),
-                (a[0] - b[0]).hypot(a[1] - b[1]),
-            ));
-        }
-    }
-    Ok(posted
-        .into_iter()
-        .map(|(line, mut speeds)| {
-            speeds.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let half = speeds.iter().map(|(_, length)| length).sum::<f64>() / 2.0;
-            let mut length = 0.0;
-            let median = speeds
-                .iter()
-                .find(|(_, row_length)| {
-                    length += row_length;
-                    length >= half
-                })
-                .map_or(speeds[0].0, |(speed, _)| *speed);
-            (line, median)
-        })
-        .collect())
 }
 
 /// Converts the rail rows of one dev4 square, a row on a bridge on its deck from `decks`; returns
@@ -143,9 +45,8 @@ pub fn convert(
         return Ok(0);
     };
     require_rail_stamps(&table)?;
-    let run = run_trains(&table)?;
-    let line_speeds = high_speed_line_speeds(&table)?;
-    let takes_freight = guessed_freight_rows(&table, &line_speeds)?;
+    let eligibility = table_freight_eligibility(&table.batches)?;
+    let run = run_trains(&table, &eligibility.takes_freight)?;
     let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {
@@ -173,11 +74,14 @@ pub fn convert(
         );
         let osm_id = column(batch, "osm_id")?.as_primitive::<Int64Type>();
         for row in 0..batch.num_rows() {
-            let trains = run[batch_first_row + row];
+            let row_index = batch_first_row + row;
+            let trains = run[row_index];
             let [passenger_source, freight_source] = trains.source;
             let kind = RailType::from_code(rail_type.value(row));
             let iso = country.value(row).to_le_bytes();
             let tier = if kind == RailType::Rail
+                && GUESSED_TRAIN_SOURCES.contains(&freight_source)
+                && trains.freight.iter().sum::<f64>() > 0.0
                 && tables
                     .train_scales
                     .get(iso)
@@ -201,15 +105,11 @@ pub fn convert(
             } else {
                 FreightRegion::World
             };
-            let (passenger_trains, mut freight_trains, mut calendar_estimated_shares) =
+            let (passenger_trains, freight_trains, calendar_estimated_shares) =
                 trains.scaled(tables, kind, iso, tier, region);
-            let (name, reference) = (names.value(row), refs.value(row));
+            let (name, reference) = (utf8_value(names, row), utf8_value(refs, row));
             let posted = (maxspeed.value(row) > 0).then(|| f64::from(maxspeed.value(row)));
-            let line_speed = high_speed
-                .value(row)
-                .then(|| line_speeds.get(&(name.to_string(), reference.to_string())))
-                .flatten()
-                .copied();
+            let line_speed = eligibility.line_speed[row_index];
             let (speed, speed_source) = match (posted, line_speed) {
                 (Some(posted), _) => (posted, "osm_posted"),
                 (None, Some(line)) => (line, "high_speed_line"),
@@ -218,14 +118,6 @@ pub fn convert(
                 }
                 (None, None) => (kind.default_speed_kmh(), "default_by_type"),
             };
-            // A line built for high speed takes no guessed freight unless it is mapped as carrying
-            // freight (Germany's mixed lines are: Hannover-Würzburg, Mannheim-Stuttgart).
-            if GUESSED_TRAIN_SOURCES.contains(&freight_source)
-                && !takes_freight[batch_first_row + row]
-            {
-                freight_trains = [0.0; PERIODS];
-                calendar_estimated_shares[1] = 0.0;
-            }
             if tunnel.value(row)
                 || kind == RailType::Preserved
                 || passenger_trains
@@ -354,82 +246,193 @@ mod tests {
         assert_eq!(display_trains(0.0), 0.0);
     }
 
-    /// The Tokaido Shinkansen (285 km/h, no traffic mode mapped) takes no guessed freight, a German
-    /// line mapped mixed at 280 km/h does, as does any line under 250 km/h.
+    /// A passenger-only row joined to a longer row with guessed freight emits zero freight with
+    /// normalized provenance (`status = 2`, `source = 0`, `cal_est = 0`) while keeping the run's
+    /// passenger trains; observed freight on a passenger-only row is kept intact.
     #[test]
-    fn high_speed_lines_take_guessed_freight_only_where_mapped() {
-        assert!(!takes_guessed_freight(285.0, 0));
-        assert!(!takes_guessed_freight(250.0, 1));
-        assert!(takes_guessed_freight(280.0, 3));
-        assert!(takes_guessed_freight(280.0, 2));
-        assert!(takes_guessed_freight(160.0, 0));
-    }
-
-    /// The rows the emitter and the national fit both take guessed freight on: an ordinary line; not
-    /// a high-speed line posted 300, nor its short station approach posted 120, nor its piece that
-    /// posts nothing (each runs at its line's km-weighted 300); a high-speed line mapped mixed; a
-    /// high-speed piece of no named line (its 250 is a default, not a speed it was built for).
-    #[test]
-    fn the_fit_and_the_emitter_share_which_rows_take_guessed_freight() {
+    fn convert_normalizes_suppressed_guessed_freight_and_keeps_observed_freight() {
         use arrow_array::{
-            BooleanArray, Int32Array, RecordBatch, StringArray, UInt8Array, UInt16Array,
+            ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
+            RecordBatch, StringArray, UInt8Array, UInt16Array,
         };
+        use arrow_ipc::writer::FileWriter;
+        use arrow_schema::Schema;
+        use serde_json::json;
         use std::sync::Arc;
-        let rows = [
-            (160, false, "", 0, 900),
-            (300, true, "LGV", 0, 900),
-            (120, true, "LGV", 0, 100),
-            (0, true, "LGV", 0, 900),
-            (280, true, "Mixed", 3, 900),
-            (0, true, "", 0, 900),
-        ];
-        let x: Vec<i32> = (0..rows.len() as i32).map(|i| i * 1000).collect();
+
+        let dir = tempfile::tempdir().unwrap();
+        let square = Square { x: 256, y: 256 };
+        let sq_dir = dir.path().join("z9/256/256");
+        std::fs::create_dir_all(&sq_dir).unwrap();
+
+        let (x0, y0) = crate::osm::geometry::lonlat_to_grid(0.1, -0.1);
+        let (x1, y1) = crate::osm::geometry::lonlat_to_grid(0.1005, -0.1);
+        let (x2, y2) = crate::osm::geometry::lonlat_to_grid(0.103, -0.1);
+        let (ox0, oy0) = crate::osm::geometry::lonlat_to_grid(0.2, -0.2);
+        let (ox1, oy1) = crate::osm::geometry::lonlat_to_grid(0.201, -0.2);
+
         let batch = RecordBatch::try_from_iter([
-            ("start_gx", Arc::new(Int32Array::from(x.clone())) as _),
             (
-                "start_gy",
-                Arc::new(Int32Array::from(vec![0; rows.len()])) as _,
+                "osm_id",
+                Arc::new(Int64Array::from(vec![10, 11, 12])) as ArrayRef,
             ),
+            ("start_gx", Arc::new(Int32Array::from(vec![x0, x1, ox0]))),
+            ("start_gy", Arc::new(Int32Array::from(vec![y0, y1, oy0]))),
+            ("end_gx", Arc::new(Int32Array::from(vec![x1, x2, ox1]))),
+            ("end_gy", Arc::new(Int32Array::from(vec![y1, y2, oy1]))),
             (
-                "end_gx",
-                Arc::new(Int32Array::from(
-                    x.iter().zip(rows).map(|(x, r)| x + r.4).collect::<Vec<_>>(),
-                )) as _,
+                "length_m",
+                Arc::new(Float32Array::from(vec![55.0, 280.0, 110.0])),
             ),
+            ("rail_type", Arc::new(UInt8Array::from(vec![0, 0, 0]))),
+            ("usage", Arc::new(UInt8Array::from(vec![0, 0, 0]))),
+            ("maxspeed", Arc::new(UInt16Array::from(vec![160, 160, 160]))),
             (
-                "end_gy",
-                Arc::new(Int32Array::from(vec![0; rows.len()])) as _,
+                "country_iso",
+                Arc::new(UInt16Array::from(vec![u16::from_le_bytes(*b"TR"); 3])),
             ),
-            (
-                "maxspeed",
-                Arc::new(UInt16Array::from_iter_values(rows.map(|r| r.0))) as _,
-            ),
-            (
-                "highspeed",
-                Arc::new(BooleanArray::from(rows.map(|r| r.1).to_vec())) as _,
-            ),
+            ("tunnel", Arc::new(BooleanArray::from(vec![false; 3]))),
+            ("bridge", Arc::new(BooleanArray::from(vec![false; 3]))),
+            ("highspeed", Arc::new(BooleanArray::from(vec![false; 3]))),
             (
                 "name",
-                Arc::new(StringArray::from(rows.map(|r| r.2).to_vec())) as _,
+                Arc::new(StringArray::from(vec![
+                    Some("PaxOnly"),
+                    Some("Ordinary"),
+                    Some("ObservedMode1"),
+                ])),
             ),
             (
                 "ref",
-                Arc::new(StringArray::from(vec![""; rows.len()])) as _,
+                Arc::new(StringArray::from(vec![None::<&str>, Some("R1"), None])),
+            ),
+            ("traffic_mode", Arc::new(UInt8Array::from(vec![1, 0, 1]))),
+            (
+                "passenger_status",
+                Arc::new(UInt8Array::from(vec![1, 1, 1])),
+            ),
+            ("freight_status", Arc::new(UInt8Array::from(vec![2, 1, 1]))),
+            (
+                "passenger_source_id",
+                Arc::new(UInt16Array::from(vec![100, 100, 100])),
             ),
             (
-                "traffic_mode",
-                Arc::new(UInt8Array::from_iter_values(rows.map(|r| r.3))) as _,
+                "freight_source_id",
+                Arc::new(UInt16Array::from(vec![0, 9793, 111])),
+            ),
+            (
+                "trains_passenger_day",
+                Arc::new(Float64Array::from(vec![20.0, 50.0, 30.0])),
+            ),
+            (
+                "trains_passenger_evening",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
+            ),
+            (
+                "trains_passenger_night",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
+            ),
+            (
+                "trains_freight_day",
+                Arc::new(Float64Array::from(vec![0.0, 10.0, 12.0])),
+            ),
+            (
+                "trains_freight_evening",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
+            ),
+            (
+                "trains_freight_night",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
+            ),
+            (
+                "passenger_missing_calendar_estimate_day",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
+            ),
+            (
+                "passenger_missing_calendar_estimate_evening",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
+            ),
+            (
+                "passenger_missing_calendar_estimate_night",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
+            ),
+            (
+                "freight_missing_calendar_estimate_day",
+                Arc::new(Float64Array::from(vec![0.0, 4.0, 3.0])),
+            ),
+            (
+                "freight_missing_calendar_estimate_evening",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
+            ),
+            (
+                "freight_missing_calendar_estimate_night",
+                Arc::new(Float64Array::from(vec![0.0; 3])),
             ),
         ])
         .unwrap();
-        let table = Table {
-            metadata: HashMap::new(),
-            batches: vec![batch],
-        };
-        let line_speeds = high_speed_line_speeds(&table).unwrap();
-        assert_eq!(
-            guessed_freight_rows(&table, &line_speeds).unwrap(),
-            [true, false, false, false, true, true]
+        let schema = Schema::new_with_metadata(
+            batch.schema().fields().clone(),
+            [
+                ("grid", "z30"),
+                ("railways_contract", "country_baked_v1"),
+                ("rail_traffic_contract", "1"),
+            ]
+            .map(|(k, v)| (k.to_string(), v.to_string())),
         );
+        let file = std::fs::File::create(sq_dir.join("railways.arrow")).unwrap();
+        let mut writer = FileWriter::try_new(file, &schema).unwrap();
+        writer
+            .write(&batch.with_schema(Arc::new(schema)).unwrap())
+            .unwrap();
+        writer.finish().unwrap();
+
+        let dev4 = Dev4 {
+            prepared: dir.path().to_path_buf(),
+            rasters: std::path::PathBuf::new(),
+        };
+        let mut out = Vec::new();
+        let emitted = convert(
+            (
+                &dev4,
+                &FreightNetwork::default(),
+                SourceTables::test_fixture(),
+            ),
+            square,
+            &Decks::default(),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(emitted, 3);
+
+        let by_name = |name: &str| {
+            out.iter()
+                .find(|piece| piece.attribute.display[0] == json!(name))
+                .unwrap()
+        };
+        // PaxOnly (mode=1 joined to Ordinary): inherits 50 pax, suppresses guessed freight 9793
+        // and normalizes freight status/source/calendar-estimate share.
+        let pax_only = &by_name("PaxOnly").attribute.display;
+        assert_eq!(pax_only[4], json!(50.0));
+        assert_eq!(pax_only[7], json!(0.0));
+        assert_eq!(pax_only[11], json!(2));
+        assert_eq!(pax_only[16], json!(0));
+        assert_eq!(pax_only[18], json!(0.0));
+
+        // Ordinary (mode=0): keeps 50 pax and TR-scaled guessed freight (source 9793).
+        let tr_scale = SourceTables::test_fixture()
+            .train_scales
+            .get(*b"TR")
+            .unwrap()
+            .scales[0];
+        let ordinary = &by_name("Ordinary").attribute.display;
+        assert_eq!(ordinary[4], json!(50.0));
+        assert_eq!(ordinary[7], json!(display_trains(10.0 * tr_scale)));
+        assert_eq!(ordinary[16], json!(9793));
+
+        // ObservedMode1 (mode=1 with observed source 111): keeps 12 freight and source 111.
+        let observed = &by_name("ObservedMode1").attribute.display;
+        assert_eq!(observed[4], json!(30.0));
+        assert_eq!(observed[7], json!(12.0));
+        assert_eq!(observed[16], json!(111));
     }
 }

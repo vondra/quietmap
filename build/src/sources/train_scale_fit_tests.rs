@@ -454,3 +454,131 @@ fn missing_year_takes_nearest_earlier_vintage_and_unmeasured_country_is_omitted(
     assert_eq!(pl["national"]["freight"][0], 2024);
     assert_eq!(be["national"], json!({"passenger": null, "freight": null}));
 }
+
+/// Regression for joined passenger-only (`traffic_mode == 1`) segments, observed freight on
+/// passenger-only rows, and conventional connectors joined to high-speed-vetoed rows at the
+/// national train-scale fit input.
+#[test]
+fn joined_passenger_only_segment_does_not_inflate_fitted_freight_scale() {
+    use arrow_array::{
+        ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+        UInt8Array, UInt16Array,
+    };
+    use std::sync::Arc;
+
+    // Rows 0-1 (DE): 1 km mode=1 joined to 2 km mode=0 (10 guessed freight, 40 pax).
+    // Row 2 (DE):    1 km mode=1 with observed freight (8 freight, source 100).
+    // Rows 3-4 (AT): 2 km 300 km/h mode=0 (0 freight) joined to 1 km 80 km/h mode=0 (20 guessed).
+    let batch = RecordBatch::try_from_iter([
+        (
+            "start_gx",
+            Arc::new(Int32Array::from(vec![0, 10_000, 50_000, 80_000, 100_000])) as ArrayRef,
+        ),
+        ("start_gy", Arc::new(Int32Array::from(vec![0; 5]))),
+        (
+            "end_gx",
+            Arc::new(Int32Array::from(vec![
+                10_000, 30_000, 60_000, 100_000, 110_000,
+            ])),
+        ),
+        ("end_gy", Arc::new(Int32Array::from(vec![0; 5]))),
+        (
+            "length_m",
+            Arc::new(Float32Array::from(vec![
+                1000.0, 2000.0, 1000.0, 2000.0, 1000.0,
+            ])),
+        ),
+        ("rail_type", Arc::new(UInt8Array::from(vec![0u8; 5]))),
+        (
+            "country_iso",
+            Arc::new(UInt16Array::from(vec![
+                u16::from_le_bytes(*b"DE"),
+                u16::from_le_bytes(*b"DE"),
+                u16::from_le_bytes(*b"DE"),
+                u16::from_le_bytes(*b"AT"),
+                u16::from_le_bytes(*b"AT"),
+            ])),
+        ),
+        ("passenger_status", Arc::new(UInt8Array::from(vec![2u8; 5]))),
+        ("freight_status", Arc::new(UInt8Array::from(vec![2u8; 5]))),
+        (
+            "passenger_source_id",
+            Arc::new(UInt16Array::from(vec![GUESSED; 5])),
+        ),
+        (
+            "freight_source_id",
+            Arc::new(UInt16Array::from(vec![
+                GUESSED, GUESSED, OBSERVED, GUESSED, GUESSED,
+            ])),
+        ),
+        (
+            "trains_passenger_day",
+            Arc::new(Float64Array::from(vec![0.0, 40.0, 20.0, 60.0, 10.0])),
+        ),
+        (
+            "trains_passenger_evening",
+            Arc::new(Float64Array::from(vec![0.0; 5])),
+        ),
+        (
+            "trains_passenger_night",
+            Arc::new(Float64Array::from(vec![0.0; 5])),
+        ),
+        (
+            "trains_freight_day",
+            Arc::new(Float64Array::from(vec![0.0, 10.0, 8.0, 0.0, 20.0])),
+        ),
+        (
+            "trains_freight_evening",
+            Arc::new(Float64Array::from(vec![0.0; 5])),
+        ),
+        (
+            "trains_freight_night",
+            Arc::new(Float64Array::from(vec![0.0; 5])),
+        ),
+        (
+            "maxspeed",
+            Arc::new(UInt16Array::from(vec![160, 160, 160, 300, 80])),
+        ),
+        (
+            "highspeed",
+            Arc::new(BooleanArray::from(vec![false, false, false, true, false])),
+        ),
+        (
+            "name",
+            Arc::new(StringArray::from(vec!["", "", "", "HSL", ""])),
+        ),
+        ("ref", Arc::new(StringArray::from(vec![""; 5]))),
+        (
+            "traffic_mode",
+            Arc::new(UInt8Array::from(vec![1, 0, 1, 0, 0])),
+        ),
+    ])
+    .unwrap();
+    let table = Table {
+        metadata: [
+            ("grid", "z30"),
+            ("railways_contract", "country_baked_v1"),
+            ("rail_traffic_contract", "1"),
+        ]
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .into(),
+        batches: vec![batch],
+    };
+
+    let countries = table_train_km(&table, &FreightNetwork::default()).unwrap();
+    let de = countries[b"DE"];
+    // Mode=1 row takes run's 40 pax (140 total) and 0 guessed freight (only the 2 km mode=0
+    // counts -> 20.0, not 30.0); the observed-freight mode=1 row keeps its 8.0 observed train-km.
+    assert_eq!(de.passenger[1], 140.0);
+    assert_eq!(de.freight_guessed.iter().sum::<f64>(), 20.0);
+    assert_eq!(de.freight_observed, 8.0);
+    let national = NationalTrainKm {
+        passenger: None,
+        freight: Some((2024, 28.0)),
+    };
+    assert_eq!(fitted(&de, &national, [1.0; 3], SPREAD).scales[0], 1.0);
+
+    // Conventional 80 km/h connector joined to 300 km/h mode=0 keeps its 20.0 guessed freight.
+    let at = countries[b"AT"];
+    assert_eq!(at.freight_guessed.iter().sum::<f64>(), 20.0);
+}

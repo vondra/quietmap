@@ -163,6 +163,7 @@ fn run_trains_skips_median_only_for_globally_resolved_sections() {
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6,
             ])),
         ),
+        ("traffic_mode", Arc::new(UInt8Array::from(vec![0u8; 14]))),
         (
             "freight_matching",
             Arc::new(UInt8Array::from(vec![
@@ -228,7 +229,7 @@ fn run_trains_skips_median_only_for_globally_resolved_sections() {
         batches: vec![batch],
         metadata: HashMap::new(),
     };
-    let resolved = run_trains(&table).unwrap();
+    let resolved = run_trains(&table, &[true; 14]).unwrap();
     // Swanton: CA row keeps 30/5 and source 0 instead of inheriting US FRA 0/2.
     assert_eq!(resolved[2].source, [0, 0]);
     assert_eq!(resolved[2].passenger[0], 30.0);
@@ -250,4 +251,145 @@ fn run_trains_skips_median_only_for_globally_resolved_sections() {
     // Horns: touching crossings keep their own sounding rates (2/d vs 16.5/d).
     assert_eq!(resolved[12].passenger[0], 2.0);
     assert_eq!(resolved[13].passenger[0], 16.5);
+}
+
+/// `run_trains` suppresses guessed freight (and normalizes its provenance to estimated zero) on
+/// ineligible rows while keeping observed freight, protects conventional freight connectors joined
+/// to high-speed-vetoed runs, and keeps untagged pieces inside `traffic_mode == 1` runs at zero.
+#[test]
+fn run_trains_respects_freight_eligibility_across_joined_runs() {
+    use arrow_array::{ArrayRef, Float64Array, Int32Array, UInt8Array, UInt16Array};
+    use arrow_schema::{Field, Schema};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    // Run A (rows 0-1): short mode=1 joined to long mode=0 with guessed freight (source 9793).
+    // Run B (rows 2-3): short mode=1 joined to long mode=0 with observed freight (source 111).
+    // Run C (rows 4-5): long 300 km/h mode=0 (0 freight) joined to short 80 km/h mode=0 (20 frt).
+    // Run D (rows 6-7): long mode=1 (0 freight) joined to short untagged mode=0 (20 frt).
+    let columns: Vec<(&str, ArrayRef)> = vec![
+        (
+            "start_gx",
+            Arc::new(Int32Array::from(vec![
+                0, 100, 10000, 10100, 20000, 22000, 30000, 32000,
+            ])),
+        ),
+        ("start_gy", Arc::new(Int32Array::from(vec![0; 8]))),
+        (
+            "end_gx",
+            Arc::new(Int32Array::from(vec![
+                100, 2100, 10100, 12100, 22000, 22200, 32000, 32200,
+            ])),
+        ),
+        ("end_gy", Arc::new(Int32Array::from(vec![0; 8]))),
+        ("rail_type", Arc::new(UInt8Array::from(vec![0u8; 8]))),
+        (
+            "traffic_mode",
+            Arc::new(UInt8Array::from(vec![1, 0, 1, 0, 0, 0, 1, 0])),
+        ),
+        ("passenger_status", Arc::new(UInt8Array::from(vec![1u8; 8]))),
+        ("freight_status", Arc::new(UInt8Array::from(vec![1u8; 8]))),
+        (
+            "passenger_source_id",
+            Arc::new(UInt16Array::from(vec![100u16; 8])),
+        ),
+        (
+            "freight_source_id",
+            Arc::new(UInt16Array::from(vec![0, 9793, 0, 111, 0, 0, 0, 0])),
+        ),
+        (
+            "trains_passenger_day",
+            Arc::new(Float64Array::from(vec![
+                30.0, 50.0, 20.0, 40.0, 60.0, 10.0, 80.0, 40.0,
+            ])),
+        ),
+        (
+            "trains_passenger_evening",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+        (
+            "trains_passenger_night",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+        (
+            "trains_freight_day",
+            Arc::new(Float64Array::from(vec![
+                0.0, 10.0, 0.0, 12.0, 0.0, 20.0, 0.0, 20.0,
+            ])),
+        ),
+        (
+            "trains_freight_evening",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+        (
+            "trains_freight_night",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+        (
+            "passenger_missing_calendar_estimate_day",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+        (
+            "passenger_missing_calendar_estimate_evening",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+        (
+            "passenger_missing_calendar_estimate_night",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+        (
+            "freight_missing_calendar_estimate_day",
+            Arc::new(Float64Array::from(vec![
+                0.0, 3.0, 0.0, 4.0, 0.0, 0.0, 0.0, 0.0,
+            ])),
+        ),
+        (
+            "freight_missing_calendar_estimate_evening",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+        (
+            "freight_missing_calendar_estimate_night",
+            Arc::new(Float64Array::from(vec![0.0; 8])),
+        ),
+    ];
+    let fields: Vec<Field> = columns
+        .iter()
+        .map(|(name, arr)| Field::new(*name, arr.data_type().clone(), false))
+        .collect();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(fields)),
+        columns.into_iter().map(|(_, arr)| arr).collect(),
+    )
+    .unwrap();
+    let table = Table {
+        batches: vec![batch],
+        metadata: HashMap::new(),
+    };
+    let takes_freight = [false, true, false, true, false, true, false, true];
+    let resolved = run_trains(&table, &takes_freight).unwrap();
+
+    // Run A: mode=1 keeps run's 50 pax, drops guessed freight 9793 and normalizes provenance.
+    assert_eq!(resolved[0].passenger[0], 50.0);
+    assert_eq!(resolved[0].freight, [0.0; 3]);
+    assert_eq!(resolved[0].missing_calendar_estimate[1], [0.0; 3]);
+    assert_eq!((resolved[0].status[1], resolved[0].source[1]), (2, 0));
+    assert_eq!(resolved[1].freight[0], 10.0);
+    assert_eq!(resolved[1].source[1], 9793);
+
+    // Run B: mode=1 keeps observed freight (source 111) intact.
+    assert_eq!(resolved[2].freight[0], 12.0);
+    assert_eq!(resolved[2].source[1], 111);
+    assert_eq!(resolved[2].missing_calendar_estimate[1][0], 4.0);
+
+    // Run C: conventional connector keeps its 20 freight while high-speed row stays at 0.
+    assert_eq!(resolved[4].passenger[0], 60.0);
+    assert_eq!(resolved[4].freight, [0.0; 3]);
+    assert_eq!(resolved[5].passenger[0], 60.0);
+    assert_eq!(resolved[5].freight[0], 20.0);
+
+    // Run D: untagged mode=0 piece inside a passenger-only mode=1 run still inherits zero freight.
+    assert_eq!(resolved[6].passenger[0], 80.0);
+    assert_eq!(resolved[6].freight, [0.0; 3]);
+    assert_eq!(resolved[7].passenger[0], 80.0);
+    assert_eq!(resolved[7].freight, [0.0; 3]);
 }

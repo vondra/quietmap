@@ -48,6 +48,7 @@ pub(crate) struct Expanded {
     pub usage: u8,
     pub service: u8,
     pub traffic_mode: u8,
+    pub takes_guessed_freight: bool,
     pub country_iso: [u8; 2],
 }
 

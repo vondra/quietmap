@@ -3,6 +3,7 @@ use super::encode::Expanded;
 use super::merge::{CategoryFlow, RowTraffic, STATUS_ESTIMATED, STATUS_KNOWN, STATUS_UNKNOWN};
 use super::model::RailModel;
 use super::parallel_geometry::{cross_sections, project_tracks};
+use tiles::sources::GUESSED_TRAIN_SOURCES;
 
 pub(super) fn scope_winner(
     model: &RailModel,
@@ -81,23 +82,6 @@ pub(super) fn scope_value(
     }
 }
 
-fn line_prior(
-    members: &[usize],
-    priors: &[RowTraffic],
-    category: fn(&RowTraffic) -> CategoryFlow,
-) -> CategoryFlow {
-    members
-        .iter()
-        .map(|&member| category(&priors[member]))
-        .fold(CategoryFlow::default(), |best, flow| {
-            if best.status == STATUS_UNKNOWN || daily_total(&flow) > daily_total(&best) {
-                flow
-            } else {
-                best
-            }
-        })
-}
-
 fn daily_total(flow: &CategoryFlow) -> f64 {
     flow.periods.iter().sum()
 }
@@ -115,7 +99,6 @@ struct TrackEvidence<'a> {
     domestic: &'a [RowTraffic],
     foreign: &'a [RowTraffic],
     priors: &'a [RowTraffic],
-    modes: &'a [u8],
 }
 
 fn track_share(
@@ -124,14 +107,14 @@ fn track_share(
     members: &[usize],
     category: fn(&RowTraffic) -> CategoryFlow,
     own: usize,
-    allows: fn(u8) -> bool,
+    is_freight: bool,
+    allows: impl Fn(usize) -> bool,
 ) -> CategoryFlow {
     let TrackEvidence {
         model,
         domestic,
         foreign,
         priors,
-        modes,
     } = *evidence;
     let tracks = members.len() as f64;
     // Ranked evidence from either timetable marks the line active; a no-service stamp beside
@@ -146,32 +129,37 @@ fn track_share(
         .iter()
         .any(|flow| flow.status != STATUS_UNKNOWN && !model.is_residual(flow.source_id))
     });
-    let capable: Vec<usize> = members
-        .iter()
-        .copied()
-        .filter(|&member| allows(modes[member]))
-        .collect();
-    let prior = line_prior(&capable, priors, category);
+    let mut capable_count = 0usize;
+    let mut prior = CategoryFlow::default();
+    for &member in members {
+        if !allows(member) {
+            continue;
+        }
+        capable_count += 1;
+        let flow = category(&priors[member]);
+        if prior.status == STATUS_UNKNOWN || daily_total(&flow) > daily_total(&prior) {
+            prior = flow;
+        }
+    }
     let winner = scope_winner(model, own_iso, members, domestic, line_ranked, category);
-    let (line, divisor, from_prior) = if winner != 0 && !model.is_residual(winner) {
+    let (line, from_prior) = if winner != 0 && !model.is_residual(winner) {
         let value = scope_value(model, members, domestic, winner, category);
         if model.stamps_whole_line(winner) {
             // A proxy estimates the line itself, not the tracks it stamps.
-            (value, tracks, false)
+            (value, false)
         } else {
             let fully_covered = members
                 .iter()
                 .all(|&member| category(&domestic[member]).status != STATUS_UNKNOWN);
             if fully_covered || daily_total(&value) > daily_total(&prior) {
-                (value, tracks, false)
+                (value, false)
             } else {
-                (prior, capable.len() as f64, true)
+                (prior, true)
             }
         }
     } else if model.is_residual(winner) {
         (
             scope_value(model, members, domestic, winner, category),
-            tracks,
             false,
         )
     } else {
@@ -182,12 +170,16 @@ fn track_share(
             scope_value(model, members, foreign, abroad, category)
         };
         if daily_total(&value) > daily_total(&prior) {
-            (value, tracks, false)
+            (value, false)
         } else {
-            (prior, capable.len() as f64, true)
+            (prior, true)
         }
     };
-    if from_prior && !allows(modes[own]) {
+    // Class priors and whole-line guessed freight proxies are shared only among eligible tracks
+    // so downstream eligibility checks do not throw away the share of an ineligible twin.
+    let split_among_eligible =
+        from_prior || (is_freight && GUESSED_TRAIN_SOURCES.contains(&line.source_id));
+    if split_among_eligible && (!allows(own) || capable_count == 0) {
         return CategoryFlow {
             periods: [0.0; 3],
             missing_calendar_estimate: [0.0; 3],
@@ -197,6 +189,11 @@ fn track_share(
             stop: 0,
         };
     }
+    let divisor = if split_among_eligible {
+        capable_count as f64
+    } else {
+        tracks
+    };
     CategoryFlow {
         periods: line.periods.map(|value| value / divisor),
         missing_calendar_estimate: line.missing_calendar_estimate.map(|value| value / divisor),
@@ -251,12 +248,12 @@ pub(crate) fn allocate_over_parallel_tracks(
     let foreign: Vec<RowTraffic> = rows.iter().map(|row| row.child.foreign).collect();
     let priors: Vec<RowTraffic> = rows.iter().map(|row| row.prior).collect();
     let modes: Vec<u8> = rows.iter().map(|row| row.traffic_mode).collect();
+    let takes_freight: Vec<bool> = rows.iter().map(|row| row.takes_guessed_freight).collect();
     let evidence = TrackEvidence {
         model,
         domestic: &domestic,
         foreign: &foreign,
         priors: &priors,
-        modes: &modes,
     };
     for (index, row) in rows.iter_mut().enumerate() {
         if row.service != 0 {
@@ -273,7 +270,8 @@ pub(crate) fn allocate_over_parallel_tracks(
             members,
             |t| t.passenger,
             index,
-            carries_passengers,
+            false,
+            |member| carries_passengers(modes[member]),
         );
         let freight = track_share(
             &evidence,
@@ -281,7 +279,8 @@ pub(crate) fn allocate_over_parallel_tracks(
             members,
             |t| t.freight,
             index,
-            carries_freight,
+            true,
+            |member| takes_freight[member],
         );
         row.child.traffic = RowTraffic { passenger, freight };
     }

@@ -218,6 +218,7 @@ fn expanded_row_named(
         usage: 0,
         service: 0,
         traffic_mode: 0,
+        takes_guessed_freight: true,
         country_iso: country,
     }
 }
@@ -1460,6 +1461,8 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
         arrow_schema::Field::new("usage", arrow_schema::DataType::UInt8, false),
         arrow_schema::Field::new("service", arrow_schema::DataType::UInt8, false),
         arrow_schema::Field::new("traffic_mode", arrow_schema::DataType::UInt8, false),
+        arrow_schema::Field::new("maxspeed", arrow_schema::DataType::UInt16, false),
+        arrow_schema::Field::new("highspeed", arrow_schema::DataType::Boolean, false),
         arrow_schema::Field::new("country_iso", arrow_schema::DataType::UInt16, false),
         arrow_schema::Field::new("ref", arrow_schema::DataType::Utf8, true),
         arrow_schema::Field::new("name", arrow_schema::DataType::Utf8, true),
@@ -1478,6 +1481,8 @@ fn ranking_commuter_cap_ambiguous_fallback_canada_isolation_and_newly_stamped_ya
             std::sync::Arc::new(arrow_array::UInt8Array::from(vec![3u8])),
             std::sync::Arc::new(arrow_array::UInt8Array::from(vec![1u8])), // stamped service=yard
             std::sync::Arc::new(arrow_array::UInt8Array::from(vec![0u8])), // traffic_mode=unknown
+            std::sync::Arc::new(arrow_array::UInt16Array::from(vec![0u16])),
+            std::sync::Arc::new(arrow_array::BooleanArray::from(vec![false])),
             std::sync::Arc::new(arrow_array::UInt16Array::from(vec![u16::from_le_bytes(
                 *b"US",
             )])),
