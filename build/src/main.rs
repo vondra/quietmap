@@ -57,6 +57,7 @@ mod terrain;
 mod terrain_completion;
 mod terrain_fine;
 mod traffic;
+mod unmodelled_sites;
 mod weather;
 mod year;
 

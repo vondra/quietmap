@@ -6,8 +6,7 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::path::Path;
 
-/// The complete input ring as GeoJSON, closed and continuous across the antimeridian.
-fn geometry(ring: &[(i32, i32)]) -> Option<Value> {
+fn ring_coordinates(ring: &[(i32, i32)], reference_lon: Option<f64>) -> Option<Vec<[f64; 2]>> {
     let mut coordinates: Vec<[f64; 2]> = ring
         .iter()
         .map(|&(x, y)| {
@@ -23,10 +22,25 @@ fn geometry(ring: &[(i32, i32)]) -> Option<Value> {
     if coordinates.len() < 4 {
         return None;
     }
+    let anchor = reference_lon.unwrap_or(first[0]);
     for point in &mut coordinates {
-        point[0] += ((first[0] - point[0]) / 360.0).round() * 360.0;
+        point[0] += ((anchor - point[0]) / 360.0).round() * 360.0;
     }
-    Some(json!({"type": "Polygon", "coordinates": [coordinates]}))
+    Some(coordinates)
+}
+
+/// The complete input polygon (outer ring plus any inner holes) as GeoJSON, closed and continuous
+/// across the antimeridian.
+fn geometry(ring: &[(i32, i32)], holes: &[Vec<(i32, i32)>]) -> Option<Value> {
+    let outer = ring_coordinates(ring, None)?;
+    let anchor = outer[0][0];
+    let mut rings = vec![outer];
+    for hole in holes {
+        if let Some(coords) = ring_coordinates(hole, Some(anchor)) {
+            rings.push(coords);
+        }
+    }
+    Some(json!({"type": "Polygon", "coordinates": rings}))
 }
 
 /// One display database per year, made from the same industrial input as the sound sources.
@@ -62,7 +76,7 @@ pub fn build(
             let rows = read_rows(facilities, square)?;
             read += rows.len();
             for row in rows {
-                if let Some(geometry) = geometry(&row.ring) {
+                if let Some(geometry) = geometry(&row.ring, &row.holes) {
                     written += insert
                         .execute([format!("{:016x}", row.group_key()), geometry.to_string()])
                         .map_err(|error| error.to_string())?;
@@ -88,7 +102,7 @@ mod tests {
             .into_iter()
             .map(|(lat, lon)| degrees_to_z30(lat, lon))
             .collect();
-        let polygon = geometry(&ring).unwrap();
+        let polygon = geometry(&ring, &[]).unwrap();
         let points = polygon["coordinates"][0].as_array().unwrap();
         assert_eq!(points.len(), 4);
         assert_eq!(points.first(), points.last());
@@ -96,8 +110,25 @@ mod tests {
             assert!((point[0].as_f64().unwrap() - 180.0).abs() < 0.02);
             assert!((point[1].as_f64().unwrap() - 10.0).abs() < 0.02);
         }
-        assert!(geometry(&[]).is_none());
-        assert!(geometry(&ring[..2]).is_none());
-        assert!(geometry(&[ring[0]; 4]).is_none());
+        assert!(geometry(&[], &[]).is_none());
+        assert!(geometry(&ring[..2], &[]).is_none());
+        assert!(geometry(&[ring[0]; 4], &[]).is_none());
+
+        // Inner hole rings survive as GeoJSON polygon interior rings.
+        let outer: Vec<_> = [(50.0, 14.0), (50.0, 14.1), (50.1, 14.1), (50.1, 14.0)]
+            .into_iter()
+            .map(|(lat, lon)| degrees_to_z30(lat, lon))
+            .collect();
+        let hole: Vec<_> = [
+            (50.03, 14.03),
+            (50.03, 14.07),
+            (50.07, 14.07),
+            (50.07, 14.03),
+        ]
+        .into_iter()
+        .map(|(lat, lon)| degrees_to_z30(lat, lon))
+        .collect();
+        let with_hole = geometry(&outer, &[hole]).unwrap();
+        assert_eq!(with_hole["coordinates"].as_array().unwrap().len(), 2);
     }
 }

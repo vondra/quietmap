@@ -8,20 +8,58 @@ pub type Polygon = Vec<Ring>;
 
 pub fn mapped_geometry(bytes: &[u8]) -> Result<Vec<u8>> {
     ensure!(bytes.len() >= 4, "truncated mapped facility geometry");
-    let n = u32::from_le_bytes(bytes[..4].try_into()?) as usize;
-    ensure!(
-        bytes.len() == 4 + n * 8,
-        "invalid mapped facility geometry length"
-    );
+    let mut pos = 0usize;
+    let mut decoded_rings: Vec<Vec<[f64; 2]>> = Vec::new();
+    while pos < bytes.len() {
+        ensure!(pos + 4 <= bytes.len(), "truncated mapped facility geometry");
+        let n = u32::from_le_bytes(bytes[pos..pos + 4].try_into()?) as usize;
+        pos += 4;
+        let ring_bytes = n
+            .checked_mul(8)
+            .ok_or_else(|| anyhow::anyhow!("mapped facility geometry length overflow"))?;
+        ensure!(
+            pos.checked_add(ring_bytes)
+                .is_some_and(|end| end <= bytes.len()),
+            "invalid mapped facility geometry length"
+        );
+        let mut ring = Vec::with_capacity(n);
+        for point in bytes[pos..pos + ring_bytes].chunks_exact(8) {
+            let x = i32::from_le_bytes(point[..4].try_into()?);
+            let y = i32::from_le_bytes(point[4..].try_into()?);
+            let (lat, lon) = crate::dev4::z30_corner_degrees(x, y);
+            ring.push([lon, lat]);
+        }
+        pos += ring_bytes;
+        decoded_rings.push(ring);
+    }
+    ensure!(!decoded_rings.is_empty(), "empty mapped facility geometry");
+    if decoded_rings.len() == 1 {
+        let ring = &decoded_rings[0];
+        let mut wkb = vec![1];
+        wkb.extend(2_u32.to_le_bytes());
+        wkb.extend((ring.len() as u32).to_le_bytes());
+        for &[lon, lat] in ring {
+            wkb.extend(lon.to_le_bytes());
+            wkb.extend(lat.to_le_bytes());
+        }
+        return Ok(wkb);
+    }
+    // Outer ring plus inner hole rings as a standard WKB Polygon (type 3), each ring closed.
     let mut wkb = vec![1];
-    wkb.extend(2_u32.to_le_bytes());
-    wkb.extend((n as u32).to_le_bytes());
-    for point in bytes[4..].chunks_exact(8) {
-        let x = i32::from_le_bytes(point[..4].try_into()?);
-        let y = i32::from_le_bytes(point[4..].try_into()?);
-        let (lat, lon) = crate::dev4::z30_corner_degrees(x, y);
-        wkb.extend(lon.to_le_bytes());
-        wkb.extend(lat.to_le_bytes());
+    wkb.extend(3_u32.to_le_bytes());
+    wkb.extend((decoded_rings.len() as u32).to_le_bytes());
+    for ring in &decoded_rings {
+        let close = ring.first().is_some_and(|first| ring.last() != Some(first));
+        let count = ring.len() + usize::from(close);
+        wkb.extend((count as u32).to_le_bytes());
+        for &[lon, lat] in ring {
+            wkb.extend(lon.to_le_bytes());
+            wkb.extend(lat.to_le_bytes());
+        }
+        if close && let Some(&[lon, lat]) = ring.first() {
+            wkb.extend(lon.to_le_bytes());
+            wkb.extend(lat.to_le_bytes());
+        }
     }
     Ok(wkb)
 }
@@ -38,15 +76,20 @@ pub fn grid_point(longitude: f64, latitude: f64) -> (i32, i32) {
 }
 
 pub fn grid_ring(geometry: Option<&[u8]>) -> Result<Vec<(i32, i32)>> {
+    Ok(grid_rings(geometry)?.into_iter().next().unwrap_or_default())
+}
+
+/// Outer ring followed by any inner hole rings of the first polygon part, snapped to z30 cells.
+pub fn grid_rings(geometry: Option<&[u8]>) -> Result<Vec<Vec<(i32, i32)>>> {
     let Some(bytes) = geometry else {
         return Ok(Vec::new());
     };
     Ok(rings(bytes)?
-        .first()
-        .and_then(|p| p.first())
         .into_iter()
-        .flatten()
-        .map(|p| grid_point(p[0], p[1]))
+        .next()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ring| ring.into_iter().map(|p| grid_point(p[0], p[1])).collect())
         .collect())
 }
 

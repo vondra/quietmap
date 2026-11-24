@@ -3,7 +3,7 @@ use crate::{
     aircraft, airport, barriers, cli::*, climate, dev4::Dev4, facilities, facility_inputs,
     obstacles, osm, osm_regions, rail_inputs, railways, rasters, road_counts, roads, ships,
     source_outlines, source_tables, sources, structure_inputs, structures, terrain, terrain_fine,
-    traffic, weather, year,
+    traffic, unmodelled_sites, weather, year,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -142,6 +142,11 @@ pub(crate) fn run(arguments: &[String]) -> Result<(), String> {
             rasters::build(&inputs, &parse_squares(options.get("squares")?)?, &out)
         }
         "source-outlines" => source_outlines::build(
+            &facilities::Dataset::open(&inputs)?,
+            &parse_squares(options.get("squares")?)?,
+            &out,
+        ),
+        "unmodelled-sites" => unmodelled_sites::build(
             &facilities::Dataset::open(&inputs)?,
             &parse_squares(options.get("squares")?)?,
             &out,

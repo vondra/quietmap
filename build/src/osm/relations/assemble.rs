@@ -5,6 +5,8 @@ use super::*;
 /// Accumulates way geometries for relation assembly.
 pub struct AssembledRelation {
     pub rings: Vec<Vec<[f64; 2]>>,
+    /// Closed inner hole rings assigned to each outer ring (parallel to `rings`).
+    pub holes_per_ring: Vec<Vec<Vec<[f64; 2]>>>,
     pub tags: Tags,
     pub feature_types: Vec<FeatureType>,
 }
@@ -56,13 +58,19 @@ impl RelationAssembler {
     pub fn assemble(&self, rel_id: i64, manifest: &RelationManifest) -> Option<AssembledRelation> {
         let info = manifest.relations.get(&rel_id)?;
 
-        // Collect outer rings' coordinates
+        let keep_holes = info.feature_types.contains(&FeatureType::Industrial)
+            && crate::osm::classify::is_active_military_range_map(&info.tags);
+
+        // Collect outer rings' coordinates, plus inner holes only for active military ranges.
         let mut outer_coords: Vec<Vec<[f64; 2]>> = Vec::new();
+        let mut inner_coords: Vec<Vec<[f64; 2]>> = Vec::new();
         for (way_id, role) in &info.member_ways {
-            if (role == "outer" || role.is_empty())
-                && let Some(coords) = self.way_geoms.get(way_id)
-            {
-                outer_coords.push(coords.clone());
+            if let Some(coords) = self.way_geoms.get(way_id) {
+                if role == "outer" || role.is_empty() {
+                    outer_coords.push(coords.clone());
+                } else if keep_holes && role == "inner" {
+                    inner_coords.push(coords.clone());
+                }
             }
         }
 
@@ -70,14 +78,28 @@ impl RelationAssembler {
             return None;
         }
 
-        // Try to merge outer ways into a single ring
+        // Merge outer ways into rings; when keeping holes, assign each closed inner hole to the
+        // smallest (immediate) enclosing outer ring so nested islands keep their own holes.
         let merged = merge_outer_rings(outer_coords);
         if merged.is_empty() {
             return None;
         }
+        let mut holes_per_ring: Vec<Vec<Vec<[f64; 2]>>> = vec![Vec::new(); merged.len()];
+        if keep_holes && !inner_coords.is_empty() {
+            let outer_areas: Vec<f64> = merged.iter().map(|r| ring_area_deg2(r)).collect();
+            for inner in merge_outer_rings(inner_coords) {
+                if !crate::osm::classify::is_a_closed_ring(&inner) {
+                    continue;
+                }
+                if let Some(host) = immediate_enclosing_outer(&merged, &outer_areas, &inner) {
+                    holes_per_ring[host].push(inner);
+                }
+            }
+        }
 
         Some(AssembledRelation {
             rings: merged,
+            holes_per_ring,
             tags: info.tags.clone(),
             feature_types: info.feature_types.clone(),
         })
@@ -152,4 +174,85 @@ pub(super) fn merge_outer_rings(ways: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> 
         rings.push(ring);
     }
     rings
+}
+
+/// Ray-cast containment in `[lat, lon]` order with longitude wrapped around the ring's first point.
+fn ring_contains_latlon(ring: &[[f64; 2]], point: [f64; 2]) -> bool {
+    if ring.len() < 3 {
+        return false;
+    }
+    let reference = ring[0][1];
+    let px = reference + crate::osm::geometry::wrapped_longitude_delta(reference, point[1]);
+    let py = point[0];
+    let mut inside = false;
+    let mut j = ring.len() - 1;
+    for i in 0..ring.len() {
+        let xi = reference + crate::osm::geometry::wrapped_longitude_delta(reference, ring[i][1]);
+        let yi = ring[i][0];
+        let xj = reference + crate::osm::geometry::wrapped_longitude_delta(reference, ring[j][1]);
+        let yj = ring[j][0];
+        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Unsigned planar shoelace area in wrapped degree-squared (used only to rank enclosing outers).
+fn ring_area_deg2(ring: &[[f64; 2]]) -> f64 {
+    if ring.len() < 3 {
+        return 0.0;
+    }
+    let reference = ring[0][1];
+    let mut sum = 0.0;
+    let mut j = ring.len() - 1;
+    for i in 0..ring.len() {
+        let xi = crate::osm::geometry::wrapped_longitude_delta(reference, ring[i][1]);
+        let yi = ring[i][0];
+        let xj = crate::osm::geometry::wrapped_longitude_delta(reference, ring[j][1]);
+        let yj = ring[j][0];
+        sum += xj * yi - xi * yj;
+        j = i;
+    }
+    0.5 * sum.abs()
+}
+
+/// Immediate (smallest-area) outer ring that encloses `inner`. Probes vertices of `inner` first
+/// (so a hole whose first vertex coincides with the outer boundary still matches), falling back
+/// to its vertex mean if every vertex lies on the outer boundary.
+fn immediate_enclosing_outer(
+    outers: &[Vec<[f64; 2]>],
+    outer_areas: &[f64],
+    inner: &[[f64; 2]],
+) -> Option<usize> {
+    let inner_area = ring_area_deg2(inner);
+    let unique = if inner.len() > 1 && inner.last() == inner.first() {
+        &inner[..inner.len() - 1]
+    } else {
+        inner
+    };
+    let mut best: Option<(usize, f64)> = None;
+    for (idx, outer) in outers.iter().enumerate() {
+        let area = outer_areas[idx];
+        if area <= inner_area {
+            continue;
+        }
+        let enclosed = unique.iter().any(|&pt| ring_contains_latlon(outer, pt)) || {
+            let reference = unique[0][1];
+            let n = unique.len() as f64;
+            let mean_lon = reference
+                + unique
+                    .iter()
+                    .map(|p| crate::osm::geometry::wrapped_longitude_delta(reference, p[1]))
+                    .sum::<f64>()
+                    / n;
+            let mean_lat = unique.iter().map(|p| p[0]).sum::<f64>() / n;
+            ring_contains_latlon(outer, [mean_lat, mean_lon])
+        };
+        if enclosed && best.is_none_or(|(_, best_area)| area < best_area) {
+            best = Some((idx, area));
+        }
+    }
+    best.map(|(idx, _)| idx)
 }

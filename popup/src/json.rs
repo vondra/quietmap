@@ -450,6 +450,30 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         },
     });
     let mut line = line;
+    if !update.unmodelled.is_empty() {
+        line["unmodelled"] = Value::Array(
+            update
+                .unmodelled
+                .iter()
+                .map(|site| {
+                    let distance_m = if site.inside {
+                        0
+                    } else {
+                        site.distance_m.round().max(1.0) as u64
+                    };
+                    json!({
+                        "id": format!("{:016x}", site.group_key),
+                        "source_type": site.layer.name(),
+                        "kind": site.kind.name(),
+                        "name": site.name,
+                        "inside": site.inside,
+                        "distance_m": distance_m,
+                        "area_m2": site.area_m2.round() as u64,
+                    })
+                })
+                .collect(),
+        );
+    }
     if !pieces.is_empty() {
         line["pieces"] = Value::Array(pieces);
     }

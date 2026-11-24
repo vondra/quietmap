@@ -60,7 +60,7 @@ fn read_family(
     };
     require_stamp(&table, "grid", "z30").map_err(|e| anyhow!(e))?;
     let stamp = if role == INDUSTRY {
-        ("osm_industrial_contract", "2")
+        ("osm_industrial_contract", "3")
     } else {
         ("leisure_contract", "leisure_v5")
     };

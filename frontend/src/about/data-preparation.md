@@ -661,6 +661,17 @@ read that same facility input.
 - **Solar farms and substations.** Solar farms hum from their inverters by day (88 dB(A) a MW at
   full output; 0.55 MW a hectare where untagged), substations from their transformers around the
   clock (<abbr title="the International Electrotechnical Commission's standard for transformer noise">IEC 551</abbr>).
+- **Military firing ranges and training areas.** Active open-air polygons tagged
+  `military=range`, `military=training_area` or `military=danger_area` in OpenStreetMap (excluding
+  barracks, bases, offices, disused or historic sites, roofed buildings, offshore sea-chart zones,
+  and non-firing hazard overlays such as unexploded ordnance, minefields or nuclear exclusion zones)
+  are carried through the facility input into `source-outlines.sqlite` and `unmodelled-sites` with
+  zero emission. Weapon mix, annual round counts and firing positions are not published globally,
+  and large-calibre blasts are assessed with C-weighted peak metrics rather than A-weighted annual
+  Lden, so the popup names nearby ranges without inventing a level (within 3 km under 5 km², 10 km
+  at 5 km² or above; inner holes are preserved so enclaved villages are not marked inside). Bare
+  `landuse=military` polygons without a range, training or danger tag — including large estates
+  mapped only as military land — stay unflagged so quiet barracks and depots are not mislabelled.
 
 </details>
 
@@ -675,7 +686,8 @@ exist, then mapped heights and floor counts, then the typical height for the foo
 from official inventories and OpenStreetMap. The country pages name the surveys and inventories.
 
 Not modelled: roads and railways in tunnels, rail yards, heritage lines, curve squeal, motorsport,
-deliveries, building sites, garden machinery, music and festivals.
+military firing and blast noise (active ranges are named in the popup without a level), deliveries,
+building sites, garden machinery, music and festivals.
 
 <details>
 <summary>Each kind of building and place</summary>
@@ -708,8 +720,8 @@ deliveries, building sites, garden machinery, music and festivals.
   weeks; courts, playgrounds, pools and terraces their active level for about an eighth of the day,
   stadiums on match days. A pitch counts at most 10 ha, a court, playground, pool or terrace at
   most the 99th percentile of its kind mapped in 2026 (for every year: a playground 6,280 m², a
-  terrace 760 m²): a 46 ha dog run mapped as a playground is a large playground. Each is heard while in use, not as a steady hum at its mean. Outdoor
-  shooting ranges fire 20,000 shots a year by day.
+  terrace 760 m²): a 46 ha dog run mapped as a playground is a large playground. Each is heard while in use, not as a steady hum at its mean. Civilian outdoor
+  shooting ranges fire 20,000 shots a year by day; military ranges are not given a guessed shot count.
 - **Car parks** follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
   (LfU 2007): 63 dB(A) for one movement an hour, 0.4 movements a space an hour from 06 to 22 h and
   0.05 at night at most; where the buildings are mapped, a car park carries no more cars than
@@ -855,7 +867,10 @@ Beside the squares lie the year's flight tracks, 28 GB in 256 files, read only t
 flight, and its weather table, 16.6 MB for every half degree: a 30-year climatology, the same in
 every year. Industrial site boundaries are kept in `source-outlines.sqlite`, indexed by the same
 source id as their sound. Opening a site's row reads its whole input boundary; sources without a
-mapped boundary keep their computed points. This display file does not enter the noise calculation.
+mapped boundary keep their computed points. Active military firing ranges and training areas are
+indexed beside it in `unmodelled-sites` (about 3.3 MB worldwide), keyed by the same source id so
+opening a row in the popup loads its boundary from `source-outlines.sqlite`. Neither file enters
+the noise calculation.
 
 </details>
 

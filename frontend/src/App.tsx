@@ -99,8 +99,15 @@ export default function App() {
   const highlightedSource = highlighted?.startsWith('source:')
     ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)
     : undefined
+  const highlightedUnmodelled = highlighted?.startsWith('source:')
+    ? noiseDetailData?.unmodelled?.find(u => `source:${u.id}` === highlighted)
+    : undefined
   const highlightedTrack = noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlighted)?.track
-  const sourceOutline = useSourceOutline(highlightedSource)
+  const outlineId = highlightedSource?.source_type === 'industrial'
+    && highlightedSource.metadata?.source_type !== 'wind_turbine'
+    ? highlightedSource.id
+    : highlightedUnmodelled?.id ?? null
+  const sourceOutline = useSourceOutline(outlineId)
   const highlight = sourceOutline ?? (highlightedSource?.geometry
     ? contributorHighlight(highlightedSource)
     : highlightedTrack ? highlightGeoJson(highlightedTrack) : null)

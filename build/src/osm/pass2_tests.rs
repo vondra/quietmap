@@ -20,25 +20,69 @@ fn outer_building_keeps_its_independent_source_family() {
         )]
         .into(),
     };
+    let empty = Tags::new();
     assert!(super::relation_covers_kind(
         1,
         &FeatureType::Building,
+        &empty,
         &manifest
     ));
     assert!(!super::relation_covers_kind(
         1,
         &FeatureType::Industrial,
+        &empty,
         &manifest
     ));
     assert!(!super::relation_covers_kind(
         1,
         &FeatureType::Leisure,
+        &empty,
         &manifest
     ));
     assert!(!super::relation_covers_kind(
         3,
         &FeatureType::Building,
+        &empty,
         &manifest
+    ));
+
+    // A military range relation never suppresses an emitting industrial outer member way.
+    let range_tags: Tags = [
+        ("landuse".into(), "military".into()),
+        ("military".into(), "training_area".into()),
+    ]
+    .into();
+    let factory_tags: Tags = [("landuse".into(), "industrial".into())].into();
+    let range_manifest = RelationManifest {
+        way_to_relations: [(10, vec![(20, "outer".to_owned())])].into(),
+        relations: [(
+            20,
+            RelationInfo {
+                feature_types: vec![FeatureType::Industrial],
+                tags: range_tags.clone(),
+                member_ways: vec![],
+            },
+        )]
+        .into(),
+    };
+    assert!(!super::relation_covers_kind(
+        10,
+        &FeatureType::Industrial,
+        &factory_tags,
+        &range_manifest
+    ));
+    assert!(super::relation_covers_kind(
+        10,
+        &FeatureType::Industrial,
+        &range_tags,
+        &range_manifest
+    ));
+    let shooting_way: Tags = [("sport".into(), "shooting".into())].into();
+    assert!(super::relation_covers_kind(
+        10,
+        &FeatureType::Leisure,
+        &shooting_way,
+        &range_manifest
     ));
 }
 

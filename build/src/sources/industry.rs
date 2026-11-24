@@ -30,7 +30,8 @@ const FOOTPRINT_REACH_M: f64 = 300.0;
 /// The cells of the index the sites' reach marks: 2^14 z30 cells, about 600 m of Web Mercator.
 const REACH_CELL_SHIFT: u32 = 14;
 
-/// One normalized industrial facility as the conversion reads it; tags are kept for power rows only.
+/// One normalized industrial facility as the conversion reads it; tags are kept for power and
+/// military range rows.
 pub struct IndustrialRow {
     pub osm_kind: String,
     pub osm_id: i64,
@@ -40,6 +41,7 @@ pub struct IndustrialRow {
     pub name: String,
     pub rated_power_kw: Option<f64>,
     pub ring: Z30Ring,
+    pub holes: Vec<Z30Ring>,
     pub area_m2: Option<f64>,
     pub nace: Option<u16>,
     pub tags: Tags,
@@ -228,13 +230,20 @@ pub fn site_outlines(
     for &square in squares {
         rows.extend(read_rows(facilities, square)?);
     }
+    Ok(site_outlines_from_rows(rows))
+}
+
+fn site_outlines_from_rows(rows: Vec<IndustrialRow>) -> RingIndex {
     let mut index = RingIndex::default();
     for (at, row) in rows.into_iter().enumerate() {
-        if row.ring.len() >= 3 && row.source_type != SOURCE_WIND_OUTLINE {
+        if row.ring.len() >= 3
+            && row.source_type != SOURCE_WIND_OUTLINE
+            && row.source_type != SOURCE_MILITARY_RANGE
+        {
             index.add(at as u64, vec![vec![row.ring]]);
         }
     }
-    Ok(index)
+    index
 }
 
 fn place(
@@ -294,10 +303,17 @@ pub(crate) fn read_rows(
         .rows(square, INDUSTRY)?
         .into_iter()
         .map(|row| {
-            let power = matches!(
+            let keep_tags = matches!(
                 row.source_type,
-                SOURCE_SOLAR_FARM | SOURCE_SUBSTATION | SOURCE_TRANSFORMER
+                SOURCE_SOLAR_FARM | SOURCE_SUBSTATION | SOURCE_TRANSFORMER | SOURCE_MILITARY_RANGE
             );
+            let mut rings =
+                geometry::grid_rings(row.geometry.as_deref()).map_err(|e| e.to_string())?;
+            let ring = if rings.is_empty() {
+                Vec::new()
+            } else {
+                rings.remove(0)
+            };
             Ok(IndustrialRow {
                 osm_kind: row.osm_kind,
                 osm_id: row.osm_id,
@@ -308,10 +324,11 @@ pub(crate) fn read_rows(
                 rated_power_kw: row
                     .capacity
                     .filter(|v| *v > 0.0 && row.capacity_unit == "kW"),
-                ring: geometry::grid_ring(row.geometry.as_deref()).map_err(|e| e.to_string())?,
+                ring,
+                holes: rings,
                 area_m2: row.area_m2.filter(|v| *v > 0.0).map(f64::from),
                 nace: (row.activity > 0).then_some(row.activity),
-                tags: if power {
+                tags: if keep_tags {
                     parse_tags(&row.osm_tags)
                 } else {
                     Tags::new()

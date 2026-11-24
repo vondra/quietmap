@@ -1,14 +1,17 @@
 //! `industrial.arrow` writer: one row per industrial/power site footprint with
 //! source type + optional hub-height/rated-power. See `finalize` for dispatch.
 
-use crate::osm::geometry::poly::{encode_grid_poly, ring_area_m2};
+use crate::osm::geometry::poly::{
+    MIN_FOOTPRINT_AREA_M2, encode_grid_poly_with_holes, ring_area_m2,
+};
+use crate::osm::spill::parse_rings_text;
 use anyhow::Result;
 use arrow_array::builder::*;
 use arrow_schema::*;
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{decode_tsv_ring, evidence::write_with_evidence, parse_grid_cell};
+use super::{evidence::write_with_evidence, parse_grid_cell};
 
 pub(super) fn write_industrial(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
@@ -48,7 +51,7 @@ pub(super) fn write_industrial(rows: &[Vec<String>], path: &Path) -> Result<()> 
         }
         let c_gx = parse_grid_cell(&row[2]);
         let c_gy = parse_grid_cell(&row[3]);
-        let ring = decode_tsv_ring(row.get(9).map(|s| s.as_str()).unwrap_or(""));
+        let rings = parse_rings_text(row.get(9).map(|s| s.as_str()).unwrap_or(""));
 
         osm_id.append_value(row[1].parse().unwrap_or(0));
         cgx.append_value(c_gx);
@@ -68,13 +71,18 @@ pub(super) fn write_industrial(rows: &[Vec<String>], path: &Path) -> Result<()> 
         } else {
             power.append_null();
         }
-        match ring {
-            Some(ring) => {
-                match ring_area_m2(&ring) {
-                    Some(a) => ind_area.append_value(a as f32),
+        match rings {
+            Some((outer, holes)) => {
+                match ring_area_m2(&outer) {
+                    Some(outer_area) => {
+                        let hole_area: f64 = holes.iter().filter_map(|h| ring_area_m2(h)).sum();
+                        ind_area.append_value(
+                            (outer_area - hole_area).max(MIN_FOOTPRINT_AREA_M2) as f32
+                        );
+                    }
                     None => ind_area.append_null(),
                 }
-                geom.append_value(encode_grid_poly(&ring));
+                geom.append_value(encode_grid_poly_with_holes(&outer, &holes));
             }
             None => {
                 geom.append_null();

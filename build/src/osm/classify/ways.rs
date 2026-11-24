@@ -24,7 +24,10 @@ pub fn feature_types<'a>(
 ) -> Vec<FeatureType> {
     let mut types = Vec::new();
     if primary == FeatureType::Building {
-        if is_special_leisure(&tag) {
+        if is_special_leisure(&tag)
+            && !(super::special_leisure_class(&tag) == Some(11)
+                && super::has_military_shooting_veto_lookup(&tag))
+        {
             types.push(FeatureType::Leisure);
         }
         if tag("power") != Some("generator") && is_power_or_inactive_industry(&tag) {
@@ -111,6 +114,18 @@ pub(crate) fn classify_primary_way(way: &Way) -> Option<FeatureType> {
         }
         Some(ParkingKind::NotItsOwnSource) => return None,
         None => {}
+    }
+
+    // Military firing ranges and training areas beat civilian shooting (`sport=shooting` /
+    // `leisure=shooting_ground`), while emitting industrial co-tags keep their emitting path and
+    // inactive/non-firing military ranges never fall through to the 20,000-shot civilian emitter.
+    if super::has_military_shooting_veto(&tags) {
+        if super::is_emitting_industrial(tag) || super::is_active_military_range(&tags) {
+            return Some(FeatureType::Industrial);
+        }
+        if super::special_leisure_class(tag) == Some(11) {
+            return None;
+        }
     }
 
     // Leisure AREA (settlement v2 phase 2) — open-air activity sources with no

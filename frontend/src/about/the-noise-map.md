@@ -66,7 +66,9 @@ aircraft. All six show the painted total, one alone its own loudness, and two to
 from each layer's own. Quiet zones wash green every place where the total stays at or below a
 chosen loudness, from 0.25 to 4 sone, or a chosen Lden, from 20 to 55 dB.
 At the same zoom, phones and computers use the same grid for quiet zones. Green means the
-six mapped sources together stay within your limit in that cell. Zooming in shows smaller
+six mapped sources together stay within your limit in that cell; unmodelled sources — including
+active military firing ranges, whose boundary appears in the popup rather than on the painted
+industry layer — are not in the green wash. Zooming in shows smaller
 areas, so the green boundary can move.
 
 Dublin protects [Blessington Street Basin](/#lat=53.357153&lng=-6.270895&z=13&d=53.357153,-6.270895&m=lden&qc=1&qt=55).

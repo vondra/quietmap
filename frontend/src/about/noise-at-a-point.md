@@ -18,7 +18,10 @@ same answer.
 
 The popup leads with how loud the place sounds, then lists the sources heard there, the largest
 share first. A row opens to the source's data and how its sound arrives, and highlights it on the
-map. An industrial site shows its mapped boundary where one is available. At Greenwich, November 2026:
+map. An industrial site shows its mapped boundary where one is available. Active military firing
+ranges and training areas nearby appear under **Not in the level** — within 3 km for sites under
+5 km², and within 10 km for larger ones — with their distance, area and mapped boundary, because
+weapon firing and blast noise is not included in the modelled level. At Greenwich, November 2026:
 
 | In the popup | What it tells |
 |---|---|

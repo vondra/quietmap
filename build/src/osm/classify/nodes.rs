@@ -20,6 +20,9 @@ fn node_settlement_kind<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> O
     let mut outdoor_seating = None;
     let mut access = None;
     let mut sport = None;
+    let mut landuse_military = false;
+    let mut inactive_tag = false;
+    let mut military_shooting_veto = false;
     for (k, v) in tags {
         match k {
             "amenity" => amenity = Some(v),
@@ -30,25 +33,53 @@ fn node_settlement_kind<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> O
             "outdoor_seating" => outdoor_seating = Some(v),
             "access" => access = Some(v),
             "sport" => sport = Some(v),
-            _ => {}
+            "landuse" if v == "military" => landuse_military = true,
+            "disused" | "abandoned" | "ruins" | "razed" | "demolished" | "historic"
+            | "construction" | "proposed" | "was" | "former" | "removed" | "destroyed"
+            | "end_date"
+                if !matches!(v, "no" | "false" | "0" | "") =>
+            {
+                inactive_tag = true;
+            }
+            _ => {
+                if !military_shooting_veto
+                    && (k == "military" || k.contains(":military") || k.contains(":landuse"))
+                    && super::has_military_shooting_veto(&[(k, v)])
+                {
+                    military_shooting_veto = true;
+                }
+            }
         }
+    }
+    if landuse_military && inactive_tag {
+        military_shooting_veto = true;
     }
     // Leisure-area node (own footprint) takes priority over the join POI: a
     // `leisure=playground` point IS a source, not a reclassifier. Shares the
     // `is_leisure_area` way-gate so a `swimming_pool` node is held to the SAME
     // public/access bar as a way (most pool nodes are private back-yards).
-    let leisure_tags: Vec<(&str, &str)> = [
-        amenity.map(|v| ("amenity", v)),
-        leisure.map(|v| ("leisure", v)),
-        outdoor_seating.map(|v| ("outdoor_seating", v)),
-        access.map(|v| ("access", v)),
-        sport.map(|v| ("sport", v)),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    if is_leisure_area(&leisure_tags) {
-        return Some(FeatureType::Leisure);
+    // Fast-path skip untagged / non-leisure nodes before assembling tag slices.
+    if leisure.is_some() || sport.is_some() || outdoor_seating.is_some() {
+        let leisure_tags: Vec<(&str, &str)> = [
+            amenity.map(|v| ("amenity", v)),
+            leisure.map(|v| ("leisure", v)),
+            outdoor_seating.map(|v| ("outdoor_seating", v)),
+            access.map(|v| ("access", v)),
+            sport.map(|v| ("sport", v)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let vetoed = military_shooting_veto
+            && super::special_leisure_class(|key| {
+                leisure_tags
+                    .iter()
+                    .find(|&&(k, _)| k == key)
+                    .map(|&(_, v)| v)
+            }) == Some(11);
+        if !vetoed && is_leisure_area(&leisure_tags) {
+            return Some(FeatureType::Leisure);
+        }
     }
     // Function POI for the join — only if some key carries a noise-relevant value.
     if crate::osm::spill::poi_class(amenity, shop, healthcare, tourism).is_some() {
@@ -200,6 +231,15 @@ mod tests {
         assert_eq!(
             kept.get("shooting:range").map(String::as_str),
             Some("indoor")
+        );
+        // Military firing range nodes co-tagged sport=shooting must never emit 20,000 civilian shots.
+        assert_eq!(
+            node_settlement_kind([("military", "range"), ("sport", "shooting")].into_iter()),
+            None
+        );
+        assert_eq!(
+            node_settlement_kind([("was:military", "range"), ("sport", "shooting")].into_iter()),
+            None
         );
     }
 
