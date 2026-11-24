@@ -140,8 +140,11 @@ pub fn answer(
     let mut terrain_rings = 0;
     let weather_started = std::time::Instant::now();
     let weather = physics::weather::read_place(&release.weather_path, lat, lon)?;
-    let unmodelled = tiles::unmodelled::query_file(&release.unmodelled_path, lat, lon)?;
     let weather_read_seconds = weather_started.elapsed().as_secs_f64();
+    let unmodelled_started = std::time::Instant::now();
+    let unmodelled_query = tiles::unmodelled::query_file(&release.unmodelled_path, lat, lon)?;
+    let unmodelled_read_seconds = unmodelled_started.elapsed().as_secs_f64();
+    let unmodelled = unmodelled_query.sites;
     let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
     // The yearly atmosphere of each square the rolls heard start in, as the boxes take theirs.
     let mut roll_atmospheres: HashMap<tiles::square::Square, PlaceAtmosphere> = HashMap::new();
@@ -159,9 +162,12 @@ pub fn answer(
         .iter()
         .map(|&layer| LayerSelection::new(layer))
         .collect();
-    // The weather table's nodes are the click's first read.
-    let (mut reads, mut bytes, mut read_seconds) =
-        (1usize, physics::weather::PLACE_BYTES, weather_read_seconds);
+    // The weather table and optional unmodelled-sites index are the click's first reads.
+    let (mut reads, mut bytes, mut read_seconds) = (
+        1usize + unmodelled_query.reads,
+        physics::weather::PLACE_BYTES + unmodelled_query.bytes,
+        weather_read_seconds + unmodelled_read_seconds,
+    );
     let (mut candidate_seconds, mut evaluate_seconds) = (0.0f64, 0.0f64);
     let mut station: Option<Station> = None;
     let mut aircraft_events = None;

@@ -87,19 +87,12 @@ for (const display of [
       const { x, y } = await canvasCenter(page)
       await page.mouse.click(x, y)
 
-      // Null-level update (including a building with no exposed facade) still displays the
-      // unmodelled range and draws its outline.
-      const silent = popupUpdate(1, false, lat, lng, SOURCE_DB)
-      silent.total_lden = null
-      silent.total = { ld: null, le: null, ln: null, lden: null }
-      silent.loudness = null
-      silent.building = { id: 'b1', height_m: 12, floor: 2, facade: null }
-      silent.top_contributors = []
-      silent.unmodelled = [
+      // First: a non-null modelled update keeps the unmodelled range beside the level and shares.
+      const unmodelled = [
         {
           id: rangeId,
-          source_type: 'industrial',
-          kind: 'military_training_area',
+          source_type: 'industrial' as const,
+          kind: 'military_training_area' as const,
           name: 'Fixture Northern Artillery Training Area',
           inside: false,
           distance_m: 80,
@@ -107,18 +100,35 @@ for (const display of [
         },
         {
           id: 'abcdef1234567890',
-          source_type: 'industrial',
-          kind: 'military_range',
+          source_type: 'industrial' as const,
+          kind: 'military_range' as const,
           name: '',
           inside: true,
           distance_m: 0,
           area_m2: 120_000,
         },
       ]
+      const modelled = popupUpdate(1, true, lat, lng, SOURCE_DB)
+      modelled.unmodelled = unmodelled
+      await sendPopupLine(page, modelled)
+      const section = page.getByTestId('unmodelled-section').filter({ visible: true })
+      await expect(page.getByTestId('noise-badge').filter({ visible: true })).toContainText('sone')
+      await expect(section).toBeVisible()
+      await expect(section).toContainText('Not in the level')
+      await expect(section.getByRole('button', { name: /Fixture Northern Artillery Training Area/ })).toContainText('80 m')
+
+      // Second: a null-level update (including a building with no exposed facade) still displays
+      // the unmodelled ranges and draws the opened range's outline.
+      const silent = popupUpdate(2, false, lat, lng, SOURCE_DB)
+      silent.total_lden = null
+      silent.total = { ld: null, le: null, ln: null, lden: null }
+      silent.loudness = null
+      silent.building = { id: 'b1', height_m: 12, floor: 2, facade: null }
+      silent.top_contributors = []
+      silent.unmodelled = unmodelled
       await sendPopupLine(page, silent)
       await endPopup(page)
 
-      const section = page.getByTestId('unmodelled-section').filter({ visible: true })
       await expect(section).toBeVisible()
       await expect(section).toContainText('Not in the level')
       const rangeRow = section.getByRole('button', { name: /Fixture Northern Artillery Training Area/ })

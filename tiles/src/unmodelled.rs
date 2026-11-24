@@ -1,16 +1,19 @@
 //! Nearby unmodelled sites (active military firing ranges and training areas) indexed by z9 square.
 //!
 //! One compact file per year (`<year root>/unmodelled-sites`). Each grouped site is stored once
-//! with its exact z30 outer and hole rings and posted into every z9 square its reach-expanded parts
-//! intersect, so a click reads only its square's candidates.
+//! with its exact z30 outer and hole rings, build-computed covering parent indices, and postings
+//! into every z9 square its reach-expanded parts intersect, so a click reads only its square's
+//! candidates.
 //!
 //! ```text
 //! magic "qmunm1\n\0", u32 sites, u32 squares, u32 postings, u32 strings_bytes
-//! square_table[squares]:  (u32 square_key, u32 postings_offset, u32 postings_len), sorted by key
+//! square_table[squares]:  (u32 square_key, u32 postings_offset, u32 postings_len), strictly ascending
 //! postings[postings]:     u32 site_index
 //! site_offsets[sites+1]:  u32 byte offset into site_blob (monotonic; last == site_blob_len)
 //! site_blob:              per site: u64 group_key, u8 layer, u8 kind, u16 pad, u32 reach_m,
-//!                         f64 area_m2, u32 name_offset, u32 name_len, u32 part_count,
+//!                         f64 area_m2, u32 name_offset, u32 name_len,
+//!                         u32 covered_count, u32 covered_by[covered_count],
+//!                         u32 part_count,
 //!                         per part: f32 bbox[4] (min_lon, min_lat, max_lon, max_lat), u32 ring_count,
 //!                         per ring: u32 vertex_count, (i32 gx, i32 gy)[vertex_count]
 //!                         (ring 0 is the outer ring; rings 1.. are inner hole rings)
@@ -22,7 +25,7 @@ use crate::geo::{MAX_LATITUDE_DEG, Mercator, TileId, WGS84_A_M};
 use crate::little_endian::u32_at;
 use crate::sources::Layer;
 use crate::square::{SQUARES_PER_AXIS, Square};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -33,6 +36,9 @@ const HEADER_BYTES: usize = 24;
 const SQUARE_ENTRY_BYTES: usize = 12;
 const Z30_QUANTUM_M: f64 = 0.037_322_767_717_044_72;
 const MAX_REPORTED: usize = 5;
+/// Edge distance at or below which a click on a polygon boundary counts as inside (symmetric on
+/// every edge, avoiding ray-cast west-vs-east asymmetry).
+const ON_EDGE_EPSILON_M: f64 = 1e-3;
 
 /// Notification distance (m): 3 km for sites under 5 km², 10 km at or above 5 km².
 pub const SMALL_SITE_REACH_M: u32 = 3_000;
@@ -88,6 +94,8 @@ pub struct SiteRecord {
     pub name: String,
     pub area_m2: f64,
     pub reach_m: u32,
+    /// Group keys of larger sites that geometrically cover this site (computed at build time).
+    pub covered_by: Vec<u64>,
     pub parts: Vec<SitePart>,
 }
 
@@ -101,6 +109,14 @@ pub struct NearbySite {
     pub inside: bool,
     pub distance_m: f64,
     pub area_m2: f64,
+}
+
+/// Matched unmodelled sites together with the exact I/O performed to read them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QueryResult {
+    pub sites: Vec<NearbySite>,
+    pub reads: usize,
+    pub bytes: u64,
 }
 
 fn z30_to_lonlat(gx: i32, gy: i32) -> [f64; 2] {
@@ -120,6 +136,14 @@ fn square_of_lonlat(lon: f64, lat: f64) -> Square {
 
 fn longitude_delta(delta: f64) -> f64 {
     (delta + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// WGS84 zonal and meridional metres per degree at `lat_deg`.
+fn meters_per_degree(lat_deg: f64) -> (f64, f64) {
+    let phi = lat_deg.to_radians();
+    let m_lat = 111_132.92 - 559.82 * (2.0 * phi).cos() + 1.175 * (4.0 * phi).cos();
+    let m_lon = (111_412.84 * phi.cos() - 93.5 * (3.0 * phi).cos()).max(1_000.0);
+    (m_lon, m_lat)
 }
 
 /// Bounding box of an outer ring in degrees (unwrapped relative to its first vertex when needed,
@@ -148,7 +172,7 @@ fn part_bounds(part: &SitePart) -> Option<[f64; 4]> {
 
 fn add_covered_squares(bounds: [f64; 4], reach_m: u32, squares: &mut BTreeSet<u32>) {
     let reach = f64::from(reach_m) + 250.0;
-    let dlat = reach / 111_000.0;
+    let dlat = reach / 110_500.0;
     let min_lat = (bounds[1] - dlat).clamp(-MAX_LATITUDE_DEG, MAX_LATITUDE_DEG);
     let max_lat = (bounds[3] + dlat).clamp(-MAX_LATITUDE_DEG, MAX_LATITUDE_DEG);
     let cos_lat = min_lat
@@ -171,7 +195,6 @@ fn add_covered_squares(bounds: [f64; 4], reach_m: u32, squares: &mut BTreeSet<u3
         }
         return;
     }
-    // Split longitude span cleanly across the antimeridian if expanded bounds cross ±180°.
     let spans: Vec<(f64, f64)> = if min_lon < -180.0 {
         vec![(min_lon + 360.0, 179.999_999), (-180.0, max_lon)]
     } else if max_lon >= 180.0 {
@@ -201,13 +224,19 @@ pub fn write(path: &Path, sites: &[SiteRecord]) -> Result<(), String> {
             ));
         }
     }
+    let mut index_by_key: HashMap<u64, u32> = HashMap::with_capacity(sites.len());
+    for (index, site) in sites.iter().enumerate() {
+        let site_index = u32::try_from(index).map_err(|_| "too many unmodelled sites")?;
+        index_by_key.insert(site.group_key, site_index);
+    }
+
     let mut square_postings: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     let mut site_offsets: Vec<u32> = Vec::with_capacity(sites.len() + 1);
     let mut site_blob: Vec<u8> = Vec::new();
     let mut strings_blob: Vec<u8> = Vec::new();
 
     for (index, site) in sites.iter().enumerate() {
-        let site_index = u32::try_from(index).map_err(|_| "too many unmodelled sites")?;
+        let site_index = index as u32;
         let mut valid_parts: Vec<([f64; 4], &SitePart)> = Vec::new();
         let mut covered: BTreeSet<u32> = BTreeSet::new();
         for part in &site.parts {
@@ -216,6 +245,15 @@ pub fn write(path: &Path, sites: &[SiteRecord]) -> Result<(), String> {
                 valid_parts.push((bounds, part));
             }
         }
+        let mut parent_indices: Vec<u32> = site
+            .covered_by
+            .iter()
+            .filter_map(|key| index_by_key.get(key).copied())
+            .filter(|&parent_idx| parent_idx != site_index)
+            .collect();
+        parent_indices.sort_unstable();
+        parent_indices.dedup();
+
         site_offsets.push(u32::try_from(site_blob.len()).map_err(|_| "site blob overflow")?);
         let name_offset = u32::try_from(strings_blob.len()).map_err(|_| "strings blob overflow")?;
         let name_bytes = site.name.as_bytes();
@@ -230,6 +268,10 @@ pub fn write(path: &Path, sites: &[SiteRecord]) -> Result<(), String> {
         site_blob.extend_from_slice(&site.area_m2.to_le_bytes());
         site_blob.extend_from_slice(&name_offset.to_le_bytes());
         site_blob.extend_from_slice(&name_len.to_le_bytes());
+        site_blob.extend_from_slice(&(parent_indices.len() as u32).to_le_bytes());
+        for parent_idx in parent_indices {
+            site_blob.extend_from_slice(&parent_idx.to_le_bytes());
+        }
         site_blob.extend_from_slice(&(valid_parts.len() as u32).to_le_bytes());
         for (bounds, part) in valid_parts {
             for value in bounds {
@@ -293,12 +335,14 @@ pub fn write(path: &Path, sites: &[SiteRecord]) -> Result<(), String> {
 }
 
 struct DecodedSite {
+    site_index: u32,
     group_key: u64,
     layer: Layer,
     kind: UnmodelledKind,
     reach_m: u32,
     area_m2: f64,
     name: String,
+    covered_by: Vec<u32>,
     parts: Vec<DecodedPart>,
 }
 
@@ -307,13 +351,25 @@ struct DecodedPart {
     rings: Vec<Vec<[f64; 2]>>,
 }
 
-fn read_exact_at(file: &mut File, offset: u64, len: usize) -> Result<Vec<u8>, FormatError> {
-    let mut buf = vec![0u8; len];
-    file.seek(SeekFrom::Start(offset))
-        .map_err(|_| FormatError("unmodelled-sites: seek failed"))?;
-    file.read_exact(&mut buf)
-        .map_err(|_| FormatError("unmodelled-sites: truncated file"))?;
-    Ok(buf)
+struct MeteredFile<'a> {
+    file: &'a mut File,
+    reads: usize,
+    bytes: u64,
+}
+
+impl<'a> MeteredFile<'a> {
+    fn read_exact_at(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, FormatError> {
+        let mut buf = vec![0u8; len];
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|_| FormatError("unmodelled-sites: seek failed"))?;
+        self.file
+            .read_exact(&mut buf)
+            .map_err(|_| FormatError("unmodelled-sites: truncated file"))?;
+        self.reads += 1;
+        self.bytes += len as u64;
+        Ok(buf)
+    }
 }
 
 fn decode_layer(code: u8) -> Result<Layer, FormatError> {
@@ -324,13 +380,15 @@ fn decode_layer(code: u8) -> Result<Layer, FormatError> {
 }
 
 fn decode_site(
+    site_index: u32,
+    site_count: usize,
     bytes: &[u8],
-    file: &mut File,
+    reader: &mut MeteredFile<'_>,
     strings_start: u64,
     strings_bytes: usize,
 ) -> Result<DecodedSite, FormatError> {
     let err = FormatError("unmodelled-sites: truncated site record");
-    if bytes.len() < 36 {
+    if bytes.len() < 40 {
         return Err(err);
     }
     let group_key = u64::from_le_bytes(bytes[0..8].try_into().map_err(|_| err)?);
@@ -340,21 +398,43 @@ fn decode_site(
     let area_m2 = f64::from_le_bytes(bytes[16..24].try_into().map_err(|_| err)?);
     let name_offset = u32_at(bytes, 24) as usize;
     let name_len = u32_at(bytes, 28) as usize;
-    let part_count = u32_at(bytes, 32) as usize;
+    let covered_count = u32_at(bytes, 32) as usize;
     if name_offset
         .checked_add(name_len)
         .is_none_or(|end| end > strings_bytes)
     {
         return Err(FormatError("unmodelled-sites: name out of range"));
     }
+    let mut pos = 36usize;
+    let covered_bytes = covered_count.checked_mul(4).ok_or(err)?;
+    if pos
+        .checked_add(covered_bytes)
+        .and_then(|end| end.checked_add(4))
+        .is_none_or(|end| end > bytes.len())
+    {
+        return Err(err);
+    }
+    let mut covered_by = Vec::with_capacity(covered_count);
+    for _ in 0..covered_count {
+        let parent_idx = u32_at(bytes, pos);
+        if parent_idx as usize >= site_count {
+            return Err(FormatError("unmodelled-sites: covering index out of range"));
+        }
+        covered_by.push(parent_idx);
+        pos += 4;
+    }
+    let part_count = u32_at(bytes, pos) as usize;
+    pos += 4;
+    if part_count > (bytes.len() - pos) / 20 {
+        return Err(err);
+    }
     let name = if name_len == 0 {
         String::new()
     } else {
-        let raw = read_exact_at(file, strings_start + name_offset as u64, name_len)?;
+        let raw = reader.read_exact_at(strings_start + name_offset as u64, name_len)?;
         String::from_utf8(raw).map_err(|_| FormatError("unmodelled-sites: invalid utf-8 name"))?
     };
 
-    let mut pos = 36usize;
     let mut parts = Vec::with_capacity(part_count);
     for _ in 0..part_count {
         if pos + 20 > bytes.len() {
@@ -373,6 +453,9 @@ fn decode_site(
         ];
         let ring_count = u32_at(bytes, pos + 16) as usize;
         pos += 20;
+        if ring_count > (bytes.len() - pos) / 4 {
+            return Err(err);
+        }
         let mut rings = Vec::with_capacity(ring_count);
         for _ in 0..ring_count {
             if pos + 4 > bytes.len() {
@@ -402,12 +485,14 @@ fn decode_site(
         return Err(FormatError("unmodelled-sites: trailing bytes in site"));
     }
     Ok(DecodedSite {
+        site_index,
         group_key,
         layer,
         kind,
         reach_m,
         area_m2,
         name,
+        covered_by,
         parts,
     })
 }
@@ -437,8 +522,6 @@ fn ring_contains(ring: &[[f64; 2]], point: [f64; 2]) -> bool {
 }
 
 fn part_contains(part: &DecodedPart, point: [f64; 2]) -> bool {
-    // Part bounds are stored as f32; keep a small latitude margin so boundary rounding never
-    // rejects a click or vertex near the north or south edge.
     const BBOX_MARGIN_DEG: f64 = 1e-4;
     if point[1] < part.bbox[1] - BBOX_MARGIN_DEG || point[1] > part.bbox[3] + BBOX_MARGIN_DEG {
         return false;
@@ -462,8 +545,7 @@ fn ring_distance_m(ring: &[[f64; 2]], point: [f64; 2]) -> f64 {
     if ring.is_empty() {
         return f64::INFINITY;
     }
-    let m_per_deg_lat = 111_132.95;
-    let m_per_deg_lon = 111_319.49 * point[1].to_radians().cos().max(0.01);
+    let (m_per_deg_lon, m_per_deg_lat) = meters_per_degree(point[1]);
     let mut best_sq = f64::INFINITY;
     let n = ring.len();
     for i in 0..n {
@@ -493,9 +575,8 @@ fn site_distance_m(site: &DecodedSite, point: [f64; 2]) -> (bool, f64) {
         return (true, 0.0);
     }
     let mut best = f64::INFINITY;
+    let dlat = (f64::from(site.reach_m) + 500.0) / 110_500.0;
     for part in &site.parts {
-        // Quick latitude bbox rejection before edge loop.
-        let dlat = (f64::from(site.reach_m) + 500.0) / 111_000.0;
         if point[1] < part.bbox[1] - dlat || point[1] > part.bbox[3] + dlat {
             continue;
         }
@@ -503,137 +584,26 @@ fn site_distance_m(site: &DecodedSite, point: [f64; 2]) -> (bool, f64) {
             best = best.min(ring_distance_m(ring, point));
         }
     }
+    if best <= ON_EDGE_EPSILON_M {
+        return (true, 0.0);
+    }
     (false, best)
-}
-
-/// Shared-boundary tolerance when checking whether a mapped sub-sector lies inside a larger range
-/// (OSM training sectors often share outer ways or roads with the enclosing training area).
-const COVER_EDGE_TOLERANCE_M: f64 = 10.0;
-
-fn ring_within_m(ring: &[[f64; 2]], point: [f64; 2], limit_m: f64) -> bool {
-    if ring.is_empty() {
-        return false;
-    }
-    let m_per_deg_lat = 111_132.95;
-    let m_per_deg_lon = 111_319.49 * point[1].to_radians().cos().max(0.01);
-    let dlat = limit_m / m_per_deg_lat + 1e-6;
-    let limit_sq = limit_m * limit_m;
-    let n = ring.len();
-    for i in 0..n {
-        let a = ring[i];
-        let b = ring[(i + 1) % n];
-        if a[1].max(b[1]) < point[1] - dlat || a[1].min(b[1]) > point[1] + dlat {
-            continue;
-        }
-        let ax = longitude_delta(a[0] - point[0]) * m_per_deg_lon;
-        let bx = longitude_delta(b[0] - point[0]) * m_per_deg_lon;
-        if ax.max(bx) < -limit_m || ax.min(bx) > limit_m {
-            continue;
-        }
-        let ay = (a[1] - point[1]) * m_per_deg_lat;
-        let by = (b[1] - point[1]) * m_per_deg_lat;
-        let abx = bx - ax;
-        let aby = by - ay;
-        let len_sq = abx * abx + aby * aby;
-        let t = if len_sq > 0.0 {
-            (-(ax * abx + ay * aby) / len_sq).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let cx = ax + t * abx;
-        let cy = ay + t * aby;
-        if cx * cx + cy * cy <= limit_sq {
-            return true;
-        }
-    }
-    false
-}
-
-fn site_boundary_within_m(site: &DecodedSite, point: [f64; 2], limit_m: f64) -> bool {
-    let dlat = (limit_m + 50.0) / 111_000.0;
-    for part in &site.parts {
-        if point[1] < part.bbox[1] - dlat || point[1] > part.bbox[3] + dlat {
-            continue;
-        }
-        for ring in &part.rings {
-            if ring_within_m(ring, point, limit_m) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// True when every outer ring of `child` lies inside `parent` (outer minus holes), allowing
-/// vertices on or within [`COVER_EDGE_TOLERANCE_M`] of `parent`'s boundary while requiring at
-/// least one strictly interior point so adjacent touching ranges are never suppressed.
-fn covers(parent: &DecodedSite, child: &DecodedSite) -> bool {
-    if child.parts.is_empty() || parent.parts.is_empty() {
-        return false;
-    }
-    let dlat = (COVER_EDGE_TOLERANCE_M + 50.0) / 111_000.0;
-    let parent_min_lat = parent
-        .parts
-        .iter()
-        .map(|p| p.bbox[1])
-        .fold(f64::INFINITY, f64::min);
-    let parent_max_lat = parent
-        .parts
-        .iter()
-        .map(|p| p.bbox[3])
-        .fold(f64::NEG_INFINITY, f64::max);
-    child.parts.iter().all(|part| {
-        if part.bbox[1] < parent_min_lat - dlat || part.bbox[3] > parent_max_lat + dlat {
-            return false;
-        }
-        let Some(outer) = part.rings.first() else {
-            return false;
-        };
-        if outer.is_empty() {
-            return false;
-        }
-        let mut any_strictly_inside = false;
-        for &pt in outer {
-            if site_contains_point(parent, pt) {
-                any_strictly_inside = true;
-            } else if !site_boundary_within_m(parent, pt, COVER_EDGE_TOLERANCE_M) {
-                return false;
-            }
-        }
-        if any_strictly_inside {
-            return true;
-        }
-        let vertices = if outer.len() > 1 && outer.last() == outer.first() {
-            &outer[..outer.len() - 1]
-        } else {
-            outer.as_slice()
-        };
-        let reference = vertices[0][0];
-        let n = vertices.len() as f64;
-        let mean_lon = reference
-            + vertices
-                .iter()
-                .map(|p| longitude_delta(p[0] - reference))
-                .sum::<f64>()
-                / n;
-        let mean_lat = vertices.iter().map(|p| p[1]).sum::<f64>() / n;
-        site_contains_point(parent, [mean_lon, mean_lat])
-    })
 }
 
 /// Queries `<year root>/unmodelled-sites` at `(lat, lon)`.
 ///
-/// An absent file (legacy release) returns empty; a present corrupt or truncated file fails.
-pub fn query_file(path: &Path, lat: f64, lon: f64) -> Result<Vec<NearbySite>, String> {
+/// An absent file (legacy release) returns empty with zero reads; a present corrupt or truncated
+/// file fails.
+pub fn query_file(path: &Path, lat: f64, lon: f64) -> Result<QueryResult, String> {
     let mut file = match File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(QueryResult::default()),
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
     query_open_file(&mut file, lat, lon).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-fn query_open_file(file: &mut File, lat: f64, lon: f64) -> Result<Vec<NearbySite>, FormatError> {
+fn query_open_file(file: &mut File, lat: f64, lon: f64) -> Result<QueryResult, FormatError> {
     let file_len = file
         .metadata()
         .map_err(|_| FormatError("unmodelled-sites: stat failed"))?
@@ -641,7 +611,12 @@ fn query_open_file(file: &mut File, lat: f64, lon: f64) -> Result<Vec<NearbySite
     if file_len < HEADER_BYTES as u64 {
         return Err(FormatError("unmodelled-sites: truncated header"));
     }
-    let header = read_exact_at(file, 0, HEADER_BYTES)?;
+    let mut reader = MeteredFile {
+        file,
+        reads: 0,
+        bytes: 0,
+    };
+    let header = reader.read_exact_at(0, HEADER_BYTES)?;
     if &header[..8] != MAGIC {
         return Err(FormatError("unmodelled-sites: bad magic"));
     }
@@ -667,18 +642,30 @@ fn query_open_file(file: &mut File, lat: f64, lon: f64) -> Result<Vec<NearbySite
     if site_blob_start + strings_bytes as u64 > file_len {
         return Err(FormatError("unmodelled-sites: truncated sections"));
     }
-    let last_offset_bytes = read_exact_at(file, offsets_start + (site_count * 4) as u64, 4)?;
+    let last_offset_bytes = reader.read_exact_at(offsets_start + (site_count * 4) as u64, 4)?;
     let site_blob_bytes = u32_at(&last_offset_bytes, 0) as u64;
     let strings_start = site_blob_start + site_blob_bytes;
     if strings_start + strings_bytes as u64 != file_len {
         return Err(FormatError("unmodelled-sites: file length mismatch"));
     }
     if square_count == 0 || site_count == 0 {
-        return Ok(Vec::new());
+        return Ok(QueryResult {
+            sites: Vec::new(),
+            reads: reader.reads,
+            bytes: reader.bytes,
+        });
+    }
+
+    let table = reader.read_exact_at(square_table_start, square_table_bytes)?;
+    for idx in 1..square_count {
+        let prev = u32_at(&table, (idx - 1) * SQUARE_ENTRY_BYTES);
+        let curr = u32_at(&table, idx * SQUARE_ENTRY_BYTES);
+        if curr <= prev {
+            return Err(FormatError("unmodelled-sites: unsorted square table"));
+        }
     }
 
     let target_key = square_key(square_of_lonlat(lon, lat));
-    let table = read_exact_at(file, square_table_start, square_table_bytes)?;
     let mut lo = 0usize;
     let mut hi = square_count;
     let mut found = None;
@@ -695,7 +682,11 @@ fn query_open_file(file: &mut File, lat: f64, lon: f64) -> Result<Vec<NearbySite
         }
     }
     let Some(entry_idx) = found else {
-        return Ok(Vec::new());
+        return Ok(QueryResult {
+            sites: Vec::new(),
+            reads: reader.reads,
+            bytes: reader.bytes,
+        });
     };
     let p_offset = u32_at(&table, entry_idx * SQUARE_ENTRY_BYTES + 4) as usize;
     let p_len = u32_at(&table, entry_idx * SQUARE_ENTRY_BYTES + 8) as usize;
@@ -707,7 +698,7 @@ fn query_open_file(file: &mut File, lat: f64, lon: f64) -> Result<Vec<NearbySite
             "unmodelled-sites: postings range out of bounds",
         ));
     }
-    let posting_raw = read_exact_at(file, postings_start + (p_offset * 4) as u64, p_len * 4)?;
+    let posting_raw = reader.read_exact_at(postings_start + (p_offset * 4) as u64, p_len * 4)?;
     let click = [(lon + 180.0).rem_euclid(360.0) - 180.0, lat];
 
     let mut matched: Vec<(DecodedSite, bool, f64)> = Vec::new();
@@ -716,32 +707,38 @@ fn query_open_file(file: &mut File, lat: f64, lon: f64) -> Result<Vec<NearbySite
         if idx >= site_count {
             return Err(FormatError("unmodelled-sites: site index out of range"));
         }
-        let pair = read_exact_at(file, offsets_start + (idx * 4) as u64, 8)?;
+        let pair = reader.read_exact_at(offsets_start + (idx * 4) as u64, 8)?;
         let start = u32_at(&pair, 0) as u64;
         let end = u32_at(&pair, 4) as u64;
         if end < start || end > site_blob_bytes {
             return Err(FormatError("unmodelled-sites: bad site offset"));
         }
-        let raw = read_exact_at(file, site_blob_start + start, (end - start) as usize)?;
-        let site = decode_site(&raw, file, strings_start, strings_bytes)?;
+        let raw = reader.read_exact_at(site_blob_start + start, (end - start) as usize)?;
+        let site = decode_site(
+            idx as u32,
+            site_count,
+            &raw,
+            &mut reader,
+            strings_start,
+            strings_bytes,
+        )?;
         let (inside, distance_m) = site_distance_m(&site, click);
         if inside || distance_m <= f64::from(site.reach_m) {
             matched.push((site, inside, distance_m));
         }
     }
 
-    // Suppress nested child sites fully covered by a larger matched site (equal area -> lower id wins).
+    // Suppress nested child sites covered by a matched parent, never hiding a site the click lies
+    // inside when the covering parent does not contain the click (e.g. a hole).
     let kept: Vec<usize> = (0..matched.len())
         .filter(|&i| {
-            let child = &matched[i].0;
+            let (child, child_inside, _) = &matched[i];
             !(0..matched.len()).any(|j| {
                 if i == j {
                     return false;
                 }
-                let parent = &matched[j].0;
-                let beats = parent.area_m2 > child.area_m2
-                    || (parent.area_m2 == child.area_m2 && parent.group_key < child.group_key);
-                beats && covers(parent, child)
+                let (parent, parent_inside, _) = &matched[j];
+                (!*child_inside || *parent_inside) && child.covered_by.contains(&parent.site_index)
             })
         })
         .collect();
@@ -768,7 +765,11 @@ fn query_open_file(file: &mut File, lat: f64, lon: f64) -> Result<Vec<NearbySite
             .then_with(|| a.group_key.cmp(&b.group_key))
     });
     out.truncate(MAX_REPORTED);
-    Ok(out)
+    Ok(QueryResult {
+        sites: out,
+        reads: reader.reads,
+        bytes: reader.bytes,
+    })
 }
 
 #[cfg(test)]

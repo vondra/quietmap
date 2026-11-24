@@ -305,6 +305,9 @@ fn military_range_admission_separates_active_ranges_from_quiet_and_non_firing_la
         vec![("landuse", "industrial"), ("military", "danger_area")],
         vec![("landuse", "quarry"), ("military", "danger_area")],
         vec![("railway", "yard"), ("military", "training_area")],
+        vec![("military", "range"), ("shooting:range", "indoor")],
+        vec![("military", "range"), ("construction", "yes")],
+        vec![("military", "range"), ("proposed", "yes")],
     ] {
         assert!(!is_active_military_range(&rejected), "{rejected:?}");
         assert_ne!(
@@ -320,6 +323,15 @@ fn military_range_admission_separates_active_ranges_from_quiet_and_non_firing_la
     ]));
     assert!(has_military_shooting_veto(&[
         ("was:military", "range"),
+        ("sport", "shooting")
+    ]));
+    assert!(has_military_shooting_veto(&[
+        ("landuse", "military"),
+        ("disused", "yes"),
+        ("sport", "shooting")
+    ]));
+    assert!(has_military_shooting_veto(&[
+        ("abandoned:landuse", "military"),
         ("sport", "shooting")
     ]));
     assert!(!has_military_shooting_veto(&[("sport", "shooting")]));

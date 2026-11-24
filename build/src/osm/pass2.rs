@@ -284,9 +284,9 @@ fn apply_way(
 }
 
 /// Suppress only the family represented by an assembled outer relation. A
-/// building member can carry a separate power/sport feature absent on its parent,
-/// and an active military range relation never suppresses an emitting industrial
-/// outer way (nor vice versa).
+/// building member can carry a separate power/sport feature absent on its parent;
+/// an active military range relation never suppresses an emitting industrial outer
+/// way (nor vice versa), and always suppresses civilian shooting on its outer way.
 fn relation_covers_kind(
     id: i64,
     kind: &FeatureType,
@@ -295,14 +295,19 @@ fn relation_covers_kind(
 ) -> bool {
     let way_military =
         *kind == FeatureType::Industrial && classify::is_active_military_range_map(way_tags);
+    let way_shooting = *kind == FeatureType::Leisure
+        && classify::special_leisure_class(|key| way_tags.get(key).map(String::as_str)) == Some(11);
     manifest.way_to_relations.get(&id).is_some_and(|parents| {
         parents.iter().any(|(id, role)| {
             (role.is_empty() || role == "outer")
                 && manifest.relations.get(id).is_some_and(|relation| {
+                    let rel_military = relation.feature_types.contains(&FeatureType::Industrial)
+                        && classify::is_active_military_range_map(&relation.tags);
+                    if way_shooting && rel_military {
+                        return true;
+                    }
                     relation.feature_types.contains(kind)
-                        && (*kind != FeatureType::Industrial
-                            || classify::is_active_military_range_map(&relation.tags)
-                                == way_military)
+                        && (*kind != FeatureType::Industrial || rel_military == way_military)
                 })
         })
     })

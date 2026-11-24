@@ -88,24 +88,28 @@ fn lifecycle_key(key: &str) -> bool {
     .any(|prefix| key == *prefix || key.strip_prefix(prefix).is_some_and(|s| s.starts_with(':')))
 }
 
-const MILITARY_LIFECYCLE_PREFIXES: &[&str] = &[
-    "disused",
-    "abandoned",
-    "historic",
-    "razed",
-    "demolished",
-    "construction",
-    "proposed",
-    "was",
-    "former",
-    "removed",
-    "ruins",
-    "destroyed",
+const MILITARY_LIFECYCLE: [(&str, &str, &str); 12] = [
+    ("disused", "disused:military", "disused:landuse"),
+    ("abandoned", "abandoned:military", "abandoned:landuse"),
+    ("historic", "historic:military", "historic:landuse"),
+    ("razed", "razed:military", "razed:landuse"),
+    ("demolished", "demolished:military", "demolished:landuse"),
+    (
+        "construction",
+        "construction:military",
+        "construction:landuse",
+    ),
+    ("proposed", "proposed:military", "proposed:landuse"),
+    ("was", "was:military", "was:landuse"),
+    ("former", "former:military", "former:landuse"),
+    ("removed", "removed:military", "removed:landuse"),
+    ("ruins", "ruins:military", "ruins:landuse"),
+    ("destroyed", "destroyed:military", "destroyed:landuse"),
 ];
 
 fn military_lifecycle_key(key: &str) -> bool {
-    MILITARY_LIFECYCLE_PREFIXES.iter().any(|prefix| {
-        key == *prefix || key.strip_prefix(prefix).is_some_and(|s| s.starts_with(':'))
+    MILITARY_LIFECYCLE.iter().any(|&(prefix, _, _)| {
+        key == prefix || key.strip_prefix(prefix).is_some_and(|s| s.starts_with(':'))
     })
 }
 
@@ -129,66 +133,60 @@ fn is_military_range_value(value: &str) -> bool {
     matches!(value, "range" | "training_area" | "danger_area")
 }
 
-const MILITARY_LIFECYCLE_KEYS: [&str; 12] = [
-    "disused:military",
-    "abandoned:military",
-    "historic:military",
-    "razed:military",
-    "demolished:military",
-    "construction:military",
-    "proposed:military",
-    "was:military",
-    "former:military",
-    "removed:military",
-    "ruins:military",
-    "destroyed:military",
-];
+fn has_military_inactive_lookup<'a>(tag: &impl Fn(&str) -> Option<&'a str>) -> bool {
+    tag("end_date").is_some_and(truthy_tag)
+        || MILITARY_LIFECYCLE.iter().any(|&(prefix, mil_key, lu_key)| {
+            tag(prefix).is_some_and(truthy_tag)
+                || tag(mil_key).is_some_and(truthy_tag)
+                || tag(lu_key).is_some_and(truthy_tag)
+        })
+}
 
-/// True when any active or lifecycle-prefixed military firing/training/danger tag is present, so a
-/// military range (active, disused, non-firing or node) never falls through to the civilian 20,000
-/// shots/yr shooting emitter.
+/// True when any active or lifecycle-prefixed military firing/training/danger tag is present, or
+/// when an inactive `landuse=military` site carries a shooting tag, so military facilities never
+/// fall through to the civilian 20,000 shots/yr shooting emitter.
 pub fn has_military_shooting_veto_lookup<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
     tag("military").is_some_and(is_military_range_value)
-        || MILITARY_LIFECYCLE_KEYS
+        || MILITARY_LIFECYCLE
             .iter()
-            .any(|key| tag(key).is_some_and(is_military_range_value))
+            .any(|&(_, mil_key, _)| tag(mil_key).is_some_and(is_military_range_value))
+        || (tag("landuse") == Some("military") && has_military_inactive_lookup(&tag))
+        || MILITARY_LIFECYCLE
+            .iter()
+            .any(|&(_, _, lu_key)| tag(lu_key) == Some("military"))
 }
 
 pub fn has_military_shooting_veto<'a>(tags: &[(&'a str, &'a str)]) -> bool {
     has_military_shooting_veto_lookup(|key| tags.iter().find(|&&(k, _)| k == key).map(|&(_, v)| v))
 }
 
-fn has_military_inactive_tag<'a>(tags: &[(&'a str, &'a str)]) -> bool {
+fn has_indoor_shooting_tag(tags: &[(&str, &str)]) -> bool {
     tags.iter().any(|&(k, v)| {
-        if k == "end_date" {
-            return truthy_tag(v);
-        }
-        if let Some((prefix, feature)) = k.split_once(':') {
-            return MILITARY_LIFECYCLE_PREFIXES.contains(&prefix)
-                && matches!(feature, "military" | "landuse")
-                && truthy_tag(v);
-        }
-        matches!(
-            k,
-            "disused" | "abandoned" | "ruins" | "razed" | "demolished" | "historic"
-        ) && truthy_tag(v)
+        (k == "shooting" || k.starts_with("shooting:"))
+            && v.split([';', ',', '/']).any(|part| {
+                matches!(
+                    normalized_sport_token(part).as_str(),
+                    "indoor" | "indoor_range" | "virtual"
+                )
+            })
     })
 }
 
 /// One universal admission rule for active open-air military firing ranges, training areas and
 /// danger areas: keeps real land ranges, drops barracks/bases/bunkers/bare `landuse=military`,
-/// inactive/lifecycle ranges, roofed buildings, offshore sea boxes, and non-firing UXO/minefield/
-/// nuclear/buffer-zone overlays.
+/// inactive/lifecycle ranges, roofed or indoor ranges, offshore sea boxes, and non-firing UXO/
+/// minefield/nuclear/buffer-zone overlays.
 pub fn is_active_military_range<'a>(tags: &[(&'a str, &'a str)]) -> bool {
     let tag = |key: &str| tags.iter().find(|&&(k, _)| k == key).map(|&(_, v)| v);
     let Some(military) = tag("military").filter(|v| is_military_range_value(v)) else {
         return false;
     };
-    if is_emitting_industrial(tag) || has_military_inactive_tag(tags) {
+    if is_emitting_industrial(tag) || has_military_inactive_lookup(&tag) {
         return false;
     }
     if tag("building").is_some_and(|v| v != "no")
         || tag("indoor").is_some_and(|v| v != "no")
+        || has_indoor_shooting_tag(tags)
         || tag("area") == Some("no")
         || tag("seamark:type").is_some()
     {

@@ -77,6 +77,13 @@ fn outer_building_keeps_its_independent_source_family() {
         &range_tags,
         &range_manifest
     ));
+    let shooting_way: Tags = [("sport".into(), "shooting".into())].into();
+    assert!(super::relation_covers_kind(
+        10,
+        &FeatureType::Leisure,
+        &shooting_way,
+        &range_manifest
+    ));
 }
 
 use super::{centroid, facility_part_tags, ring_for_spill};
