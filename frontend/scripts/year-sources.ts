@@ -129,7 +129,11 @@ export function renderYearSources(page: string, years: NamedYear[]): string {
     return [
       `### ${escapeMarkdown(name)}`,
       `Map state: immediately before **${manifest.as_of}**.${scope === 'world' ? ` Flows: **${manifest.flows.start} to ${manifest.flows.end}**, excluding the last day.${flowExclusions(manifest)}` : ''}`,
-      noRoadCounts ? 'No road count at or before this year is used for this country. Traffic follows the [global model](/about/data-preparation) and mapped buildings, or any 2026 country or network table described under Roads above.' : '',
+      noRoadCounts
+        ? (name === '2026'
+          ? 'No road count at or before this year is used for this country. Traffic follows the [global model](/about/data-preparation) and mapped buildings, or any 2026 country or network table described under Roads above.'
+          : 'No road count at or before this year is used for this country. Traffic follows the [global model](/about/data-preparation) and mapped buildings.')
+        : '',
       lines.length ? lines.join('\n\n') : 'No separate local dataset; the world and regional sources apply.',
     ].filter(Boolean).join('\n\n')
   })

@@ -46,7 +46,7 @@ Surface metro sections are included; see the [railway method](/about/data-prepar
 
 ## Industry
 
-- Coal, gas and nuclear plants, LNG terminals and solar farms: Global Energy Monitor lists, operating units only, matched to OpenStreetMap industrial areas within 1.5 km. Wind farms are not used.
+- Coal, gas and nuclear plants, LNG terminals and solar farms: Global Energy Monitor lists (operating units on the 2026 map; on the 2024 map, dated commissioning and retirement filters apply and undated records classify a matching footprint while its historical operation remains unknown), matched to OpenStreetMap industrial areas within 1.5 km. Wind farms are not used.
 - Steel works, cement plants, coal mines: GEM trackers.
 - Other factories: OSM polygons with a generic sound level.
 

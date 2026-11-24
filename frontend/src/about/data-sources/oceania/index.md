@@ -5,7 +5,7 @@ intro: Rail timetables in Australia, road traffic counts in New Zealand, class d
 
 <!-- SUBPAGES -->
 
-Australia has train timetables for five states (on the 2024 map, four from 2024 archives plus New South Wales as a declared 2026 fallback vintage) and no traffic counts loaded. New Zealand has measured traffic on state highways and Auckland streets (on the 2024 map, Auckland counts dated before 2025-01-01 plus the April 2026 NZTA carriageway snapshot as a declared fallback vintage) and no train timetable loaded.
+Australia has train timetables for five states (on the 2024 map, four from 2024 archives plus New South Wales as a declared 2026 fallback vintage) and no traffic counts loaded. New Zealand has published traffic estimates on state highways and measured counts on Auckland streets (on the 2024 map, Auckland counts dated before 2025-01-01 plus the April 2026 NZTA carriageway snapshot as a declared fallback vintage) and no train timetable loaded.
 
 No traffic counts were found for Fiji, New Caledonia, Papua New Guinea or Samoa. Streets carry the trips their buildings make, and secondary and tertiary roads follow a model of the trips made within 5 km. Motorways, trunk and primary roads use the [world defaults](/about/data-preparation) in Australia, Fiji, Papua New Guinea and Samoa; in New Zealand, and in New Caledonia, which the map treats as part of France, uncounted ones follow one model of the trips made around them, fitted on counted roads. Most of these islands have no railway. Power plants come from Global Energy Monitor.
 

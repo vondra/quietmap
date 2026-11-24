@@ -37,7 +37,7 @@ Motorcycles: where counted roads nearby count them, their share; otherwise the c
 
 Homes emit their air conditioners: 2.37 per household in Japan, 1.46 in China, 0.29 in South-East Asia, 0.16 in South Asia. Mosques call five times a day at their own prayer times, with country rules: Indonesia adds the recitation before the call, Saudi Arabia the iqama, calling at a third of the power, and Turkey the sala; mosques in China, Tajikistan and Singapore do not call outside, and in Japan, South Korea, Taiwan, Hong Kong and Macao only those with a mapped minaret call, once on Fridays.
 
-No Asian country has a wind turbine register or a national building register loaded: wind turbines are OpenStreetMap's, one without tagged values at 105 dB(A), the fleet median, on a 105 m hub. Building heights come from the global sources described in the [data preparation](/about/data-preparation).
+No Asian country has a wind turbine register loaded: wind turbines are OpenStreetMap's, one without tagged values at 105 dB(A), the fleet median, on a 105 m hub. Building heights use Japan's measured PLATEAU survey in Tokyo, Osaka and Sapporo and the global sources described in [data preparation](/about/data-preparation) elsewhere.
 
 Ships along Asian coasts come from Global Fishing Watch, which has no separate class for yachts and pleasure boats: boats without AIS are missing, while pleasure craft with AIS count as large ships on the 2026 map and are not separated from work boats on the 2024 map. The Mediterranean and Black Sea coasts of Turkey, Syria, Lebanon, Israel and Georgia carry EMODnet 2024 instead, pleasure boats included; the Caspian Sea has almost no ship data.
 

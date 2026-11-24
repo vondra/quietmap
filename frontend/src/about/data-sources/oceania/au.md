@@ -39,7 +39,7 @@ Freight is not covered: the Pilbara iron ore lines and the Hunter Valley coal li
 
 ## Industry
 
-Power plants: Global Energy Monitor power tracker, operating plants only, supplementing the WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. A plant is a noise source only where OSM maps an industrial area at its location.
+Power plants: Global Energy Monitor power tracker (operating plants on the 2026 map; undated records classify a matching 2024 footprint while its historical operation remains unknown), supplementing the WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. A plant is a noise source only where OSM maps an industrial area at its location.
 
 Wind turbines are OSM points. The Clean Energy Regulator lists wind farms by postcode only, so missing specs cannot be filled from a register; a turbine without a tagged rating takes the fleet's median sound power, 105 dB(A) at full power, and one without a tagged hub height stands 105 m high.
 
