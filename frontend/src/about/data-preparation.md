@@ -33,7 +33,8 @@ Every input follows one uniform admission rule by kind:
   still apply to earlier years unless dated evidence shows a different practice. Where no
   target-year or earlier activity dataset exists, the nearest later vintage may be declared
   explicitly as a **fallback vintage**: its signed vintage gap is derived from the manifest and
-  shown in popup citations and on the source pages, alongside its reason on the source pages.
+  shown on the source pages alongside its reason (and in popup citations for datasets cited in the
+  popup).
 
 A fitted table is admitted only when every input used to derive it is admitted. For example,
 traffic counts divided by a newer mapped road length cannot supply an earlier year's rate. A
@@ -634,8 +635,9 @@ maps of 2022.
 A dated operating interval or an earlier observed status determines a site's operating state. A
 facility that opens on or after the map cutoff is skipped before matching so it neither classifies
 nor silences an earlier mapped tenant. A site retired after the cutoff, or scheduled only for a
-planned retirement, was operating at the cutoff, and a newer closure record cannot silence another
-tenant described by a different register.
+future planned retirement where prior operation is dated, was operating at the cutoff (an undated
+planned retirement does not invent prior operation), and a newer closure record cannot silence
+another tenant described by a different register.
 Conflicting evidence stays unknown. An undated record from a later structure register still
 classifies a matching earlier mapped footprint while its operation remains unknown
 (never inventing confirmation that the site was running). Names can suggest a sector but do not

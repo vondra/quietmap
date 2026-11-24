@@ -5,7 +5,7 @@ intro: Passenger rail timetables for five states (four 2024 archives plus New So
 
 ## Roads
 
-No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts on the 2026 map and on qualifying counted networks worldwide on the 2024 map, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
 
 Australia has no national traffic database. Five states publish counts under CC BY 4.0; loaders for them are not yet written.
 

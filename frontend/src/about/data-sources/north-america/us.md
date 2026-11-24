@@ -13,7 +13,7 @@ Day, evening and night split: [FHWA TMAS](https://www.fhwa.dot.gov/policyinforma
 
 Minor collectors and local streets are not in HPMS, whose values reach 60 % of the length of motorways, trunks and primaries and 1 % of secondary, tertiary and unclassified roads. Uncounted local streets carry the trips their buildings make, secondary and tertiary roads the trips made within 5 km of them. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)).
 
-Vehicle mix: where not counted, FHWA's state mix by road group and area ([Highway Statistics](https://www.fhwa.dot.gov/policyinformation/statistics.cfm), table VM-4), motorcycles included; electric cars 1.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 105 km/h.
+Vehicle mix: where not counted, FHWA's state mix by road group and area ([Highway Statistics](https://www.fhwa.dot.gov/policyinformation/statistics.cfm), table VM-4), motorcycles included; electric cars 1.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 105 km/h on the 2026 map (80 km/h world default on the 2024 map).
 
 Unsigned roads: a primary road 64 km/h in towns, 89 outside (cars drive 75 on a two-way one).
 

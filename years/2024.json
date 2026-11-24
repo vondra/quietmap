@@ -10304,7 +10304,7 @@
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "Original CIS path bitmap calendars averaged over their own published 2025–2026 service window (passenger traffic codes 11 and C1–C4), applied as a declared fallback vintage for 2024.",
+      "description": "Original CIS path bitmap calendars averaged over their published service window (passenger traffic codes 11 and C1–C4), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "The 2024 national CIS timetable archive is no longer published; the 2025/2026 timetable is used as the nearest later vintage."
       }
@@ -10342,7 +10342,7 @@
       "licence": "open-data",
       "public_ok": true,
       "depends_on": [],
-      "description": "Dubai RTA Metro and tram GTFS service calendars averaged over their own published 2025-08-29 to 2025-12-31 window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
+      "description": "Dubai RTA tram GTFS service calendars (one tram route selected; averaged over the published window including exceptions and weekends), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "No 2024 Dubai Metro/Tram archive was found; the August 2025 RTA timetable is used as the nearest later vintage."
       }
@@ -10374,13 +10374,13 @@
       "url": "https://gtfs.sofiatraffic.bg/api/v1/static",
       "observed": {
         "start": "2026-06-13",
-        "end": "2027-06-12"
+        "end": "2027-06-13"
       },
       "published": null,
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Sofia Traffic Metro and tram GTFS service calendars averaged over their own published 2026-06-13 to 2027-06-12 window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
+      "description": "Sofia Traffic Metro and tram GTFS service calendars averaged over the full published window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "No 2024 Sofia Metro/tram archive was found; the 2026/2027 Sofia Traffic timetable is used as the nearest later vintage."
       }
@@ -10418,7 +10418,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Greek rail community GTFS service calendars averaged over their own published 2026-07-08 to 2026-11-29 window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
+      "description": "Greek rail community GTFS service calendars averaged over their published window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "No 2024 Greek rail GTFS archive was found; the 2026 community timetable is used as the nearest later vintage."
       }
@@ -10437,7 +10437,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "HŽ Putnički prijevoz GTFS service calendars averaged over their own published 2025-12-08 to 2026-12-07 window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
+      "description": "HŽ Putnički prijevoz GTFS service calendars averaged over the first 365 days of the published 2025-12-08 to 2026-12-13 calendar (capped at the 366-day fallback window limit; including exceptions and weekends), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "No 2024 HŽ Putnički prijevoz archive was found; the 2025/2026 timetable is used as the nearest later vintage."
       }
@@ -10456,7 +10456,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "MÁV rail GTFS service calendars averaged over their own published 2026-02-13 to 2026-12-13 window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
+      "description": "MÁV rail GTFS service calendars averaged over their published window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "No 2024 MÁV rail archive was found; the 2026 timetable is used as the nearest later vintage."
       }
@@ -10475,7 +10475,7 @@
       "licence": "mixed (per-operator)",
       "public_ok": true,
       "depends_on": [],
-      "description": "Indian Railways community GTFS service calendars averaged over their own published 2026-08-30 to 2026-09-30 window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
+      "description": "Indian Railways community GTFS service calendars averaged over their published window (including exceptions and weekends), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "No 2024 Indian Railways GTFS archive was found; the August 2026 timetable is used as the nearest later vintage."
       }
@@ -10507,13 +10507,13 @@
       "url": "https://files.mobilitydatabase.org/mdb-2265/mdb-2265-202608040036/mdb-2265-202608040036.zip",
       "observed": {
         "start": "2026-08-03",
-        "end": "2026-08-31"
+        "end": "2026-10-04"
       },
       "published": "2026-08-29",
       "licence": "Provider terms; no published open licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "Charlotte CATS light-rail and streetcar GTFS service calendars averaged over their own published 2026-08-03 to 2026-08-31 window (including exceptions and weekends; Mobility Database mdb-2265-202608040036), applied as a declared fallback vintage for 2024.",
+      "description": "Charlotte CATS light-rail and streetcar GTFS service calendars averaged over the full published window (including exceptions and weekends; Mobility Database mdb-2265-202608040036), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "No 2024 Charlotte CATS rail archive was found; the August 2026 Mobility Database timetable is used as the nearest later vintage."
       }
@@ -10532,7 +10532,7 @@
       "licence": "Provider terms; no published open licence",
       "public_ok": true,
       "depends_on": [],
-      "description": "Honolulu Skyline GTFS service calendars averaged over their own published 2026-07-01 to 2026-08-22 window (including exceptions and weekends; Mobility Database mdb-2350-202607090002), applied as a declared fallback vintage for 2024.",
+      "description": "Honolulu Skyline GTFS service calendars averaged over the full published window (including exceptions and weekends; Mobility Database mdb-2350-202607090002), applied as a declared fallback vintage for 2024.",
       "fallback_vintage": {
         "reason": "No 2024 Honolulu Skyline archive was found; the July 2026 Mobility Database timetable is used as the nearest later vintage."
       }
