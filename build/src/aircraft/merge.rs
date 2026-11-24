@@ -7,6 +7,7 @@ use super::echoes::suppress_anonymous_echoes;
 use super::filters::point_is_sane;
 use super::trace::{
     AircraftTrace, CallsignChange, SECONDARY_PROVIDER, TracePoint, address_identity,
+    is_concrete_category,
 };
 use std::collections::HashMap;
 
@@ -107,12 +108,25 @@ fn merge_one_address(primary: &mut AircraftTrace, secondary: AircraftTrace) -> (
         }
         kept_points.push(point);
     }
-    let kept = kept_points.len() as u64;
-    if kept == 0 {
-        return (0, covered);
+    if !is_concrete_category(primary.emitter_category)
+        && (primary.emitter_category == 0 || is_concrete_category(secondary.emitter_category))
+    {
+        primary.emitter_category = secondary.emitter_category;
     }
     if primary.aircraft_type.trim().is_empty() {
         primary.aircraft_type = secondary.aircraft_type;
+        primary.registration = secondary.registration;
+    } else if primary.registration.trim().is_empty()
+        && primary
+            .aircraft_type
+            .trim()
+            .eq_ignore_ascii_case(secondary.aircraft_type.trim())
+    {
+        primary.registration = secondary.registration;
+    }
+    let kept = kept_points.len() as u64;
+    if kept == 0 {
+        return (0, covered);
     }
     // Interleave by time; a primary sample goes first on equal times.
     let primary_points = std::mem::take(&mut primary.points);

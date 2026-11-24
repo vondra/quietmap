@@ -126,6 +126,19 @@ fn addresses_group_by_namespace_and_reject_reserved_values() {
 }
 
 #[test]
+fn concrete_emitter_category_upgrades_zero_or_no_info_and_reads_registration() {
+    let raw = gz(
+        r#"{"icao":"49d1a8","r":"OK-TVP","t":"B738","timestamp":1000,"trace":[
+            [10,50.0,14.0,1000.0,120.0,90.0,0,0,{"flight":"OKCDA   ","category":"A0"}],
+            [20,50.001,14.001,1100.0,122.0,90.0,0,0,{"flight":"OKCDA   ","category":"A1"}]
+        ]}"#,
+    );
+    let trace = parse_trace(&raw).unwrap().unwrap();
+    assert_eq!(trace.registration, "OK-TVP");
+    assert_eq!(trace.emitter_category, 0xa1);
+}
+
+#[test]
 fn retained_points_carry_their_callsign_changes_forward() {
     let raw = gz(r#"{"icao":"49d328","timestamp":0,"trace":[
             [0,50.0,14.0,1000.0,250.0,90.0,0,0,{"flight":"AAA"}],

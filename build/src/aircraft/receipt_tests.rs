@@ -48,6 +48,7 @@ fn each_trace_counts_once_per_utc_hour_of_the_day() {
     };
     let trace = |address: &str, offsets: &[f64]| AircraftTrace {
         address: address.into(),
+        registration: String::new(),
         aircraft_type: "B738".into(),
         emitter_category: 0,
         points: offsets.iter().map(|&o| point(o)).collect(),

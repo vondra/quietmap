@@ -51,11 +51,18 @@ pub struct CallsignChange {
 pub struct AircraftTrace {
     /// As in the archive: six hex digits, `~` first for a non-ICAO (TIS-B, anonymous) address.
     pub address: String,
+    pub registration: String,
     pub aircraft_type: String,
     /// ADS-B emitter category as a hex-like byte (`A3` is 0xA3); 0 when never reported.
     pub emitter_category: u8,
     pub points: Vec<TracePoint>,
     pub callsigns: Vec<CallsignChange>,
+}
+
+/// Whether `emitter_category` carries a concrete DO-260B category (`A1..D7`, excluding `0` and
+/// the `A0`/`B0`/`C0`/`D0` "no category information" values).
+pub fn is_concrete_category(emitter_category: u8) -> bool {
+    emitter_category != 0 && (emitter_category & 0x0f) != 0
 }
 
 impl AircraftTrace {

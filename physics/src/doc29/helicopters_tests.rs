@@ -180,9 +180,12 @@ fn designators_without_easa_levels_read_their_mass_class() {
             "{designator}"
         );
     }
-    // Any other rotorcraft the mapping routes to the helicopter class reads the light class.
-    let unlisted = AircraftType::of(profile_idx("H199"), "H199").helicopter;
-    assert_eq!(unlisted, Some(Light.levels()));
+    // Any other rotorcraft the mapping routes to the helicopter class reads its Doc 8643 wake
+    // mass class (L/- → Light, M/H → Heavy).
+    let unlisted_light = AircraftType::of(profile_idx("ALO2"), "ALO2").helicopter;
+    assert_eq!(unlisted_light, Some(Light.levels()));
+    let unlisted_heavy = AircraftType::of(profile_idx("NH90"), "NH90").helicopter;
+    assert_eq!(unlisted_heavy, Some(Heavy.levels()));
     let spec = [(Light, 83.1), (Medium, 84.4), (Heavy, 89.7)];
     for (class, level) in spec {
         assert!(

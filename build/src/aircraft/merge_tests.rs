@@ -7,6 +7,7 @@ use super::*;
 fn track(address: &str, times: &[f64], lat: f32) -> AircraftTrace {
     AircraftTrace {
         address: address.into(),
+        registration: String::new(),
         aircraft_type: "B738".into(),
         emitter_category: 0,
         points: times
@@ -179,4 +180,19 @@ fn a_duplicate_under_another_identity_stays_on_the_baseline() {
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].address, "4ca011");
     assert!(merged[0].points.iter().all(|p| !p.is_secondary()));
+}
+
+#[test]
+fn covered_secondary_upgrades_category_and_keeps_registration_paired_with_type() {
+    let mut primary = track("49d1a8", &[0.0, 5.0], 50.0);
+    primary.emitter_category = 0xa0;
+    let mut secondary = track("49d1a8", &[0.0, 5.0], 50.0);
+    secondary.aircraft_type = "SR20".into();
+    secondary.registration = "OK-CDA".into();
+    secondary.emitter_category = 0xa1;
+    let (merged, counts) = merge_providers(vec![primary], vec![secondary]);
+    assert_eq!(counts.secondary_points_kept, 0);
+    assert_eq!(merged[0].emitter_category, 0xa1);
+    assert_eq!(merged[0].aircraft_type, "B738");
+    assert_eq!(merged[0].registration, "");
 }

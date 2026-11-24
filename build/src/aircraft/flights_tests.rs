@@ -30,6 +30,7 @@ fn ground(timestamp: f64, speed_kt: f32) -> TracePoint {
 fn trace(designator: &str, points: Vec<TracePoint>, callsigns: &[(usize, &str)]) -> AircraftTrace {
     AircraftTrace {
         address: "49d328".into(),
+        registration: String::new(),
         aircraft_type: designator.into(),
         emitter_category: 0,
         points,
@@ -266,4 +267,103 @@ fn a_rotation_of_unknown_type_flies_by_its_whole_flight() {
         Some(light)
     );
     assert_eq!(rotation_profile("", 0xB1, "", &slow), None);
+}
+
+#[test]
+fn stale_database_types_yield_to_contradicting_aircraft_broadcasts() {
+    let slow_points = vec![
+        TracePoint {
+            ground_speed_kt: 120.0,
+            ..air(1_000.0, 49.78, 2_500.0)
+        },
+        TracePoint {
+            ground_speed_kt: 124.0,
+            ..air(1_010.0, 49.79, 2_500.0)
+        },
+        ground(1_020.0, 5.0),
+        ground(1_700.0, 5.0),
+        TracePoint {
+            ground_speed_kt: 118.0,
+            ..air(1_710.0, 49.80, 2_500.0)
+        },
+        TracePoint {
+            ground_speed_kt: 122.0,
+            ..air(1_720.0, 49.81, 2_500.0)
+        },
+    ];
+    let mut okcda = trace("B738", slow_points, &[(0, "OKCDA")]);
+    okcda.address = "49d1a8".into();
+    okcda.registration = "OK-TVP".into();
+    let flights = trace_to_flights(okcda, ADSB_LOL, ADSB_EXCHANGE);
+    assert_eq!(flights.len(), 2);
+    for flight in &flights {
+        assert_eq!(flight.profile, profile_idx("C172"));
+        assert_eq!(flight.airframe, Airframe::Propeller);
+        assert_eq!(flight.aircraft_type, "");
+    }
+    assert_eq!(
+        (flights[0].callsign.as_str(), flights[1].callsign.as_str()),
+        ("OKCDA", "")
+    );
+
+    // Matching registration (or suffix abbreviation) and airline flight numbers do not contradict.
+    assert!(registration_contradicts("OK-TVP", "OKCDA"));
+    assert!(!registration_contradicts("OK-TVP", "OKTVP"));
+    assert!(!registration_contradicts("OK-TVP", "TVP"));
+    assert!(!registration_contradicts("OK-TVP", "OK123"));
+    assert!(!registration_contradicts("OK-TVP", "TVS100P"));
+    assert!(registration_contradicts("N12345", "N54321"));
+    assert!(!registration_contradicts("N12345", "N12345AB"));
+    assert!(!registration_contradicts("N12345", "N12IO"));
+
+    // Fast business jets with factory A1 category keep their type; slow stale airliners with A1,
+    // rotorcraft A7 on a fixed-wing type, or large/heavy A3..A5 on a light piston contradict.
+    assert!(!category_contradicts_type("E55P", 0xA1, false, false));
+    assert!(category_contradicts_type("B738", 0xA1, true, false));
+    assert!(!category_contradicts_type("B738", 0xA1, false, true));
+    assert!(category_contradicts_type("B738", 0xA7, true, false));
+    assert!(category_contradicts_type("C172", 0xA5, false, true));
+
+    // A fast rotation whose registration contradicts the header and has no concrete category
+    // clears its displayed aircraft_type while keeping its profile off the fallback.
+    let mut fast_reassigned = trace(
+        "B738",
+        vec![
+            TracePoint {
+                ground_speed_kt: 240.0,
+                ..air(100.0, 50.0, 12_000.0)
+            },
+            TracePoint {
+                ground_speed_kt: 250.0,
+                ..air(110.0, 50.02, 12_000.0)
+            },
+        ],
+        &[(0, "OKCDA")],
+    );
+    fast_reassigned.registration = "OK-TVP".into();
+    let fast_flights = trace_to_flights(fast_reassigned, ADSB_LOL, ADSB_EXCHANGE);
+    assert_eq!(fast_flights.len(), 1);
+    assert_eq!(fast_flights[0].profile, profile_idx("B738"));
+    assert_eq!(fast_flights[0].aircraft_type, "");
+
+    let mut stale_glid = trace(
+        "GLID",
+        vec![
+            TracePoint {
+                ground_speed_kt: 110.0,
+                ..air(100.0, 47.5, 3_000.0)
+            },
+            TracePoint {
+                ground_speed_kt: 115.0,
+                ..air(110.0, 47.51, 3_000.0)
+            },
+        ],
+        &[(0, "OEFKL")],
+    );
+    stale_glid.registration = "OE-CEM".into();
+    stale_glid.emitter_category = 0xa1;
+    let rescued = trace_to_flights(stale_glid, ADSB_LOL, ADSB_EXCHANGE);
+    assert_eq!(rescued.len(), 1);
+    assert_eq!(rescued[0].profile, profile_idx("C172"));
+    assert_eq!(rescued[0].aircraft_type, "");
 }

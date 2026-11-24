@@ -16,7 +16,7 @@
 use std::sync::LazyLock;
 
 use super::npd::{is_helicopter_class, read_npd};
-use super::profiles_generated::NUM_CLASSES;
+use super::profiles_generated::{NUM_CLASSES, doc8643_type};
 use super::thrust::PowerBracket;
 
 /// Certified levels of one helicopter type at 150 m.
@@ -124,8 +124,7 @@ const WITHOUT_LEVELS: [(&str, HelicopterMassClass); 9] = [
 ];
 
 /// Certified levels of a designator of the helicopter class: its own EASA record, else its mass
-/// class; any other rotorcraft the mapping routes there reads the light class (the gyroplane
-/// prior of dev4).
+/// class (from `WITHOUT_LEVELS` or its ICAO Doc 8643 wake category `M`/`H` vs `L`/`-`).
 pub fn helicopter_levels(designator: &str) -> HelicopterLevels {
     if let Some((_, levels)) = CERTIFIED
         .iter()
@@ -133,11 +132,16 @@ pub fn helicopter_levels(designator: &str) -> HelicopterLevels {
     {
         return *levels;
     }
-    WITHOUT_LEVELS
+    if let Some(&(_, class)) = WITHOUT_LEVELS
         .iter()
         .find(|(listed, _)| *listed == designator)
-        .map_or(HelicopterMassClass::Light, |&(_, class)| class)
-        .levels()
+    {
+        return class.levels();
+    }
+    match doc8643_type(designator) {
+        Some((_, b'M' | b'H')) => HelicopterMassClass::Heavy.levels(),
+        _ => HelicopterMassClass::Light.levels(),
+    }
 }
 
 /// The helicopter class curve at 150 m: approach (level and descent) and departure (climb) SEL.
