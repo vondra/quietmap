@@ -1,20 +1,26 @@
 //! Generated profile tables: 124 NPD profiles, their noise classes and the designator mapping.
 //!
-//! The profiles, the designator mapping (`profile_idx`, `similarity_fallback`) and the helicopter
-//! and fallback curves come from `scripts/build-aircraft-profiles.py` of the dev4 product
-//! repository (branch `main`, last changed in aa84ae6f; EASA ANP database v2.3 with its v9
-//! supplement and the pinned global traffic counts, 4,885,163,837 segments), copied from dev4
-//! `qm260904` at c815f215 with two hand edits (2598c1c2 removed the constant scaled distance per
-//! profile, fe4d9933 the ground-operations table).
+//! The profiles, the strict designator mapping (`profile_idx`) and the helicopter and fallback
+//! curves come from `scripts/build-aircraft-profiles.py` of the dev4 product repository (branch
+//! `main`, last changed in aa84ae6f; EASA ANP database v2.3 with its v9 supplement and the pinned
+//! global traffic counts, 4,885,163,837 segments), copied from dev4 `qm260904` at c815f215 with two
+//! hand edits (2598c1c2 removed the constant scaled distance per profile, fe4d9933 the
+//! ground-operations table).
 //!
-//! r051: `similarity_fallback` routes the most flown designators dev4 left on FALLBACK (edited by
-//! hand, as in dev4). The classes and every ANP profile's curves are written by
-//! `scripts/aircraft-classes.py`:
+//! Designators not in the strict 123-entry table are routed by `doc8643_fallback`: exact 1-to-1 ANP
+//! aircraft substitutions first, then the anchor of the designator's ICAO Doc 8643 class and wake
+//! turbulence category (`physics/src/doc29/icao-aircraft-types.json`, 2,788 designators from
+//! `wiedehopf/tar1090-db` `icao_aircraft_types2.js` v3.14.1727, commit `cc6d4b07e87b`, 2026-11-23,
+//! sourced from `Mictronics/readsb-protobuf` `webapp/src/db/types.json`). The classes and every ANP
+//! profile's curves are written by `scripts/aircraft-classes.py`:
 //! a class per ANP aircraft a designator reads (Doc 29 flies each aircraft on its own data), where
 //! dev4 had collapsed the profiles onto 15 classes by the likeness of their loudest curves and
 //! mapped several designators to the wrong aircraft; every ANP curve holds for 160 kt (Doc 29 4th
 //! ed. Vol 2 2.5; dev4 had given turboprops 130 kt and pistons 90-110 kt). The kernel reads each
 //! class's anchor profile (`CLASS_REP_PROFILE_IDX`); the members of a class share its curves.
+
+use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use super::npd::{Family, Installation, NpdProfile};
 
@@ -281,7 +287,7 @@ pub static CLASS_OF_PROFILE: [u8; NUM_PROFILES] = [
     48, // DH8A → DHC8
     48, // DH8B → DHC8
     49, // L410 → DHC6
-    49, // EN48 → DHC6
+    54, // EN48 → HELICOPTER
     50, // SF34 → SF340
     47, // F50 → DHC830
     51, // F70 → F10062
@@ -1187,12 +1193,12 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         Installation::Propeller,
     ),
     NpdProfile::new(
-        "EN48/DHC6",
-        [91.3, 87.2, 84.4, 81.6, 76.9, 71.7, 67.6, 62.9, 57.2, 50.0],
-        [95.9, 92.0, 89.3, 86.5, 82.0, 77.0, 73.1, 68.6, 63.5, 57.4],
-        [90.9, 84.6, 80.4, 76.0, 69.1, 61.6, 56.0, 49.8, 42.6, 34.0],
-        [95.6, 89.5, 85.3, 81.0, 74.3, 67.0, 61.6, 55.6, 49.0, 41.4],
-        160.0,
+        "EN48/HELICOPTER",
+        [99.3, 95.9, 93.5, 91.0, 86.6, 81.2, 77.4, 72.7, 66.7, 59.9],
+        [97.3, 93.9, 91.5, 89.0, 84.6, 79.2, 75.4, 70.7, 64.7, 57.9],
+        [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
+        [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
+        100.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1601,10 +1607,9 @@ pub fn noise_class_of(profile_idx: u8) -> u8 {
     CLASS_OF_PROFILE[i]
 }
 
-/// Map ICAO 4-letter typecode to a profile index. Strict ICAO Doc 8643
-/// table first; on miss, falls back to `similarity_fallback` which
-/// pattern-matches typecode prefixes onto the closest anchor profile.
-/// Truly unknown / exotic typecodes still land on FALLBACK_PROFILE_IDX.
+/// Map ICAO type designator to a profile index: strict 123-entry ANP table first, then exact ANP
+/// aircraft substitutions and the ICAO Doc 8643 class-and-wake anchor (`doc8643_fallback`).
+/// Unassigned or unmapped designators (`ZZZZ`, `""`) return `FALLBACK_PROFILE_IDX`.
 pub fn profile_idx(typecode: &str) -> u8 {
     match typecode {
         "B738" => 0,
@@ -1730,412 +1735,105 @@ pub fn profile_idx(typecode: &str) -> u8 {
         "BK17" => 120,
         "B505" => 121,
         "GYRO" => 122,
-        _ => similarity_fallback(typecode),
+        _ => doc8643_fallback(typecode),
     }
 }
 
-/// Pattern-based fallback when the strict ICAO 4-letter match misses.
-/// Maps unmapped typecode prefixes onto the closest anchor profile by
-/// engine type / size class (Cessna piston → C172, Beech turboprop → DH8D,
-/// Cessna business jet → C56X, Bombardier/Gulfstream/Falcon/Hawker/Embraer
-/// business jet → CRJ9, Cirrus/Diamond/RV/GA-piston/UL → C172,
-/// helicopters → EC35). Sailplane designators route to C172 as
-/// defense-in-depth only — Stage 0/1 drop them up front via
-/// [`is_negligible_noise_typecode`].
-/// Typecodes that miss every pattern still return FALLBACK_PROFILE_IDX.
-///
-/// Coverage per ADSB scan (24 sample days, 1.30 M traces): patterns below
-/// re-route ~70–80 % of unmapped traffic — most surviving FALLBACK
-/// entries are exotic / military / experimental typecodes.
-fn similarity_fallback(typecode: &str) -> u8 {
-    let b = typecode.as_bytes();
-    // Sailplanes + self-launch/sustainer motor-gliders: Schempp-Hirth
-    // (Ventus/Discus/Duo Discus/Nimbus/Janus), Schleicher AS2x digit range
-    // (ASW-20…ASG-29; the range skips AS2T = FFA Turbine Bravo, a turboprop
-    // trainer) + ASK-14 / ASH-30 / ASH-31, Glaser-Dirks/DG, Rolladen-
-    // Schneider LS, Grob Twin G103, PIK-20E, generic GLID + BALL hot-air
-    // balloons. All verified against ICAO 8643 (2026-06-11). Normally dropped
-    // at Stage 0/1 by `is_negligible_noise_typecode`; this arm is defense-
-    // in-depth for any other caller and MUST precede the GL*→CRJ9,
-    // SF*→DH8D and helicopter arms below (GLID would otherwise evaluate as
-    // a CRJ-900, AS2x as an EC-135). C172 = quietest available profile,
-    // least-wrong if ever evaluated.
-    if matches!(
-        b,
-        b"GLID"
-            | b"VENT"
-            | b"DISC"
-            | b"DUOD"
-            | b"NIMB"
-            | b"JANU"
-            | [b'A', b'S', b'2', b'0'..=b'9']
-            | b"AS14"
-            | b"AS30"
-            | b"AS31"
-            | b"DG40"
-            | b"DG50"
-            | b"DG60"
-            | b"DG80"
-            | b"DG1T"
-            | b"LS8"
-            | b"LS9"
-            | b"LS10"
-            | b"G103"
-            | b"PK20"
-            | b"BALL"
-    ) {
-        return profile_idx("C172");
-    }
-    // GA piston singles (+ light piston twins — same PROP_C172 Voronoi class):
-    // Robin DR-400/DR-220/HR-200, Tecnam P2008/P2010, Grob G-115, Grumman
-    // AA-5, Mooney M20K (M20T), Socata TB-9/TB-10/TB-20, Aquila A210, MS-880
-    // Rallye, Commander 114, FFA AS-202 Bravo, Tecnam P2006T, Partenavia
-    // P-68. Each verified L1P/L2P piston in ICAO 8643 (2026-06-11).
-    // 2026-07-03 CZ FALLBACK scan against ICAO 8643: Zlin Z-42/142/242
-    // + Z-43/143 + Z-26 + Z-50 (largest real type on FALLBACK in CZ — 78
-    // flights/49 cells; the Novy Knin case: one Z-42 pass = 66 % of a point's
-    // airborne dB on the jet fallback), Cessna R182 (C82R — escapes the C1xx
-    // pattern), Fournier RF-6/RF-10, Jodel D150, Extra 300/NG, and Zenair
-    // CH-601 (CH60 — L1P fixed-wing; the CZ scan draft mislabelled it a
-    // helicopter).
-    // Previously fell to the jet-flavoured FALLBACK energy-mean — +10..25 dB
-    // vs reality for light pistons (audit 2026-06 airborne A1; DR40 alone =
-    // 1,437 rows in a 600-R4 Europe sample).
-    if matches!(
-        b,
-        b"DR40"
-            | b"DR22"
-            | b"HR20"
-            | b"P208"
-            | b"TWEN"
-            | b"G115"
-            | b"AA5"
-            | b"M20T"
-            | b"TB20"
-            | b"TOBA"
-            | b"TAMP"
-            | b"A210"
-            | b"RALL"
-            | b"AC11"
-            | b"AS02"
-            | b"P06T"
-            | b"P68"
-            | b"Z42"
-            | b"Z43"
-            | b"Z26"
-            | b"Z50"
-            | b"C82R"
-            | b"CH60"
-            | b"RF6"
-            | b"RF10"
-            | b"D150"
-            | b"E300"
-            | b"EXNG"
-    ) {
-        return profile_idx("C172");
-    }
-    // Powered ultralights / LSA (Rotax 912 class) + touring motor gliders:
-    // Aerospool WT9 Dynamic, Ikarus C42, generic ULAC microlight, Tecnam
-    // P2002 Sierra / P-92 Echo / Astore, Flight Design CT, JMB VL-3,
-    // Pipistrel Virus, Breezer, Evektor EuroStar + SportStar, BRM NG-5 +
-    // B23, PS-28 Cruiser, Sling 2, Tomark SD-4, Aero AT-3, Shark Aero,
-    // Direct Fly Alto, Zlin Savage, Europa; touring motor gliders HK-36
-    // Dimona, Scheibe SF-25 Falke, Grob G-109, Schleicher ASK-16 fly with
-    // engine running — UL-class noise, not sailplane silence. ICAO 8643
-    // special designators PARA (powered parachute) / SHIP (airship) cruise
-    // engine-on too — without this arm they fell to the jet FALLBACK (PARA
-    // only dodged it via the Piper PA** pattern below; explicit here for
-    // intent). GYRO is strict-mapped to HELICOPTER in the typecode table.
-    // 2026-07-03: ATEC Faeta (FAET) + Zephyr (ZEPH/ZEP2), TL-2000 Sting
-    // (TL20), Jabiru J400, Alpi Pioneer 300 (PNR3) — Czech/eur UL classics
-    // concentrated locally, invisible to the global-volume scan that seeded
-    // this list.
-    // Verified in ICAO 8643 (2026-06-11). Ordering: ECHO/ASTO must precede
-    // the EC*/AS* helicopter arm, SF25 the SF*→SAAB turboprop arm.
-    if matches!(
-        b,
-        b"WT9"
-            | b"C42"
-            | b"ULAC"
-            | b"SIRA"
-            | b"ECHO"
-            | b"ASTO"
-            | b"FDCT"
-            | b"VL3"
-            | b"PIVI"
-            | b"BREZ"
-            | b"EV97"
-            | b"EVSS"
-            | b"NG5"
-            | b"BR23"
-            | b"CRUZ"
-            | b"SLG2"
-            | b"SD4"
-            | b"AAT3"
-            | b"SHRK"
-            | b"ALTO"
-            | b"SAVG"
-            | b"EUPA"
-            | b"PARA"
-            | b"SHIP"
-            | b"DIMO"
-            | b"SF25"
-            | b"G109"
-            | b"AS16"
-            | b"FAET"
-            | b"ZEPH"
-            | b"ZEP2"
-            | b"TL20"
-            | b"J400"
-            | b"PNR3"
-    ) {
-        return profile_idx("C172");
-    }
-    // r051: the most flown designators that fell to FALLBACK (the jet energy mean at full power) on
-    // four world days of the year run, routed to their nearest ANP aircraft: light singles (T206 to
-    // Grob 120; PIAT, GX and MC01 fly 87 kt), piston twins, turboprops and military trainers,
-    // business jets by weight, airliners and freighters. Military jets, tankers and the A400M stay
-    // on FALLBACK.
-    match b {
-        b"T206" | b"T210" | b"P210" | b"C82S" | b"C82T" | b"SLG4" | b"BL8" | b"CH7A" | b"CH7B"
-        | b"COL3" | b"COL4" | b"G120" | b"AA1" | b"HUSK" | b"EFOX" | b"GA8" | b"DHC2" | b"BT36"
-        | b"CT4" | b"TL30" | b"R200" | b"VELO" | b"M7" | b"NAVI" | b"T34P" | b"PIAT" | b"GX"
-        | b"MC01" => return profile_idx("C172"),
-        b"AEST" | b"B58T" | b"BE18" | b"BN2P" | b"AC50" => return profile_idx("PA34"),
-        b"TEX2" | b"T34T" | b"SW3" | b"SW4" | b"G12T" | b"EPIC" | b"P180" | b"K100" | b"DH3T"
-        | b"AC90" | b"MU2" | b"U21" | b"SB20" | b"SH36" | b"CN35" | b"C27J" | b"E2" | b"TUCA"
-        | b"S2T" | b"F406" | b"DC3T" | b"M600" | b"M700" => return profile_idx("DH8D"),
-        b"DHC6" | b"D228" => return profile_idx("L410"),
-        b"JS32" => return profile_idx("JS41"),
-        b"F100" => return profile_idx("F70"),
-        b"B762" => return profile_idx("B763"),
-        b"CRJX" => return profile_idx("CRJ9"),
-        b"A318" => return profile_idx("A319"),
-        b"SU95" | b"AJ27" => return profile_idx("E190"),
-        b"C919" => return profile_idx("A20N"),
-        b"J328" | b"E135" | b"E145" => return profile_idx("EMJ"),
-        b"P8" => return profile_idx("B738"),
-        b"E737" => return profile_idx("B737"),
-        b"C17" | b"C5M" | b"A124" => return profile_idx("B744"),
-        b"E3TF" => return profile_idx("B742"),
-        b"H64" | b"H47" | b"UH1" | b"H53S" => return profile_idx("EC35"),
-        b"HDJT" | b"PRM1" | b"EA50" | b"G150" | b"FA10" | b"FA20" | b"FA50" | b"H25B" | b"H25C"
-        | b"ASTR" | b"E50P" | b"E55P" | b"E545" | b"E550" => return profile_idx("C56X"),
-        b"CL30" | b"CL35" | b"F2TH" | b"F900" | b"G280" | b"E35L" | b"GALX" | b"HA4T" => {
+/// ICAO Doc 8643 aircraft description (`L2J`, `H1T`, `L1P`, ...) and wake turbulence category
+/// (`L`, `M`, `H`, `J`, `-`) from `physics/src/doc29/icao-aircraft-types.json` (2,788 designators,
+/// `wiedehopf/tar1090-db` `icao_aircraft_types2.js` v3.14.1727, commit `cc6d4b07e87b`, 2026-11-23).
+pub fn doc8643_type(typecode: &str) -> Option<([u8; 3], u8)> {
+    static TABLE: LazyLock<HashMap<String, ([u8; 3], u8)>> = LazyLock::new(|| {
+        let raw = include_str!("icao-aircraft-types.json");
+        let mut map = HashMap::with_capacity(2800);
+        for line in raw.lines() {
+            let Some((key_part, rest)) = line.trim().split_once("\": {\"desc\": \"") else {
+                continue;
+            };
+            let key = key_part.trim_start_matches('"');
+            let Some((desc, wtc_part)) = rest.split_once("\", \"wtc\": \"") else {
+                continue;
+            };
+            let wtc = wtc_part.as_bytes().first().copied().unwrap_or(b'-');
+            if let Ok(desc_bytes) = <[u8; 3]>::try_from(desc.as_bytes()) {
+                map.insert(key.to_string(), (desc_bytes, wtc));
+            }
+        }
+        map
+    });
+    TABLE.get(typecode.trim()).copied()
+}
+
+/// Exact ANP aircraft substitutions and ICAO Doc 8643 class-and-wake fallback for designators not
+/// in the 123-entry strict table.
+fn doc8643_fallback(typecode: &str) -> u8 {
+    let code = typecode.trim();
+    match code {
+        "AEST" | "B58T" | "BE18" | "BN2P" | "AC50" => return profile_idx("PA34"),
+        "DHC6" | "D228" => return profile_idx("L410"),
+        "JS31" | "JS32" => return profile_idx("JS41"),
+        "F100" => return profile_idx("F70"),
+        "B762" => return profile_idx("B763"),
+        "CRJX" => return profile_idx("CRJ9"),
+        "A318" => return profile_idx("A319"),
+        "SU95" | "AJ27" => return profile_idx("E190"),
+        "C919" => return profile_idx("A20N"),
+        "J328" | "E135" | "E145" | "E45X" => return profile_idx("EMJ"),
+        "P8" => return profile_idx("B738"),
+        "E737" => return profile_idx("B737"),
+        "C17" | "C5M" | "A124" => return profile_idx("B744"),
+        "E3TF" => return profile_idx("B742"),
+        "HDJT" | "PRM1" | "EA50" | "G150" | "FA10" | "FA20" | "FA50" | "H25B" | "H25C" | "ASTR"
+        | "E50P" | "E55P" | "E545" | "E550" => {
+            return profile_idx("C56X");
+        }
+        "CL30" | "CL35" | "F2TH" | "F900" | "G280" | "E35L" | "GALX" | "HA4T" => {
             return profile_idx("CL60");
         }
-        b"GA5C" | b"GA6C" | b"GA7C" | b"GA8C" => return profile_idx("GLF6"),
-        b"FA8X" => return profile_idx("FA7X"),
-        [b'L', b'J', _, _] => return profile_idx("LJ60"),
+        "GA5C" | "GA6C" | "GA7C" | "GA8C" => return profile_idx("GLF6"),
+        "FA8X" => return profile_idx("FA7X"),
+        "LJ23" | "LJ24" | "LJ25" | "LJ28" | "LJ31" | "LJ35" | "LJ40" | "LJ45" | "LJ55" | "LJ70"
+        | "LJ75" => return profile_idx("LJ60"),
+        "AN2" | "C20T" | "PC6" => return profile_idx("DH8D"),
+        "H125" | "H130" | "H135" | "H145" | "H155" | "H160" | "H175" | "H215" | "H225" | "EC65"
+        | "S70" => return profile_idx("EC35"),
         _ => {}
     }
-    // C-130 Hercules and C-130J Super Hercules — military 4-engine turboprop
-    // (would otherwise hit the C1xx Cessna piston bucket and produce a 20+ dB
-    //  underestimate; DH8D anchor is the closest single-class fit).
-    // + Shorts Skyvan (SC7, para-ops), CASA C-295 + Dornier 328 (Kbely),
-    // and Antonov An-2: a 1000 hp radial-piston biplane — acoustically the
-    // DH8D curve, not C172; sampling-window membership must not determine
-    // the acoustic class.
-    if matches!(b, b"C130" | b"C30J" | b"SC7" | b"C295" | b"D328" | b"AN2") {
-        return profile_idx("DH8D");
-    }
-    // Cessna piston singles (C150 / C152 / C170 / C172 / C177 / C180 / C182 / C185)
-    if matches!(b, [b'C', b'1', _, _]) {
+    if is_negligible_noise_typecode(code) {
         return profile_idx("C172");
     }
-    // Cessna single-engine turboprops — Caravan (C208/C20T) and Conquest (C441),
-    // plus CASA C-212 (also turboprop). Carved out of the C2..7xx jet range
-    // because the Caravan is the most common unmapped Cessna in ADSB scans.
-    if matches!(b, b"C208" | b"C20T" | b"C212" | b"C441") {
-        return profile_idx("DH8D");
+    let Some((desc, wtc)) = doc8643_type(code) else {
+        return FALLBACK_PROFILE_IDX;
+    };
+    match (desc, wtc) {
+        ([b'H' | b'G' | b'R', _, _], _) => profile_idx("EC35"),
+        ([_, _, b'P' | b'E' | b'M'], _) | ([b'L' | b'B' | b'P' | b'D', b'0', b'-'], _) => {
+            profile_idx("C172")
+        }
+        ([b'L' | b'A' | b'S', _, b'T'], b'L' | b'M') => profile_idx("DH8D"),
+        ([b'L' | b'A' | b'S', _, b'J'], b'L') => profile_idx("C56X"),
+        ([b'L' | b'A' | b'S', _, b'J'], b'M') => profile_idx("CRJ9"),
+        ([b'L' | b'A' | b'S', b'1' | b'2', b'J'], b'H' | b'J') => profile_idx("B763"),
+        ([b'L' | b'A' | b'S', _, b'J'], b'H' | b'J') => profile_idx("B744"),
+        _ => FALLBACK_PROFILE_IDX,
     }
-    // Cessna piston twins (C30x Skymaster, C310, C337, C340, C40x, C44x)
-    // and remaining piston singles (C206/C207 Stationair, C210 Centurion).
-    if matches!(
-        b,
-        [b'C', b'2', b'0', b'6' | b'7']
-            | [b'C', b'2', b'1', b'0']
-            | [b'C', b'3', _, _]
-            | [b'C', b'4', _, _]
-    ) {
-        return profile_idx("C172");
-    }
-    // Cessna business jets — Citation Mustang/CJ (C25x), Citation 5xx/6xx/7xx series.
-    if matches!(
-        b,
-        [b'C', b'2', b'5', _] | [b'C', b'5', _, _] | [b'C', b'6', _, _] | [b'C', b'7', _, _]
-    ) {
-        return profile_idx("C56X");
-    }
-    // Beechcraft Bonanza/Baron/Duke piston singles + twins (BE19/23/24/3x/5x/6x/76/77/80/88).
-    // Carved out of the BE turboprop bucket: BE35→DH8D was a
-    // 10+ dB overestimate (Bonanza is a piston single, not a King Air).
-    if matches!(
-        b,
-        [b'B', b'E', b'1', b'9']
-            | [b'B', b'E', b'2', b'3' | b'4']
-            | [b'B', b'E', b'3', _]
-            | [b'B', b'E', b'5', _]
-            | [b'B', b'E', b'6', _]
-            | [b'B', b'E', b'7', b'6' | b'7']
-            | b"BE17"
-            | b"BE80"
-            | b"BE88"
-    ) {
-        return profile_idx("C172");
-    }
-    // Beechcraft King Air turboprops (BE9x / BE10 / BE20), Beechjet (BE40, small jet)
-    // and Beech 1900/350 commuter turboprops.
-    if matches!(
-        b,
-        [b'B', b'E', b'9', _]
-            | b"BE10"
-            | b"BE20"
-            | b"BE40"
-            | [b'B', b'1', b'9', b'0']
-            | [b'B', b'3', b'5', b'0']
-    ) {
-        return profile_idx("DH8D");
-    }
-    // Boeing 717-200 (B712) — rear-fuselage twin-jet (MD-95 derivative), acoustically
-    // close to FUSE_CRJ9 anchor (CRJ-900 family, also rear-fuselage twin). Carved
-    // out before the BAe 146 / Bell helicopter B4xx pattern hits.
-    if matches!(b, b"B712") {
-        return profile_idx("CRJ9");
-    }
-    // Pilatus PC-12 / PC-7 turboprops
-    if matches!(b, [b'P', b'C', _, _]) {
-        return profile_idx("DH8D");
-    }
-    // Piper PA-2x/3x/4x — piston/turboprop singles+twins
-    if matches!(
-        b,
-        [b'P', b'A', _, _] | [b'P', b'2', b'8', _] | [b'P', b'3', b'2', _] | [b'P', b'4', b'6', _]
-    ) {
-        return profile_idx("C172");
-    }
-    // Bombardier Challenger CL-30/35/60/64 + Gulfstream/Hawker — business jet
-    // (`GLF*` is subsumed by [b'G', b'L', _, _] above — kept earlier as docs.)
-    if matches!(
-        b,
-        [b'C', b'L', _, _] | [b'G', b'L', _, _] | [b'H', b'2', b'5', _] | b"G280"
-    ) {
-        return profile_idx("CRJ9");
-    }
-    // Falcon / Learjet / Embraer business jet (Phenom / Legacy)
-    if matches!(
-        b,
-        [b'F', b'9', b'0', b'0'] | [b'F', b'2', b'T', b'H'] | [b'L', b'J', _, _]
-    ) {
-        return profile_idx("CRJ9");
-    }
-    if matches!(b, [b'E', _, _, b'P' | b'L']) {
-        return profile_idx("CRJ9");
-    }
-    // Embraer EMB-110 Bandeirante / EMB-120 Brasilia — twin turboprops.
-    // Carved out before the E1xx jet pattern (would otherwise route to CRJ9 and
-    // overstate by ~12 dB SEL on small commuter turboprops).
-    if matches!(b, [b'E', b'1', b'1', _] | [b'E', b'1', b'2', _]) {
-        return profile_idx("DH8D");
-    }
-    // Embraer ERJ-1xx / E170/190/195 / E2 family (E290/E295) — regional jets.
-    if matches!(b, [b'E', b'1' | b'4' | b'5', _, _]) {
-        return profile_idx("CRJ9");
-    }
-    // ATR turboprops, Dash 8, SAAB 340/Shorts, Daher TBM
-    if matches!(
-        b,
-        [b'A', b'T', _, _] | [b'D', b'H', b'8', _] | [b'S', b'F', _, _] | [b'T', b'B', b'M', _]
-    ) {
-        return profile_idx("DH8D");
-    }
-    // Cirrus SR / S22, Diamond DA, Vans RV — GA piston singles
-    if matches!(
-        b,
-        [b'S', b'R', _, _]
-            | [b'S', b'2', b'2', _]
-            | [b'D', b'A', _, _]
-            | [b'D', b'V', _, _]
-            | [b'R', b'V', _, _]
-    ) {
-        return profile_idx("C172");
-    }
-    // 3-char RV* codes (RV3 / RV4 / RV6 / RV7 / RV8 / RV9 — Vans homebuilt)
-    if matches!(b, [b'R', b'V', _]) {
-        return profile_idx("C172");
-    }
-    // BAe 146 / Avro RJ — 4-engine rear-fuselage regional jet
-    // (carved out before the Bell B4xx helicopter pattern, which would otherwise
-    //  route a 4-engine jet to a single-rotor helicopter).
-    if matches!(
-        b,
-        b"B461" | b"B462" | b"B463" | b"B14R" | b"RJ70" | b"RJ85" | b"RJ1H"
-    ) {
-        return profile_idx("CRJ9");
-    }
-    // IAI 1125 Astra / Gulfstream G100 (ASTR) — mid-size bizjet. Found during
-    // the ICAO 8643 audit of the former blanket AS*→helicopter arm, which
-    // modeled this jet as an EC-135.
-    if matches!(b, b"ASTR") {
-        return profile_idx("CRJ9");
-    }
-    // Helicopters: AS-332 Super Puma / AS-532 Cougar exact pair + EC / Bell /
-    // Sikorsky / Robinson / Leonardo / Airbus H-series. Deliberately NOT a
-    // blanket `AS**` prefix: per ICAO 8643 (verified 2026-06-11) the only
-    // AS-prefixed helicopter designators are AS32 / AS3B / AS50 / AS55 /
-    // AS65 — the latter three are strict-mapped above; every other AS* code
-    // is fixed-wing (Schleicher sailplanes, FFA Bravo, Tecnam Astore, IAI
-    // Astra — all routed above; the residue falls to FALLBACK, not to a
-    // phantom helicopter).
-    if matches!(b, b"AS32" | b"AS3B" | [b'E', b'C', _, _]) {
-        return profile_idx("EC35");
-    }
-    if matches!(b, [b'B', b'4', _, _] | [b'B', b'5', b'0', b'5']) {
-        return profile_idx("EC35");
-    }
-    // Sikorsky H-60 / S-70 / S-76 / S-92, Robinson R22/44/66, plus UHEL —
-    // ICAO 8643 special designator for ultralight helicopters (Mosquito
-    // class): piston like an R22, EC35 is the only rotorcraft anchor.
-    // + Mil Mi-8/17 (MI8), PZL W-3 Sokol (W3, police/army CZ), Bell 212
-    // (B212 — the B4xx pattern misses it), Schweizer 269 (H269), Guimbal
-    // Cabri G2 (G2CA, H1P piston trainer), Magni M-16 gyro (MM16 — gyros
-    // follow the GYRO→rotorcraft convention). Verified against ICAO 8643 2026-07-03.
-    if matches!(
-        b,
-        b"H60"
-            | b"R22"
-            | b"R44"
-            | b"R66"
-            | b"S70"
-            | b"S76"
-            | b"S92"
-            | b"UHEL"
-            | b"MI8"
-            | b"W3"
-            | b"B212"
-            | b"H269"
-            | b"G2CA"
-            | b"MM16"
-    ) {
-        return profile_idx("EC35");
-    }
-    // Leonardo AW + Airbus H-series 4-char codes
-    if matches!(b, [b'A', b'1', b'0' | b'1' | b'3' | b'6' | b'8', _]) {
-        return profile_idx("EC35");
-    }
-    if matches!(b, [b'H', b'1', _, _] | [b'H', b'2', b'1' | b'2', _]) {
-        return profile_idx("EC35");
-    }
-    FALLBACK_PROFILE_IDX
 }
 
-/// Beacon-only ADS-B entries that should not flow through the aircraft
-/// pipeline. `TWR` = control tower fixed transponders. `GND` = airport
-/// ground vehicles (fuel trucks, tugs, follow-me, fire trucks); these
-/// would otherwise hit the 737-800 fallback profile and produce a
-/// ~30 dB over-estimate per source at airport receivers.
+/// Fixed-transponder tower or surface-vehicle ADS-B entries (`TWR`, `GND`, `SERV`, `EMER`).
 pub fn is_non_aircraft_typecode(typecode: &str) -> bool {
-    matches!(typecode.trim(), "TWR" | "GND")
+    is_tower_typecode(typecode) || is_ground_vehicle_typecode(typecode)
+}
+
+/// Fixed control-tower transponder (`TWR`, Doc 8643 `T0-`).
+pub fn is_tower_typecode(typecode: &str) -> bool {
+    let code = typecode.trim();
+    code.eq_ignore_ascii_case("TWR") || matches!(doc8643_type(code), Some(([b'T', b'0', b'-'], _)))
+}
+
+/// Airport surface vehicle (`GND`, `SERV`, `EMER`, Doc 8643 `V0-`).
+pub fn is_ground_vehicle_typecode(typecode: &str) -> bool {
+    let code = typecode.trim();
+    code.eq_ignore_ascii_case("GND") || matches!(doc8643_type(code), Some(([b'V', b'0', b'-'], _)))
 }
 
 /// Unpowered sailplanes + self-launch/sustainer motor-gliders whose engine

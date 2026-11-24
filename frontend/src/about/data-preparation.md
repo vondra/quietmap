@@ -506,10 +506,13 @@ the take-offs and landings on its runways, but not the flights above them.
 <summary>How a flight's noise is computed</summary>
 
 - **The flight.** Height above the geoid, thrust from the observed climb and acceleration, flaps
-  and gear on approach; a type the database lacks flies as a similar aircraft. Helicopters take
-  their type's certification level. A flight of unknown type flies as a helicopter or a Cessna 172
-  by its transponder's category, as a Cessna 172 when its median speed in the air is under 140 kt
-  and it carries no airline flight number, else as a generic jet.
+  and gear on approach; a type the database lacks takes its nearest match or the anchor of its ICAO
+  Doc 8643 class and wake category. Helicopters take their type's certification level, or the light
+  or heavy default by their wake category. A database type contradicted by the aircraft's own
+  broadcast registration callsign or transponder category is cleared. A flight of unknown type flies
+  on the anchor of its transponder's category (helicopter, Cessna 172, business jet, medium jet, 757
+  or heavy jet), as a Cessna 172 when its median speed in the air is under 140 kt and it carries no
+  airline flight number, else as a generic jet.
 - **Its phases.** On the ground: take-off and landing rolls as Doc 29 computes them, one for each
   runway direction, operation and aircraft class with its movements of an average day. A mapped
   runway belongs to the identified aerodrome whose boundary covers the greatest length of it.
@@ -971,8 +974,10 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
 
 The first step turns a year of ADS-B traces into flight segments per day (`build/src/aircraft`):
 altitudes above EGM2008, each segment's Doc 29 phase and operation (A.3.2), and each flight's class,
-decided once: its designator's ANP aircraft (55 classes, `scripts/aircraft-classes.py`), else by its
-transponder category or slow flight, else a fallback; surface vehicles are ground traffic.
+decided once: its designator's ANP aircraft (55 classes, `scripts/aircraft-classes.py`) or Doc 8643
+class and wake anchor (`physics/src/doc29/icao-aircraft-types.json`) unless the aircraft's own
+broadcast registration or category contradicts the database header, else by its transponder category
+or slow flight, else a fallback; surface vehicles are ground traffic.
 `aircraft-shuffle` sorts the window's segments into z9 squares once; `aircraft-boxes` builds a
 square at a time and gives each segment its power by the force balance with the observed climb and
 acceleration (`physics/src/doc29/thrust.rs`; an arrival's flap and gear below the landing

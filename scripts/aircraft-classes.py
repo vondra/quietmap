@@ -26,7 +26,7 @@ thrust_generated.rs, approach_generated.rs, spectra_generated.rs.
 
 usage: aircraft-classes.py ANP_2_3_DIR ANP_V9_DIR REPO_ROOT  (needs openpyxl)
 """
-import csv, os, re, statistics, sys
+import csv, json, os, re, statistics, sys
 import openpyxl
 
 MAX_ROWS = 6
@@ -70,7 +70,7 @@ MAPPING = {
     "AT72": "ATR72", "AT76": "ATR72", "AT43": "ATR72", "AT45": "ATR72",  # all but AT72: proxies
     "DH8D": "DHC830", "DH8C": "DHC830", "F50": "DHC830",  # Q400, Fokker 50: proxies
     "DH8A": "DHC8", "DH8B": "DHC8", "JS41": "DHC8",  # Jetstream 41: proxy
-    "SF34": "SF340", "L410": "DHC6", "EN48": "DHC6",  # proxies but the Saab
+    "SF34": "SF340", "L410": "DHC6",  # L410: proxy (EN48 is an Enstrom 480 helicopter, H1T)
     "C172": "CNA172", "C152": "CNA172", "C182": "CNA172", "PA28": "CNA172", "SR20": "CNA172",
     "SR22": "CNA172", "DA40": "CNA172", "P28A": "CNA172", "C210": "CNA172", "BE36": "CNA172",
     "M20P": "CNA172", "C206": "CNA172", "PA32": "CNA172", "RV7": "CNA172", "RV8": "CNA172",
@@ -283,6 +283,14 @@ def replace_block(text, start_marker, end_marker, new):
 
 def main(anp_dir, v9_dir, root):
     anp = Anp(anp_dir, v9_dir)
+    doc8643 = json.load(open(os.path.join(root, "physics/src/doc29/icao-aircraft-types.json")))
+    for designator, acft in MAPPING.items():
+        if designator in doc8643:
+            desc = doc8643[designator]["desc"]
+            eng = anp.aircraft[acft]["Engine Type"]
+            assert not desc.startswith(("H", "G", "R")), (designator, desc, acft)
+            assert (eng == "Jet") == (desc[2] == "J") and (eng == "Turboprop") == (desc[2] == "T"), (
+                designator, desc, acft, eng)
     doc29 = os.path.join(root, "physics/src/doc29")
     profiles_path = os.path.join(doc29, "profiles_generated.rs")
     text = open(profiles_path).read()
@@ -292,7 +300,7 @@ def main(anp_dir, v9_dir, root):
     old_classes = [int(x) for x in re.findall(r"^\s*(\d+),", old_classes, re.M)]
     old_names = re.findall(r'"([^"]+)"', re.search(r"CLASS_NAMES: \[&str; NUM_CLASSES\] = \[(.*?)\];", text, re.S).group(1))
     designators = [name.split("/")[0] for name in names]
-    helicopter = [old_names[c] == "HELICOPTER" for c in old_classes]
+    helicopter = [old_names[c] == "HELICOPTER" or d == "EN48" for d, c in zip(designators, old_classes)]
     # Classes: the fallback proxy, one per ANP aircraft in profile order, the helicopters.
     anp_ids = []
     for designator, heli in zip(designators, helicopter):
@@ -316,14 +324,19 @@ def main(anp_dir, v9_dir, root):
     anchors = [designators.index("AS50") if name == "HELICOPTER"
                else class_of.index(c) for c, name in enumerate(class_names)]
     # Profiles: every ANP-mapped designator reads its aircraft's curves at 160 kt.
+    heli_entry = entries[designators.index("AS50")].group(0)
     for m in reversed(entries):
         designator = m.group(1).split("/")[0]
         p = designators.index(designator)
-        if class_of[p] in (0, len(class_names) - 1):
+        if class_of[p] == 0:
+            continue
+        if class_of[p] == len(class_names) - 1:
+            text = text[:m.start()] + heli_entry.replace('"AS50/HELICOPTER"', f'"{designator}/HELICOPTER"') + text[m.end():]
             continue
         acft = MAPPING[designator]
         text = text[:m.start()] + aircraft[acft].profile(f"{designator}/{acft}") + "\n" + text[m.end():]
-    names = [f"{d}/{MAPPING[d]}" if class_of[p] not in (0, len(class_names) - 1) else names[p]
+    names = [f"{d}/{MAPPING[d]}" if class_of[p] not in (0, len(class_names) - 1)
+             else (f"{d}/HELICOPTER" if class_of[p] == len(class_names) - 1 else names[p])
              for p, d in enumerate(designators)]
     family = ["Narrowbody"] + [aircraft[a].family for a in anp_ids] + ["Helicopter"]
     is_jet = [True] + [aircraft[a].engine_type == "Jet" for a in anp_ids] + [False]

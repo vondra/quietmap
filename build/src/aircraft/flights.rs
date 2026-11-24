@@ -6,11 +6,12 @@
 //! knew their field).
 
 use super::filters::point_is_sane;
-use super::trace::{AircraftTrace, TracePoint, parse_address_hex};
+use super::trace::{AircraftTrace, TracePoint, is_concrete_category, parse_address_hex};
 use physics::doc29::npd::is_helicopter_class;
 use physics::doc29::profiles_generated::{
-    CLASS_REP_PROFILE_IDX, FALLBACK_PROFILE_IDX, IS_JET, NUM_CLASSES, is_negligible_noise_typecode,
-    noise_class_of, profile_idx,
+    CLASS_REP_PROFILE_IDX, FALLBACK_PROFILE_IDX, IS_JET, NUM_CLASSES, doc8643_type,
+    is_ground_vehicle_typecode, is_negligible_noise_typecode, is_tower_typecode, noise_class_of,
+    profile_idx,
 };
 use std::ops::Range;
 
@@ -39,11 +40,55 @@ pub fn flight_number(callsign: &str) -> bool {
     bytes.len() >= 4 && bytes[..3].iter().all(u8::is_ascii_alphabetic) && bytes[3].is_ascii_digit()
 }
 
+/// Whether more than half of a rotation's observed airborne speeds are below
+/// [`LIGHT_MEDIAN_SPEED_KT`] (ignoring zero values from unreported ground-speed fields).
+pub fn is_slow_airborne(points: &[TracePoint]) -> bool {
+    let (mut total, mut under) = (0usize, 0usize);
+    for point in points {
+        if !point.is_surface_report()
+            && point.ground_speed_kt.is_finite()
+            && point.ground_speed_kt > 0.0
+        {
+            total += 1;
+            if point.ground_speed_kt < LIGHT_MEDIAN_SPEED_KT {
+                under += 1;
+            }
+        }
+    }
+    2 * under > total
+}
+
+/// The profile of a rotation whose designator is unresolved or contradicted by the aircraft's own
+/// broadcasts: decisive ADS-B emitter categories first (`A7` helicopter, `A1`/`B4` C172,
+/// `B1`/`B2` glider/balloon dropped, `A2` C56X, `A3` B738, `A4` B752, `A5` B763), else without a
+/// flight number at a median airborne speed under [`LIGHT_MEDIAN_SPEED_KT`] the C172.
+fn unknown_type_profile(emitter_category: u8, callsign: &str, slow: bool) -> Option<u8> {
+    let light = profile_idx("C172");
+    match emitter_category {
+        0xA7 => {
+            let class = (0..NUM_CLASSES).find(|&class| is_helicopter_class(class));
+            return class.map(|class| CLASS_REP_PROFILE_IDX[class]);
+        }
+        0xA1 | 0xB4 => return Some(light),
+        0xB1 | 0xB2 => return None,
+        0xA2 => return Some(profile_idx("C56X")),
+        0xA3 => return Some(profile_idx("B738")),
+        0xA4 => return Some(profile_idx("B752")),
+        0xA5 => return Some(profile_idx("B763")),
+        _ => {}
+    }
+    Some(if slow && !flight_number(callsign) {
+        light
+    } else {
+        FALLBACK_PROFILE_IDX
+    })
+}
+
 /// The profile a rotation flies, decided once for all its segments: its designator's; for a
 /// designator on the fallback, the transponder's emitter category (A7 rotorcraft the helicopter
-/// class, A1 light and B4 ultralight the C172's) or, without a flight number at a median airborne
-/// ground speed under [`LIGHT_MEDIAN_SPEED_KT`], the C172's. `None` for a glider or a balloon (B1,
-/// B2), dropped as their designators are. The boxes, the events and the checker fly it.
+/// class, A1 light and B4 ultralight the C172's, A2-A5 their jet class anchors) or, without a
+/// flight number at a median airborne ground speed under [`LIGHT_MEDIAN_SPEED_KT`], the C172's.
+/// `None` for a glider or a balloon (B1, B2), dropped as their designators are.
 pub fn rotation_profile(
     designator: &str,
     emitter_category: u8,
@@ -54,30 +99,151 @@ pub fn rotation_profile(
     if profile != FALLBACK_PROFILE_IDX {
         return Some(profile);
     }
-    let light = profile_idx("C172");
-    match emitter_category {
-        0xA7 => {
-            let class = (0..NUM_CLASSES).find(|&class| is_helicopter_class(class));
-            return class.map(|class| CLASS_REP_PROFILE_IDX[class]);
-        }
-        0xA1 | 0xB4 => return Some(light),
-        0xB1 | 0xB2 => return None,
-        _ => {}
+    unknown_type_profile(emitter_category, callsign, is_slow_airborne(points))
+}
+
+/// Whether `text` is a valid FAA US civil registration (`N` followed by 1-5 characters: first
+/// digit 1-9, up to 4 more digits, and at most 2 trailing uppercase letters excluding `I` and `O`).
+pub fn is_us_tail_number(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix('N').map(str::as_bytes) else {
+        return false;
+    };
+    if rest.is_empty() || rest.len() > 5 || !matches!(rest[0], b'1'..=b'9') {
+        return false;
     }
-    let mut speeds: Vec<f32> = points
-        .iter()
-        .filter(|point| !point.is_surface_report() && point.ground_speed_kt.is_finite())
-        .map(|point| point.ground_speed_kt)
+    let digits = rest.iter().take_while(|&&b| b.is_ascii_digit()).count();
+    let letters = &rest[digits..];
+    letters.len() <= 2
+        && letters
+            .iter()
+            .all(|&b| b.is_ascii_uppercase() && b != b'I' && b != b'O')
+}
+
+/// Whether `text` is a hyphenated civil registration `PREFIX-SUFFIX` (1-2 char alphanumeric
+/// prefix with at least one letter, 3-4 char alphanumeric suffix; single-letter prefixes take a
+/// 4-letter alphabetic suffix).
+fn split_hyphenated_registration(text: &str) -> Option<(&str, &str)> {
+    let (prefix, suffix) = text.split_once('-')?;
+    let pb = prefix.as_bytes();
+    let sb = suffix.as_bytes();
+    if !(1..=2).contains(&pb.len())
+        || !(3..=4).contains(&sb.len())
+        || !(4..=5).contains(&(pb.len() + sb.len()))
+        || !pb.iter().all(u8::is_ascii_alphanumeric)
+        || !pb.iter().any(u8::is_ascii_uppercase)
+        || !sb.iter().all(u8::is_ascii_alphanumeric)
+    {
+        return None;
+    }
+    if pb.len() == 1 && (sb.len() != 4 || !sb.iter().all(u8::is_ascii_uppercase)) {
+        return None;
+    }
+    Some((prefix, suffix))
+}
+
+/// Whether the aircraft's broadcast callsign is a civil registration that contradicts the static
+/// database registration `"r"`.
+pub fn registration_contradicts(db_registration: &str, active_callsign: &str) -> bool {
+    let db_reg: String = db_registration
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .map(|c| c.to_ascii_uppercase())
         .collect();
-    speeds.sort_by(f32::total_cmp);
-    let slow = speeds
-        .get(speeds.len() / 2)
-        .is_some_and(|median| *median < LIGHT_MEDIAN_SPEED_KT);
-    Some(if slow && !flight_number(callsign) {
-        light
-    } else {
-        profile
-    })
+    let raw_cs: String = active_callsign
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    let cs: String = raw_cs.chars().filter(|&c| c != '-').collect();
+    let reg_clean: String = db_reg.chars().filter(|&c| c != '-').collect();
+    if reg_clean.is_empty()
+        || cs.is_empty()
+        || flight_number(&cs)
+        || cs == reg_clean
+        || (cs.len() >= 3 && reg_clean.ends_with(&cs))
+    {
+        return false;
+    }
+    if let Some((prefix, _)) = split_hyphenated_registration(&db_reg) {
+        let same_country_reg = cs.starts_with(prefix)
+            && cs.len() == reg_clean.len()
+            && cs[prefix.len()..].bytes().all(|b| b.is_ascii_uppercase());
+        return same_country_reg
+            || split_hyphenated_registration(&raw_cs).is_some()
+            || is_us_tail_number(&cs);
+    }
+    if is_us_tail_number(&reg_clean) {
+        return is_us_tail_number(&cs) || split_hyphenated_registration(&raw_cs).is_some();
+    }
+    false
+}
+
+/// Whether the aircraft's broadcast ADS-B emitter category contradicts the static database
+/// designator's ICAO Doc 8643 class or wake category, corroborated by the rotation's speed.
+pub fn category_contradicts_type(
+    designator: &str,
+    emitter_category: u8,
+    slow: bool,
+    is_flight_number: bool,
+) -> bool {
+    let code = designator.trim();
+    if code.is_empty() {
+        return false;
+    }
+    if is_negligible_noise_typecode(code)
+        || is_tower_typecode(code)
+        || is_ground_vehicle_typecode(code)
+    {
+        return match emitter_category {
+            0xA7 => slow,
+            0xA1 | 0xB4 => slow && !is_flight_number && !code.eq_ignore_ascii_case("BALL"),
+            0xA2..=0xA5 => !slow || is_flight_number,
+            _ => false,
+        };
+    }
+    let profile = profile_idx(code);
+    let is_light_bizjet = profile == profile_idx("C56X") || profile == profile_idx("LJ60");
+    let Some((desc, wtc)) = doc8643_type(code) else {
+        if profile == FALLBACK_PROFILE_IDX {
+            return false;
+        }
+        let class = usize::from(noise_class_of(profile));
+        return match emitter_category {
+            0xB1 | 0xB2 => slow && !is_flight_number,
+            0xA7 => slow && !is_helicopter_class(class),
+            0xA1 => slow && !is_flight_number && IS_JET[class] && !is_light_bizjet,
+            0xB4 => slow && !is_flight_number && IS_JET[class],
+            0xA3..=0xA5 => (!slow || is_flight_number) && is_helicopter_class(class),
+            _ => false,
+        };
+    };
+    let is_rotorcraft = matches!(desc[0], b'H' | b'G' | b'R');
+    let is_fixed_wing = matches!(desc[0], b'L' | b'A' | b'S');
+    let is_motor_glider_or_airship = desc == *b"L1M"
+        || desc == *b"B0-"
+        || matches!(code, "SF25" | "DIMO" | "G109" | "AS16" | "SF28");
+    match emitter_category {
+        0xB1 | 0xB2 => slow && !is_flight_number && !is_motor_glider_or_airship,
+        0xA7 => slow && is_fixed_wing,
+        0xA1 => {
+            slow && !is_flight_number
+                && !is_light_bizjet
+                && ((is_fixed_wing && desc[2] == b'J' && matches!(wtc, b'M' | b'H' | b'J'))
+                    || matches!(wtc, b'H' | b'J'))
+        }
+        0xB4 => {
+            slow && !is_flight_number
+                && ((is_fixed_wing && desc[2] == b'J') || matches!(wtc, b'M' | b'H' | b'J'))
+        }
+        0xA3..=0xA5 => {
+            (!slow || is_flight_number)
+                && matches!(wtc, b'L' | b'-')
+                && (is_rotorcraft
+                    || matches!(desc[2], b'P' | b'E' | b'M')
+                    || matches!(desc, [b'L' | b'B' | b'P' | b'D', b'0', b'-']))
+        }
+        _ => false,
+    }
 }
 
 /// What Stage 1's filters tell apart, from the kernel's noise class of the designator.
@@ -127,16 +293,10 @@ pub fn trace_to_flights(
     secondary_source: u8,
 ) -> Vec<Flight> {
     let designator = trace.aircraft_type.trim().to_string();
-    // Obstacles (emitter categories C3-C5) make no noise; surface vehicles (C1 emergency, C2
-    // service) are ground vehicles whatever their designator.
-    if designator.eq_ignore_ascii_case("TWR")
-        || is_negligible_noise_typecode(&designator)
-        || matches!(trace.emitter_category, 0xC3..=0xC5)
-    {
+    // Obstacles (emitter categories C3-C5) make no noise.
+    if matches!(trace.emitter_category, 0xC3..=0xC5) {
         return Vec::new();
     }
-    let ground_vehicle =
-        designator.eq_ignore_ascii_case("GND") || matches!(trace.emitter_category, 0xC1 | 0xC2);
     trace.retain_points(|_, point| point_is_sane(point));
     if trace.points.len() < 2 {
         return Vec::new();
@@ -146,23 +306,74 @@ pub fn trace_to_flights(
     let mut flights = Vec::new();
     for range in split_rotations(&trace.points) {
         let points = trace.points[range.clone()].to_vec();
-        let first_timestamp = points[0].timestamp as u32;
-        let flight_id = if real_address && first_timestamp != 0 {
-            (u64::from(address) << 40) | u64::from(first_timestamp)
-        } else {
-            synthetic_id(&trace.aircraft_type, first_timestamp, &points[0])
-        };
         let callsign = trace
             .callsigns
             .iter()
             .find(|change| range.contains(&change.point_index))
             .map(|change| change.callsign.clone())
             .unwrap_or_default();
+        let active_callsign = if !callsign.is_empty() {
+            callsign.as_str()
+        } else {
+            trace
+                .callsigns
+                .iter()
+                .rev()
+                .find(|change| change.point_index < range.start)
+                .map_or("", |change| change.callsign.as_str())
+        };
+        let slow = is_slow_airborne(&points);
+        let reg_contradicted = registration_contradicts(&trace.registration, active_callsign);
+        let cat_contradicted = category_contradicts_type(
+            &designator,
+            trace.emitter_category,
+            slow,
+            flight_number(active_callsign),
+        );
+        let header_contradicted = reg_contradicted || cat_contradicted;
+        if !header_contradicted
+            && (is_tower_typecode(&designator) || is_negligible_noise_typecode(&designator))
+        {
+            continue;
+        }
+        let ground_vehicle = matches!(trace.emitter_category, 0xC1 | 0xC2)
+            || (!header_contradicted && is_ground_vehicle_typecode(&designator));
+        let aircraft_type = if header_contradicted {
+            String::new()
+        } else {
+            trace.aircraft_type.clone()
+        };
+        let first_timestamp = points[0].timestamp as u32;
+        let flight_id = if real_address && first_timestamp != 0 {
+            (u64::from(address) << 40) | u64::from(first_timestamp)
+        } else {
+            synthetic_id(&aircraft_type, first_timestamp, &points[0])
+        };
         let profile = if ground_vehicle {
             NO_PROFILE
+        } else if !header_contradicted {
+            let Some(profile) =
+                rotation_profile(&designator, trace.emitter_category, &callsign, &points)
+            else {
+                continue;
+            };
+            profile
+        } else if reg_contradicted
+            && !cat_contradicted
+            && slow
+            && !flight_number(active_callsign)
+            && !matches!(trace.emitter_category, 0xA7 | 0xB1 | 0xB2)
+        {
+            profile_idx("C172")
+        } else if reg_contradicted
+            && !cat_contradicted
+            && !is_concrete_category(trace.emitter_category)
+            && !slow
+        {
+            profile_idx(&designator)
         } else {
-            let profile = rotation_profile(&designator, trace.emitter_category, &callsign, &points);
-            let Some(profile) = profile else {
+            let Some(profile) = unknown_type_profile(trace.emitter_category, active_callsign, slow)
+            else {
                 continue;
             };
             profile
@@ -181,7 +392,7 @@ pub fn trace_to_flights(
                 0
             },
             callsign,
-            aircraft_type: trace.aircraft_type.clone(),
+            aircraft_type,
             profile,
             airframe: airframe(profile),
             source_id,

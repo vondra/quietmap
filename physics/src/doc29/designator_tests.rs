@@ -157,3 +157,49 @@ fn as_prefixed_rotorcraft_stay_helicopters() {
     }
     assert_eq!(profile_idx("ASTR"), profile_idx("C56X"));
 }
+
+/// The ICAO Doc 8643 class-and-wake table routes previously misclassified wildcard catches and
+/// unmapped types to their class anchor, fixes EN48 (Enstrom 480 helicopter) in the strict table,
+/// and leaves heavy 4-engine military turboprops (A400M) and unassigned ZZZZ on the fallback.
+#[test]
+fn doc8643_classes_route_types_without_wildcard_misfires() {
+    let parsed: serde_json::Value =
+        serde_json::from_str(include_str!("icao-aircraft-types.json")).unwrap();
+    let map = parsed.as_object().unwrap();
+    assert_eq!(map.len(), 2788);
+    for (code, row) in map {
+        let desc = row["desc"].as_str().unwrap().as_bytes();
+        let wtc = row["wtc"].as_str().unwrap().as_bytes()[0];
+        assert_eq!(doc8643_type(code), Some(([desc[0], desc[1], desc[2]], wtc)));
+    }
+
+    let helicopter = noise_class_of(profile_idx("EC35"));
+    for rotorcraft in [
+        "EN48", "EXPL", "CLON", "ALO2", "ALO3", "GAZL", "NH90", "EH10", "V22",
+    ] {
+        assert_eq!(
+            noise_class_of(profile_idx(rotorcraft)),
+            helicopter,
+            "{rotorcraft}"
+        );
+    }
+    let c172 = profile_idx("C172");
+    for piston in [
+        "C72R", "C77R", "GLST", "GLAS", "GLSP", "GLIM", "EAGL", "EVOP", "ESCP", "ELSP", "E400",
+        "BE95", "DH82", "DH89", "SF28", "L200", "F260", "LNC2", "LEG2", "TB30", "DC6", "P51",
+    ] {
+        assert_eq!(profile_idx(piston), c172, "{piston}");
+    }
+    let dh8d = profile_idx("DH8D");
+    for turboprop in [
+        "BE30", "C408", "C425", "CL2T", "E500", "EVOT", "PC6", "PC7", "PC9", "CVLT", "M28", "DHC7",
+    ] {
+        assert_eq!(profile_idx(turboprop), dh8d, "{turboprop}");
+    }
+    assert_eq!(profile_idx("SF50"), profile_idx("C56X"));
+    assert_eq!(profile_idx("BE40"), profile_idx("CRJ9"));
+    assert_eq!(profile_idx("A400"), FALLBACK_PROFILE_IDX);
+    assert_eq!(profile_idx("ZZZZ"), FALLBACK_PROFILE_IDX);
+    assert!(is_ground_vehicle_typecode("GND") && is_ground_vehicle_typecode("SERV"));
+    assert!(is_tower_typecode("TWR") && !is_ground_vehicle_typecode("TWR"));
+}

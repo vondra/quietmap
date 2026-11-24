@@ -2,7 +2,9 @@
 //! ground speed, track, flags, vertical rate, details|null, source, geometric altitude, ..]` are
 //! read field by field without building a JSON value tree (a day holds about 100 M rows).
 
-use super::trace::{AircraftTrace, CallsignChange, SURFACE_REPORT, TracePoint};
+use super::trace::{
+    AircraftTrace, CallsignChange, SURFACE_REPORT, TracePoint, is_concrete_category,
+};
 use flate2::read::GzDecoder;
 use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use std::fmt;
@@ -42,13 +44,19 @@ pub fn parse_trace(gzip_bytes: &[u8]) -> Result<Option<AircraftTrace>, String> {
                 callsign,
             });
         }
-        if emitter_category == 0 {
+        if !is_concrete_category(emitter_category)
+            && (emitter_category == 0 || is_concrete_category(row.emitter_category))
+        {
             emitter_category = row.emitter_category;
         }
         points.push(point);
     }
     Ok((points.len() >= 2).then(|| AircraftTrace {
         address: document.address.unwrap_or_default(),
+        registration: document
+            .registration
+            .map(|r| r.trim().to_string())
+            .unwrap_or_default(),
         aircraft_type: document.aircraft_type.unwrap_or_default(),
         emitter_category,
         points,
@@ -58,6 +66,7 @@ pub fn parse_trace(gzip_bytes: &[u8]) -> Result<Option<AircraftTrace>, String> {
 
 struct Document {
     address: Option<String>,
+    registration: Option<String>,
     aircraft_type: Option<String>,
     base_timestamp: Option<f64>,
     rows: Option<Vec<Option<Row>>>,
@@ -204,7 +213,7 @@ impl<'de> Visitor<'de> for CellVisitor {
 /// ADS-B emitter category `A0`-`D7` as 0xA0-0xD7; anything else 0.
 fn category_code(text: Option<String>) -> u8 {
     match text.as_deref().map(str::as_bytes) {
-        Some([letter @ b'A'..=b'D', digit @ b'0'..=b'9']) => {
+        Some([letter @ b'A'..=b'D', digit @ b'0'..=b'7']) => {
             ((letter - b'A' + 0xa) << 4) | (digit - b'0')
         }
         _ => 0,
@@ -295,6 +304,7 @@ impl<'de> Deserialize<'de> for Document {
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Document, A::Error> {
                 let mut document = Document {
                     address: None,
+                    registration: None,
                     aircraft_type: None,
                     base_timestamp: None,
                     rows: None,
@@ -302,6 +312,7 @@ impl<'de> Deserialize<'de> for Document {
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "icao" => document.address = map.next_value()?,
+                        "r" => document.registration = map.next_value()?,
                         "t" => document.aircraft_type = map.next_value()?,
                         "timestamp" => document.base_timestamp = map.next_value()?,
                         "trace" => {
