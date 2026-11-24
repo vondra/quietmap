@@ -1,4 +1,4 @@
-// The chip for a choice of any subset (the reachable area's walk and car): a visible checkbox square,
+// The chip for a reachable-area mode choice (walk or car): a visible indicator square,
 // so that a filled button is not read as an action; white in both states, the square signal enough
 // (owner 2026-07-29).
 import { Check } from 'lucide-react'

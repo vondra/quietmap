@@ -1,5 +1,5 @@
-// The reachable area on the map: each mode's polygon, the car's lighter under the walk's, and the map
-// fitted to them once drawn, in the part the controls leave in sight.
+// The reachable area on the map: the chosen mode's polygon, and the map fitted to it when first
+// drawn, in the part the controls leave in sight.
 import { useEffect } from 'react'
 import { useMap, Source, Layer } from 'react-map-gl/maplibre'
 import { framePadding } from './map-frame'
@@ -27,8 +27,8 @@ export default function IsochronLayer({ area, fit }: { area: GeoJSON.FeatureColl
   if (!area) return null
   return (
     <Source id="isochron" type="geojson" data={area}>
-      <Layer id="isochron-fill" type="fill" paint={{ 'fill-color': '#2563eb', 'fill-opacity': ['match', ['get', 'mode'], 'walk', 0.18, 0.08] }} />
-      <Layer id="isochron-line" type="line" paint={{ 'line-color': '#2563eb', 'line-width': ['match', ['get', 'mode'], 'walk', 2.5, 1.5], 'line-opacity': 0.9 }} />
+      <Layer id="isochron-fill" type="fill" paint={{ 'fill-color': '#2563eb', 'fill-opacity': 0.12 }} />
+      <Layer id="isochron-line" type="line" paint={{ 'line-color': '#2563eb', 'line-width': 2, 'line-opacity': 0.9 }} />
     </Source>
   )
 }

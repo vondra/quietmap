@@ -34,7 +34,7 @@ import { firstCheckin, type Stay, type StaySearch } from './lib/stays'
 import { PopupStateContext } from './hooks/usePopupState'
 import { useReachableArea } from './hooks/useReachableArea'
 import { useSelectedStay } from './hooks/useSelectedStay'
-import type { MapCamera, Position, ReachRequest } from './lib/url-state'
+import type { MapCamera, Position, ReachOptions, ReachRequest } from './lib/url-state'
 
 export default function App() {
   const { state, updateUrl } = useUrlState()
@@ -49,9 +49,15 @@ export default function App() {
   const [staySeed, setStaySeed] = useState<{ stay: Stay; search: StaySearch } | null>(null)
   const { stay: selectedStay, message: stayMessage } = useSelectedStay(state.stayId, detailPosition, staySearch, staySeed)
   const isochron = useReachableArea(state.reach)
-  const isochronBusy = useRef(isochron.busy)
-  isochronBusy.current = isochron.busy
-  const showIsochron = (reach: ReachRequest) => { isochron.fitNext.current = true; updateUrl({ reach }) }
+  const showIsochron = (reach: ReachRequest) => {
+    if (!state.reach) isochron.fitNext.current = true
+    isochron.retry()
+    updateUrl({ reach, reachOptions: { minutes: reach.minutes, mode: reach.mode } })
+  }
+  const changeIsochron = (reachOptions: ReachOptions) => updateUrl(s => ({
+    reachOptions,
+    ...(s.reach && reachOptions.minutes >= 1 ? { reach: { lat: s.reach.lat, lng: s.reach.lng, ...reachOptions } } : {}),
+  }))
   const clearIsochron = () => updateUrl({ reach: null })
   const latestState = useRef(state)
   latestState.current = state
@@ -204,7 +210,6 @@ export default function App() {
   }, [detailPosition])
   const handleDetailPositionChange = useCallback((pos: { lat: number; lng: number } | null) => {
     activeDetailPosition.current = pos
-    if (isochronBusy.current) updateUrl({ reach: null })
     setStaySeed(null)
     updateUrl(s => ({ detailPosition: pos, stayId: null, popup: {}, scroll: { ...s.scroll, detail: 0 }, controls: pos ? (s.detailPosition ? s.controls : null) : window.matchMedia(DESKTOP_QUERY).matches ? 'layers' : null,
       sheetExpanded: true, ...(pos ? {} : { calculation: false }) }))
@@ -234,8 +239,8 @@ export default function App() {
   }, [handleDetailPositionChange])
 
   const handleBasemapChange = (basemap: BasemapId) => updateUrl({ basemap })
-  // The area reachable from the open place: its button at the search field's end, where dev1 had it,
-  // its panel under the place's row.
+  // The reachable area: its button at the search field's end, where dev1 had it, and its panel
+  // below the open place's row (or directly under the search field once the place is closed).
   const isochronButton = (
     <button
       type="button"
@@ -254,10 +259,25 @@ export default function App() {
     </button>
   )
   // Folded, the panel keeps what it holds: its minutes, a request on its way, what went wrong.
-  const isochronPanel = detailPosition && <div hidden={!isochronOpen}><IsochronPanel at={detailPosition} options={state.reachOptions} onChange={reachOptions => updateUrl({ reachOptions })} onShow={showIsochron} busy={isochron.busy} error={isochron.error} /></div>
   const reachName = state.reach && (titleAt(placeTitles, state.reach)?.title
     ?? (sameDetailPosition(state.reach, detailPosition) ? detailPlaceName : null)
+    ?? recentPlaces.find(place => samePlace(place, state.reach!))?.place
     ?? `${state.reach.lat.toFixed(4)}, ${state.reach.lng.toFixed(4)}`)
+  const isochronOrigin = detailPosition ?? state.reach
+  const isochronPanel = isochronOrigin && (
+    <div hidden={!isochronOpen}>
+      <IsochronPanel
+        at={isochronOrigin}
+        from={reachName}
+        atOtherPlace={Boolean(state.reach && detailPosition && !sameDetailPosition(state.reach, detailPosition))}
+        options={state.reach ? { minutes: state.reach.minutes, mode: state.reach.mode } : state.reachOptions}
+        onChange={changeIsochron}
+        onShow={showIsochron}
+        busy={isochron.busy}
+        error={isochron.error}
+      />
+    </div>
+  )
   const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange,
     stayMaxPrice, onStayMaxPriceChange: (stayMaxPrice: number | null) => updateUrl({ stayMaxPrice }),
     reachLabel: state.reach ? `${state.reach.minutes} min from ${reachName}` : null, onClearReach: clearIsochron,
@@ -303,7 +323,7 @@ export default function App() {
         // for each place and account under its key (what was open belongs to them): siblings under one
         // key once left a name field behind.
         openAction={<MediaButtons media={media} />}
-        fieldAction={isochronButton}
+        fieldAction={isochronOrigin ? isochronButton : undefined}
         accountAction={<AccountButton account={account} onSignOut={signOut} onDeleteAccount={deleteAccount} open={cardTab === 'account' && !desktop} onOpenChange={setAccountOpen} />}
       >
         {isochronPanel}

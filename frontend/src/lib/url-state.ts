@@ -19,7 +19,8 @@ export interface MapCamera extends Position { zoom: number; bearing: number; pit
 export function pixelPadding(padding: CameraPadding, width: number, height: number): CameraPadding {
   return { top: padding.top * height, right: padding.right * width, bottom: padding.bottom * height, left: padding.left * width }
 }
-export interface ReachOptions { minutes: number; modes: ('walk' | 'car')[] }
+export type ReachMode = 'walk' | 'car'
+export interface ReachOptions { minutes: number; mode: ReachMode }
 export interface ReachRequest extends Position, ReachOptions {}
 export type PopupState = Record<string, boolean | number | string>
 export interface UrlState extends MapCamera {
@@ -65,8 +66,11 @@ function date(raw: string | null, fallback: string): string {
     && new Date(raw).toISOString().slice(0, 10) === raw ? raw : fallback
 }
 function reachOptions(raw: string | null): ReachOptions {
-  const [minutes, ...modes] = (raw ?? '60,walk,car').split(',')
-  return { minutes: Math.round(number(minutes, 60, 0, 120)), modes: (['walk', 'car'] as const).filter(mode => modes.includes(mode)) }
+  const [minutes, ...modes] = (raw ?? '60,car').split(',')
+  return {
+    minutes: Math.round(number(minutes, 60, 0, 120)),
+    mode: modes.includes('car') ? 'car' : modes.includes('walk') ? 'walk' : 'car',
+  }
 }
 function popupState(raw: string | null): PopupState {
   try {
@@ -99,6 +103,7 @@ export function parseHash(hash = window.location.hash): UrlState {
   const ro = p.get('ro'), reachParts = p.get('reach')?.split(',')
   const origin = reachParts && position(reachParts.slice(0, 2).join(','))
   const reached = reachParts && reachOptions(reachParts.slice(2).join(','))
+  const reach = origin && reached && reached.minutes > 0 ? { ...origin, ...reached } : null
   const padding = (p.get('pad') ?? '').split(',')
   const panel = p.get('panel'), scroll = p.get('scroll')?.split(',') ?? []
   return {
@@ -118,8 +123,9 @@ export function parseHash(hash = window.location.hash): UrlState {
     controls: panel === 'layers' || panel === 'account' ? panel : panel === 'none' || detailPosition || !window.matchMedia(DESKTOP_QUERY).matches ? null : 'layers',
     advanced: p.has('adv') ? p.get('adv') === '1' : metric === 'lden' || dataLayers.length > 0,
     calculation: !!detailPosition && p.get('calc') === '1', sheetExpanded: p.get('sheet') !== 'peek',
-    isochronOpen: p.get('iso') === '1', reachOptions: reachOptions(p.get('travel')),
-    reach: origin && reached && reached.minutes > 0 && reached.modes.length ? { ...origin, ...reached } : null,
+    isochronOpen: p.get('iso') === '1',
+    reachOptions: p.has('travel') ? reachOptions(p.get('travel')) : reach ? { minutes: reach.minutes, mode: reach.mode } : reachOptions(null),
+    reach,
     popup: detailPosition ? popupState(p.get('popup')) : {},
     scroll: { layers: number(scroll[0], 0, 0, 1000000), detail: detailPosition ? number(scroll[1], 0, 0, 1000000) : 0 },
   }
@@ -152,8 +158,8 @@ export function buildHash(s: UrlState): string {
   if (s.calculation && s.detailPosition) add('calc', 1)
   if (!s.sheetExpanded) add('sheet', 'peek')
   if (s.isochronOpen) add('iso', 1)
-  const travel = (o: ReachOptions) => [o.minutes, ...o.modes].join(',')
-  if (travel(s.reachOptions) !== '60,walk,car') parts.push(`travel=${travel(s.reachOptions)}`)
+  const travel = (o: ReachOptions) => `${o.minutes},${o.mode}`
+  if (travel(s.reachOptions) !== '60,car') parts.push(`travel=${travel(s.reachOptions)}`)
   if (s.reach) parts.push(`reach=${positionText(s.reach)},${travel(s.reach)}`)
   if (s.detailPosition && Object.keys(s.popup).length) add('popup', JSON.stringify(s.popup))
   if (s.scroll.layers || (s.detailPosition && s.scroll.detail)) parts.push(`scroll=${Math.round(s.scroll.layers ?? 0)},${s.detailPosition ? Math.round(s.scroll.detail ?? 0) : 0}`)
