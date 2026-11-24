@@ -9,7 +9,7 @@
 //!
 //! Designators not in the strict 123-entry table are routed by `doc8643_fallback`: exact 1-to-1 ANP
 //! aircraft substitutions first, then the anchor of the designator's ICAO Doc 8643 class and wake
-//! turbulence category (`years/tables/*/icao-aircraft-types.json`, 2,788 designators from
+//! turbulence category (`physics/src/doc29/icao-aircraft-types.json`, 2,788 designators from
 //! `wiedehopf/tar1090-db` `icao_aircraft_types2.js` v3.14.1727, commit `cc6d4b07e87b`, 2026-11-23,
 //! sourced from `Mictronics/readsb-protobuf` `webapp/src/db/types.json`). The classes and every ANP
 //! profile's curves are written by `scripts/aircraft-classes.py`:
@@ -1740,11 +1740,11 @@ pub fn profile_idx(typecode: &str) -> u8 {
 }
 
 /// ICAO Doc 8643 aircraft description (`L2J`, `H1T`, `L1P`, ...) and wake turbulence category
-/// (`L`, `M`, `H`, `J`, `-`) from `years/tables/2026/icao-aircraft-types.json` (2,788 designators,
+/// (`L`, `M`, `H`, `J`, `-`) from `physics/src/doc29/icao-aircraft-types.json` (2,788 designators,
 /// `wiedehopf/tar1090-db` `icao_aircraft_types2.js` v3.14.1727, commit `cc6d4b07e87b`, 2026-11-23).
 pub fn doc8643_type(typecode: &str) -> Option<([u8; 3], u8)> {
     static TABLE: LazyLock<HashMap<String, ([u8; 3], u8)>> = LazyLock::new(|| {
-        let raw = include_str!("../../../years/tables/2026/icao-aircraft-types.json");
+        let raw = include_str!("icao-aircraft-types.json");
         let mut map = HashMap::with_capacity(2800);
         for line in raw.lines() {
             let Some((key_part, rest)) = line.trim().split_once("\": {\"desc\": \"") else {

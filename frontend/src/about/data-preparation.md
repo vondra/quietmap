@@ -937,7 +937,7 @@ the checksums of its datum grids and PROJ database, with no system-grid or netwo
 The first step turns a year of ADS-B traces into flight segments per day (`build/src/aircraft`):
 altitudes above EGM2008, each segment's Doc 29 phase and operation (A.3.2), and each flight's class,
 decided once: its designator's ANP aircraft (55 classes, `scripts/aircraft-classes.py`) or Doc 8643
-class and wake anchor (`years/tables/*/icao-aircraft-types.json`) unless the aircraft's own
+class and wake anchor (`physics/src/doc29/icao-aircraft-types.json`) unless the aircraft's own
 broadcast registration or category contradicts the database header, else by its transponder category
 or slow flight, else a fallback; surface vehicles are ground traffic.
 `aircraft-shuffle` sorts the window's segments into z9 squares once; `aircraft-boxes` builds a

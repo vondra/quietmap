@@ -163,14 +163,8 @@ fn as_prefixed_rotorcraft_stay_helicopters() {
 /// and leaves heavy 4-engine military turboprops (A400M) and unassigned ZZZZ on the fallback.
 #[test]
 fn doc8643_classes_route_types_without_wildcard_misfires() {
-    assert_eq!(
-        include_str!("../../../years/tables/2026/icao-aircraft-types.json"),
-        include_str!("../../../years/tables/2024/icao-aircraft-types.json")
-    );
-    let parsed: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../years/tables/2026/icao-aircraft-types.json"
-    ))
-    .unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(include_str!("icao-aircraft-types.json")).unwrap();
     let map = parsed.as_object().unwrap();
     assert_eq!(map.len(), 2788);
     for (code, row) in map {

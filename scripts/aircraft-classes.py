@@ -283,7 +283,7 @@ def replace_block(text, start_marker, end_marker, new):
 
 def main(anp_dir, v9_dir, root):
     anp = Anp(anp_dir, v9_dir)
-    doc8643 = json.load(open(os.path.join(root, "years/tables/2026/icao-aircraft-types.json")))
+    doc8643 = json.load(open(os.path.join(root, "physics/src/doc29/icao-aircraft-types.json")))
     for designator, acft in MAPPING.items():
         if designator in doc8643:
             desc = doc8643[designator]["desc"]
