@@ -2,15 +2,21 @@
 
 use super::*;
 
-/// Decide whether a relation is one of the multipolygon flavours we track.
+/// Decide whether a relation is one of the polygon flavours we track (`type=multipolygon`, plus
+/// `type=boundary` specifically for eligible active military ranges such as Czech `vojenské újezdy`
+/// and Slovak `vojenské obvody`).
 pub(super) fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(Vec<FeatureType>, Tags)> {
     let tags: Tags = rel
         .tags()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     let tag = |k: &str| tags.get(k).map(String::as_str);
-    if tag("type") != Some("multipolygon") {
-        return None;
+    let pairs: Vec<(&str, &str)> = tags.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let active_military = crate::osm::classify::is_active_military_range(&pairs);
+    match tag("type") {
+        Some("multipolygon") => {}
+        Some("boundary") if active_military => {}
+        _ => return None,
     }
     // A car park is what it is before it is what it is zoned as, and a lot mapped
     // as a relation is not a source: the assembler keeps one outer ring and drops
@@ -25,6 +31,14 @@ pub(super) fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(Vec<Featu
             )
         ) {
         FeatureType::Building
+    } else if crate::osm::classify::has_military_shooting_veto(&pairs)
+        && (crate::osm::classify::is_emitting_industrial(tag) || active_military)
+    {
+        FeatureType::Industrial
+    } else if crate::osm::classify::has_military_shooting_veto(&pairs)
+        && crate::osm::classify::special_leisure_class(tag) == Some(11)
+    {
+        return None;
     } else if crate::osm::classify::is_special_leisure(tag) {
         FeatureType::Leisure
     } else if parking.is_some() {

@@ -15,6 +15,9 @@ pub struct Release {
     /// The year's weather table: a click reads its own place of it
     /// (`physics::weather::read_place`), the painter all of it.
     pub weather_path: PathBuf,
+    /// Optional year-level index of nearby unmodelled sites (active military firing ranges and
+    /// training areas); absent in older trees.
+    pub unmodelled_path: PathBuf,
 }
 
 impl Release {
@@ -29,6 +32,7 @@ impl Release {
         }
         Ok(Release {
             weather_path: year_root.join(WEATHER_FILE),
+            unmodelled_path: year_root.join(tiles::unmodelled::UNMODELLED_SITES_FILE),
             year_root,
         })
     }

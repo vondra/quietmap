@@ -51,7 +51,7 @@ fn industrial(path: &Path, centroid: (f64, f64), ring: &[(f64, f64)], source_typ
         fields,
         HashMap::from([
             ("grid".into(), "z30".into()),
-            ("osm_industrial_contract".into(), "2".into()),
+            ("osm_industrial_contract".into(), "3".into()),
         ]),
     );
     let batch = RecordBatch::try_new(

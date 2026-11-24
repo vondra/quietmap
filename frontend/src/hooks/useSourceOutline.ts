@@ -1,11 +1,9 @@
-// Load the opened industrial site's boundary; a late response never replaces another selection.
+// Load an opened industrial site's or unmodelled range's boundary; a late response never replaces
+// another selection.
 import { useEffect, useState } from 'react'
 import { MAP_YEAR } from '../lib/map-year'
-import type { Contributor } from '../types/noise'
 
-export function useSourceOutline(source: Contributor | undefined): GeoJSON.FeatureCollection | null {
-  const id = source?.source_type === 'industrial' && source.metadata?.source_type !== 'wind_turbine'
-    ? source.id : null
+export function useSourceOutline(id: string | null): GeoJSON.FeatureCollection | null {
   const [loaded, setLoaded] = useState<{ id: string; outline: GeoJSON.FeatureCollection } | null>(null)
   useEffect(() => {
     if (!id) return

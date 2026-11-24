@@ -29,10 +29,12 @@ Every input follows one uniform admission rule by kind:
 - **Activity and flows** (traffic counts, timetables, hourly counts, level crossings, flights,
   ships, airport operations and corridor assumptions) take the target year or an earlier vintage
   by default. Laws and practices apply over their documented validity intervals (church bells,
-  calls to prayer, venue hours, implicit speed-limit rules). Where no target-year or earlier
-  activity dataset exists, the nearest later vintage may be declared explicitly as a **fallback
-  vintage**: its reason and signed vintage gap are derived from the manifest and shown on the
-  source pages and in popup citations.
+  calls to prayer, venue hours, implicit speed-limit rules); standing practices measured later
+  still apply to earlier years unless dated evidence shows a different practice. Where no
+  target-year or earlier activity dataset exists, the nearest later vintage may be declared
+  explicitly as a **fallback vintage**: its signed vintage gap is derived from the manifest and
+  shown on the source pages alongside its reason (and in popup citations for datasets cited in the
+  popup).
 
 A fitted table is admitted only when every input used to derive it is admitted. For example,
 traffic counts divided by a newer mapped road length cannot supply an earlier year's rate. A
@@ -347,7 +349,8 @@ metro counted at its stops: on the 2026 map, outside the United States, the trai
 timetable's busiest Wednesday (Wednesday 8 April 2026 for Czechia's national timetable; and in the
 United States, the mean of the days of the year to 31 August 2026 that its archived timetables
 cover, weekends included); on the 2024 map, the mean over all 366 days of 2024, weekends
-included, with missing calendar dates estimated from each operator's covered-day mean. Freight
+included, with missing calendar dates estimated from each operator's covered-day mean (while
+declared fallback-vintage timetables average over their own published service calendar). Freight
 comes from defaults calibrated in 28 European countries (32 on the 2024 map) and Turkey against
 official goods train-kilometres
 ([Eurostat](https://ec.europa.eu/eurostat/web/transport/database) 2024; the United Kingdom 2019;
@@ -393,7 +396,8 @@ the entire observation window. Overlapping alternative feeds follow source prior
 are not summed or stitched into one calendar. Missing dates in the winning feed remain estimated.
 The available months may have a different service mix from the rest of the year, so an incomplete
 calendar cannot establish the actual full-year mean.
-Where no timetable archive exists for the selected year, the map keeps its declared estimates.
+Where no timetable archive exists for the selected year, either a declared fallback vintage or
+the map's class and corridor estimates apply.
 The train details show how much of a mixed count comes from dates without timetable data.
 
 Observed and calendar-estimated trains use the same modelled day, evening and night shares
@@ -406,10 +410,10 @@ last stored before the window's end that covers four weeks of it, or the days a 
 horizon covers, or for SunRail and Sacramento a later archive that still covers part of it.
 
 For 2024, the window is the calendar year. The United States' timetables are the same systems'
-archives stored in 2024 and chosen by the same rule, 55 archives including San Diego's Coaster and
-Sprinter, the Kansas City streetcar and the Hartford Line (from July 2023 through 9 June 2024),
-supplemented by 2026 fallback vintages for Charlotte's light rail and Honolulu's Skyline where no
-2024 archive exists; Buffalo's Metro Rail keeps class estimates. Poland's trains combine the 2024
+archives chosen by the same rule: 54 archives stored in 2024 plus the July 2023 Hartford Line
+archive (whose calendar runs through 9 June 2024), including San Diego's Coaster and Sprinter and
+the Kansas City streetcar, supplemented by 2026 fallback vintages for Charlotte's light rail and
+Honolulu's Skyline where no 2024 archive exists; Buffalo's Metro Rail keeps class estimates. Poland's trains combine the 2024
 archives of PolRegio, PKP Intercity, SKM Warszawa (from Warsaw ZTM) and four regional railways with
 a 2026 fallback vintage of the joint Polish Trains feed restricted strictly to the six remaining
 operators without 2024 archives; the Silesian trams cover 23 days of the summer. Fallback-vintage
@@ -630,8 +634,10 @@ maps of 2022.
 
 A dated operating interval or an earlier observed status determines a site's operating state. A
 facility that opens on or after the map cutoff is skipped before matching so it neither classifies
-nor silences an earlier mapped tenant. A site retired after the cutoff was operating at the cutoff,
-and a newer closure record cannot silence another tenant described by a different register.
+nor silences an earlier mapped tenant. A site retired after the cutoff, or scheduled only for a
+future planned retirement where prior operation is dated, was operating at the cutoff (an undated
+planned retirement does not invent prior operation), and a newer closure record cannot silence
+another tenant described by a different register.
 Conflicting evidence stays unknown. An undated record from a later structure register still
 classifies a matching earlier mapped footprint while its operation remains unknown
 (never inventing confirmation that the site was running). Names can suggest a sector but do not
@@ -655,6 +661,17 @@ read that same facility input.
 - **Solar farms and substations.** Solar farms hum from their inverters by day (88 dB(A) a MW at
   full output; 0.55 MW a hectare where untagged), substations from their transformers around the
   clock (<abbr title="the International Electrotechnical Commission's standard for transformer noise">IEC 551</abbr>).
+- **Military firing ranges and training areas.** Active open-air polygons tagged
+  `military=range`, `military=training_area` or `military=danger_area` in OpenStreetMap (excluding
+  barracks, bases, offices, disused or historic sites, roofed buildings, offshore sea-chart zones,
+  and non-firing hazard overlays such as unexploded ordnance, minefields or nuclear exclusion zones)
+  are carried through the facility input into `source-outlines.sqlite` and `unmodelled-sites` with
+  zero emission. Weapon mix, annual round counts and firing positions are not published globally,
+  and large-calibre blasts are assessed with C-weighted peak metrics rather than A-weighted annual
+  Lden, so the popup names nearby ranges without inventing a level (within 3 km under 5 km², 10 km
+  at 5 km² or above; inner holes are preserved so enclaved villages are not marked inside). Bare
+  `landuse=military` polygons without a range, training or danger tag — including large estates
+  mapped only as military land — stay unflagged so quiet barracks and depots are not mislabelled.
 
 </details>
 
@@ -669,7 +686,8 @@ exist, then mapped heights and floor counts, then the typical height for the foo
 from official inventories and OpenStreetMap. The country pages name the surveys and inventories.
 
 Not modelled: roads and railways in tunnels, rail yards, heritage lines, curve squeal, motorsport,
-deliveries, building sites, garden machinery, music and festivals.
+military firing and blast noise (active ranges are named in the popup without a level), deliveries,
+building sites, garden machinery, music and festivals.
 
 <details>
 <summary>Each kind of building and place</summary>
@@ -702,8 +720,8 @@ deliveries, building sites, garden machinery, music and festivals.
   weeks; courts, playgrounds, pools and terraces their active level for about an eighth of the day,
   stadiums on match days. A pitch counts at most 10 ha, a court, playground, pool or terrace at
   most the 99th percentile of its kind mapped in 2026 (for every year: a playground 6,280 m², a
-  terrace 760 m²): a 46 ha dog run mapped as a playground is a large playground. Each is heard while in use, not as a steady hum at its mean. Outdoor
-  shooting ranges fire 20,000 shots a year by day.
+  terrace 760 m²): a 46 ha dog run mapped as a playground is a large playground. Each is heard while in use, not as a steady hum at its mean. Civilian outdoor
+  shooting ranges fire 20,000 shots a year by day; military ranges are not given a guessed shot count.
 - **Car parks** follow the [Bavarian parking study](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0)
   (LfU 2007): 63 dB(A) for one movement an hour, 0.4 movements a space an hour from 06 to 22 h and
   0.05 at night at most; where the buildings are mapped, a car park carries no more cars than
@@ -851,7 +869,10 @@ Beside the squares lie the year's flight tracks, 28 GB in 256 files, read only t
 flight, and its weather table, 16.6 MB for every half degree: a 30-year climatology, the same in
 every year. Industrial site boundaries are kept in `source-outlines.sqlite`, indexed by the same
 source id as their sound. Opening a site's row reads its whole input boundary; sources without a
-mapped boundary keep their computed points. This display file does not enter the noise calculation.
+mapped boundary keep their computed points. Active military firing ranges and training areas are
+indexed beside it in `unmodelled-sites` (about 3.3 MB worldwide), keyed by the same source id so
+opening a row in the popup loads its boundary from `source-outlines.sqlite`. Neither file enters
+the noise calculation.
 
 </details>
 

@@ -170,6 +170,7 @@ fn apply_way(
             if let Some(assembled) = assembler.assemble(rel_id, manifest) {
                 let relations::AssembledRelation {
                     rings,
+                    holes_per_ring,
                     inner_rings,
                     tags,
                     feature_types: types,
@@ -196,18 +197,43 @@ fn apply_way(
                     } else {
                         vec![extracted_tags.clone(); rings.len()]
                     };
-                    for (ring, tags) in rings.iter().zip(part_tags.iter()).take(count) {
+                    let keep_holes = matches!(ftype, FeatureType::Industrial)
+                        && classify::is_active_military_range_map(&extracted_tags);
+                    for ((ring, holes), tags) in rings
+                        .iter()
+                        .zip(holes_per_ring.iter())
+                        .zip(part_tags.iter())
+                        .take(count)
+                    {
                         let (clat, clon) = centroid(ring);
                         let square = crate::osm::geometry::square_of(clat, clon);
                         let safe_ring = ring_for_spill(ring, &mut stats.antimeridian_rings_omitted);
+                        let safe_holes: Vec<&[[f64; 2]]> = if keep_holes && safe_ring.is_some() {
+                            holes
+                                .iter()
+                                .filter_map(|hole| {
+                                    ring_for_spill(hole, &mut stats.antimeridian_rings_omitted)
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                         let squares = if horticulture {
                             squares_of_ring(safe_ring, square)
                         } else {
                             vec![square]
                         };
                         for sq in squares {
-                            spiller.emit_polygon(
-                                &ftype, sq, rel_id, "relation", clat, clon, tags, safe_ring,
+                            spiller.emit_polygon_with_holes(
+                                &ftype,
+                                sq,
+                                rel_id,
+                                "relation",
+                                clat,
+                                clon,
+                                tags,
+                                safe_ring,
+                                &safe_holes,
                             )?;
                         }
                         stats.features_total += 1;
@@ -293,21 +319,33 @@ fn apply_way(
 }
 
 /// Suppress only the family represented by an assembled outer relation. A
-/// building member can carry a separate power/sport feature absent on its parent,
-/// and a real building way is not suppressed by a landuse=greenhouse_horticulture relation.
+/// building member can carry a separate power/sport feature absent on its parent;
+/// a real building way is not suppressed by a landuse=greenhouse_horticulture relation;
+/// an active military range relation never suppresses an emitting industrial outer
+/// way (nor vice versa), and always suppresses civilian shooting on its outer way.
 fn relation_covers_kind(
     id: i64,
     kind: &FeatureType,
-    way_tags: &Tags,
+    way_tags: &classify::Tags,
     manifest: &RelationManifest,
 ) -> bool {
     let way_has_building = *kind == FeatureType::Building
         && classify::has_a_building(|k| way_tags.get(k).map(String::as_str));
+    let way_military =
+        *kind == FeatureType::Industrial && classify::is_active_military_range_map(way_tags);
+    let way_shooting = *kind == FeatureType::Leisure
+        && classify::special_leisure_class(|key| way_tags.get(key).map(String::as_str)) == Some(11);
     manifest.way_to_relations.get(&id).is_some_and(|parents| {
         parents.iter().any(|(id, role)| {
             (role.is_empty() || role == "outer")
                 && manifest.relations.get(id).is_some_and(|relation| {
+                    let rel_military = relation.feature_types.contains(&FeatureType::Industrial)
+                        && classify::is_active_military_range_map(&relation.tags);
+                    if way_shooting && rel_military {
+                        return true;
+                    }
                     relation.feature_types.contains(kind)
+                        && (*kind != FeatureType::Industrial || rel_military == way_military)
                         && !(way_has_building && is_horticulture_zone(&relation.tags))
                 })
         })

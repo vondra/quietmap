@@ -40,11 +40,11 @@ interface SearchBarProps {
   onSignIn?: () => void
   /** The open place's actions, at its row's end. */
   openAction?: ReactNode
-  /** The open place's action at the field's end, where Google's directions stand (the reachable area). */
+  /** The reachable-area action at the field's end, where Google's directions stand. */
   fieldAction?: ReactNode
   /** The phone's account, at the field's end whatever is open (Google Maps' place for it). */
   accountAction?: ReactNode
-  /** Under the open place's row: what its actions opened. */
+  /** Under the open place's row (or under the search field when a reachable area is active): what its actions opened. */
   children?: ReactNode
 }
 
@@ -212,12 +212,12 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
             }}
             onKeyDown={handleKeyDown}
             placeholder={open ? 'Search another place…' : 'Search address or coordinates…'}
-            className={`w-full rounded-lg bg-background px-4 py-2.5 pr-10 ${open ? 'max-md:pr-[4.75rem]' : ''} text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 pointer-fine:text-sm`}
+            className={`w-full rounded-lg bg-background px-4 py-2.5 pr-10 ${fieldAction ? 'max-md:pr-[4.75rem]' : ''} text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30 pointer-fine:text-sm`}
           />
           <span id="search-keys" hidden>Enter coordinates as latitude, longitude. Up and down choose a place, Enter opens it, Shift+Delete forgets it.</span>
           <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
             {listing && searchNames && suggestions?.query !== asked && <span className="px-1 text-sm text-muted-foreground">...</span>}
-            {!showingSearch && open && fieldAction}
+            {!showingSearch && fieldAction}
             {!showingSearch && accountAction}
           </div>
         </div>
@@ -297,7 +297,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
           <p role="status" className="rounded-b-lg border border-border bg-popover px-3 py-2 text-xs text-muted-foreground">
             Use latitude −{MAX_LATITUDE} to {MAX_LATITUDE} and longitude −180 to 180.
           </p>
-        ) : open && !showingSearch && (
+        ) : open && !showingSearch ? (
           <>
             {/* Made anew for each place: a name being written belongs to the place it was begun for. Its
                 key names the row alone: siblings under one key once left a row behind at every place. */}
@@ -317,6 +317,8 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
               <div className="max-h-[max(6rem,calc(60dvh-11rem-env(safe-area-inset-top,0px)))] overflow-y-auto overscroll-contain md:max-h-[calc(100dvh-10rem)]">{children}</div>
             </div>
           </>
+        ) : !showingSearch && children && (
+          <div className="overflow-hidden rounded-b-lg bg-popover">{children}</div>
         )}
         {notSaved && <p role="alert" className="mt-1 rounded-md bg-popover px-3 py-1 text-xs text-destructive shadow-lg">Not saved: the map could not be reached.</p>}
       </div>

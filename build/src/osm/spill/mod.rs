@@ -43,6 +43,17 @@ pub fn encode_ring_text(ring: &[(i32, i32)]) -> String {
         .join(";")
 }
 
+/// Encode an outer ring and optional hole rings separated by `|`; zero holes matches [`encode_ring_text`].
+pub fn encode_rings_text(outer: &[(i32, i32)], holes: &[Vec<(i32, i32)>]) -> String {
+    if holes.is_empty() {
+        return encode_ring_text(outer);
+    }
+    std::iter::once(encode_ring_text(outer))
+        .chain(holes.iter().map(|hole| encode_ring_text(hole)))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 /// Parse a TSV ring column. `None` on any malformation (caller stores null).
 pub fn parse_ring_text(s: &str) -> Option<Vec<(i32, i32)>> {
     if s.is_empty() {
@@ -54,6 +65,22 @@ pub fn parse_ring_text(s: &str) -> Option<Vec<(i32, i32)>> {
         out.push((gx.parse().ok()?, gy.parse().ok()?));
     }
     if out.len() < 3 { None } else { Some(out) }
+}
+
+/// One snapped polygon ring in z30 cells.
+pub type SnappedRing = Vec<(i32, i32)>;
+
+/// Parse an outer ring and optional `|`-delimited hole rings from the TSV ring column.
+pub fn parse_rings_text(s: &str) -> Option<(SnappedRing, Vec<SnappedRing>)> {
+    let mut parts = s.split('|');
+    let outer = parse_ring_text(parts.next()?)?;
+    let mut holes = Vec::new();
+    for part in parts {
+        if let Some(hole) = parse_ring_text(part) {
+            holes.push(hole);
+        }
+    }
+    Some((outer, holes))
 }
 
 /// OSM strings at the TSV boundary. Tabs and record separators are data in

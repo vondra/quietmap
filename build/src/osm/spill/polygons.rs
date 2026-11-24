@@ -19,6 +19,22 @@ impl Spiller {
         tags: &Tags,
         ring: Option<&[[f64; 2]]>,
     ) -> Result<()> {
+        self.emit_polygon_with_holes(ftype, square, osm_id, osm_kind, clat, clon, tags, ring, &[])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn emit_polygon_with_holes(
+        &mut self,
+        ftype: &FeatureType,
+        square: Square,
+        osm_id: i64,
+        osm_kind: &str,
+        clat: f64,
+        clon: f64,
+        tags: &Tags,
+        ring: Option<&[[f64; 2]]>,
+        holes: &[&[[f64; 2]]],
+    ) -> Result<()> {
         if !self.selects(square) {
             return Ok(());
         }
@@ -57,6 +73,10 @@ impl Spiller {
         let snapped: Vec<(i32, i32)> = ring
             .map(|r| r.iter().map(|c| lonlat_to_grid(c[1], c[0])).collect())
             .unwrap_or_default();
+        let snapped_holes: Vec<Vec<(i32, i32)>> = holes
+            .iter()
+            .map(|hole| hole.iter().map(|c| lonlat_to_grid(c[1], c[0])).collect())
+            .collect();
 
         let w = self.get_writer(name, bucket)?;
         write!(w, "{}\t{}\t{}\t{}", spill_key(square), osm_id, cgx, cgy)?;
@@ -106,11 +126,18 @@ impl Spiller {
                 else {
                     site_type_from_tags(tags)
                 };
+                // Active military ranges never overload industrial site_subtype codes (1..12).
+                let site_subtype =
+                    if src_type == physics::emission::industrial::SOURCE_MILITARY_RANGE {
+                        0
+                    } else {
+                        site_subtype_from_tags(tags)
+                    };
                 write!(
                     w,
                     "\t{}\t{}\t{}\t{}\t{}",
                     src_type,
-                    site_subtype_from_tags(tags),
+                    site_subtype,
                     tsv_tag(tags, "name"),
                     tags.get("height")
                         .and_then(|s| parse_height(s))
@@ -145,8 +172,8 @@ impl Spiller {
             _ => {}
         }
 
-        // Snapped ring as grid text (empty when the feature is a point).
-        write!(w, "\t{}", encode_ring_text(&snapped))?;
+        // Snapped ring (plus optional `|`-delimited holes) as grid text (empty when a point).
+        write!(w, "\t{}", encode_rings_text(&snapped, &snapped_holes))?;
         if matches!(
             ftype,
             FeatureType::Industrial | FeatureType::WindTurbine | FeatureType::Leisure

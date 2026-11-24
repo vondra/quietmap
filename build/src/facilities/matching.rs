@@ -58,7 +58,11 @@ pub fn classify(
     let mut rings = Vec::with_capacity(sites.len());
     let mut indexed = Vec::new();
     for (row, site) in sites.iter().enumerate() {
-        let ring = if site.role == INDUSTRY {
+        // Active military ranges are unmodelled annotations and must never win point-observation
+        // containment from an emitting industrial site sharing the area.
+        let ring = if site.role == INDUSTRY
+            && site.source_type != physics::emission::industrial::SOURCE_MILITARY_RANGE
+        {
             site.geometry
                 .as_deref()
                 .map(geometry::rings)

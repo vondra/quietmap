@@ -521,7 +521,7 @@ test.describe('animated', () => {
   })
 })
 
-test("desktop: the reachable area is drawn from the open place by the button at the search field's end; folded, its panel keeps its request; another place's drops it", async ({ page }) => {
+test("desktop: the reachable area is drawn from the open place by the button at the search field's end; folded, its panel keeps its request; another place keeps the origin until From here is chosen", async ({ page }) => {
   await installHermeticMap(page, POINT)
   const asked: string[] = []
   await page.route('**/api/isochron?**', async route => {
@@ -549,7 +549,7 @@ test("desktop: the reachable area is drawn from the open place by the button at 
   await expect(button).toBeHidden()
   await search.press('Escape')
   await button.click()
-  await panel.getByRole('button', { name: 'Car' }).click()
+  await panel.getByRole('button', { name: 'Walk' }).click()
   await minutes.fill('5')
   await panel.getByRole('button', { name: 'Show area' }).click()
   await expect.poll(() => asked).toHaveLength(1)
@@ -562,12 +562,14 @@ test("desktop: the reachable area is drawn from the open place by the button at 
   await button.click()
   await expect(minutes).toHaveValue('5')
   await expect(panel.getByRole('button', { name: 'Drawing…' })).toBeDisabled()
-  // Another place's area asked meanwhile drops the first, whose answer would land after it.
+  // Clicking another place keeps the in-flight origin; changing mode or minutes replaces it at the same origin.
   await page.mouse.click(x + 60, y + 60)
+  await expect(panel.getByRole('button', { name: 'Drawing…' })).toBeDisabled()
+  await panel.getByRole('button', { name: 'Car' }).click()
   expect((await dropped).failure()?.errorText).toContain('ABORTED')
-  await panel.getByRole('button', { name: 'Show area' }).click()
   await expect.poll(() => asked).toHaveLength(2)
-  await expect(panel.getByRole('button', { name: 'Show area' })).toBeEnabled()
+  expect(Number(new URLSearchParams(asked[1]).get('lat'))).toBeCloseTo(POINT.lat, 6)
+  await expect(panel.getByRole('button', { name: 'From here' })).toBeEnabled()
   await expect(panel.getByRole('alert')).toHaveCount(0)
 })
 

@@ -206,3 +206,133 @@ fn crossing_and_whistle_tags_keep_national_values() {
         );
     }
 }
+
+#[test]
+fn military_range_admission_separates_active_ranges_from_quiet_and_non_firing_land() {
+    for admitted in [
+        vec![("landuse", "military"), ("military", "range")],
+        vec![("landuse", "military"), ("military", "training_area")],
+        vec![("landuse", "military"), ("military", "danger_area")],
+        vec![
+            ("military", "range"),
+            ("building", "no"),
+            ("indoor", "no"),
+            ("disused", "no"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "danger_area"),
+            ("boundary", "hazard"),
+            ("hazard", "shooting_range"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "danger_area"),
+            ("boundary", "civil"),
+        ],
+    ] {
+        assert!(is_active_military_range(&admitted), "{admitted:?}");
+        assert_eq!(
+            industrial_class(&tags(&admitted)),
+            Some(physics::emission::industrial::SOURCE_MILITARY_RANGE),
+            "{admitted:?}"
+        );
+    }
+
+    for rejected in [
+        vec![("landuse", "military")],
+        vec![("landuse", "military"), ("military", "barracks")],
+        vec![("landuse", "military"), ("military", "base")],
+        vec![("landuse", "military"), ("military", "office")],
+        vec![("landuse", "military"), ("military", "bunker")],
+        vec![
+            ("landuse", "military"),
+            ("military", "range"),
+            ("disused", "yes"),
+        ],
+        vec![("was:military", "training_area")],
+        vec![
+            ("landuse", "military"),
+            ("military", "range"),
+            ("end_date", "2015"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "range"),
+            ("building", "yes"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "range"),
+            ("indoor", "yes"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "range"),
+            ("area", "no"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "range"),
+            ("seamark:type", "restricted_area"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "danger_area"),
+            ("hazard", "unexploded_ordnance"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "danger_area"),
+            ("hazard", "minefield"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "danger_area"),
+            ("hazard", "nuclear"),
+        ],
+        vec![("military", "danger_area"), ("boundary", "civil")],
+        vec![
+            ("landuse", "military"),
+            ("military", "danger_area"),
+            ("boundary", "military"),
+        ],
+        vec![
+            ("landuse", "military"),
+            ("military", "danger_area"),
+            ("boundary", "protected_area"),
+        ],
+        vec![("landuse", "industrial"), ("military", "danger_area")],
+        vec![("landuse", "quarry"), ("military", "danger_area")],
+        vec![("railway", "yard"), ("military", "training_area")],
+        vec![("military", "range"), ("shooting:range", "indoor")],
+        vec![("military", "range"), ("construction", "yes")],
+        vec![("military", "range"), ("proposed", "yes")],
+    ] {
+        assert!(!is_active_military_range(&rejected), "{rejected:?}");
+        assert_ne!(
+            industrial_class(&tags(&rejected)),
+            Some(physics::emission::industrial::SOURCE_MILITARY_RANGE),
+            "{rejected:?}"
+        );
+    }
+
+    assert!(has_military_shooting_veto(&[
+        ("military", "range"),
+        ("sport", "shooting")
+    ]));
+    assert!(has_military_shooting_veto(&[
+        ("was:military", "range"),
+        ("sport", "shooting")
+    ]));
+    assert!(has_military_shooting_veto(&[
+        ("landuse", "military"),
+        ("disused", "yes"),
+        ("sport", "shooting")
+    ]));
+    assert!(has_military_shooting_veto(&[
+        ("abandoned:landuse", "military"),
+        ("sport", "shooting")
+    ]));
+    assert!(!has_military_shooting_veto(&[("sport", "shooting")]));
+}

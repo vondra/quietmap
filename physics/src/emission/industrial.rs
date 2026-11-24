@@ -39,7 +39,8 @@ const MACHINERY: [f64; BANDS] = [-3.0, -1.0, 0.0, 1.0, 0.0, -1.0, -3.0, -6.0];
 /// OSM source types of `industrial.arrow` with their own models or none: a rail yard (dropped:
 /// its 96 dB(A)/ha was guessed), a wind turbine, a wind-farm outline and an inactive site
 /// (their turbines or nothing emit), a solar farm, a substation, a transformer (its rating joins
-/// its substation). Types above the transformer are unknown and silent.
+/// its substation), and an active military firing range or training area (kept as an unmodelled
+/// industrial annotation, zero sound emitted). Types above the transformer are silent.
 pub const SOURCE_QUARRY: u8 = 1;
 pub const SOURCE_RAIL_YARD: u8 = 5;
 pub const SOURCE_WIND_TURBINE: u8 = 10;
@@ -48,6 +49,7 @@ pub const SOURCE_INACTIVE: u8 = 12;
 pub const SOURCE_SOLAR_FARM: u8 = 13;
 pub const SOURCE_SUBSTATION: u8 = 14;
 pub const SOURCE_TRANSFORMER: u8 = 15;
+pub const SOURCE_MILITARY_RANGE: u8 = 16;
 
 /// The coarsest profile, by OSM source type: generic site, quarry, farmyard, works, wastewater.
 pub fn source_type_profile(source_type: u8) -> IndustrialProfile {

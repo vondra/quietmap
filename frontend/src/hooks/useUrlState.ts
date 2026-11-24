@@ -18,6 +18,9 @@ export function useUrlState() {
       const next = parseHash()
       if (buildHash(next) === buildHash(latest.current)) return
       if (sameDetailPosition(next.detailPosition, latest.current.detailPosition)) next.detailPosition = latest.current.detailPosition
+      if (next.reach && latest.current.reach && sameDetailPosition(next.reach, latest.current.reach)) {
+        next.reach = { ...next.reach, lat: latest.current.reach.lat, lng: latest.current.reach.lng }
+      }
       for (const key of ['padding', 'staySearch', 'reach', 'heatmapLayers', 'dataLayers', 'popup', 'scroll'] as const) {
         if (JSON.stringify(next[key]) === JSON.stringify(latest.current[key])) Object.assign(next, { [key]: latest.current[key] })
       }

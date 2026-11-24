@@ -21,7 +21,7 @@ Train, S-tog, metro and light rail counts: on the 2026 map, [Rejseplanen timetab
 
 Wind turbines are OpenStreetMap points. A turbine paired with an [Energistyrelsen register](https://ens.dk/) (Danish Energy Agency) entry, one to one and nearest first within 500 m, takes its rated power and hub height from the register.
 
-The register adds 76 turbines OpenStreetMap lacks and removes 92 it calls dismantled.
+The register adds 76 turbines OpenStreetMap lacks and removes 92 it calls dismantled on the 2026 map (71 added on the 2024 map).
 
 ## Buildings and terrain
 

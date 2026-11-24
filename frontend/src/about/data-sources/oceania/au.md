@@ -5,7 +5,7 @@ intro: Passenger rail timetables for five states (four 2024 archives plus New So
 
 ## Roads
 
-No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow a model of the trips made within 5 km, fitted on European counts on the 2026 map and on qualifying counted networks worldwide on the 2024 map, and streets carry the trips their buildings make. Where too few buildings are mapped, roads keep the class defaults ([world defaults](/about/data-preparation)).
 
 Australia has no national traffic database. Five states publish counts under CC BY 4.0; loaders for them are not yet written.
 
@@ -39,7 +39,7 @@ Freight is not covered: the Pilbara iron ore lines and the Hunter Valley coal li
 
 ## Industry
 
-Power plants: Global Energy Monitor power tracker, operating plants only, supplementing the WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. A plant is a noise source only where OSM maps an industrial area at its location.
+Power plants: Global Energy Monitor power tracker (operating plants on the 2026 map; undated records classify a matching 2024 footprint while its historical operation remains unknown), supplementing the WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. A plant is a noise source only where OSM maps an industrial area at its location.
 
 Wind turbines are OSM points. The Clean Energy Regulator lists wind farms by postcode only, so missing specs cannot be filled from a register; a turbine without a tagged rating takes the fleet's median sound power, 105 dB(A) at full power, and one without a tagged hub height stands 105 m high.
 

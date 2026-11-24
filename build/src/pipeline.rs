@@ -230,6 +230,10 @@ pub(crate) fn build(options: &Arguments) -> Result<()> {
             match step.name {
                 "weather" => publish(&output, &run.out.join("weather"))?,
                 "source-outlines" => publish(&output, &run.out.join("source-outlines.sqlite"))?,
+                "unmodelled-sites" => publish(
+                    &output,
+                    &run.out.join(tiles::unmodelled::UNMODELLED_SITES_FILE),
+                )?,
                 "aircraft-tracks" => publish(
                     &output.join("aircraft-tracks"),
                     &run.out.join("aircraft-tracks"),

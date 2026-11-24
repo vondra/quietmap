@@ -6,7 +6,7 @@ use arrow_schema::Schema;
 /// Spill serialization and semantics: changing this invalidates completed scratch.
 pub const ROADS_CONTRACT: &str = "2";
 pub const RAILWAYS_CONTRACT: &str = "2";
-pub const INDUSTRIAL_CONTRACT: &str = "2";
+pub const INDUSTRIAL_CONTRACT: &str = "3";
 pub const TRANSPORT_NODES_CONTRACT: &str = "1";
 pub const LEISURE_CONTRACT_V5: &str = "leisure_v5";
 

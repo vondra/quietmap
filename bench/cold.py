@@ -62,12 +62,14 @@ def square_files(year_root, lat, lon):
 
 
 def click_files(prepared, year, lat, lon):
-    """Every file a click at (lat, lon) can read: its squares' files, the flight tracks and the
-    weather."""
+    """Every file a click at (lat, lon) can read: its squares' files, the flight tracks, the
+    weather and the optional unmodelled-sites index."""
     yield from square_files(prepared / year, lat, lon)
     yield from sorted((prepared / year / "aircraft-tracks").glob("*.aircraft-tracks"))
     if (prepared / year / "weather").exists():
         yield prepared / year / "weather"
+    if (prepared / year / "unmodelled-sites").exists():
+        yield prepared / year / "unmodelled-sites"
 
 
 LIBC.mmap.restype = ctypes.c_void_p

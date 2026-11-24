@@ -16,10 +16,13 @@ async function fixtures(page: Page) {
     return route.fulfill({ json: { listings: [HOTEL], nights: 3, currency: 'EUR', expiresIn: 3600, failure: null } })
   })
   await page.route('**/api/isochron?**', route => {
-    areas.push(new URL(route.request().url()).searchParams)
-    const x = POINT.lng, y = POINT.lat
-    return route.fulfill({ json: { type: 'FeatureCollection', features: [{ type: 'Feature', properties: { mode: 'walk' },
-      geometry: { type: 'Polygon', coordinates: [[[x - 0.004, y - 0.004], [x + 0.004, y - 0.004], [x + 0.004, y + 0.004], [x - 0.004, y + 0.004], [x - 0.004, y - 0.004]]] } }] } })
+    const params = new URL(route.request().url()).searchParams
+    areas.push(params)
+    const x = Number(params.get('lng') ?? POINT.lng), y = Number(params.get('lat') ?? POINT.lat)
+    const d = 0.0005 * Number(params.get('minutes') ?? 8)
+    const modes = (params.get('modes') ?? 'walk').split(',')
+    return route.fulfill({ json: { type: 'FeatureCollection', features: modes.map(mode => ({ type: 'Feature', properties: { mode },
+      geometry: { type: 'Polygon', coordinates: [[[x - d, y - d], [x + d, y - d], [x + d, y + d], [x - d, y + d], [x - d, y - d]]] } })) } })
   })
   return { stays, areas }
 }
@@ -102,7 +105,7 @@ for (const phone of [false, true]) test.describe(phone ? 'phone address' : 'desk
     await popup(page).getByTestId('calculation-toggle').click()
     await visible(page, 'Reachable area').click()
     await page.getByRole('spinbutton', { name: 'Minutes', exact: true }).filter({ visible: true }).fill('17')
-    await visible(page, 'Car').click()
+    await visible(page, 'Walk').click()
     await visible(page, 'Show area').click()
     await expect(visible(page, 'Show area')).toBeEnabled()
     const detailScroller = popup(page).locator('..')
@@ -305,4 +308,86 @@ test('old world-copy points reopen; a busy shared stay retries without changing 
   expect(calls).toBe(2)
   const [point] = await popupRequests(page)
   expect(point.lng).toBeCloseTo(POINT.lng, 6)
+})
+
+for (const phone of [false, true]) test.describe(phone ? 'phone reachable area' : 'desktop reachable area', () => {
+  if (phone) test.use(PHONE)
+  test('a reachable area keeps its origin and camera when another point is clicked at its edge and the minutes change', async ({ page }) => {
+    const remote = await fixtures(page)
+    await page.route('**/api/reverse?**', route => {
+      const lat = Number(new URL(route.request().url()).searchParams.get('lat'))
+      const place = Math.abs(lat - POINT.lat) < 0.002 ? 'Origin square' : 'Edge meadow'
+      return route.fulfill({ json: { place } })
+    })
+    // A legacy two-mode travel parameter normalizes to car.
+    await page.goto(`${mapUrl(POINT)}&d=${POINT.lat},${POINT.lng}&travel=40,walk,car`)
+    await answer(page)
+    await visible(page, 'Reachable area').click()
+    const modeToggle = page.getByTestId('isochron-mode').filter({ visible: true })
+    await expect(modeToggle.locator('button[aria-pressed="true"]')).toHaveCount(1)
+    await expect(visible(page, 'Car')).toHaveAttribute('aria-pressed', 'true')
+    await expect(visible(page, 'Walk')).toHaveAttribute('aria-pressed', 'false')
+    await visible(page, 'Walk').click()
+    await expect(modeToggle.locator('button[aria-pressed="true"]')).toHaveCount(1)
+    await expect(visible(page, 'Walk')).toHaveAttribute('aria-pressed', 'true')
+    await expect(visible(page, 'Car')).toHaveAttribute('aria-pressed', 'false')
+    await visible(page, 'Car').click()
+    await expect(modeToggle.locator('button[aria-pressed="true"]')).toHaveCount(1)
+    const minutes = page.getByRole('spinbutton', { name: 'Minutes', exact: true }).filter({ visible: true })
+    await expect(minutes).toHaveValue('40')
+    await visible(page, 'Show area').click()
+    await expect.poll(() => remote.areas).toHaveLength(1)
+    await expect(visible(page, 'Show area')).toBeEnabled()
+    expect(remote.areas[0].get('minutes')).toBe('40')
+    expect(remote.areas[0].get('modes')).toBe('car')
+    expect(Number(remote.areas[0].get('lat'))).toBeCloseTo(POINT.lat, 5)
+    await expect(page.getByTestId('isochron-origin').filter({ visible: true })).toHaveText('from Origin square')
+    // Wait for the initial fitBounds to settle before panning to the edge.
+    await expect.poll(() => Number(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('z'))).toBeLessThan(15)
+
+    // Pan to the edge of the 40-minute area and click a point there to check its noise.
+    const edge = { lat: POINT.lat + 0.018, lng: POINT.lng + 0.018 }
+    await page.evaluate(({ lat, lng }) => {
+      const params = new URLSearchParams(location.hash.slice(1))
+      params.set('lat', String(lat)); params.set('lng', String(lng)); params.set('z', '15')
+      location.hash = params.toString()
+    }, edge)
+    await expect.poll(() => Number(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('z'))).toBe(15)
+    await page.waitForTimeout(150)
+    const { x, y } = await canvasCenter(page)
+    await page.mouse.click(x, y)
+    await expect.poll(async () => (await popupRequests(page)).length).toBe(2)
+    const clicked = (await popupRequests(page))[1]
+    expect(clicked.lat).toBeCloseTo(edge.lat, 3)
+    await sendPopupLine(page, popupUpdate(1, false, clicked.lat, clicked.lng, 48))
+    await endPopup(page)
+    await page.waitForTimeout(450)
+
+    const cameraAtEdge = new URLSearchParams(new URL(page.url()).hash.slice(1))
+    await expect(page.getByTestId('isochron-origin').filter({ visible: true })).toHaveText('from Origin square')
+    await expect(visible(page, 'From here')).toBeEnabled()
+
+    // Change the reachable area from 40 to 45 minutes: redraws at once at Origin square, camera stays at the edge.
+    await minutes.fill('45')
+    await expect.poll(() => remote.areas).toHaveLength(2)
+    await expect(visible(page, 'From here')).toBeEnabled()
+    expect(remote.areas[1].get('minutes')).toBe('45')
+    expect(Number(remote.areas[1].get('lat'))).toBeCloseTo(POINT.lat, 5)
+    expect(Number(remote.areas[1].get('lng'))).toBeCloseTo(POINT.lng, 5)
+    await page.waitForTimeout(450)
+    const cameraAfterResize = new URLSearchParams(new URL(page.url()).hash.slice(1))
+    expect(Number(cameraAfterResize.get('lat'))).toBeCloseTo(Number(cameraAtEdge.get('lat')), 4)
+    expect(Number(cameraAfterResize.get('lng'))).toBeCloseTo(Number(cameraAtEdge.get('lng')), 4)
+    expect(Number(cameraAfterResize.get('z'))).toBeCloseTo(Number(cameraAtEdge.get('z')), 3)
+    expect(cameraAfterResize.get('reach')).toBe(`${POINT.lat.toFixed(6)},${POINT.lng.toFixed(6)},45,car`)
+    await page.screenshot({ path: test.info().outputPath(`${phone ? 'phone' : 'desktop'}-isochron-edge.png`) })
+
+    // Recomputing from the clicked edge point is an explicit choice.
+    await visible(page, 'From here').click()
+    await expect.poll(() => remote.areas).toHaveLength(3)
+    expect(remote.areas[2].get('minutes')).toBe('45')
+    expect(Number(remote.areas[2].get('lat'))).toBeCloseTo(clicked.lat, 5)
+    expect(Number(remote.areas[2].get('lng'))).toBeCloseTo(clicked.lng, 5)
+    await expect(page.getByTestId('isochron-origin').filter({ visible: true })).toHaveText('from Edge meadow')
+  })
 })

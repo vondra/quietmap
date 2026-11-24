@@ -6,6 +6,7 @@ import { HoverText } from './ui/info-tip'
 import { restSources, shownRows, type HiddenRow } from './noise/rest'
 import { Chevron } from './noise/shared'
 import { AircraftLayerRow, ContributorRow, RestRow, rowRank } from './noise/source/ContributorRow'
+import { UnmodelledSection } from './noise/source/UnmodelledSection'
 import type { Metric } from '../lib/hm3-decoder'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 
@@ -154,36 +155,38 @@ export default function NoiseDetailContent({ metric, data, onHighlight, calculat
         </div>
       </div>
       {data.total_lden != null ? (
-        <>
-          <div className="border-t border-border">{shown}</div>
-          {answered && onCalculationToggle && (
-            <>
-              <button
-                type="button"
-                data-testid="calculation-toggle"
-                aria-expanded={calculationOpen}
-                className="mt-2 flex w-full items-center justify-between rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/40"
-                onClick={() => { revealCalculation.current = !calculationOpen; onCalculationToggle?.() }}
-              >
-                <span>Detailed calculation</span>
-                <Chevron open={calculationOpen} />
-              </button>
-              {calculationOpen && (
-                <Suspense fallback={<div className="mt-2 text-[11px] text-muted-foreground animate-pulse">…</div>}>
-                  <IntoView reveal={revealCalculation}>
-                    <CalculationDetails data={data} />
-                  </IntoView>
-                </Suspense>
-              )}
-            </>
-          )}
-        </>
+        <div className="border-t border-border">{shown}</div>
       ) : (
         <div className="text-sm text-muted-foreground mt-1">
           {data.building?.facade === null
             ? 'Not assessed — this building has no exposed façade'
             : 'No modelled noise source reaches this point.'}
         </div>
+      )}
+      <UnmodelledSection
+        sites={data.unmodelled}
+        onHighlight={id => onHighlight(id === null ? null : `source:${id}`)}
+      />
+      {data.total_lden != null && answered && onCalculationToggle && (
+        <>
+          <button
+            type="button"
+            data-testid="calculation-toggle"
+            aria-expanded={calculationOpen}
+            className="mt-2 flex w-full items-center justify-between rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/40"
+            onClick={() => { revealCalculation.current = !calculationOpen; onCalculationToggle?.() }}
+          >
+            <span>Detailed calculation</span>
+            <Chevron open={calculationOpen} />
+          </button>
+          {calculationOpen && (
+            <Suspense fallback={<div className="mt-2 text-[11px] text-muted-foreground animate-pulse">…</div>}>
+              <IntoView reveal={revealCalculation}>
+                <CalculationDetails data={data} />
+              </IntoView>
+            </Suspense>
+          )}
+        </>
       )}
       {SHOW_STATS && <StatsPanel data={data} />}
     </div>

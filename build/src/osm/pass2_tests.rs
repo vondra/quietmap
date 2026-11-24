@@ -45,6 +45,73 @@ fn outer_building_keeps_its_independent_source_family() {
         &empty,
         &manifest
     ));
+
+    // A military range relation never suppresses an emitting industrial outer member way.
+    let range_tags: Tags = [
+        ("landuse".into(), "military".into()),
+        ("military".into(), "training_area".into()),
+    ]
+    .into();
+    let factory_tags: Tags = [("landuse".into(), "industrial".into())].into();
+    let range_manifest = RelationManifest {
+        way_to_relations: [(10, vec![(20, "outer".to_owned())])].into(),
+        relations: [(
+            20,
+            RelationInfo {
+                feature_types: vec![FeatureType::Industrial],
+                tags: range_tags.clone(),
+                member_ways: vec![],
+            },
+        )]
+        .into(),
+    };
+    assert!(!super::relation_covers_kind(
+        10,
+        &FeatureType::Industrial,
+        &factory_tags,
+        &range_manifest
+    ));
+    assert!(super::relation_covers_kind(
+        10,
+        &FeatureType::Industrial,
+        &range_tags,
+        &range_manifest
+    ));
+    let shooting_way: Tags = [("sport".into(), "shooting".into())].into();
+    assert!(super::relation_covers_kind(
+        10,
+        &FeatureType::Leisure,
+        &shooting_way,
+        &range_manifest
+    ));
+
+    // A landuse=greenhouse_horticulture relation never suppresses a member way that carries building=*.
+    let hort_tags: Tags = [("landuse".into(), "greenhouse_horticulture".into())].into();
+    let building_way: Tags = [("building".into(), "greenhouse".into())].into();
+    let hort_manifest = RelationManifest {
+        way_to_relations: [(30, vec![(40, "outer".to_owned())])].into(),
+        relations: [(
+            40,
+            RelationInfo {
+                feature_types: vec![FeatureType::Building],
+                tags: hort_tags.clone(),
+                member_ways: vec![],
+            },
+        )]
+        .into(),
+    };
+    assert!(!super::relation_covers_kind(
+        30,
+        &FeatureType::Building,
+        &building_way,
+        &hort_manifest
+    ));
+    assert!(super::relation_covers_kind(
+        30,
+        &FeatureType::Building,
+        &hort_tags,
+        &hort_manifest
+    ));
 }
 
 use super::{centroid, facility_part_tags, ring_for_spill};

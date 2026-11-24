@@ -18,6 +18,7 @@ pub mod sources;
 pub mod square;
 pub mod terrain;
 pub mod terrain_fine;
+pub mod unmodelled;
 
 /// The kinds of tiles, one file a square and kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

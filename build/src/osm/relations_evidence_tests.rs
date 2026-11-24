@@ -79,3 +79,60 @@ fn outer_parts_and_reversed_members_survive() {
     assert_eq!(rings[0].len(), 4);
     assert_eq!(rings[1], vec![d, e, f, d]);
 }
+
+#[test]
+fn inner_holes_are_merged_and_assigned_to_their_immediate_enclosing_outer_ring() {
+    let range_tags: Tags = [
+        ("landuse".into(), "military".into()),
+        ("military".into(), "training_area".into()),
+    ]
+    .into();
+    // Large outer shell (0..20) with an outer hole (2..18), an island inside the hole (4..16),
+    // and an inner hole inside that island (6..14) whose first vertex touches the island boundary:
+    // even when the large shell appears first, the island's hole must belong to the island.
+    let shell = vec![[0., 0.], [0., 20.], [20., 20.], [20., 0.], [0., 0.]];
+    let island = vec![[4., 4.], [4., 16.], [16., 16.], [16., 4.], [4., 4.]];
+    let outer_hole_a = vec![[2., 2.], [2., 18.], [18., 18.]];
+    let outer_hole_b = vec![[18., 18.], [18., 2.], [2., 2.]];
+    let island_hole = vec![[4., 10.], [6., 14.], [14., 14.], [14., 6.], [4., 10.]];
+    let manifest = RelationManifest {
+        relations: HashMap::from([(
+            77,
+            RelationInfo {
+                feature_types: vec![FeatureType::Industrial],
+                tags: range_tags,
+                member_ways: vec![
+                    (1, "outer".into()),
+                    (2, "outer".into()),
+                    (3, "inner".into()),
+                    (4, "inner".into()),
+                    (5, "inner".into()),
+                ],
+            },
+        )]),
+        way_to_relations: HashMap::from([
+            (1, vec![(77, "outer".into())]),
+            (2, vec![(77, "outer".into())]),
+            (3, vec![(77, "inner".into())]),
+            (4, vec![(77, "inner".into())]),
+            (5, vec![(77, "inner".into())]),
+        ]),
+    };
+    let mut assembler = RelationAssembler::new(&manifest);
+    assert!(assembler.add_way(1, shell, &manifest).is_empty());
+    assert!(assembler.add_way(2, island, &manifest).is_empty());
+    assert!(assembler.add_way(3, outer_hole_a, &manifest).is_empty());
+    assert!(assembler.add_way(4, outer_hole_b, &manifest).is_empty());
+    assert_eq!(assembler.add_way(5, island_hole, &manifest), vec![77]);
+    let relation = assembler.assemble(77, &manifest).unwrap();
+    assert_eq!(relation.rings.len(), 2);
+    assert_eq!(relation.holes_per_ring.len(), 2);
+    assert_eq!(relation.holes_per_ring[0].len(), 1);
+    assert_eq!(relation.holes_per_ring[1].len(), 1);
+    assert!(crate::osm::classify::is_a_closed_ring(
+        &relation.holes_per_ring[0][0]
+    ));
+    assert!(crate::osm::classify::is_a_closed_ring(
+        &relation.holes_per_ring[1][0]
+    ));
+}
