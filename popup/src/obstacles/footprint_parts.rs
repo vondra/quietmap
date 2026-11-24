@@ -35,6 +35,7 @@ impl Scene<'_> {
                         id,
                         height_m: record.height_m,
                         envelope: record.envelope,
+                        single_part: false,
                         rings: vec![ring],
                     });
                 }
@@ -57,11 +58,25 @@ impl Scene<'_> {
                 complete = false;
             }
         }
+        if parts.len() == 1 {
+            parts[0].single_part = true;
+        }
         if complete && parts.len() == 1 {
             BuildingParts::One(parts.pop().unwrap())
         } else {
             BuildingParts::Locate(parts)
         }
+    }
+
+    /// Whether `point` (click metres) lies inside `footprint`'s exterior ring and outside its holes.
+    pub fn footprint_contains(&self, footprint: &Footprint, point: [f64; 2]) -> bool {
+        let Some(outer) = footprint.rings.first() else {
+            return false;
+        };
+        self.ring_contains(outer, point)
+            && !footprint.rings[1..]
+                .iter()
+                .any(|hole| self.ring_contains(hole, point))
     }
 
     /// The containing exterior of a point already classified indoors under this record's ID.

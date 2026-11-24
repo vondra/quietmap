@@ -331,6 +331,48 @@ fn cannot_hold(name: &str, value: &Value) -> ! {
     panic!("display field {name} cannot hold {value}")
 }
 
+fn decode_text<'a>(bytes: &[u8], strings: &'a [u8]) -> Result<Option<&'a str>, FormatError> {
+    let text_at = u32::from_le_bytes(bytes.try_into().unwrap());
+    if text_at == u32::MAX {
+        return Ok(None);
+    }
+    let bad = FormatError("sources: display text out of range");
+    let text_at = text_at as usize;
+    let length = strings.get(text_at..text_at + 2).ok_or(bad)?;
+    let length = usize::from(u16::from_le_bytes([length[0], length[1]]));
+    let text = strings.get(text_at + 2..text_at + 2 + length).ok_or(bad)?;
+    std::str::from_utf8(text)
+        .map(Some)
+        .map_err(|_| FormatError("sources: display text is not UTF-8"))
+}
+
+/// Reads one `Text` field (`field_index`) from a display record of `layer` without decoding its
+/// other fields; returns `Ok(None)` when the field is omitted or null.
+pub fn read_text<'a>(
+    layer: Layer,
+    records: &[u8],
+    strings: &'a [u8],
+    at: usize,
+    field_index: usize,
+) -> Result<Option<&'a str>, FormatError> {
+    let out_of_range = FormatError("sources: display out of range");
+    let count = usize::from(*records.get(at).ok_or(out_of_range)?);
+    let fields = display_fields(layer);
+    if count > fields.len() || at + record_bytes(layer, count) > records.len() {
+        return Err(out_of_range);
+    }
+    if field_index >= count || fields[field_index].kind != Text {
+        return Ok(None);
+    }
+    let offset = at
+        + 1
+        + fields[..field_index]
+            .iter()
+            .map(|field| field.kind.bytes())
+            .sum::<usize>();
+    decode_text(&records[offset..offset + Text.bytes()], strings)
+}
+
 /// A display record of `layer` at `at` in `records`, its texts in `strings`, as the positional
 /// JSON array it was written from.
 pub fn read_record(
@@ -365,22 +407,10 @@ fn signed(bytes: &[u8]) -> i64 {
 
 fn read_field(kind: FieldKind, bytes: &[u8], strings: &[u8]) -> Result<Value, FormatError> {
     Ok(match kind {
-        Text => {
-            let at = u32::from_le_bytes(bytes.try_into().unwrap());
-            if at == u32::MAX {
-                return Ok(Value::Null);
-            }
-            let bad = FormatError("sources: display text out of range");
-            let at = at as usize;
-            let length = strings.get(at..at + 2).ok_or(bad)?;
-            let length = usize::from(u16::from_le_bytes([length[0], length[1]]));
-            let text = strings.get(at + 2..at + 2 + length).ok_or(bad)?;
-            Value::String(
-                std::str::from_utf8(text)
-                    .map_err(|_| FormatError("sources: display text is not UTF-8"))?
-                    .to_string(),
-            )
-        }
+        Text => match decode_text(bytes, strings)? {
+            Some(text) => Value::String(text.to_string()),
+            None => Value::Null,
+        },
         Whole(_) | WholeOrNull(_) => {
             let mut wide = [0u8; 8];
             wide[..bytes.len()].copy_from_slice(bytes);

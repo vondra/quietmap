@@ -4,11 +4,13 @@ use crate::exact::Point;
 use crate::square::Square;
 use popup::candidates::GROUND_REACH_M;
 use popup::obstacles::{FacadeReceiver, Footprint};
+use std::sync::Arc;
 
 pub(crate) fn choose(
     square: &Square,
     building: &Footprint,
     receivers: &[FacadeReceiver],
+    excluded_sources: Option<Arc<[u32]>>,
 ) -> Result<Point, String> {
     // The first canonical receiver gives both squares the same weather for the ranking.
     let (lat, lon) = square.frame.to_mercator(receivers[0].position).to_degrees();
@@ -30,7 +32,7 @@ pub(crate) fn choose(
         &square.obstacles,
         square.weather.place(lat, lon),
     )?;
-    Point::on_facade(square, facade.position, building.id)
+    Point::on_facade(square, facade.position, building.id, excluded_sources)
 }
 
 /// Only background interpolation is clamped; the façade's rays and aircraft use its true point.

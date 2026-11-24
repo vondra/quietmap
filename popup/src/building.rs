@@ -2,10 +2,12 @@
 //! 7c533e17): of the CNOSSOS-EU 2.8 façade receivers, the one where the sources with the greatest
 //! bound at any façade sum to the highest Lden wins (ties to the first in canonical order); the
 //! ring loop then answers there with every source. At a façade the own building still screens what
-//! stands behind it, and its footprint does not count for the reflection bonus (2.8).
+//! stands behind it, its footprint does not count for the reflection bonus (2.8), and a home's own
+//! statistical outdoor plant (`residential_house`, `residential_multi`, `default`) leaves its own
+//! façade's level.
 
 use crate::answer::RECEIVER_HEIGHT_M;
-use crate::candidates::{Attributes, Candidate};
+use crate::candidates::{Attributes, Candidate, SourceAttribute};
 use crate::evaluate::{Receiver, Scratch, received_energy};
 use crate::obstacles::{FacadeReceiver, Footprint, Scene};
 use crate::scene::Ground;
@@ -63,6 +65,24 @@ fn facade_at(
     })
 }
 
+/// Whether `source` at `point` (click metres) is the receiving home `footprint`'s own statistical
+/// outdoor plant and should leave that home's own façade level.
+///
+/// A single-part building matches by `footprint.id` alone so concave or courtyard homes whose
+/// centroid lies outside their walls are still excluded. When one input record groups separate
+/// physical buildings under one id (`!footprint.single_part`), the source must also lie inside
+/// `footprint`'s exterior (and outside its courtyards) so building A's plant stays audible on B.
+pub fn is_own_home_plant(
+    footprint: &Footprint,
+    source: &SourceAttribute,
+    point: [f64; 2],
+    obstacles: &Scene<'_>,
+) -> bool {
+    source.home_plant
+        && source.footprint_id == footprint.id
+        && (footprint.single_part || obstacles.footprint_contains(footprint, point))
+}
+
 /// The loudest façade of `footprint` over the candidates collected so far (all layers).
 #[allow(clippy::too_many_arguments)]
 pub fn loudest_facade(
@@ -74,6 +94,31 @@ pub fn loudest_facade(
     obstacles: &Scene<'_>,
     weather: PlaceWeather,
 ) -> Result<Facade, String> {
+    let external: Vec<&Candidate>;
+    let candidates = if candidates.iter().any(|candidate| {
+        is_own_home_plant(
+            footprint,
+            &attributes[candidate.attribute],
+            candidate.ends_m[0],
+            obstacles,
+        )
+    }) {
+        external = candidates
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                !is_own_home_plant(
+                    footprint,
+                    &attributes[candidate.attribute],
+                    candidate.ends_m[0],
+                    obstacles,
+                )
+            })
+            .collect();
+        &external[..]
+    } else {
+        candidates
+    };
     let facades = receivers
         .iter()
         .enumerate()

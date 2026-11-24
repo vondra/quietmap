@@ -186,9 +186,12 @@ low.
 ## Where the point is
 
 The point is 4 m above the ground, as the END prescribes. Inside a building the popup answers at
-the building's loudest façade, where a noise map's receivers stand. When one map record groups
-separate buildings, each has its own façades, including its courtyard walls. A building with no
-exposed façade gets no answer. No indoor attenuation is applied.
+the building's loudest façade, where a noise map's receivers stand. A home's own modelled heat pump
+and air-conditioning emission leaves its own façade's level, so a click on a house answers with the
+noise reaching it from outside; neighbours' homes, shops and restaurants, terraces, church bells
+and industrial sites stay. When one map record groups separate buildings, each has its own façades,
+including its courtyard walls, and keeps any other building's emission. A building with no exposed
+façade gets no answer. No indoor attenuation is applied.
 
 <details>
 <summary>How the façade is chosen</summary>
@@ -197,7 +200,7 @@ The façade point loudest by Lden from the 100 pieces of ground sources with the
 the building (flights do not choose it), among receivers placed as
 <abbr title="Common Noise Assessment Methods in Europe, the EU's method for road, railway and industrial noise">CNOSSOS-EU</abbr>
 places them: every 5 m or less along each façade, 0.1 m in front of the wall and 4 m up, the
-façade's own reflection left out.
+façade's own reflection and a home's own modelled plant left out.
 
 Sources are ranked first by a cheap ceiling that omits air absorption. A source is skipped only
 when its ceiling falls below the hundredth full bound at the façades; equal bounds keep their

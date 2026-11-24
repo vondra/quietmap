@@ -44,6 +44,7 @@ fn a_building_reads_its_loudest_facade() {
             id: 7,
             height_m: 10.0,
             envelope: tiles::obstacles::EnvelopeClass::Residential,
+            single_part: true,
             rings: Vec::new(),
         },
         pixels,
@@ -317,5 +318,137 @@ fn a_winning_facade_keeps_the_same_sound_when_its_loser_is_skipped() {
     assert_eq!(
         loudest_by_ground([(7, pruned[0]), (7, pruned[1])].into_iter())[&7],
         loudest_by_ground([(7, sounded[0]), (7, sounded[1])].into_iter())[&7]
+    );
+}
+
+/// Differential test: an elongated rural home with a strong own `residential_house` plant at its
+/// centroid and a road facing its short east wall paints identical building pixels (Lden and Nden)
+/// to the same square with the home's own source deleted, while outdoor pixels beside the house
+/// still hear the house's plant.
+#[test]
+fn home_pixels_match_a_tile_with_own_home_plant_removed_and_pick_the_road_wall() {
+    use crate::paint::paint_pixels;
+    use tiles::obstacles::{EnvelopeClass, Outline, OutlineKind, encode as encode_obstacles};
+
+    let tile = TileId { x: 2212, y: 1387 };
+    let grid = Grid {
+        pixels: 64,
+        block: 8,
+        hum_spacing: 16,
+    };
+    let weather_bytes = encode_weather(&vec![WeatherNode::default(); ROWS * COLUMNS]);
+    let weather = WeatherTable::parse(&weather_bytes).unwrap();
+    // Elongated east-west home (~460 m x 135 m at 50 deg N) spanning multiple 64x64 grid pixels
+    // so the centroid plant is much closer to the long north/south walls than the short east wall.
+    let outline = Outline {
+        footprint_id: 42,
+        kind: OutlineKind::Exterior,
+        envelope: EnvelopeClass::Residential,
+        height_m: 12.0,
+        vertices: vec![
+            [-1200, -350],
+            [1200, -350],
+            [1200, 350],
+            [-1200, 350],
+            [-1200, -350],
+        ],
+    };
+    let road = Attribute {
+        layer: Layer::Road,
+        height_m: 0.05,
+        ground_percent: 0,
+        platform_half_width_m: 5.0,
+        exclusion_radius_m: 0.0,
+        footprint_id: 0,
+        group_key: 1,
+        emission: [[66.0; BANDS]; PERIODS],
+        display: vec![serde_json::json!("east lane")],
+    };
+    let own_home = Attribute {
+        layer: Layer::Building,
+        height_m: 4.0,
+        ground_percent: 50,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 0.0,
+        footprint_id: 42,
+        group_key: 2,
+        emission: [[88.0; BANDS]; PERIODS],
+        display: vec![
+            serde_json::json!(""),
+            serde_json::json!("residential_house"),
+        ],
+    };
+    let road_piece = Piece {
+        ends: [[2200, -1500], [2200, 1500]],
+        attribute: 0,
+    };
+    let home_piece = Piece {
+        ends: [[0, 0]; 2],
+        attribute: 1,
+    };
+
+    let paint_case = |include_own: bool| {
+        let root = tempfile::tempdir().unwrap();
+        let year = root.path().join("2026");
+        std::fs::create_dir(&year).unwrap();
+        std::fs::write(year.join("weather"), &weather_bytes).unwrap();
+        tiles::mark_year_complete(&year, br#"{"year":"2026","as_of":"2027-01-01"}"#, "test")
+            .unwrap();
+        write_tiles(
+            &year,
+            Kind::Obstacles,
+            &[(tile, encode_obstacles(std::slice::from_ref(&outline)))],
+        )
+        .unwrap();
+        let sources = if include_own {
+            encode_sources(
+                &[road_piece, home_piece],
+                &[road.clone(), own_home.clone()],
+                &[],
+            )
+        } else {
+            encode_sources(&[road_piece], std::slice::from_ref(&road), &[])
+        };
+        write_tiles(&year, Kind::Sources, &[(tile, sources)]).unwrap();
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let corners = corners_of(&square, grid, None).unwrap().unwrap();
+        let painted = paint_pixels(&square, grid, None, corners).unwrap();
+        let indoor_at = 32 * grid.pixels + 32;
+        assert_eq!(
+            square
+                .obstacles
+                .enclosing_building_id(metres_at(&square, grid.pixels, 32.5, 32.5))
+                .unwrap(),
+            Some(42)
+        );
+        let outdoor_north = 30 * grid.pixels + 32;
+        assert_eq!(
+            square
+                .obstacles
+                .enclosing_building_id(metres_at(&square, grid.pixels, 32.5, 30.5))
+                .unwrap(),
+            None
+        );
+        (
+            painted.lden[indoor_at],
+            painted.nden[indoor_at],
+            painted.lden[outdoor_north],
+        )
+    };
+
+    let (with_lden, with_nden, out_with) = paint_case(true);
+    let (without_lden, without_nden, out_without) = paint_case(false);
+    // Building pixels match the source-deleted reference identically in both Lden and Nden.
+    assert_eq!(with_lden, without_lden, "building Lden drifted");
+    assert_eq!(with_nden, without_nden, "building Nden drifted");
+    assert_eq!(with_lden[Layer::Building as usize], crate::levels::SILENCE);
+    assert!(with_lden[Layer::Road as usize] < crate::levels::SILENCE);
+    // Outdoor pixel north of the house still hears the house's plant.
+    assert!(out_with[Layer::Building as usize] < crate::levels::SILENCE);
+    assert_eq!(
+        out_without[Layer::Building as usize],
+        crate::levels::SILENCE
     );
 }

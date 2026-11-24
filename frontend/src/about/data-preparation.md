@@ -676,7 +676,8 @@ deliveries, building sites, garden machinery, music and festivals.
 
 - **Homes** emit the outdoor units of the heat pumps and air conditioners their country's
   households own (surveys in 35 countries, the United States, Canada and the Gulf), for the hours
-  their climate asks. Buildings known only from Overture's footprints emit nothing.
+  their climate asks. A home's own modelled emission counts outdoors and at neighbouring buildings,
+  not at its own façade. Buildings known only from Overture's footprints emit nothing.
 - **Food shops and supermarkets** emit their rooftop refrigeration by their footprint, day and
   night, 2 dB quieter in the evening and at night.
 - **Other shops and offices** emit their cooling plant: sized by their floor and their climate, as

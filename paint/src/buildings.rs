@@ -117,14 +117,36 @@ pub(crate) fn facade_candidates(
 ) -> Result<Vec<FacadeCandidate>, String> {
     // A pixel's shorter side (m): half of it in front of a receiver lies in the pixel it faces.
     let pixel_m = shortest_pixel_side_metres(square, n);
-    let in_front = |position: [f64; 2], bearing_deg: f64| -> f64 {
+    let own_free_field = |at: usize, own: &[u32]| -> f64 {
+        let centre = metres_at(square, n, (at % n) as f64 + 0.5, (at / n) as f64 + 0.5);
+        own.iter()
+            .map(|&index| {
+                let candidate = &square.candidates[index as usize];
+                let source = &square.attributes[candidate.attribute];
+                let d = candidate.distance_from(centre).max(1.0);
+                let dz = source.height_m - popup::answer::RECEIVER_HEIGHT_M;
+                source.lden_power / (4.0 * std::f64::consts::PI * (d * d + dz * dz))
+            })
+            .sum()
+    };
+    let in_front = |position: [f64; 2], bearing_deg: f64, own: Option<&[u32]>| -> f64 {
         let (east, north) = bearing_deg.to_radians().sin_cos();
         let front = [
             position[0] + 0.5 * pixel_m * east,
             position[1] + 0.5 * pixel_m * north,
         ];
-        let painted = pixel_of(square, n, front).and_then(|at| pixels[at].as_ref());
-        painted.map_or(0.0, |(layers, _)| ground_energy(layers))
+        let Some(at) = pixel_of(square, n, front) else {
+            return 0.0;
+        };
+        let Some((layers, _)) = pixels[at].as_ref() else {
+            return 0.0;
+        };
+        let mut adjusted = *layers;
+        if let Some(own) = own {
+            let bldg = Layer::Building as usize;
+            adjusted[bldg] = (adjusted[bldg] - own_free_field(at, own)).max(0.0);
+        }
+        ground_energy(&adjusted)
     };
     let chosen: Vec<Vec<FacadeCandidate>> = buildings
         .par_iter()
@@ -135,13 +157,15 @@ pub(crate) fn facade_candidates(
             if receivers.is_empty() {
                 return Ok(Vec::new());
             }
+            let excluded = square.own_home_plant_candidates(building);
             if building
                 .rings
                 .iter()
                 .flat_map(|ring| &ring.points)
                 .any(|&position| pixel_of(square, n, position).is_none())
             {
-                let point = crate::boundary_facades::choose(square, building, &receivers)?;
+                let point =
+                    crate::boundary_facades::choose(square, building, &receivers, excluded)?;
                 let pixel = crate::boundary_facades::background_pixel(square, n, point.position);
                 return Ok(vec![FacadeCandidate {
                     building: index,
@@ -153,7 +177,11 @@ pub(crate) fn facade_candidates(
             let mut ranked: Vec<(f64, [f64; 2], usize)> = Vec::new();
             for receiver in receivers {
                 if let Some(pixel) = pixel_of(square, n, receiver.position) {
-                    let estimate = in_front(receiver.position, receiver.outward_bearing_deg);
+                    let estimate = in_front(
+                        receiver.position,
+                        receiver.outward_bearing_deg,
+                        excluded.as_deref(),
+                    );
                     ranked.push((estimate, receiver.position, pixel));
                 }
             }
@@ -164,7 +192,7 @@ pub(crate) fn facade_candidates(
                 .map(|(_, position, pixel)| {
                     Ok(FacadeCandidate {
                         building: index,
-                        point: Point::on_facade(square, position, building.id)?,
+                        point: Point::on_facade(square, position, building.id, excluded.clone())?,
                         pixel,
                         exact: false,
                     })

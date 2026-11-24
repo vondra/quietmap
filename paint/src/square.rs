@@ -13,10 +13,13 @@ use physics::bound::{ReceiverBound, Spread, received_energy_bound, receiver_boun
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::weather::{PlaceWeather, WeatherTable};
 use popup::aircraft::rolls::{HeardPath, prepare as prepare_rolls};
+use popup::building::is_own_home_plant;
 use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect, loud};
-use popup::obstacles::Scene;
+use popup::obstacles::{Footprint, Scene};
 use popup::release::{Release, RingFiles};
 use popup::scene::Ground;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tiles::Kind;
 use tiles::aircraft::Aircraft;
 use tiles::geo::{LocalFrame, Mercator, TileId};
@@ -102,6 +105,8 @@ pub struct Square<'a> {
     pub obstacles: Scene<'a>,
     pub attributes: Attributes,
     pub candidates: Vec<Candidate>,
+    /// Candidate indices (sorted) of `home_plant` sources indexed by their building `footprint_id`.
+    home_plant_by_footprint: HashMap<u64, Vec<u32>>,
     pub index: Index,
     reaches_squared: Vec<f64>,
     spreads: Vec<Spread>,
@@ -235,6 +240,16 @@ impl<'a> Square<'a> {
             }
             candidates.extend(found);
         }
+        let mut home_plant_by_footprint: HashMap<u64, Vec<u32>> = HashMap::new();
+        for (idx, candidate) in candidates.iter().enumerate() {
+            let source = &attributes[candidate.attribute];
+            if source.home_plant {
+                home_plant_by_footprint
+                    .entry(source.footprint_id)
+                    .or_default()
+                    .push(idx as u32);
+            }
+        }
         let reaches: Vec<f64> = (candidates.iter())
             .map(|candidate| candidate.reach_m(&attributes[candidate.attribute]))
             .collect();
@@ -253,6 +268,7 @@ impl<'a> Square<'a> {
             obstacles,
             attributes,
             candidates,
+            home_plant_by_footprint,
             index,
             reaches_squared,
             spreads,
@@ -260,6 +276,26 @@ impl<'a> Square<'a> {
             rolls,
             sources: sources.into_iter().map(|(_, file)| file).collect(),
         })
+    }
+
+    /// Sorted candidate indices of `footprint`'s own statistical home-plant sources to leave out
+    /// at `footprint`'s façades (`popup::building::is_own_home_plant`).
+    pub fn own_home_plant_candidates(&self, footprint: &Footprint) -> Option<Arc<[u32]>> {
+        let candidates = self.home_plant_by_footprint.get(&footprint.id)?;
+        let excluded: Vec<u32> = candidates
+            .iter()
+            .copied()
+            .filter(|&index| {
+                let candidate = &self.candidates[index as usize];
+                is_own_home_plant(
+                    footprint,
+                    &self.attributes[candidate.attribute],
+                    candidate.ends_m[0],
+                    &self.obstacles,
+                )
+            })
+            .collect();
+        (!excluded.is_empty()).then(|| excluded.into())
     }
 
     /// The distance from `point`'s receiver to candidate `index`'s emitters, as a click's

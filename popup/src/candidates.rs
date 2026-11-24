@@ -13,7 +13,7 @@ use physics::bound::{
 };
 use rayon::prelude::*;
 use tiles::geo::{LocalFrame, TileId};
-use tiles::sources::{Layer, Sources};
+use tiles::sources::{Layer, Sources, is_home_building_type};
 
 /// Attributes or pieces per parallel task of one tile.
 const PARALLEL_CHUNK: usize = 4_096;
@@ -39,6 +39,9 @@ pub struct SourceAttribute {
     pub platform_half_width_m: f64,
     pub exclusion_radius_m: f64,
     pub footprint_id: u64,
+    /// True for a home's statistical outdoor plant (`residential_house`, `residential_multi`,
+    /// `default`) carrying a building footprint id: excluded at that home's own façade.
+    pub home_plant: bool,
     pub group_key: u64,
     pub energy: [[f64; BANDS]; PERIODS],
     /// Its Lden power (per metre for lines), which sets its reach.
@@ -261,6 +264,12 @@ pub fn collect(
             let energy = row_energies[sources
                 .emission_row_of(index as u32)
                 .map_err(|error| error.to_string())?];
+            let home_plant = attribute.layer == Layer::Building
+                && attribute.footprint_id != 0
+                && sources
+                    .building_type(index as u32)
+                    .map_err(|error| error.to_string())?
+                    .is_some_and(is_home_building_type);
             Ok(SourceAttribute {
                 layer: attribute.layer,
                 height_m: attribute.height_m,
@@ -268,6 +277,7 @@ pub fn collect(
                 platform_half_width_m: attribute.platform_half_width_m,
                 exclusion_radius_m: attribute.exclusion_radius_m,
                 footprint_id: attribute.footprint_id,
+                home_plant,
                 group_key: attribute.group_key,
                 energy,
                 lden_power: lden_energy(&energy.map(|bands| bands.iter().sum())),

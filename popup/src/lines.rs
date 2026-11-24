@@ -3,12 +3,13 @@
 //! stop rule would show with gaps), joined at shared ends into lines and simplified together, so
 //! the final update stays within its budget (100 KB, frontend/src/about/noise-at-a-point.md).
 
+use crate::obstacles::{Footprint, Scene};
 use crate::release::RingFiles;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tiles::Kind;
 use tiles::geo::{GlobalSteps, LocalFrame, TileId};
-use tiles::sources::Sources;
+use tiles::sources::{Layer, Sources, is_home_building_type};
 
 /// Lines are simplified to this distance (Douglas-Peucker): under a pixel at street zoom.
 const TOLERANCE_M: f64 = 1.0;
@@ -21,13 +22,16 @@ const MOST_POINTS: usize = 2_000;
 pub type Lines = Vec<Vec<[f64; 2]>>;
 
 /// The lines of the groups `keys` (fewer than 65,535: the listed rows' parts) within `reach_m` of
-/// `receiver` (click metres), one entry per key in its order.
+/// `receiver` (click metres), one entry per key in its order. When `excluded_home` is given, pieces
+/// of that home's own statistical outdoor plant are omitted so map highlights match what the façade
+/// evaluated (including multi-part footprints whose parts share one `group_key`).
 pub fn whole_lines(
     rings: &[&RingFiles],
     frame: &LocalFrame,
     keys: &[u64],
     receiver: [f64; 2],
     reach_m: f64,
+    excluded_home: Option<(&Footprint, &Scene<'_>)>,
 ) -> Result<Vec<Lines>, String> {
     if keys.is_empty() {
         return Ok(Vec::new());
@@ -49,7 +53,7 @@ pub fn whole_lines(
         .collect();
     let found = files
         .par_iter()
-        .map(|&(tile, bytes)| group_pieces(tile, bytes, &sorted))
+        .map(|&(tile, bytes)| group_pieces(tile, bytes, frame, &sorted, excluded_home))
         .collect::<Result<Vec<_>, String>>()?;
     let mut pieces: Vec<Vec<[GlobalSteps; 2]>> = vec![Vec::new(); keys.len()];
     for (position, ends) in found.into_iter().flatten() {
@@ -94,20 +98,43 @@ pub fn whole_lines(
 }
 
 /// The pieces of one sources file whose group is among `sorted` (key, position), as positions and
-/// global ends.
+/// global ends, omitting pieces excluded by `excluded_home`.
 fn group_pieces(
     tile: TileId,
     bytes: &[u8],
+    frame: &LocalFrame,
     sorted: &[(u64, u16)],
+    excluded_home: Option<(&Footprint, &Scene<'_>)>,
 ) -> Result<Vec<(u16, [GlobalSteps; 2])>, String> {
     let sources = Sources::parse(bytes).map_err(|error| error.to_string())?;
     let mut group = vec![u16::MAX; sources.attribute_count()];
+    let mut check_part = vec![false; sources.attribute_count()];
     let mut any = false;
     for (index, position) in group.iter_mut().enumerate() {
         let key = sources
             .group_key(index as u32)
             .map_err(|error| error.to_string())?;
         if let Ok(at) = sorted.binary_search_by(|&(k, _)| k.cmp(&key)) {
+            if let Some((footprint, _)) = excluded_home {
+                let own_home = sources
+                    .layer(index as u32)
+                    .map_err(|error| error.to_string())?
+                    == Layer::Building
+                    && sources
+                        .footprint_id(index as u32)
+                        .map_err(|error| error.to_string())?
+                        == footprint.id
+                    && sources
+                        .building_type(index as u32)
+                        .map_err(|error| error.to_string())?
+                        .is_some_and(is_home_building_type);
+                if own_home {
+                    if footprint.single_part {
+                        continue;
+                    }
+                    check_part[index] = true;
+                }
+            }
             *position = sorted[at].1;
             any = true;
         }
@@ -120,7 +147,16 @@ fn group_pieces(
         let piece = sources.piece(index).map_err(|error| error.to_string())?;
         let position = group[piece.attribute as usize];
         if position != u16::MAX {
-            pieces.push((position, piece.ends.map(|local| tile.global(local))));
+            let ends = piece.ends.map(|local| tile.global(local));
+            if check_part[piece.attribute as usize]
+                && let Some((footprint, obstacles)) = excluded_home
+            {
+                let point = frame.metres_of_steps([ends[0].x as f64, ends[0].y as f64]);
+                if obstacles.footprint_contains(footprint, point) {
+                    continue;
+                }
+            }
+            pieces.push((position, ends));
         }
     }
     Ok(pieces)

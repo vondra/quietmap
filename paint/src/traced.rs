@@ -105,7 +105,7 @@ impl<'a, B: Borrow<Block> + Sync> Traced<'a, B> {
                 exact
                     .iter()
                     .copied()
-                    .filter(|&index| loud(k, index))
+                    .filter(|&index| !points[k].excludes_candidate(index) && loud(k, index))
                     .collect()
             })
             .collect();
@@ -153,6 +153,7 @@ impl<'a, B: Borrow<Block> + Sync> Traced<'a, B> {
                 }
                 let exact = &deeper_blocks[deeper_block(k)].exact;
                 (exact.iter().copied())
+                    .filter(|&index| !points[k].excludes_candidate(index))
                     .filter(|index| first.lists[k].binary_search(index).is_err())
                     .filter(|&index| loud(k, index))
                     .collect()

@@ -12,7 +12,7 @@ use crate::aircraft::{
     FlightPasses, RingTile, holds_boxes_in_reach, holds_rolls_in_reach, reads_fine_boxes,
     ring_aircraft,
 };
-use crate::building::{BuildingClick, loudest_facade};
+use crate::building::{BuildingClick, is_own_home_plant, loudest_facade};
 use crate::candidates::{
     Attributes, Candidate, DisplayRef, GROUND_REACH_M, TileCandidates, collect,
 };
@@ -165,6 +165,7 @@ pub fn answer(
     let mut station: Option<Station> = None;
     let mut aircraft_events = None;
     let mut building: Option<BuildingClick> = None;
+    let mut enclosing_footprint: Option<crate::obstacles::Footprint> = None;
     let mut attributes = Attributes::default();
     let mut ring = 0;
     while ring < ground_rings.max(aircraft_rings) {
@@ -296,16 +297,19 @@ pub fn answer(
             terrain_rings = ring;
         }
         obstacles.insert_all(ring_obstacles);
+        if ring == 1 {
+            enclosing_footprint = obstacles.enclosing_building([0.0, 0.0])?;
+        }
         let enclosing = if ring == 1 {
-            obstacles.enclosing_building([0.0, 0.0])?
+            enclosing_footprint.as_ref()
         } else {
             None
         };
-        let facade_receivers = match &enclosing {
+        let facade_receivers = match enclosing {
             Some(footprint) => obstacles.facade_receivers(footprint)?,
             None => Vec::new(),
         };
-        if let Some(footprint) = &enclosing
+        if let Some(footprint) = enclosing
             && facade_receivers.is_empty()
         {
             // No exposed façade: the building is not assessed.
@@ -385,12 +389,22 @@ pub fn answer(
             let list = attributes.push(tile_attributes);
             for mut candidate in candidates {
                 candidate.attribute.list = list;
+                if enclosing_footprint.as_ref().is_some_and(|footprint| {
+                    is_own_home_plant(
+                        footprint,
+                        &attributes[candidate.attribute],
+                        candidate.ends_m[0],
+                        &obstacles,
+                    )
+                }) {
+                    continue;
+                }
                 selections[candidate.layer as usize].pending.push(candidate);
             }
         }
         candidate_seconds += candidates_started.elapsed().as_secs_f64();
         let evaluate_started = std::time::Instant::now();
-        if let Some(footprint) = &enclosing {
+        if let Some(footprint) = enclosing {
             let everything: Vec<&Candidate> = selections
                 .iter()
                 .flat_map(|selection| selection.pending.iter())
@@ -688,7 +702,17 @@ pub fn answer(
                         .collect()
                 };
                 let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
-                let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;
+                let excluded_home = enclosing_footprint
+                    .as_ref()
+                    .map(|footprint| (footprint, &obstacles));
+                let lines = whole_lines(
+                    &read,
+                    &frame,
+                    &keys,
+                    station.position,
+                    GROUND_REACH_M,
+                    excluded_home,
+                )?;
                 let parts = rows.iter_mut().flat_map(|row| row.parts.iter_mut());
                 for (part, lines) in parts.zip(lines) {
                     part.lines = lines;
