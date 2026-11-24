@@ -97,7 +97,6 @@ export const INPUT_KINDS = [
 export type InputKind = typeof INPUT_KINDS[number]
 export const INTERMEDIATE_KINDS: ReadonlySet<InputKind> = new Set([
   "airport-traffic",
-  "barriers",
   "bus",
   "facilities",
   "facility-observations",

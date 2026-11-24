@@ -49,6 +49,7 @@ fn movements(root: &std::path::Path, ignore_feed_window: bool) -> Vec<Movement> 
         excluded_names: &[],
         excluded_agency_names: &[],
         ignore_feed_window,
+        fallback_vintage: None,
         frozen_comparison: false,
     };
     let mut rows = convert(

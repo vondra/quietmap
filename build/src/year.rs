@@ -8,7 +8,7 @@ mod kind;
 use chrono::{Datelike, Days};
 use dates::{Interval, date};
 pub use inputs::{PREPARATION_TABLE_KINDS, YearInputs};
-pub use kind::Kind;
+pub use kind::{Admission, Kind};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -43,6 +43,12 @@ pub struct FlowWindow {
     pub increment_days: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FallbackVintage {
+    pub reason: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
@@ -61,6 +67,9 @@ pub struct Input {
     /// Publisher decoding parameters travel with the selected object, never with the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversion: Option<serde_json::Value>,
+    /// Explicit nearest-later vintage declaration for activity leaves lacking earlier coverage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_vintage: Option<FallbackVintage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,7 +147,7 @@ impl Manifest {
             }
         }
         for input in &self.inputs {
-            input
+            let (_, observed_end) = input
                 .observed
                 .bounds()
                 .map_err(|e| format!("{}: {e}", input.id))?;
@@ -155,10 +164,45 @@ impl Manifest {
             {
                 return Err(format!("{}: missing public source metadata", input.id));
             }
+            if let Some(fallback) = &input.fallback_vintage {
+                if input.kind.admission() != Admission::Activity {
+                    return Err(format!(
+                        "{}: fallback_vintage is only allowed on activity inputs",
+                        input.id
+                    ));
+                }
+                if !input.depends_on.is_empty() {
+                    return Err(format!(
+                        "{}: fallback_vintage is only allowed on leaf inputs",
+                        input.id
+                    ));
+                }
+                if self.validity.contains_key(&input.id) {
+                    return Err(format!(
+                        "{}: cannot combine validity and fallback_vintage",
+                        input.id
+                    ));
+                }
+                if observed_end < as_of {
+                    return Err(format!(
+                        "{}: fallback_vintage is only for observations ending on or after {as_of}",
+                        input.id
+                    ));
+                }
+                if fallback.reason.trim().is_empty() {
+                    return Err(format!("{}: fallback_vintage needs a reason", input.id));
+                }
+            }
         }
         for (id, interval) in &self.validity {
-            if !self.inputs.iter().any(|i| &i.id == id) {
+            let Some(input) = self.inputs.iter().find(|i| &i.id == id) else {
                 return Err(format!("validity: unknown input {id}"));
+            };
+            if !input.kind.allows_validity() {
+                return Err(format!(
+                    "validity: {id} ({}) cannot declare validity",
+                    input.kind
+                ));
             }
             interval.bounds()?;
         }
@@ -215,10 +259,16 @@ impl Manifest {
                         let (start, end) = validity.bounds()?;
                         start < cutoff
                             && end >= cutoff.pred_opt().ok_or("as-of has no preceding day")?
-                    } else if input.depends_on.is_empty() {
-                        input.observed.bounds()?.1 < cutoff
                     } else {
-                        true
+                        match input.kind.admission() {
+                            Admission::Snapshot => input.observed.bounds()?.1 < cutoff,
+                            Admission::Structure => true,
+                            Admission::Activity => {
+                                !input.depends_on.is_empty()
+                                    || input.observed.bounds()?.1 < cutoff
+                                    || input.fallback_vintage.is_some()
+                            }
+                        }
                     };
                     (&input.depends_on, own)
                 } else if let Some(input) = manifest.unavailable.iter().find(|i| i.id == id) {

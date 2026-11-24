@@ -17,6 +17,7 @@ pub struct Options<'a> {
     pub excluded_names: &'a [String],
     pub excluded_agency_names: &'a [String],
     pub ignore_feed_window: bool,
+    pub fallback_vintage: Option<&'a str>,
     #[cfg(test)]
     pub frozen_comparison: bool,
 }
@@ -136,10 +137,20 @@ pub fn convert(
         );
     }
     for trip in trips.values_mut() {
-        trip.departures = calendar.annual_departures(&trip.service, 1.0)?;
+        trip.departures = if options.fallback_vintage.is_some() {
+            let covered = coverages[&trip.operator].covered_days();
+            if covered == 0 {
+                0.0
+            } else {
+                calendar.active_days(&trip.service)? as f64 / f64::from(covered)
+            }
+        } else {
+            calendar.annual_departures(&trip.service, 1.0)?
+        };
     }
     trips.retain(|_, trip| {
-        let include_inactive = coverages[&trip.operator].covered_days() > 0;
+        let include_inactive =
+            options.fallback_vintage.is_none() && coverages[&trip.operator].covered_days() > 0;
         #[cfg(test)]
         let include_inactive = include_inactive && !options.frozen_comparison;
         trip.departures > 0.0 || include_inactive

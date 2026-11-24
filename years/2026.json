@@ -1528,7 +1528,7 @@
     },
     {
       "id": "ch-astra-sasvz-jahresergebnisse-station-list-jahres-ergebnisse-2024",
-      "kind": "prepare-road-counts",
+      "kind": "prepare-road-network",
       "region": "CH",
       "publisher": "ASTRA (Swiss Federal Roads Office)",
       "url": "https://www.astra.admin.ch/dam/de/sd-web/szrohDjQVjAZ/jahres-ergebnisse-2024.xlsx",
@@ -1656,7 +1656,7 @@
     },
     {
       "id": "at-vienna-stadt-wien-ma46-dauerzahlstellen",
-      "kind": "prepare-road-counts",
+      "kind": "prepare-road-network",
       "region": "AT:Vienna",
       "publisher": "Stadt Wien MA46",
       "url": "https://www.data.gv.at/katalog/dataset/stadt-wien_verkehrszhlstellenzhlwertewien",
@@ -2125,14 +2125,14 @@
       "publisher": "NZ Transport Agency; Auckland Transport",
       "url": "https://services.arcgis.com/CXBb7LAjgIIdcsPt/ArcGIS/rest/services/GEO_MASTER_GIS_Carriageway/FeatureServer/0",
       "observed": {
-        "start": "2026-04-11",
-        "end": "2026-04-11"
+        "start": "1969-03-26",
+        "end": "2026-01-09"
       },
-      "published": null,
+      "published": "2026-04-11",
       "licence": "CC-BY-4.0",
       "public_ok": true,
       "depends_on": [],
-      "description": "NZTA carriageway + Auckland Transport AADT. Snapshot; an earlier observation date is not recorded."
+      "description": "Auckland Transport street traffic counts with per-site count_date (1969 to 2026)."
     },
     {
       "id": "pe-mtc-provias-red-vial-nacional-departamental",
@@ -9451,7 +9451,7 @@
     },
     {
       "id": "cz-cis-service-calendar",
-      "kind": "prepare-rail-network",
+      "kind": "prepare-timetable",
       "region": "CZ",
       "publisher": "Správa železnic / CIS JŘ",
       "url": "https://portal.cisjr.cz/pub/draha/celostatni/szdc/2026/JR2026.zip",
@@ -9467,7 +9467,7 @@
     },
     {
       "id": "rail-prior-observations",
-      "kind": "prepare-rail-network",
+      "kind": "model-observations",
       "region": "world",
       "publisher": "Quiet Map",
       "url": "https://quietmap.org/about/data-preparation",
@@ -10161,266 +10161,6 @@
     "church-bells": {
       "start": "2026-10-04",
       "end": "9999-12-31"
-    },
-    "raster-de-nw-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-9394": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-can-9400": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-us-3dep-1-ak": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-gb-glo30-n00-49": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-sh-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-aq-glo30-s61-70": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-dk-dhm": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-sn-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-us-3dep-1-conus": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-gb-glo30-n50-59": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-fr-rgealti-corse": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-can-9395": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-can-9399": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-se-mhm": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-it-tinitaly": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-nl-ahn4": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-aq-glo30-s71-80": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-hb-dgm5": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-be-wa-mnt": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-ni-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-w-5782": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-gedtm30-v1.2": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-can-9398": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-aq-glo30-s86-90": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-bw-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-mv-dgm5-401": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-sl-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-w-9393": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-ie-gsi-lidar": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-pl-nmt-10": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-st-dgm5": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-gb-glo30-n60-70": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-mv-dgm5-400": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-5782": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-bb-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-can-9396": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-ca-mrdem-30": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-hh-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-can-9401": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-aq-glo30-s81-85": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-pt-mdt2m": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-10352": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-can-9397": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-9392": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-fr-rgealti": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-at-dgm10": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-w-10354": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-be-vl-dhmvii": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-es-mdt05-9402": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-gb-os-terrain50": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-ch-alti3d": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-he-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-rp-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-by-dgm5": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-de-th-dgm1": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "national-dem-cz": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "national-dem-de": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "fine-dem-cz": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "fine-dem-de": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "fine-dem-ch": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "fine-dem-nl": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "fine-dem-be": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "fine-dem-pt": {
-      "start": "2024",
-      "end": "2026"
-    },
-    "raster-us-3dep-1-ak-east": {
-      "start": "2024",
-      "end": "2026"
     }
   },
   "shared": [

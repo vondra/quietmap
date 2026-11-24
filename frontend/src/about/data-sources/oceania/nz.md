@@ -1,14 +1,14 @@
 ---
 title: New Zealand
-intro: NZTA state highway traffic and Auckland Transport street counts, both 2024. No train timetable is loaded; railways use class defaults.
+intro: NZTA state highway traffic and Auckland Transport street counts. No train timetable is loaded; railways use class defaults.
 ---
 
 ## Roads
 
-Traffic volumes, both 2024 editions:
+Traffic volumes:
 
-- State highways: [NZTA Waka Kotahi open data portal](https://opendata-nzta.opendata.arcgis.com/). Each carriageway section has an estimated daily traffic and a heavy vehicle percentage.
-- Auckland streets: [Auckland Transport](https://data-atgis.opendata.arcgis.com/) count sites, each with a daily count and a heavy vehicle percentage.
+- State highways: [NZTA Waka Kotahi open data portal](https://opendata-nzta.opendata.arcgis.com/). Each carriageway section has an estimated daily traffic and a heavy vehicle percentage. On the 2024 map, because no dated 2024 carriageway archive exists and the relative-year monitoring table has unanchored column dates, the April 2026 carriageway snapshot stands as a declared fallback vintage (+2 years).
+- Auckland streets: [Auckland Transport](https://data-atgis.opendata.arcgis.com/) count sites, each with a dated daily count and a heavy vehicle percentage; historical map years keep only counts dated before the map cutoff.
 
 An OSM motorway, trunk, primary, secondary or tertiary road takes the nearest count within 200 m with a compatible road class. The published heavy-vehicle total is retained. The selected year’s class model estimates its medium and heavy parts and the missing motorcycle count. Where no junction lies between them, an uncounted stretch of a counted road carries the count of its neighbour.
 

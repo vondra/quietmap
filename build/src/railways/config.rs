@@ -59,20 +59,22 @@ pub enum RailObject {
         fields: std::collections::BTreeMap<String, String>,
         accepted: std::collections::BTreeMap<String, Vec<String>>,
         excluded: std::collections::BTreeMap<String, Vec<String>>,
+        #[serde(default)]
+        start_fields: Vec<String>,
+        #[serde(default)]
+        end_fields: Vec<String>,
     },
 }
 
 impl RailObject {
     pub fn input(&self) -> (&str, Kind) {
         match self {
-            Self::Gtfs { input, .. } => (input, Kind::PrepareTimetable),
+            Self::Gtfs { input, .. } | Self::Czptt { input, .. } => (input, Kind::PrepareTimetable),
             Self::FraCrossings { input, .. } | Self::TcCrossings { input, .. } => {
                 (input, Kind::PrepareCrossings)
             }
-            Self::Czptt { input, .. } => (input, Kind::PrepareRailNetwork),
-            Self::PreparedMovements { input } | Self::Geojson { input, .. } => {
-                (input, Kind::PrepareRailNetwork)
-            }
+            Self::PreparedMovements { input } => (input, Kind::ModelObservations),
+            Self::Geojson { input, .. } => (input, Kind::PrepareRailNetwork),
         }
     }
 }

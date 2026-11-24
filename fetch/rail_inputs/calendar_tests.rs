@@ -146,6 +146,7 @@ fn seasonal_patterns_share_one_feed_window_but_future_only_paths_do_not_assert_z
         excluded_names: &[],
         excluded_agency_names: &[],
         ignore_feed_window: false,
+        fallback_vintage: None,
         frozen_comparison: false,
     };
     let convert = || {

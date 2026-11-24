@@ -28,6 +28,12 @@ fn dated_bounds(value: &str) -> Result<(NaiveDate, NaiveDate)> {
     Ok((day, day))
 }
 
+pub fn opens_after(start: Option<&str>, cutoff: &str) -> Result<bool> {
+    let cutoff = date(cutoff)?;
+    let start = start.map(dated_bounds).transpose()?;
+    Ok(start.is_some_and(|d| d.0 >= cutoff))
+}
+
 pub fn operation_at(
     start: Option<&str>,
     end: Option<&str>,
@@ -53,7 +59,9 @@ pub fn operation_at(
     {
         return Ok(Operation::Unknown);
     }
-    if start.is_some_and(|d| d.1 < cutoff) && (end.is_some_and(|d| d.0 >= cutoff) || state == 1) {
+    if (start.is_some_and(|d| d.1 < cutoff) && (end.is_some_and(|d| d.0 >= cutoff) || state == 1))
+        || (start.is_none() && end.is_some_and(|d| d.0 >= cutoff))
+    {
         return Ok(Operation::Operating);
     }
     if observed >= cutoff {
@@ -233,5 +241,23 @@ mod precision_tests {
             operation_at(Some("2000"), None, "2001-01-01", 1, "2000-07-01").unwrap(),
             Operation::Unknown
         );
+        assert_eq!(
+            operation_at(None, Some("2005"), "2006-06-01", 2, "2005-01-01").unwrap(),
+            Operation::Operating
+        );
+        assert_eq!(
+            operation_at(None, Some("2005-06-01"), "2006-06-01", 2, "2005-01-01").unwrap(),
+            Operation::Operating
+        );
+        assert_eq!(
+            operation_at(None, Some("2005"), "2006-06-01", 2, "2005-07-01").unwrap(),
+            Operation::Unknown
+        );
+        assert!(!opens_after(None, "2005-01-01").unwrap());
+        assert!(!opens_after(Some("2004"), "2005-01-01").unwrap());
+        assert!(!opens_after(Some("2004-12-31"), "2005-01-01").unwrap());
+        assert!(opens_after(Some("2005-01-01"), "2005-01-01").unwrap());
+        assert!(opens_after(Some("2005"), "2005-01-01").unwrap());
+        assert!(!opens_after(Some("2005"), "2005-07-01").unwrap());
     }
 }

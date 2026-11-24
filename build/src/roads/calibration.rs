@@ -19,6 +19,8 @@ pub struct Parameters {
     minimum_hourly_stations: usize,
     period_by_hour: [usize; 24],
     #[serde(default)]
+    fallback_period_shares: Option<String>,
+    #[serde(default)]
     preparation: Option<Value>,
 }
 
@@ -63,9 +65,26 @@ pub fn build(inputs: &YearInputs, output: &Path) -> Result<()> {
         )?);
     }
     observation_io::validate(&rows, inputs)?;
+    let fallback_periods = if let Some(id) = &parameters.fallback_period_shares {
+        ensure!(
+            recipe.depends_on.contains(id),
+            "calibration omits fallback period-shares dependency {id}"
+        );
+        let table: Value = serde_json::from_slice(&std::fs::read(
+            inputs.by_id(id).map_err(anyhow::Error::msg)?,
+        )?)?;
+        Some(
+            table["rows"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("fallback period-shares table lacks rows"))?
+                .clone(),
+        )
+    } else {
+        None
+    };
     std::fs::create_dir(output)?;
     let priors = priors::fit(&rows, &parameters, output)?;
-    let periods = periods::fit(&rows, &parameters, output)?;
+    let periods = periods::fit(&rows, &parameters, fallback_periods.as_deref(), output)?;
     if let Some(template) = &parameters.preparation {
         preparation::write_model(
             template,

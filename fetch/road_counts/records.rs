@@ -204,6 +204,17 @@ pub(super) fn class_mask(rank: Option<u8>, ramp: bool) -> u16 {
         .fold(0, |mask, class| mask | (1 << class))
 }
 
+pub(super) fn admitted_date(
+    from: NaiveDate,
+    to: NaiveDate,
+    first: NaiveDate,
+    last: NaiveDate,
+    cutoff: NaiveDate,
+    is_fallback: bool,
+) -> bool {
+    from >= first && to <= last && (is_fallback || to < cutoff)
+}
+
 pub(super) fn survey_year(
     row: &mut Observation,
     source: &Source,
@@ -212,12 +223,17 @@ pub(super) fn survey_year(
 ) -> Result<bool> {
     let start = NaiveDate::from_ymd_opt(year, 1, 1).ok_or_else(|| anyhow!("invalid count year"))?;
     let end = NaiveDate::from_ymd_opt(year, 12, 31).unwrap();
-    let (first, last) = source
-        .input(inputs)?
-        .observed
-        .bounds()
-        .map_err(anyhow::Error::msg)?;
-    if start < first || end > last {
+    let input = source.input(inputs)?;
+    let (first, last) = input.observed.bounds().map_err(anyhow::Error::msg)?;
+    let cutoff = NaiveDate::parse_from_str(&inputs.manifest.as_of, "%Y-%m-%d")?;
+    if !admitted_date(
+        start,
+        end,
+        first,
+        last,
+        cutoff,
+        input.fallback_vintage.is_some(),
+    ) {
         return Ok(false);
     }
     row.observed_start = start.to_string();

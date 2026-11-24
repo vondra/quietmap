@@ -7,10 +7,21 @@
 # RIVM (the Netherlands and Belgium, public domain). Needs curl, unzip, osmium-tool and Python 3
 # with GDAL's bindings (osgeo).
 #
-#   turbines.sh PLANET.osm.pbf OUT_DIR
+#   turbines.sh PLANET.osm.pbf OUT_DIR [--as-of YYYY-MM-DD] [REGISTER ..]
 set -euo pipefail
 planet=$1 out=$2
-registers=$out/registers
+shift 2
+as_of=()
+if [ "${1:-}" = "--as-of" ]; then
+    as_of=(--as-of "$2")
+    shift 2
+fi
+if [ "${#as_of[@]}" -gt 0 ] && [ -z "${TURBINE_REGISTERS:-}" ]; then
+    echo "turbines.sh: --as-of requires pinned TURBINE_REGISTERS; live downloads are not reproducible" >&2
+    exit 1
+fi
+registers=${TURBINE_REGISTERS:-$out/registers}
+if [ -z "${TURBINE_REGISTERS:-}" ]; then
 mkdir -p "$registers"/{uswtdb,nrcan,mastr,ens,vindbrukskollen,nve,clm,rivm}
 get() { curl -sS -L --fail --retry 3 --max-time 3600 -A Mozilla/5.0 -o "$2" "$1"; }
 get https://energy.usgs.gov/uswtdb/assets/data/uswtdbCSV.zip "$registers/uswtdb/uswtdb.zip"
@@ -35,8 +46,10 @@ get 'https://datosabiertos.castillalamancha.es/sites/datosabiertos.castillalaman
     "$registers/clm/turbines.csv"
 get 'https://data.rivm.nl/geo/alo/wfs?service=WFS&version=2.0.0&request=GetFeature&typeNames=alo:rivm_windturbines_ashoogte_actueel&outputFormat=application/json' \
     "$registers/rivm/turbines.geojson"
+fi
+mkdir -p "$out"
 osmium tags-filter "$planet" nwr/generator:source=wind nwr/man_made=wind_turbine \
     -o "$out/turbines.osm.pbf" --overwrite
 osmium export "$out/turbines.osm.pbf" -f geojsonseq -a type,id --overwrite -o - \
-    | python3 "$(dirname "$0")/turbines.py" "$registers" "$out/turbines.txt"
-test "$(wc -l < "$out/turbines.txt")" -gt 450000
+    | python3 "$(dirname "$0")/turbines.py" "${as_of[@]}" "$registers" "$out/turbines.txt" "$@"
+test "$(wc -l < "$out/turbines.txt")" -gt 350000

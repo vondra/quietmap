@@ -117,6 +117,30 @@ pub fn convert(inputs: &YearInputs, output: &Path, scratch: &Path) -> Result<(),
     Ok(())
 }
 
+fn fallback_schedule(
+    spec: &crate::year::Input,
+    start: chrono::NaiveDate,
+    end: chrono::NaiveDate,
+) -> Result<(chrono::NaiveDate, chrono::NaiveDate, Option<String>), String> {
+    if spec.fallback_vintage.is_none() {
+        return Ok((start, end, None));
+    }
+    let (obs_start, obs_end) = spec.observed.bounds()?;
+    let fb_end = obs_end.succ_opt().ok_or("fallback observation overflow")?;
+    let days = (fb_end - obs_start).num_days();
+    if !(1..=366).contains(&days) {
+        return Err(format!(
+            "{}: fallback timetable window must span 1..=366 days, got {days}",
+            spec.id
+        ));
+    }
+    Ok((
+        obs_start,
+        fb_end,
+        Some(format!("{}..{}", spec.observed.start, spec.observed.end)),
+    ))
+}
+
 fn convert_object(
     inputs: &YearInputs,
     object: &RailObject,
@@ -130,6 +154,14 @@ fn convert_object(
         eprintln!("railways: {id}: not admitted by this year; declared fallback applies");
         return Ok(());
     }
+    let spec = inputs
+        .manifest
+        .inputs
+        .iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| format!("missing manifest entry for {id}"))?;
+    let cutoff = chrono::NaiveDate::parse_from_str(&inputs.manifest.as_of, "%Y-%m-%d")
+        .map_err(|error| error.to_string())?;
     let input = inputs.by_id(id)?;
     match object {
         RailObject::Gtfs {
@@ -143,6 +175,7 @@ fn convert_object(
             ignore_feed_window,
             ..
         } => {
+            let (win_start, win_end, fallback_label) = fallback_schedule(spec, start, end)?;
             let extracted = tempfile::tempdir_in(scratch).map_err(|error| error.to_string())?;
             let root = if input.is_dir() {
                 input.as_path()
@@ -170,19 +203,14 @@ fn convert_object(
                     excluded_names: excluded_route_names,
                     excluded_agency_names,
                     ignore_feed_window: *ignore_feed_window,
+                    fallback_vintage: fallback_label.as_deref(),
                 };
-                for movement in gtfs::convert(directory, &options, start, end)? {
+                for movement in gtfs::convert(directory, &options, win_start, win_end)? {
                     write_movement(writer, movement)?;
                 }
             }
         }
         RailObject::FraCrossings { source_id, .. } => {
-            let spec = inputs
-                .manifest
-                .inputs
-                .iter()
-                .find(|entry| entry.id == id)
-                .ok_or_else(|| format!("missing manifest entry for {id}"))?;
             for crossing in crossings::parse_verified_fra(&input, spec, *source_id)? {
                 write_record(writer, &Record::Crossing(crossing))?;
             }
@@ -198,13 +226,22 @@ fn convert_object(
             country,
             ..
         } => {
+            let (win_start, win_end, fallback_label) = fallback_schedule(spec, start, end)?;
             let stations = inputs.by_id(stations)?;
-            for movement in czptt::convert(&input, &stations, start, end, *source_id, country)? {
+            for movement in czptt::convert(
+                &input,
+                &stations,
+                win_start,
+                win_end,
+                *source_id,
+                country,
+                fallback_label.as_deref(),
+            )? {
                 write_movement(writer, movement)?;
             }
         }
         RailObject::Geojson { .. } => {
-            for movement in spatial::convert(&input, object)? {
+            for movement in spatial::convert(&input, object, cutoff)? {
                 write_movement(writer, movement)?;
             }
         }

@@ -6,11 +6,16 @@ value; a node its point, an outline the mean of its vertices) come first; each a
 those not yet paired, nearest pairs first, within PAIR_M: a pair keeps its position and takes the
 register's hub and power where known, an unpaired standing turbine of the register is added, and
 an unpaired OpenStreetMap turbine within GONE_M of one the register calls dismantled is dropped.
-Reads osmium's GeoJSON sequence of the turbines on stdin.
+With `--as-of YYYY-MM-DD`, turbines commissioned on or after the cutoff are excluded, turbines
+dismantled on or after the cutoff are restored to standing before pairing, and undated later
+dismantlements do not drop mapped turbines. Reads osmium's GeoJSON sequence on stdin.
 
-    osmium export turbines.osm.pbf -f geojsonseq -a type,id | python3 turbines.py REGISTERS OUT [NAME ..]
+    osmium export turbines.osm.pbf -f geojsonseq -a type,id | python3 turbines.py [--as-of YYYY-MM-DD] REGISTERS OUT [NAME ..]
 """
+import argparse
+import calendar
 import csv
+import datetime
 import glob
 import json
 import math
@@ -29,6 +34,7 @@ GONE_M = 50.0
 EARTH_M = 6_371_008.8
 LIFECYCLES = ('disused', 'abandoned', 'removed', 'demolished', 'razed', 'destroyed',
               'construction', 'proposed', 'planned', 'was')
+DECOMMISSION_YEAR = re.compile(r'(?:decommission\w*|removed)\s+(?:in\s+)?((?:19|20)\d{2})\b')
 
 
 def number(value):
@@ -37,6 +43,89 @@ def number(value):
         return float(str(value).strip().replace(',', '.')) if value not in (None, '') else 0.0
     except ValueError:
         return 0.0
+
+
+def parse_as_of(value):
+    """Strict YYYY-MM-DD exclusive cutoff date."""
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        raise ValueError(f'invalid --as-of date {value!r}; expected YYYY-MM-DD')
+    return datetime.date.fromisoformat(value)
+
+
+def parse_date_bounds(value):
+    """Parse ISO/slash dates, year-months, years or year ranges into inclusive (start, end) dates."""
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        day = value.date()
+        return day, day
+    if isinstance(value, datetime.date):
+        return value, value
+    text = str(value).strip()
+    if not text:
+        return None
+    if re.fullmatch(r'\d{4}\.0+', text):
+        text = text.split('.', 1)[0]
+    head = re.split(r'[T ]', text, maxsplit=1)[0]
+    match = re.fullmatch(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', head)
+    if match:
+        year, month, day = (int(part) for part in match.groups())
+        if 1900 <= year <= 2100:
+            try:
+                parsed = datetime.date(year, month, day)
+                return parsed, parsed
+            except ValueError:
+                return None
+    match = re.fullmatch(r'(\d{4})[-/](\d{1,2})', head)
+    if match:
+        year, month = int(match.group(1)), int(match.group(2))
+        if 1900 <= year <= 2100 and 1 <= month <= 12:
+            last = calendar.monthrange(year, month)[1]
+            return datetime.date(year, month, 1), datetime.date(year, month, last)
+    match = re.fullmatch(r'(\d{4})[-/](\d{4})', head)
+    if match:
+        first_year, last_year = int(match.group(1)), int(match.group(2))
+        if 1900 <= first_year <= last_year <= 2100:
+            return datetime.date(first_year, 1, 1), datetime.date(last_year, 12, 31)
+    match = re.fullmatch(r'(\d{4})', head)
+    if match:
+        year = int(match.group(1))
+        if 1900 <= year <= 2100:
+            return datetime.date(year, 1, 1), datetime.date(year, 12, 31)
+    return None
+
+
+def parse_epoch_ms(value):
+    """Parse an epoch-millisecond timestamp into an inclusive (day, day) UTC date bound."""
+    if value in (None, ''):
+        return None
+    try:
+        ms = float(value)
+        day = datetime.datetime.fromtimestamp(ms / 1000.0, tz=datetime.timezone.utc).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    if not (1900 <= day.year <= 2100):
+        return None
+    return day, day
+
+
+def commissioned_at_or_after(bounds, as_of):
+    # Fail closed on ranges straddling as_of (e.g. "2024/2025"): only turbines known to be
+    # commissioned before as_of stand at the cutoff.
+    return as_of is not None and bounds is not None and bounds[1] >= as_of
+
+
+def historical_dismantled_state(bounds, as_of):
+    """Resolve a dismantled row at `as_of`: restore post-cutoff removals, drop undated removals."""
+    if as_of is None:
+        return 'dismantled'
+    if bounds is None:
+        return None
+    if bounds[0] >= as_of:
+        return 'standing'
+    if bounds[1] < as_of:
+        return 'dismantled'
+    return None
 
 
 def to_degrees(source):
@@ -73,101 +162,173 @@ def gdal_open(path, options):
 
 # Each register: its turbines as (state, lat, lon, hub_m, power_kw), state standing or dismantled
 # (planned and applied-for turbines are not written).
-def uswtdb(registers):
+def uswtdb(registers, as_of=None):
     (path,) = glob.glob(f'{registers}/uswtdb/uswtdb_[Vv]*.csv')
-    for row in csv.DictReader(open(path, encoding='utf-8')):
-        yield 'standing', number(row['ylat']), number(row['xlong']), number(row['t_hh']), \
-            number(row['t_cap'])
+    with open(path, encoding='utf-8') as handle:
+        for row in csv.DictReader(handle):
+            if commissioned_at_or_after(parse_date_bounds(row.get('p_year')), as_of):
+                continue
+            # A post-cutoff retrofit updates t_hh and t_cap to the repowered machine; keep the
+            # standing turbine without copying its later specifications onto an earlier map.
+            if commissioned_at_or_after(parse_date_bounds(row.get('t_retro_yr')), as_of):
+                hub, power = 0.0, 0.0
+            else:
+                hub, power = number(row['t_hh']), number(row['t_cap'])
+            yield 'standing', number(row['ylat']), number(row['xlong']), hub, power
 
 
-def nrcan(registers):
+def nrcan(registers, as_of=None):
     for row, _, _ in layer_rows(f'{registers}/nrcan/Wind_Turbine_Database_en.xlsx'):
+        if commissioned_at_or_after(parse_date_bounds(row.get('Commissioning')), as_of):
+            continue
         note = str(row['Notes'] or '').lower()
-        state = 'dismantled' if 'decommission' in note or 'removed' in note else 'standing'
+        if 'decommission' in note or 'removed' in note:
+            match = DECOMMISSION_YEAR.search(note)
+            state = historical_dismantled_state(
+                parse_date_bounds(match.group(1)) if match else None, as_of)
+            if state is None:
+                continue
+        else:
+            state = 'standing'
         yield state, number(row['Latitude']), number(row['Longitude']), \
             number(row['Hub Height (m)']), number(row['Turbine Rated Capacity (kW)'])
 
 
 MASTR_STATES = {'35': 'standing', '37': 'dismantled', '38': 'dismantled'}
+MASTR_SHUTDOWN_FIELD = {
+    '37': 'DatumBeginnVoruebergehendeStilllegung',
+    '38': 'DatumEndgueltigeStilllegung',
+}
 
 
-def mastr(registers):
+def mastr(registers, as_of=None):
     for path in sorted(glob.glob(f'{registers}/mastr/EinheitenWind*.xml')):
         for _, element in ElementTree.iterparse(path):
             if element.tag != 'EinheitWind':
                 continue
             field = {child.tag: child.text for child in element}
             element.clear()
-            state = MASTR_STATES.get(field.get('EinheitBetriebsstatus'))
+            status = field.get('EinheitBetriebsstatus')
+            state = MASTR_STATES.get(status)
             lat, lon = number(field.get('Breitengrad')), number(field.get('Laengengrad'))
-            if state and lat and lon:
-                power = number(field.get('Bruttoleistung')) or number(field.get('Nettonennleistung'))
-                yield state, lat, lon, number(field.get('Nabenhoehe')), power
+            if not (state and lat and lon):
+                continue
+            if commissioned_at_or_after(parse_date_bounds(field.get('Inbetriebnahmedatum')), as_of):
+                continue
+            if state == 'dismantled':
+                shutdown = parse_date_bounds(field.get(MASTR_SHUTDOWN_FIELD[status]))
+                state = historical_dismantled_state(shutdown, as_of)
+                if state is None:
+                    continue
+            power = number(field.get('Bruttoleistung')) or number(field.get('Nettonennleistung'))
+            yield state, lat, lon, number(field.get('Nabenhoehe')), power
 
 
-def ens(registers):
+def ens(registers, as_of=None):
     """Columns of the current and the historic file (three title rows each); UTM 32 (ETRS89); a
     deregistration date or the historic file means dismantled; small turbines lack positions."""
     degrees = to_degrees(25832)
-    files = (('current.xlsx', dict(gone=3, kw=4, hub=6, x=13, y=14), False),
-             ('historic.xlsx', dict(gone=2, kw=3, hub=5, x=12, y=13), True))
+    files = (('current.xlsx', dict(conn=2, gone=3, kw=4, hub=6, x=13, y=14), False),
+             ('historic.xlsx', dict(conn=1, gone=2, kw=3, hub=5, x=12, y=13), True))
     for name, column, historic in files:
         for index, (row, _, _) in enumerate(layer_rows(f'{registers}/ens/{name}', headers=False)):
             values = list(row.values())
             x, y = number(values[column['x']]), number(values[column['y']])
             if index < 3 or x < 100_000 or y < 1_000_000:
                 continue
+            if commissioned_at_or_after(parse_date_bounds(values[column['conn']]), as_of):
+                continue
             lat, lon = degrees(x, y)
-            state = 'dismantled' if historic or values[column['gone']] else 'standing'
+            gone_raw = values[column['gone']]
+            if historic or gone_raw:
+                state = historical_dismantled_state(parse_date_bounds(gone_raw), as_of)
+                if state is None:
+                    continue
+            else:
+                state = 'standing'
             yield state, lat, lon, number(values[column['hub']]), number(values[column['kw']])
 
 
 SWEDISH_STATES = {'Uppfört': 'standing', 'Nedmonterat': 'dismantled'}
 
 
-def vindbrukskollen(registers):
+def vindbrukskollen(registers, as_of=None):
     (path,) = glob.glob(f'{registers}/vindbrukskollen/**/*.gpkg', recursive=True) or \
         glob.glob(f'{registers}/vindbrukskollen/**/*.shp', recursive=True)
     degrees = None
     for row, point, reference in layer_rows(path):
         degrees = degrees or to_degrees(reference)
         state = SWEDISH_STATES.get(row['STATUS'])
-        if state and point:
-            lat, lon = degrees(*point)
-            yield state, lat, lon, number(row['NAVHOJD']), number(row['MAXEFFEKT']) * 1000
+        if not (state and point):
+            continue
+        if commissioned_at_or_after(parse_date_bounds(row.get('UPPFORT')), as_of):
+            continue
+        # Vindbrukskollen carries no dismantlement date, so a later Nedmonterat cannot drop an
+        # earlier mapped turbine.
+        if state == 'dismantled' and as_of is not None:
+            continue
+        lat, lon = degrees(*point)
+        yield state, lat, lon, number(row['NAVHOJD']), number(row['MAXEFFEKT']) * 1000
 
 
-def nve(registers):
+def nve(registers, as_of=None):
     """Turbines of farms in operation (status D); a turbine's rating is its farm's power in
     operation over its turbine count; no hub heights."""
-    farms = json.load(open(f'{registers}/nve/parks.geojson'))['features']
-    unit_kw = {farm['properties']['anleggsnr']: farm['properties']['effekt_mw_idrift'] * 1000
-               / farm['properties']['antallturbiner']
-               for farm in farms if farm['properties'].get('antallturbiner')
-               and farm['properties'].get('effekt_mw_idrift')}
-    for turbine in json.load(open(f'{registers}/nve/turbines.geojson'))['features']:
+    with open(f'{registers}/nve/parks.geojson', encoding='utf-8') as handle:
+        farms = json.load(handle)['features']
+    unit_kw = {}
+    farm_dates = {}
+    for farm in farms:
+        props = farm['properties']
+        key = props['anleggsnr']
+        if props.get('antallturbiner') and props.get('effekt_mw_idrift'):
+            unit_kw[key] = props['effekt_mw_idrift'] * 1000 / props['antallturbiner']
+        farm_dates[key] = (
+            parse_epoch_ms(props.get('forsteidriftdato')),
+            parse_epoch_ms(props.get('utavdriftdato')),
+        )
+    with open(f'{registers}/nve/turbines.geojson', encoding='utf-8') as handle:
+        turbines = json.load(handle)['features']
+    for turbine in turbines:
         p, geometry = turbine['properties'], turbine['geometry']
-        if geometry and p['status'] == 'D':
-            lon, lat = geometry['coordinates'][:2]
-            yield 'standing', lat, lon, 0.0, unit_kw.get(p['anleggsnr'], 0.0)
+        if not geometry:
+            continue
+        opened, closed = farm_dates.get(p['anleggsnr'], (None, None))
+        if commissioned_at_or_after(opened, as_of):
+            continue
+        lon, lat = geometry['coordinates'][:2]
+        if closed is not None and as_of is not None:
+            state = historical_dismantled_state(closed, as_of)
+            if state is None:
+                continue
+            yield state, lat, lon, 0.0, unit_kw.get(p['anleggsnr'], 0.0)
+            continue
+        if p['status'] != 'D':
+            continue
+        yield 'standing', lat, lon, 0.0, unit_kw.get(p['anleggsnr'], 0.0)
 
 
-def clm(registers):
+def clm(registers, as_of=None):
     """Castilla-La Mancha: no state field; UTM 30 on ED50 (EPSG:23030), not ETRS89 (as ETRS89 a
     median 136 m from the mapped turbines, as ED50 3 m)."""
+    del as_of
     degrees = to_degrees(23030)
-    for row in csv.DictReader(open(f'{registers}/clm/turbines.csv', encoding='latin-1')):
-        x, y = number(row['UTM_X']), number(row['UTM_Y'])
-        if x and y:
-            lat, lon = degrees(x, y)
-            yield 'standing', lat, lon, number(row['ALTURA_BUJE']), number(row['POTENCIA_UNI'])
+    with open(f'{registers}/clm/turbines.csv', encoding='latin-1') as handle:
+        for row in csv.DictReader(handle):
+            x, y = number(row['UTM_X']), number(row['UTM_Y'])
+            if x and y:
+                lat, lon = degrees(x, y)
+                yield 'standing', lat, lon, number(row['ALTURA_BUJE']), number(row['POTENCIA_UNI'])
 
 
-def rivm(registers):
+def rivm(registers, as_of=None):
     """The Netherlands' and Belgium's turbines (its German border ones are the
     Marktstammdatenregister's), from their RD New coordinates (EPSG:28992)."""
+    del as_of
     degrees = to_degrees(28992)
-    for feature in json.load(open(f'{registers}/rivm/turbines.geojson', encoding='utf-8'))['features']:
+    with open(f'{registers}/rivm/turbines.geojson', encoding='utf-8') as handle:
+        features = json.load(handle)['features']
+    for feature in features:
         p = feature['properties']
         if p['land'] != 'Duitsland':
             lat, lon = degrees(p['x'], p['y'])
@@ -245,8 +406,8 @@ class Grid:
                     yield d, index
 
 
-def main(registers, out_path, admitted):
-    turbines = list(osm_turbines(sys.stdin))
+def main(registers, out_path, admitted, as_of=None, stdin=None):
+    turbines = list(osm_turbines(sys.stdin if stdin is None else stdin))
     osm_count = len(turbines)
     paired = [False] * osm_count
     dropped = set()
@@ -254,7 +415,7 @@ def main(registers, out_path, admitted):
         if register.__name__ not in admitted:
             print(f'{register.__name__}: not admitted for this year', file=sys.stderr)
             continue
-        rows = list(register(registers))
+        rows = list(register(registers, as_of=as_of))
         grid = Grid(PAIR_M)
         for index, turbine in enumerate(turbines):
             if index >= osm_count or not paired[index]:
@@ -292,10 +453,21 @@ def main(registers, out_path, admitted):
           f'dismantled, {len(turbines) - osm_count} from the registers', file=sys.stderr)
 
 
-if __name__ == '__main__':
-    # The registers a year admits, all when none is named; each named one must be present.
-    named = sys.argv[3:] or [register.__name__ for register in REGISTERS]
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description='Merge OpenStreetMap and national wind turbine registers.')
+    parser.add_argument('--as-of', help='Exclusive map cutoff date YYYY-MM-DD for historical register filtering.')
+    parser.add_argument('registers')
+    parser.add_argument('out')
+    parser.add_argument('names', nargs='*')
+    args = parser.parse_args(argv)
+    as_of = parse_as_of(args.as_of) if args.as_of else None
+    named = args.names or [register.__name__ for register in REGISTERS]
     unknown = set(named) - {register.__name__ for register in REGISTERS}
     if unknown:
         sys.exit(f'unknown registers {sorted(unknown)}')
-    main(sys.argv[1], sys.argv[2], set(named))
+    return args.registers, args.out, set(named), as_of
+
+
+if __name__ == '__main__':
+    registers, out_path, admitted, as_of = parse_args(sys.argv[1:])
+    main(registers, out_path, admitted, as_of=as_of)

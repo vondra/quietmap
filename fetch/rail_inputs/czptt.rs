@@ -60,13 +60,14 @@ pub fn convert(
     end: NaiveDate,
     source: u16,
     country: &str,
+    fallback_vintage: Option<&str>,
 ) -> Result<Vec<Movement>, String> {
     let days = start
         .iter_days()
         .take_while(|day| *day < end)
         .collect::<Vec<_>>();
     let mut covered = vec![false; days.len()];
-    let mut sequences = Vec::new();
+    let mut raw_sequences = Vec::new();
     let mut archive = zip::ZipArchive::new(File::open(archive).map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
     for index in 0..archive.len() {
@@ -120,21 +121,30 @@ pub fn convert(
                 name: descendant(location, "PrimaryLocationName")?.to_string(),
             });
         }
-        sequences.push(Sequence {
-            id: identity,
-            stops,
-            passenger: Some(active as f64 / days.len() as f64),
-            freight: None,
-        });
+        raw_sequences.push((identity, stops, active));
     }
-    if !covered.iter().any(|day| *day) {
+    let covered_days = covered.iter().filter(|day| **day).count();
+    if covered_days == 0 {
         return Ok(Vec::new());
     }
-    let coverage = Coverage::from_days(&covered)?;
+    let (denominator, coverage) = if fallback_vintage.is_some() {
+        (covered_days as f64, Coverage::default())
+    } else {
+        (days.len() as f64, Coverage::from_days(&covered)?)
+    };
+    let sequences: Vec<_> = raw_sequences
+        .into_iter()
+        .filter(|(_, _, active)| fallback_vintage.is_none() || *active > 0)
+        .map(|(id, stops, active)| Sequence {
+            id,
+            stops,
+            passenger: Some(active as f64 / denominator),
+            freight: None,
+        })
+        .collect();
     eprintln!(
-        "railways: CIS: {} defined paths, {}/{} covered days",
+        "railways: CIS: {} defined paths, {covered_days}/{} covered days",
         sequences.len(),
-        covered.iter().filter(|day| **day).count(),
         days.len()
     );
     pairs(
@@ -143,6 +153,7 @@ pub fn convert(
         coverage,
         source,
         country,
+        fallback_vintage,
     )
 }
 
@@ -152,6 +163,7 @@ pub fn pairs(
     coverage: Coverage,
     source: u16,
     country: &str,
+    fallback_vintage: Option<&str>,
 ) -> Result<Vec<Movement>, String> {
     let mut resolved = HashMap::<String, Stop>::new();
     for sequence in &sequences {
@@ -162,6 +174,10 @@ pub fn pairs(
                 resolved.insert(stop.code.clone(), point);
             }
         }
+    }
+    let mut attributes = std::collections::BTreeMap::new();
+    if let Some(vintage) = fallback_vintage {
+        attributes.insert("fallback_vintage".into(), vintage.to_string());
     }
     let mut movements = Vec::new();
     for sequence in sequences {
@@ -187,7 +203,7 @@ pub fn pairs(
         for (index, location) in locations.into_iter().enumerate() {
             let movement = Movement {
                 missing_calendar_estimate: [0.0; 2],
-                attributes: Default::default(),
+                attributes: attributes.clone(),
                 id: format!("{}/{index}", sequence.id),
                 source_id: source,
                 country: country.to_string(),
@@ -244,6 +260,7 @@ pub fn frozen_sequences(
         Coverage::default(),
         source,
         country,
+        None,
     )
 }
 

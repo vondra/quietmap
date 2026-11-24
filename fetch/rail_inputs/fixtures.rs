@@ -85,6 +85,7 @@ fn replay_frozen_service_days() {
                     excluded_names: &selection.excluded_route_names,
                     excluded_agency_names: &[],
                     ignore_feed_window: selection.calendar_window,
+                    fallback_vintage: None,
                     frozen_comparison: true,
                 };
                 for movement in gtfs::convert(&directory.directory, &options, start, end).unwrap() {

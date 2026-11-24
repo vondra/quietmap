@@ -18,17 +18,30 @@ it was released. A count for 2024 published in 2025 remains a 2024 observation. 
 the cutoff itself belongs to the next state. Movement intervals include their first day and
 exclude their last.
 
+Every input follows one uniform admission rule by kind:
+
+- **World snapshots** (OpenStreetMap and Overture building footprints) are strictly pre-cutoff.
+- **Physical structures and static inventories** (terrain and rasters, noise barriers, building
+  heights and attributes, wind turbines, industrial registers, rail and road network geometry,
+  station lookups, boundaries and climate) stand for the map date even when observed later:
+  items carrying opening or closure dates are filtered to the map cutoff, post-cutoff removals are
+  restored to standing, and undated items stand as they are without inventing historical operation.
+- **Activity and flows** (traffic counts, timetables, hourly counts, level crossings, flights,
+  ships, airport operations and corridor assumptions) take the target year or an earlier vintage
+  by default. Laws and practices apply over their documented validity intervals (church bells,
+  calls to prayer, venue hours, implicit speed-limit rules). Where no target-year or earlier
+  activity dataset exists, the nearest later vintage may be declared explicitly as a **fallback
+  vintage**: its reason and signed vintage gap are derived from the manifest and shown on the
+  source pages and in popup citations.
+
 A fitted table is admitted only when every input used to derive it is admitted. For example,
-traffic counts divided by a newer mapped road length cannot supply an earlier year's rate. Laws and
-practices apply over their documented validity intervals; a practice measured later, such as church
-bells, calls to prayer or venue hours, holds over the preceding few years unless a source dated
-within them shows a different practice. A table fitted on the year's own mapped state, such as the
-building heights by floors and footprint area, the posted-speed medians, the railway country
-factors, a hotel's trips per floor area, the seats outside bars and restaurants or the buses on
-uncounted roads, is fitted by the year's build after that state is prepared and published with the
-year. A required model table that is missing stops
-the build. Where a country has no counts, the documented world model still applies. Source lists
-appear only for maps that have been built.
+traffic counts divided by a newer mapped road length cannot supply an earlier year's rate. A
+table fitted on the year's own mapped state, such as the building heights by floors and footprint
+area, the posted-speed medians, the railway country factors, a hotel's trips per floor area, the
+seats outside bars and restaurants or the buses on uncounted roads, is fitted by the year's build
+after that state is prepared and published with the year. A required model table that is missing
+stops the build. Where a country has no counts, the documented world model still applies. Source
+lists appear only for maps that have been built.
 
 <details>
 <summary>The year manifest and input tables</summary>
@@ -131,7 +144,7 @@ which counts and models are used; a road classification alone is not a traffic c
 
 A road observation keeps the period actually counted, its location or route, the direction and count scope, the source, and a separate value or missing flag for each vehicle class. A reported zero stays zero; a missing class is inferred and remains marked estimated. A published group, such as all trucks, keeps its total while the selected year’s class model estimates its parts. Measured vehicle classes retain that status even when the count is shared between carriageways or continued along the road. A count of one direction, both directions and a whole street cross-section have different meanings when divided between mapped carriageways.
 
-Each map year selects explicit publisher editions and converter definitions. A later publication can supply earlier observations, but observations after the year’s cutoff cannot enter the map or train its model. The country’s source section says when no dated road count is used; the global road model and mapped buildings then provide the estimate. Road classifications and manually drawn city boxes are not traffic measurements. Each publisher also declares, from its own documentation, how it chose where to count: every section of its network, a random sample of locations, or sites it selected, such as a city's busy streets or permanent stations. Where no document says so, a national authority's table of its own network is taken as the whole network and any other set of counts as selected sites; the recipe marks the design as assumed.
+Each map year selects explicit publisher editions and converter definitions. A later publication can supply earlier observations, and rows dated on or after the year’s cutoff are filtered out unless the input is an explicitly declared fallback vintage (such as Prague’s 2025 workbook or New Zealand’s 2026 carriageway snapshot for 2024). The country’s source section states both coverage and any fallback vintage gap; where no road count is used, the global road model and mapped buildings provide the estimate. Road classifications and manually drawn city boxes are not traffic measurements. Each publisher also declares, from its own documentation, how it chose where to count: every section of its network, a random sample of locations, or sites it selected, such as a city's busy streets or permanent stations. Where no document says so, a national authority's table of its own network is taken as the whole network and any other set of counts as selected sites; the recipe marks the design as assumed.
 
 One matcher uses the observation’s declared route, geometry, direction and source priority. At an equally near survey endpoint, the road’s two endpoints distinguish which surveyed section it follows. Conflicting counts with equally good support remain unassigned. Compatible counts can continue along a road through its original mapped nodes, including across a country border or a gap in the coastline data; a branch or conflicting count stops that continuation. Allocation shares a physical cross-section between parallel carriageways and preserves the published total. The final road reader applies the selected year’s vehicle shares, period fractions and speed tables.
 
@@ -364,12 +377,15 @@ last stored before the window's end that covers four weeks of it, or the days a 
 horizon covers, or for SunRail and Sacramento a later archive that still covers part of it.
 
 For 2024, the window is the calendar year. The United States' timetables are the same systems'
-archives stored in 2024 and chosen by the same rule, 54 of them, with San Diego's Coaster and
-Sprinter and the Kansas City streetcar, and the Hartford Line's own trains from a copy of July 2023
-whose calendar runs to 9 June 2024. No 2024 archive was found for Charlotte's light rail,
-Honolulu's Skyline or Buffalo's Metro Rail; their track keeps estimates. Poland's trains are the 2024 archives of PolRegio,
-PKP Intercity and four regional railways, as the joint feed that 2026 reads did not yet exist; the
-Silesian trams cover 23 days of the summer.
+archives stored in 2024 and chosen by the same rule, 55 archives including San Diego's Coaster and
+Sprinter, the Kansas City streetcar and the Hartford Line (from July 2023 through 9 June 2024),
+supplemented by 2026 fallback vintages for Charlotte's light rail and Honolulu's Skyline where no
+2024 archive exists; Buffalo's Metro Rail keeps class estimates. Poland's trains combine the 2024
+archives of PolRegio, PKP Intercity, SKM Warszawa (from Warsaw ZTM) and four regional railways with
+a 2026 fallback vintage of the joint Polish Trains feed restricted strictly to the six remaining
+operators without 2024 archives; the Silesian trams cover 23 days of the summer. Fallback-vintage
+timetables average daily service over their own published calendar window without shifting dates
+into the target year and without asserting zero-service absences.
 
 Calendar dates, additions and removals follow the
 [GTFS schedule specification](https://gtfs.org/documentation/schedule/reference/).
@@ -573,13 +589,14 @@ in Europe, the [Global Power Plant Database](https://datasets.wri.org/dataset/gl
 and national registers. The levels per sector and area are calibrated on the Czech strategic noise
 maps of 2022.
 
-A dated operating interval or an earlier observed status determines a site's state. A planned
-retirement does not close a working plant, and a newer closure record cannot silence another
-tenant described by a different register. Conflicting evidence stays unknown. An undated
-“operating” label in a later register cannot establish its earlier status. Where history is missing,
-operation remains unknown; mapped activity supplies an estimate, not evidence that the site was
-running. Names can suggest a sector but do not measure its sound. The dated registers are listed
-under [sources by year](/about/data-sources#sources-by-year).
+A dated operating interval or an earlier observed status determines a site's operating state. A
+facility that opens on or after the map cutoff is skipped before matching so it neither classifies
+nor silences an earlier mapped tenant. A site retired after the cutoff was operating at the cutoff,
+and a newer closure record cannot silence another tenant described by a different register.
+Conflicting evidence stays unknown. An undated record from a later structure register still
+classifies a matching earlier mapped footprint while leaving its historical operating state unknown
+(never inventing confirmation that the site was running). Names can suggest a sector but do not
+measure its sound. The registers are listed under [sources by year](/about/data-sources#sources-by-year).
 
 The year manifest selects the facility model and its registers. `qm-build facility-observations`
 converts publisher formats in `fetch/facilities*.rs`; `qm-build facilities` joins those observations

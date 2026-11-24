@@ -1,6 +1,18 @@
 //! Closed input kinds shared by manifest validation and every builder call site.
 use serde::Deserialize;
 
+/// Uniform admission bucket for every declared input kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admission {
+    /// Point-in-time world geometry snapshots (OSM planet, Overture footprints): strictly < as_of.
+    Snapshot,
+    /// Physical structures, static rasters, geography/networks, station lookups and inventories:
+    /// later-observed inventories stand for the map date, with per-item date filtering where present.
+    Structure,
+    /// Flow, activity, practice and model inputs: < as_of by default, or validity / fallback_vintage.
+    Activity,
+}
+
 macro_rules! kinds {
     ($($variant:ident => $name:literal $( [ $intermediate:ident ] )?),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,7 +40,7 @@ macro_rules! kinds {
 kinds! {
     AirportOperations => "airport-operations",
     AirportTraffic => "airport-traffic" [intermediate],
-    Barriers => "barriers" [intermediate],
+    Barriers => "barriers",
     BuildingPlant => "building-plant",
     BuildingRoadModels => "building-road-models",
     Bus => "bus" [intermediate],
@@ -119,4 +131,117 @@ kinds! {
     Weather => "weather" [intermediate],
     Worship => "worship" [intermediate],
     WorshipCalls => "worship-calls",
+}
+
+impl Kind {
+    /// Only standing practices and legal speed rules admit a manifest `validity` span.
+    pub fn allows_validity(self) -> bool {
+        matches!(
+            self,
+            Self::ChurchBells
+                | Self::HeavySpeeds
+                | Self::LegalSpeeds
+                | Self::PrepareOsmSpeeds
+                | Self::VenueCustoms
+                | Self::WorshipCalls
+        )
+    }
+
+    pub fn admission(self) -> Admission {
+        use Kind::*;
+        match self {
+            PrepareOsm | PrepareBuildingFootprints => Admission::Snapshot,
+            Barriers
+            | Climate
+            | FineDem
+            | NationalDem
+            | PrepareBoundaries
+            | PrepareBuildingAttributes
+            | PrepareBuildingHeights
+            | PrepareGeography
+            | PrepareGroundHeight
+            | PrepareIndustrialSites
+            | PrepareLandCover
+            | PrepareNoiseBarriers
+            | PrepareOsmBoundaries
+            | PrepareRailNetwork
+            | PrepareRoadNetwork
+            | PrepareSealing
+            | PrepareTreeCover
+            | PrepareTreeHeight
+            | PrepareTurbines
+            | PrepareWeather
+            | RasterMosaic
+            | StructureHeightRaster
+            | Tent
+            | Tiff
+            | Water => Admission::Structure,
+            AirportOperations
+            | AirportTraffic
+            | BuildingPlant
+            | BuildingRoadModels
+            | Bus
+            | BusModels
+            | ChurchBells
+            | CountedClassShares
+            | DwellingTrips
+            | ElectricCarShare
+            | Facilities
+            | FacilityModel
+            | FacilityObservations
+            | FreightPeriodShares
+            | Geoid
+            | HeavySpeeds
+            | HotelTripRate
+            | LegalSpeeds
+            | Lodgings
+            | ModelObservations
+            | MotorcycleShare
+            | OsmGeography
+            | PrepareCrossings
+            | PrepareOsmSpeeds
+            | PrepareRegions
+            | PrepareRoadCounts
+            | PrepareRoadHourly
+            | PrepareShips
+            | PrepareTimetable
+            | PrepareWeatherStatistics
+            | Prepared
+            | Primary
+            | RailFleetRegions
+            | RailFlows
+            | RailModel
+            | Rasters
+            | RegionalVehicleShares
+            | RoadCalibration
+            | RoadClassPriors
+            | RoadClassShares
+            | RoadConversion
+            | RoadObservations
+            | RoadPeriodShares
+            | RoadPreparationModel
+            | RoadReferenceCounts
+            | RoadTraffic
+            | RuralFreeFlow
+            | Secondary
+            | Segments
+            | ServiceCooling
+            | Ships
+            | Shuffled
+            | StructureHeightModel
+            | StructureObservations
+            | Structures
+            | SubdivisionGrids
+            | TaggedSpeeds
+            | Terrain
+            | TrainScales
+            | Turbines
+            | VenueCustoms
+            | VenueSeating
+            | Venues
+            | Weather
+            | Worship
+            | WorshipCalls => Admission::Activity,
+        }
+    }
 }

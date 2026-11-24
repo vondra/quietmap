@@ -27,7 +27,7 @@ Timetables are averaged over the observation year. The archived Polish Trains, W
 | [GZM](https://mkuran.pl/gtfs/gzm.zip) | Silesian trams |
 | [WKD](https://mkuran.pl/gtfs/wkd.zip) | Warsaw commuter railway |
 
-For 2024 the joint Polish Trains feed did not yet exist: the map reads the 2024 archives of Koleje Mazowieckie, PolRegio, PKP Intercity, Koleje Małopolskie, Koleje Śląskie and Koleje Dolnośląskie, with the Warsaw, Kraków, WKD and Silesian (23 summer days) feeds. No open 2024 archive was found for SKM Trójmiasto, Koleje Wielkopolskie, ŁKA, Arriva, Leo Express or RegioJet; track that no other timetable covers keeps the class defaults.
+For 2024 the joint Polish Trains feed did not yet exist: the map reads the 2024 archives of Koleje Mazowieckie, PolRegio, PKP Intercity, Koleje Małopolskie, Koleje Śląskie, Koleje Dolnośląskie and Warsaw ZTM (including SKM Warszawa), with the Kraków, WKD and Silesian (23 summer days) feeds. For the six operators with no open 2024 archive (SKM Trójmiasto, Koleje Wielkopolskie, ŁKA, Arriva RP, Leo Express and RegioJet), the 2026 Polish Trains feed stands in as a declared fallback vintage (+2 years) with the seven 2024-covered operators excluded.
 
 Trams without a feed (Gdańsk, Poznań, Wrocław, Łódź and others) default to 120 per day on every track. The timetables are passenger-only. Lines without a count take the class defaults; freight comes from them, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, 37 % of it at night as at Germany's railway monitors.
 

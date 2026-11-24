@@ -169,3 +169,143 @@ fn a_three_class_percentage_subtotal_does_not_invent_a_motorcycle_zero_or_share(
     assert!(counts[3] > 0.0);
     assert_eq!(estimated, 8);
 }
+
+#[test]
+fn auckland_and_year_field_converters_enforce_map_cutoff_while_fallback_vintage_passes_validation()
+{
+    let (directory, _) = super::tests::inputs("NZ");
+    let manifest_path = directory.path().join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["inputs"][0]["observed"] = json!({"start": "1969-01-01", "end": "2000-12-31"});
+    manifest["inputs"].as_array_mut().unwrap().push(json!({
+        "id": "fallback",
+        "kind": "prepare-road-counts",
+        "region": "NZ",
+        "publisher": "Fallback",
+        "url": "https://example.org/fallback",
+        "observed": {"start": "2002", "end": "2002"},
+        "published": "2002",
+        "licence": "CC0",
+        "public_ok": true,
+        "depends_on": [],
+        "description": "Later fallback.",
+        "fallback_vintage": {"reason": "Nearest later vintage."}
+    }));
+    std::fs::create_dir_all(directory.path().join("2000/fallback")).unwrap();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let inputs = crate::year::YearInputs::read(&manifest_path, directory.path()).unwrap();
+
+    // Auckland count_date filters out 2001-01-01 (>= as_of) and stamps individual count dates.
+    let path = directory.path().join("at.geojson");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&json!({"features": [
+            {"properties": {"adt": 500, "pcheavy": 10, "count_date": "1999-06-15T00:00:00Z"},
+             "geometry": {"type": "Point", "coordinates": [174.7, -36.8]}},
+            {"properties": {"adt": 800, "pcheavy": 10, "count_date": "2001-01-01T00:00:00Z"},
+             "geometry": {"type": "Point", "coordinates": [174.8, -36.9]}}
+        ]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let recipe = serde_json::from_value(json!({
+        "source": {"input_id": "survey", "source_id": 1090, "source_rank": 1},
+        "files": [], "carriageways": false, "search_radius_m": 60.0
+    }))
+    .unwrap();
+    let rows = nzta::convert(&recipe, &inputs, &path).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].observed_start, "1999-06-15");
+    assert_eq!(rows[0].observed_end, "1999-06-15");
+    crate::roads::observation_io::validate(&rows, &inputs).unwrap();
+
+    // Fallback carriageway observation from 2002 passes observation_io::validate under fallback_vintage.
+    let fb_path = directory.path().join("nzta.json");
+    std::fs::write(
+        &fb_path,
+        serde_json::to_vec(&json!({"features": [
+            {"properties": {"trafficADTCount": 1200, "loadingPcHeavy": 15, "ONRC": "National"},
+             "geometry": {"type": "Point", "coordinates": [174.0, -40.0]}}
+        ]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let fb_recipe = serde_json::from_value(json!({
+        "source": {"input_id": "fallback", "source_id": 1090, "source_rank": 2},
+        "files": [], "carriageways": true, "search_radius_m": 100.0
+    }))
+    .unwrap();
+    let fb_rows = nzta::convert(&fb_recipe, &inputs, &fb_path).unwrap();
+    assert_eq!(fb_rows.len(), 1);
+    assert_eq!(fb_rows[0].observed_end, "2002-12-31");
+    crate::roads::observation_io::validate(&fb_rows, &inputs).unwrap();
+
+    // fields.rs year_field excludes post-cutoff rows and keeps pre-cutoff rows.
+    let field_recipe = serde_json::from_value(json!({
+        "input_id": "survey", "records": "/features", "properties": "/properties",
+        "identity": "id", "reference": null, "geometry": {"format": "geojson"},
+        "source_id": 1, "source_rank": 1, "country": "NZ", "measured": true,
+        "count_basis": "both-directions", "time_basis": "annual-daily",
+        "daily_factor": 1.0, "direction": 0, "road_class_mask": 4, "search_radius_m": 50.0,
+        "reference_required": false, "classes": [null, null, null, null],
+        "total": "total", "year_field": "year", "estimated_classes": 15, "percentages": false
+    }))
+    .unwrap();
+    let field_rows = fields::observations(
+        &field_recipe,
+        &json!({"features": [
+            {"properties": {"id": "old", "total": 100, "year": 2000}, "geometry": {"type": "Point", "coordinates": [174.0, -40.0]}},
+            {"properties": {"id": "future", "total": 200, "year": 2001}, "geometry": {"type": "Point", "coordinates": [174.1, -40.0]}}
+        ]}),
+        &inputs,
+    )
+    .unwrap();
+    assert_eq!(field_rows.len(), 1);
+    assert_eq!(field_rows[0].identity, "old");
+
+    // Independent boundary test: a row strictly inside [first, last] that hits `cutoff` is
+    // rejected for non-fallback inputs and accepted only for fallback_vintage inputs.
+    let d = |y, m, day| chrono::NaiveDate::from_ymd_opt(y, m, day).unwrap();
+    assert!(!super::records::admitted_date(
+        d(2001, 1, 1),
+        d(2001, 1, 1),
+        d(1990, 1, 1),
+        d(2005, 12, 31),
+        d(2001, 1, 1),
+        false,
+    ));
+    assert!(super::records::admitted_date(
+        d(2001, 1, 1),
+        d(2001, 1, 1),
+        d(1990, 1, 1),
+        d(2005, 12, 31),
+        d(2001, 1, 1),
+        true,
+    ));
+
+    // Auckland site deduplication keeps only the latest eligible count_date per (coord, road_name)
+    // so older historical years cannot collide in matching, while distinct roads stay separate.
+    let dup_path = directory.path().join("at_dup.geojson");
+    std::fs::write(
+        &dup_path,
+        serde_json::to_vec(&json!({"features": [
+            {"properties": {"road_name": "CASCADES RD", "adt": 9000, "pcheavy": 5, "count_date": "1994-06-01T00:00:00Z"},
+             "geometry": {"type": "Point", "coordinates": [174.9, -36.9]}},
+            {"properties": {"road_name": "CASCADES RD", "adt": 18000, "pcheavy": 7, "count_date": "2000-06-01T00:00:00Z"},
+             "geometry": {"type": "Point", "coordinates": [174.9, -36.9]}},
+            {"properties": {"road_name": "CROSS ST", "adt": 4000, "pcheavy": 3, "count_date": "1998-06-01T00:00:00Z"},
+             "geometry": {"type": "Point", "coordinates": [174.9, -36.9]}},
+            {"properties": {"road_name": "CASCADES RD", "adt": 25000, "pcheavy": 8, "count_date": "2001-06-01T00:00:00Z"},
+             "geometry": {"type": "Point", "coordinates": [174.9, -36.9]}}
+        ]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let dup_rows = nzta::convert(&recipe, &inputs, &dup_path).unwrap();
+    assert_eq!(dup_rows.len(), 2);
+    assert_eq!(dup_rows[0].total, Some(18000.0));
+    assert_eq!(dup_rows[0].observed_end, "2000-06-01");
+    assert_eq!(dup_rows[1].total, Some(4000.0));
+    assert_eq!(dup_rows[1].observed_end, "1998-06-01");
+}

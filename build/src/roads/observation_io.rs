@@ -117,28 +117,39 @@ fn decode_geometry(mut bytes: &[u8]) -> Result<Vec<Vec<[f64; 2]>>> {
 }
 
 pub fn validate(rows: &[Observation], inputs: &YearInputs) -> Result<()> {
-    let cutoff = chrono::NaiveDate::parse_from_str(&inputs.manifest.as_of, "%Y-%m-%d")?;
+    let as_of = chrono::NaiveDate::parse_from_str(&inputs.manifest.as_of, "%Y-%m-%d")?;
+    let mut admitted_inputs = HashMap::new();
+    for input in &inputs.manifest.inputs {
+        if matches!(
+            input.kind,
+            Kind::PrepareRoadCounts | Kind::PrepareRoadHourly | Kind::PrepareRoadNetwork
+        ) && inputs
+            .manifest
+            .admitted(&input.id)
+            .map_err(anyhow::Error::msg)?
+        {
+            let (start, end) = input.observed.bounds().map_err(anyhow::Error::msg)?;
+            admitted_inputs.insert(
+                input.id.as_str(),
+                (start, end, input.fallback_vintage.is_some()),
+            );
+        }
+    }
     let mut identities = BTreeMap::new();
     for row in rows {
-        row.validate(cutoff)?;
-        let input = inputs
-            .manifest
-            .inputs
-            .iter()
-            .find(|i| i.id == row.input_id)
-            .ok_or_else(|| anyhow!("unknown observation input {}", row.input_id))?;
-        ensure!(
-            matches!(
-                input.kind,
-                Kind::PrepareRoadCounts | Kind::PrepareRoadHourly | Kind::PrepareRoadNetwork
-            ) && inputs
-                .manifest
-                .admitted(&input.id)
-                .map_err(anyhow::Error::msg)?,
-            "unadmitted road observation input {}",
-            input.id
-        );
-        let (start, end) = input.observed.bounds().map_err(anyhow::Error::msg)?;
+        let &(start, end, is_fallback) =
+            admitted_inputs.get(row.input_id.as_str()).ok_or_else(|| {
+                anyhow!(
+                    "unknown or unadmitted road observation input {}",
+                    row.input_id
+                )
+            })?;
+        let limit = if is_fallback {
+            end.succ_opt().ok_or_else(|| anyhow!("date overflow"))?
+        } else {
+            as_of
+        };
+        row.validate(limit)?;
         let from = chrono::NaiveDate::parse_from_str(&row.observed_start, "%Y-%m-%d")?;
         let to = chrono::NaiveDate::parse_from_str(&row.observed_end, "%Y-%m-%d")?;
         ensure!(

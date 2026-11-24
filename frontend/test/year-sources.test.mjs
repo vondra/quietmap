@@ -130,9 +130,48 @@ test('railway citations follow the admitted movement objects in every year', asy
     const calendar = manifest.railways.objects.find(object => object.format === 'czptt')
     if (calendar) {
       const input = manifest.inputs.find(input => input.id === calendar.input)
-      assert.equal(citations[calendar.source_id][1], observedLabel(input.observed))
+      if (input.fallback_vintage) {
+        assert.ok(citations[calendar.source_id][1].startsWith(`${observedLabel(input.observed)} (`))
+        assert.ok(citations[calendar.source_id][1].includes('fallback'))
+      } else {
+        assert.equal(citations[calendar.source_id][1], observedLabel(input.observed))
+      }
     }
   }
+})
+
+test('fallback_vintage validates reason text, shows gap on About pages and keeps mixed popup vintages separate', async () => {
+  const { datasetCitations } = await import('../scripts/dataset-citations.ts')
+  const bad = manifest()
+  bad.inputs[0].fallback_vintage = { reason: 'leaked /private/path' }
+  assert.throws(() => validatePublicManifest(bad), /Private|unpinned/)
+  bad.inputs[0].fallback_vintage = { reason: '   ' }
+  assert.throws(() => validatePublicManifest(bad), /Invalid fallback_vintage/)
+
+  const m = manifest()
+  m.year = '2024'
+  m.as_of = '2025-01-01'
+  m.inputs = [
+    { ...source('barriers', 'PL'), kind: 'barriers', publisher: 'GUGiK', observed: { start: '2026-10-08', end: '2026-10-08' } },
+    { ...source('pl-2024', 'PL'), kind: 'prepare-timetable', publisher: 'Regional', observed: { start: '2024-06-01', end: '2024-07-01' } },
+    { ...source('pl-2026', 'PL'), kind: 'prepare-timetable', publisher: 'Polish Trains', observed: { start: '2026-09-09', end: '2026-10-09' },
+      fallback_vintage: { reason: 'Uncovered operators [6] from *2026* feed' } },
+    { ...source('rail-movements', 'world'), kind: 'rail-flows', depends_on: ['pl-2024', 'pl-2026'] },
+  ]
+  m.railways = { objects: [{ input: 'pl-2024', source_id: 2066 }, { input: 'pl-2026', source_id: 2066 }] }
+  validatePublicManifest(m)
+  const page = renderYearSources('data-sources/europe/pl.md', [{ name: '2024', manifest: m }])
+  assert.ok(page.includes('[GUGiK]'), 'barriers must appear on Poland About page')
+  assert.ok(page.includes('Fallback vintage (+2 years after 2024): Uncovered operators \\[6\\] from \\*2026\\* feed. Licence:'))
+  const cite = datasetCitations(m)[2066]
+  assert.equal(cite[1], '2024-06-01 to 2024-07-01; 2026-09-09 to 2026-10-09 (+2 years fallback)')
+
+  // Real manifests expose fallback dates on the 17 corridor priors (e.g. 9181 DR Congo) in 2024.
+  const years = readYears()
+  const c2024 = datasetCitations(years.find(y => y.name === '2024').manifest)[9181]
+  const c2026 = datasetCitations(years.find(y => y.name === '2026').manifest)[9181]
+  assert.equal(c2024[1], '2026 (+2 years fallback)')
+  assert.equal(c2026[1], '2026')
 })
 
 test('an excluded railway object cannot widen an admitted timetable citation', async () => {

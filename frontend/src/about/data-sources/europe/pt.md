@@ -17,8 +17,9 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside, a motorway 120.
 
 [CP Comboios de Portugal](https://publico.cp.pt/gtfs/gtfs.zip) supplies national and commuter
 train schedules, averaged over the observation window. The archived Metro do Porto feed does
-not cover the 2026 window. Metro Sul do Tejo's archive keeps holiday dates through 2030 but its
-regular schedules end on 7 September 2025; it cannot establish annual service and is excluded.
+not cover the 2026 window. Metro Sul do Tejo's archive keeps holiday dates through 2030, omits regular weekdays for January
+through early September 2024, and ends regular schedules on 7 September 2025; it cannot establish
+annual service for either 2024 or 2026 and is excluded.
 Both light-rail networks retain class estimates. Carris Metropolitana's loaded feed contains
 no selected rail service.
 

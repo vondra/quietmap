@@ -106,14 +106,19 @@ pub fn classify(
         let spec = recipes
             .get(observation.source.as_str())
             .ok_or_else(|| anyhow::anyhow!("unrecognized facility observation source"))?;
-        if observation.activity == 0 {
+        if observation.activity == 0
+            || super::temporal::opens_after(observation.operating_from.as_deref(), cutoff)?
+        {
             continue;
         }
         let operating = OperatingEvidence::new(observation, cutoff)?;
-        let classifiable = observation.classification_admitted == 1
-            && operating.operation != Operation::Inactive
-            && (observation.observed_on.as_str() < cutoff
-                || operating.operation == Operation::Operating);
+        // Separate sector classification from operating confirmation: a site retired after the
+        // cutoff was operating at the cutoff (even when the later snapshot excluded retired rows),
+        // and an undated non-retired record from a later structure register classifies a matching
+        // mapped footprint while leaving its operating state unknown.
+        let classifiable = operating.operation != Operation::Inactive
+            && (operating.operation == Operation::Operating
+                || (observation.classification_admitted == 1 && observation.operating_state != 2));
         if !classifiable && operating.operation != Operation::Inactive {
             continue;
         }

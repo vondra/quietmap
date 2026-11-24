@@ -4581,6 +4581,692 @@
       "minimum_alignment_cosine": 0.8660254037844387,
       "twin_radius_m": 300.0,
       "twin_total_ratio_tolerance": 0.15
+    },
+    {
+      "format": "sasvz",
+      "source": {
+        "input_id": "ch-astra-sasvz-jahresergebnisse-station-list",
+        "source_id": 9756,
+        "source_rank": 3353880092
+      },
+      "sites_input": "ch-astra-sasvz-jahresergebnisse-station-list-jahres-ergebnisse-2024",
+      "count_sheet": "DTV mit Klassen",
+      "site_sheet": "SASVZ_CSACR",
+      "motorcycle_share": 0.01,
+      "search_radius_m": 200
+    },
+    {
+      "format": "wien",
+      "source": {
+        "input_id": "at-vienna-stadt-wien-ma46-dauerzahlstellen-stadt-wien-verkehrszhlstellenzhlwertewien",
+        "source_id": 9004,
+        "source_rank": 3890815788
+      },
+      "sites_input": "at-vienna-stadt-wien-ma46-dauerzahlstellen",
+      "coverage": {
+        "input_id": "municipal-road-boundaries-austria",
+        "property": "shapeName",
+        "name": "Wien(Stadt)"
+      },
+      "minimum_months": 10,
+      "road_class_mask": 6718,
+      "search_radius_m": 70,
+      "point_band_m": 15
+    },
+    {
+      "format": "tsk",
+      "source": {
+        "input_id": "cz-prague-tsk-praha-intenzity-dopravy",
+        "source_id": 9003,
+        "source_rank": 3890815787
+      },
+      "weekday_to_model_daily": 1.0,
+      "sheet": "Úseky - po profilech - dle uzlů",
+      "street_aliases": {
+        "BARRAND.MOST": "Barrandovský most",
+        "DEJVICKÝ T.": "Dejvický tunel",
+        "BRUSNICKÝ T.": "Brusnický tunel",
+        "STRAH.TUNEL": "Strahovský tunel",
+        "BUBENEČ.TUN.": "Bubenečský tunel",
+        "TUN.MRÁZOVKA": "Tunel Mrázovka",
+        "TĚŠNOVSKÝ T.": "Těšnovský tunel",
+        "V HOLEŠOVIČ.": "V Holešovičkách",
+        "5.KVĚTNA": "5. května",
+        "ŠTĚRB.SPOJKA": "Štěrboholská spojka",
+        "NUSEL.MOST": "Nuselský most",
+        "MOST BARIK.": "most Barikádníků",
+        "ROZVAD.SPOJ.": "Rozvadovská spojka",
+        "JIRÁSK.MOST": "Jiráskův most",
+        "ROHAN.NÁBŘ.": "Rohanské nábřeží",
+        "NÁB.K.JAROŠE": "nábřeží Kapitána Jaroše",
+        "NÁB.L.SVOB.": "nábřeží Ludvíka Svobody",
+        "BUBEN.NÁBŘ.": "Bubenské nábřeží",
+        "POD KREJCÁR.": "Pod Krejcárkem",
+        "BĚLOCERKEVS.": "Bělocerkevská",
+        "J.ŽELIVSKÉHO": "Jana Želivského",
+        "ČERNOKOSTEL.": "Černokostelecká",
+        "N.POVLTAVSKÁ": "Nová Povltavská"
+      },
+      "coverage_input": "municipal-road-boundaries",
+      "coverage_property": "shapeName",
+      "coverage_name": "Prague",
+      "road_class_mask": 6206
+    },
+    {
+      "format": "mop",
+      "source": {
+        "input_id": "cl-mop-red-vial-plan-nacional-de-censos-tmda-0",
+        "source_id": 1023,
+        "source_rank": 3353871359
+      },
+      "arcgis": false,
+      "year_field": "ANO",
+      "search_radius_m": 600
+    },
+    {
+      "format": "nzta",
+      "source": {
+        "input_id": "nz-nzta-carriageway-auckland-transport-aadt",
+        "source_id": 1090,
+        "source_rank": 3354002497
+      },
+      "files": [
+        "nzta-page-0.json",
+        "nzta-page-2000.json",
+        "nzta-page-4000.json",
+        "nzta-page-6000.json",
+        "nzta-page-8000.json",
+        "nzta-page-10000.json"
+      ],
+      "carriageways": true,
+      "search_radius_m": 200
+    },
+    {
+      "format": "nzta",
+      "source": {
+        "input_id": "nz-nzta-carriageway-auckland-transport-aadt-0",
+        "source_id": 1090,
+        "source_rank": 3354002498
+      },
+      "files": [
+        "at-aadt.geojson"
+      ],
+      "carriageways": false,
+      "search_radius_m": 200
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-00000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-02000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-04000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-06000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-08000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-10000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-12000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-14000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-16000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-18000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-20000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-22000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-24000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
+    },
+    {
+      "format": "fields",
+      "input_id": "road-counts-id-jalan-daerah-page-28000-geojson",
+      "records": "/features",
+      "properties": "/properties",
+      "identity": "OBJECTID",
+      "reference": null,
+      "geometry": {
+        "format": "geojson"
+      },
+      "source_id": 1048,
+      "source_rank": 3354002456,
+      "country": "ID",
+      "measured": true,
+      "count_basis": "both-directions",
+      "time_basis": "annual-daily",
+      "daily_factor": 1.0,
+      "direction": 0,
+      "road_class_mask": 4,
+      "search_radius_m": 200,
+      "reference_required": false,
+      "classes": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "total": "LHRT",
+      "year_field": "THN_DATA",
+      "estimated_classes": 0,
+      "skip_zero_total": true,
+      "field_filter": [
+        "STATUS",
+        "(?i)provinsi"
+      ],
+      "exclusion": {
+        "input_id": "id-bina-marga-toll-regional-lhrt-national-roads-0-3",
+        "files": [],
+        "radius_m": 50
+      }
     }
   ],
   "sampling": [
@@ -4914,6 +5600,74 @@
       "design": "selected-sites",
       "citation": "https://mot.gov.sa/documents/7507107/7507109/Traffic+density+on+roads.xlsx",
       "statement": "Assumed: the ministry’s and Riyadh’s counts at the roads they chose.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "cl-mop-red-vial-plan-nacional-de-censos-tmda-0"
+      ],
+      "design": "whole-network",
+      "citation": "https://rest-sit.mop.gob.cl/arcgis/rest/services/VIALIDAD/Plan_Nacional_de_Censos/MapServer",
+      "statement": "Assumed: the national census plan’s counting points across the national road network.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "cz-prague-tsk-praha-intenzity-dopravy"
+      ],
+      "design": "selected-sites",
+      "citation": "https://tsk-praha.cz/",
+      "statement": "Assumed: the city’s traffic intensities of its main streets.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "at-vienna-stadt-wien-ma46-dauerzahlstellen-stadt-wien-verkehrszhlstellenzhlwertewien"
+      ],
+      "design": "selected-sites",
+      "citation": "https://www.data.gv.at/katalog/dataset/stadt-wien_verkehrszhlstellenzhlwertewien",
+      "statement": "The values of the city’s permanent counting stations (Dauerzählstellen).",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "ch-astra-sasvz-jahresergebnisse-station-list"
+      ],
+      "design": "selected-sites",
+      "citation": "https://www.astra.admin.ch/dam/de/sd-web/szrohDjQVjAZ/jahres-ergebnisse-2024.xlsx",
+      "statement": "The annual results of the federal automatic counting stations.",
+      "stated": true
+    },
+    {
+      "inputs": [
+        "nz-nzta-carriageway-auckland-transport-aadt",
+        "nz-nzta-carriageway-auckland-transport-aadt-0"
+      ],
+      "design": "selected-sites",
+      "citation": "https://services.arcgis.com/CXBb7LAjgIIdcsPt/ArcGIS/rest/services/GEO_MASTER_GIS_Carriageway/FeatureServer/0",
+      "statement": "Assumed: Auckland Transport’s counted carriageways, chosen by its counting programme.",
+      "stated": false
+    },
+    {
+      "inputs": [
+        "road-counts-id-jalan-daerah-page-00000-geojson",
+        "road-counts-id-jalan-daerah-page-02000-geojson",
+        "road-counts-id-jalan-daerah-page-04000-geojson",
+        "road-counts-id-jalan-daerah-page-06000-geojson",
+        "road-counts-id-jalan-daerah-page-08000-geojson",
+        "road-counts-id-jalan-daerah-page-10000-geojson",
+        "road-counts-id-jalan-daerah-page-12000-geojson",
+        "road-counts-id-jalan-daerah-page-14000-geojson",
+        "road-counts-id-jalan-daerah-page-16000-geojson",
+        "road-counts-id-jalan-daerah-page-18000-geojson",
+        "road-counts-id-jalan-daerah-page-20000-geojson",
+        "road-counts-id-jalan-daerah-page-22000-geojson",
+        "road-counts-id-jalan-daerah-page-24000-geojson",
+        "road-counts-id-jalan-daerah-page-28000-geojson"
+      ],
+      "design": "selected-sites",
+      "citation": "https://gisportal.binamarga.pu.go.id/arcgis/rest/services/Jalan/Jalan_Daerah/MapServer/0",
+      "statement": "Assumed: counts on the roads the agency chose.",
       "stated": false
     }
   ]

@@ -44,6 +44,7 @@ fn publisher_identity_units_and_status_survive_record_order_and_unknown_dates() 
         raw.clone(),
         &regions(),
         &mut HashSet::new(),
+        "2001-01-01",
     )
     .unwrap();
     assert_eq!(converted[0].identity, "register/A");
@@ -58,6 +59,7 @@ fn publisher_identity_units_and_status_survive_record_order_and_unknown_dates() 
         raw.into_iter().rev().collect(),
         &regions(),
         &mut HashSet::new(),
+        "2001-01-01",
     )
     .unwrap();
     assert_eq!(converted[0].identity, reversed[1].identity);
@@ -98,6 +100,7 @@ fn planned_retirement_does_not_close_an_operating_unit_and_admission_does_not_cl
         raw.clone(),
         &regions(),
         &mut HashSet::new(),
+        "2001-01-01",
     )
     .unwrap();
     assert_eq!(
@@ -115,7 +118,15 @@ fn planned_retirement_does_not_close_an_operating_unit_and_admission_does_not_cl
     assert_eq!(rows[2].operating_until, None);
     assert_ne!(rows[0].evidence_identity, rows[1].evidence_identity);
     spec.status = None;
-    let rows = normalize(&spec, &input(), raw, &regions(), &mut HashSet::new()).unwrap();
+    let rows = normalize(
+        &spec,
+        &input(),
+        raw,
+        &regions(),
+        &mut HashSet::new(),
+        "2001-01-01",
+    )
+    .unwrap();
     assert!(
         rows.iter()
             .all(|r| r.operating_state == 0 && r.classification_admitted == 1)
@@ -140,7 +151,15 @@ fn a_concession_can_cover_owned_land_while_its_centroid_lies_outside_the_scope()
     let raw = vec![
         json!({"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[0,0],[6,0],[6,1],[0,1],[0,0]]]},"properties":{}}),
     ];
-    let rows = normalize(&spec, &input(), raw, &regions(), &mut HashSet::new()).unwrap();
+    let rows = normalize(
+        &spec,
+        &input(),
+        raw,
+        &regions(),
+        &mut HashSet::new(),
+        "2001-01-01",
+    )
+    .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].role, REGISTRY_AREA);
     assert!(rows[0].longitude > 1.0);
@@ -182,7 +201,15 @@ fn a_capacity_weighted_commissioning_year_cannot_date_a_plant_opening() {
     let raw = vec![
         json!({"latitude":"0", "longitude":"0", "primary_fuel":"Gas", "commissioning_year":"1990"}),
     ];
-    let rows = normalize(&spec, &input(), raw, &regions(), &mut HashSet::new()).unwrap();
+    let rows = normalize(
+        &spec,
+        &input(),
+        raw,
+        &regions(),
+        &mut HashSet::new(),
+        "2001-01-01",
+    )
+    .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].activity, 3511);
     assert_eq!(rows[0].operating_from, None);
@@ -209,7 +236,15 @@ fn proposed_commissioning_is_not_an_operating_interval_or_a_factory_closure() {
     let raw = vec![
         json!({"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{"start":"2001","status":"construction"}}),
     ];
-    let rows = normalize(&spec, &input(), raw, &regions(), &mut HashSet::new()).unwrap();
+    let rows = normalize(
+        &spec,
+        &input(),
+        raw,
+        &regions(),
+        &mut HashSet::new(),
+        "2001-01-01",
+    )
+    .unwrap();
     assert_eq!(rows[0].operating_state, 0);
     assert_eq!(rows[0].operating_from, None);
 }
@@ -251,7 +286,8 @@ fn numeric_voltage_strings_obey_the_threshold_while_missing_values_remain_unknow
             &input(),
             raw.clone(),
             &regions(),
-            &mut HashSet::new()
+            &mut HashSet::new(),
+            "2001-01-01",
         )
         .unwrap()
         .len(),
@@ -259,9 +295,16 @@ fn numeric_voltage_strings_obey_the_threshold_while_missing_values_remain_unknow
     );
     spec.voltage_positive_only = true;
     assert_eq!(
-        normalize(&spec, &input(), raw, &regions(), &mut HashSet::new())
-            .unwrap()
-            .len(),
+        normalize(
+            &spec,
+            &input(),
+            raw,
+            &regions(),
+            &mut HashSet::new(),
+            "2001-01-01",
+        )
+        .unwrap()
+        .len(),
         4
     );
 }
@@ -291,6 +334,81 @@ fn publisher_fuel_precedence_and_literal_status_remain_distinct() {
         ..Default::default()
     };
     let raw = ["Operating", "operating"].into_iter().map(|status| json!({"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{"status":status}})).collect();
-    let rows = normalize(&spec, &input(), raw, &regions(), &mut HashSet::new()).unwrap();
+    let rows = normalize(
+        &spec,
+        &input(),
+        raw,
+        &regions(),
+        &mut HashSet::new(),
+        "2001-01-01",
+    )
+    .unwrap();
     assert_eq!((rows[0].operating_state, rows[1].operating_state), (1, 0));
+}
+
+#[test]
+fn post_cutoff_blank_status_and_deduplicated_units_cannot_leak_or_shadow_earlier_plants() {
+    let mut later_input = input();
+    later_input.observed = serde_json::from_value(json!({"start":"2026","end":"2026"})).unwrap();
+    // 1. Blank-status admitted row with a 2025 commissioning date is excluded at as_of 2025-01-01,
+    // while a blank-status row opened in 2022 survives with its opening date preserved.
+    let blank_spec = InputSpec {
+        input: "register".into(),
+        format: "geojson".into(),
+        classifier: "constant".into(),
+        activity: 3511,
+        identities: vec!["id".into()],
+        start_fields: vec!["opened".into()],
+        status: Some(StatusRule {
+            fields: vec!["status".into()],
+            pattern: "^operating$".into(),
+            operating_pattern: "^operating$".into(),
+            inactive_pattern: "^retired$".into(),
+            blank: true,
+        }),
+        ..Default::default()
+    };
+    let blank_raw = vec![
+        json!({"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{"id":"future","status":"","opened":"2025"}}),
+        json!({"type":"Feature","geometry":{"type":"Point","coordinates":[0.1,0.1]},"properties":{"id":"existing","status":"","opened":"2022"}}),
+    ];
+    let blank_rows = normalize(
+        &blank_spec,
+        &later_input,
+        blank_raw,
+        &regions(),
+        &mut HashSet::new(),
+        "2025-01-01",
+    )
+    .unwrap();
+    assert_eq!(blank_rows.len(), 1);
+    assert_eq!(blank_rows[0].identity, "register/existing");
+    assert_eq!(blank_rows[0].operating_from.as_deref(), Some("2022"));
+
+    // 2. A 2025 unit encountered first at a deduplicated coordinate cannot steal the slot from a colocated 2010 unit.
+    let dedup_spec = InputSpec {
+        input: "register".into(),
+        format: "geojson".into(),
+        classifier: "constant".into(),
+        activity: 3511,
+        identities: vec!["id".into()],
+        start_fields: vec!["opened".into()],
+        deduplicate_digits: Some(4),
+        ..Default::default()
+    };
+    let dedup_raw = vec![
+        json!({"type":"Feature","geometry":{"type":"Point","coordinates":[0.5,0.5]},"properties":{"id":"new2025","opened":"2025-03-01"}}),
+        json!({"type":"Feature","geometry":{"type":"Point","coordinates":[0.5,0.5]},"properties":{"id":"old2010","opened":"2010-06-01"}}),
+    ];
+    let dedup_rows = normalize(
+        &dedup_spec,
+        &later_input,
+        dedup_raw,
+        &regions(),
+        &mut HashSet::new(),
+        "2025-01-01",
+    )
+    .unwrap();
+    assert_eq!(dedup_rows.len(), 1);
+    assert_eq!(dedup_rows[0].identity, "register/old2010");
 }

@@ -26,7 +26,12 @@ pub struct PeriodModel {
     pub weekday_factor: Option<f64>,
 }
 
-pub fn fit(rows: &[Observation], parameters: &Parameters, directory: &Path) -> Result<PeriodModel> {
+pub fn fit(
+    rows: &[Observation],
+    parameters: &Parameters,
+    fallback_rows: Option<&[Value]>,
+    directory: &Path,
+) -> Result<PeriodModel> {
     let mut stations = BTreeMap::<(u16, u16, String), Station>::new();
     for row in rows.iter().filter(|r| r.measured) {
         let (Some(class), Some(hours)) = (row.sample.road_class, &row.sample.hourly) else {
@@ -132,13 +137,14 @@ pub fn fit(rows: &[Observation], parameters: &Parameters, directory: &Path) -> R
         shares.iter_mut().for_each(|s| *s /= total);
         medians.insert(*key, shares);
     }
-    let mut output = Vec::new();
-    for country in countries {
+    let mut world = None;
+    let mut country_rows = BTreeMap::<String, Value>::new();
+    for country in &countries {
         let mut values = [[[0.0; 3]; 2]; 3];
         for (group, vehicles) in values.iter_mut().enumerate() {
             for (vehicle, shares) in vehicles.iter_mut().enumerate() {
                 *shares = *medians
-                    .get(&(country, group, vehicle))
+                    .get(&(*country, group, vehicle))
                     .or_else(|| medians.get(&(0, group, vehicle)))
                     .ok_or_else(|| {
                         anyhow::anyhow!(
@@ -147,8 +153,37 @@ pub fn fit(rows: &[Observation], parameters: &Parameters, directory: &Path) -> R
                     })?;
             }
         }
-        output.push(country_row(country, json!(values)));
+        let row = country_row(*country, json!(values));
+        if *country == 0 {
+            world = Some(row);
+        } else {
+            country_rows.insert(String::from_utf8(country.to_le_bytes().to_vec())?, row);
+        }
     }
+    if let Some(fallback) = fallback_rows {
+        for row in fallback {
+            let _: [[[f64; 3]; 2]; 3] = serde_json::from_value(row["value"].clone())?;
+            let Some(country_value) = row.get("country") else {
+                continue;
+            };
+            let code = country_value.as_str().ok_or_else(|| {
+                anyhow::anyhow!("fallback period-shares country must be a string")
+            })?;
+            let bytes = code.as_bytes();
+            ensure!(
+                bytes.len() == 2 && bytes.iter().all(u8::is_ascii_uppercase),
+                "invalid fallback period-shares country {code:?}"
+            );
+            country_rows
+                .entry(code.to_string())
+                .or_insert_with(|| row.clone());
+        }
+    }
+    let mut output = Vec::with_capacity(country_rows.len() + usize::from(world.is_some()));
+    if let Some(row) = world {
+        output.push(row);
+    }
+    output.extend(country_rows.into_values());
     write(directory, "road-period-shares", &json!({"rows":output}))?;
     let weekday_factor = if weekday_ratios.len() >= parameters.minimum_hourly_stations {
         let stations = weekday_ratios.len();
@@ -188,6 +223,7 @@ mod tests {
                     2
                 }
             }),
+            fallback_period_shares: None,
             preparation: None,
         };
         let mut rows = Vec::new();
@@ -206,7 +242,23 @@ mod tests {
             rows.push(row);
         }
         let directory = tempfile::tempdir().unwrap();
-        fit(&rows, &parameters, directory.path()).unwrap();
+        let us_fb = [[[0.1, 0.2, 0.7]; 2]; 3];
+        let th_fb = [[[0.632, 0.182, 0.186]; 2]; 3];
+        let fallback = vec![
+            json!({"country":"US","value":us_fb}),
+            json!({"country":"TH","value":th_fb}),
+        ];
+        fit(&rows, &parameters, Some(&fallback), directory.path()).unwrap();
+        let shares: Value = serde_json::from_slice(
+            &std::fs::read(directory.path().join("road-period-shares.json")).unwrap(),
+        )
+        .unwrap();
+        let rows_out = shares["rows"].as_array().unwrap();
+        // World row, then TH from fallback, and US keeps the year's own fit (not fallback 0.1).
+        assert_eq!(rows_out.len(), 3);
+        assert_eq!(rows_out[1]["country"], "TH");
+        assert_eq!(rows_out[2]["country"], "US");
+        assert!((rows_out[2]["value"][0][0][0].as_f64().unwrap() - 0.5).abs() < 1e-9);
         let result: Value = serde_json::from_slice(
             &std::fs::read(directory.path().join("road-weekday-factor.json")).unwrap(),
         )
@@ -218,10 +270,21 @@ mod tests {
         assert_eq!(result["stations"], 3);
         rows.push(rows[0].clone());
         assert!(
-            fit(&rows, &parameters, directory.path())
+            fit(&rows, &parameters, None, directory.path())
                 .unwrap_err()
                 .to_string()
                 .contains("overlapping")
+        );
+        // Non-string fallback country must fail validation instead of silently skipping.
+        let bad_fallback = vec![json!({"country": 123, "value": th_fb})];
+        assert!(
+            fit(
+                &rows[..3],
+                &parameters,
+                Some(&bad_fallback),
+                directory.path()
+            )
+            .is_err()
         );
     }
 }

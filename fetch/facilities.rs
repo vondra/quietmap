@@ -34,6 +34,7 @@ fn normalize(
     raw: Vec<Value>,
     regions: &Regions,
     seen: &mut HashSet<String>,
+    as_of: &str,
 ) -> Result<Vec<Facility>> {
     let observed = dates::observation_date(input)?;
     let status = spec
@@ -149,6 +150,32 @@ fn normalize(
             continue;
         }
         let activity = classify::activity(&spec.classifier, properties, spec.activity)?;
+        let observed_on = if spec.format == "eprtr-json" {
+            dates::report_date(properties, &observed)
+        } else {
+            observed.clone()
+        };
+        // WRI's GPPD commissioning_year is a capacity-weighted mean of unit ages, not a plant opening.
+        // Blank-status admitted rows still keep their declared opening date; unbuilt projects stay None.
+        let operating_from = (spec.format != "gppd-csv"
+            && (operating_state != 0 || active || spec.status.is_none()))
+        .then(|| {
+            dates::dated_history(
+                &classify::field(properties, &spec.start_fields),
+                &observed_on,
+            )
+        })
+        .flatten();
+        let operating_until = (operating_state == 2)
+            .then(|| {
+                dates::dated_history(&classify::field(properties, &spec.end_fields), &observed_on)
+            })
+            .flatten();
+        if crate::facilities::temporal::opens_after(operating_from.as_deref(), as_of)
+            .map_err(anyhow::Error::msg)?
+        {
+            continue;
+        }
         if let Some(digits) = spec.deduplicate_digits
             && active
         {
@@ -178,26 +205,6 @@ fn normalize(
         let capacity = classify::number(&classify::field(properties, &spec.capacity_fields))
             .filter(|v| *v >= 0.0)
             .map(|v| v * spec.capacity_scale);
-        let observed_on = if spec.format == "eprtr-json" {
-            dates::report_date(properties, &observed)
-        } else {
-            observed.clone()
-        };
-        // WRI's GPPD commissioning_year is a capacity-weighted mean of unit ages, not a plant opening.
-        let operating_from = (spec.format != "gppd-csv"
-            && (operating_state != 0 || spec.status.is_none()))
-        .then(|| {
-            dates::dated_history(
-                &classify::field(properties, &spec.start_fields),
-                &observed_on,
-            )
-        })
-        .flatten();
-        let operating_until = (operating_state == 2)
-            .then(|| {
-                dates::dated_history(&classify::field(properties, &spec.end_fields), &observed_on)
-            })
-            .flatten();
         crate::facilities::temporal::operation_at(
             operating_from.as_deref(),
             operating_until.as_deref(),
@@ -292,6 +299,7 @@ pub fn convert(inputs: &YearInputs, out: &Path) -> Result<()> {
             raw,
             &regions,
             duplicate_groups.entry(group.clone()).or_default(),
+            &inputs.manifest.as_of,
         )
         .with_context(|| spec.input.clone())?;
         eprintln!(

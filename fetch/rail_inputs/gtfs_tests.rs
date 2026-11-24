@@ -60,6 +60,7 @@ fn padded_tram_csv_without_sequences_keeps_every_departure() {
         excluded_names: &[],
         excluded_agency_names: &[],
         ignore_feed_window: false,
+        fallback_vintage: None,
         frozen_comparison: false,
     };
     let start = super::super::calendar::compact_date("20240101").unwrap();
@@ -153,6 +154,7 @@ fn publisher_codeshares_do_not_remove_distinct_regional_services() {
         excluded_names: &[],
         excluded_agency_names: &["Intercity (Codesharing)".into()],
         ignore_feed_window: false,
+        fallback_vintage: None,
         frozen_comparison: false,
     };
     let start = super::super::calendar::compact_date("20240101").unwrap();
@@ -217,6 +219,7 @@ fn mixed_national_archive_does_not_turn_freight_into_passenger_trains() {
         excluded_names: &[],
         excluded_agency_names: &[],
         ignore_feed_window: false,
+        fallback_vintage: None,
         frozen_comparison: false,
     };
     let start = super::super::calendar::compact_date("20240101").unwrap();
@@ -268,6 +271,7 @@ fn tram_departures_count_by_station() {
         excluded_names: &[],
         excluded_agency_names: &[],
         ignore_feed_window: false,
+        fallback_vintage: None,
         frozen_comparison: false,
     };
     let day = super::super::calendar::compact_date("20240101").unwrap();
@@ -293,4 +297,71 @@ fn tram_departures_count_by_station() {
             ("q".into(), 1.0)
         ]
     );
+}
+
+#[test]
+fn fallback_vintage_gtfs_annualizes_over_its_own_covered_days_without_shifted_bitmaps_or_zeros() {
+    let directory = tempfile::tempdir().unwrap();
+    for (name, text) in [
+        ("routes.txt", "route_id,route_type\nr,2\n"),
+        (
+            "trips.txt",
+            "route_id,service_id,trip_id\nr,active,t1\nr,inactive,t2\n",
+        ),
+        (
+            "calendar.txt",
+            "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n\
+             active,1,0,1,0,0,0,0,20260907,20260910\n\
+             inactive,0,0,0,0,0,0,0,20260907,20260910\n",
+        ),
+        (
+            "stops.txt",
+            "stop_id,stop_lat,stop_lon\nx,50,14\ny,50.1,14.1\n",
+        ),
+        (
+            "stop_times.txt",
+            "trip_id,stop_id,stop_sequence\nt1,x,1\nt1,y,2\nt2,x,1\nt2,y,2\n",
+        ),
+    ] {
+        std::fs::write(directory.path().join(name), text).unwrap();
+    }
+    let options = super::Options {
+        identity: "fallback-feed",
+        source_id: 2066,
+        country: "PL",
+        rail_types: &[2],
+        tram_types: &[],
+        excluded_names: &[],
+        excluded_agency_names: &[],
+        ignore_feed_window: false,
+        fallback_vintage: Some("2026-09-07..2026-09-12"),
+        frozen_comparison: false,
+    };
+    let start = super::super::calendar::compact_date("20260907").unwrap();
+    let end = super::super::calendar::compact_date("20260913").unwrap();
+    let rows = super::convert(directory.path(), &options, start, end).unwrap();
+    // Inactive 0.0 trip is dropped; active trip runs 2 of 4 covered days -> 0.5/day directly,
+    // default coverage (no shifted bitmap), zero missing_calendar_estimate, stamped attribute.
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].passenger, Some(0.5));
+    assert_eq!(
+        rows[0].coverage,
+        crate::railways::coverage::Coverage::default()
+    );
+    assert_eq!(rows[0].missing_calendar_estimate, [0.0, 0.0]);
+    assert_eq!(
+        rows[0]
+            .attributes
+            .get("fallback_vintage")
+            .map(String::as_str),
+        Some("2026-09-07..2026-09-12")
+    );
+    let mut writer = Vec::new();
+    super::super::write_movement(&mut writer, rows[0].clone()).unwrap();
+    let crate::railways::movements::Record::Movement(converted) =
+        serde_json::from_slice(&writer).unwrap()
+    else {
+        panic!("not a movement")
+    };
+    assert_eq!(converted.missing_calendar_estimate, [0.0, 0.0]);
 }
