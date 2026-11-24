@@ -54,6 +54,15 @@ pub(super) struct Trains {
     pub source: [u16; 2],
 }
 
+/// Clear guessed freight and normalize its provenance to preparation's estimated-zero convention
+/// so downstream provenance never attributes zero suppressed trains to a guessed dataset.
+fn clear_guessed_freight(trains: &mut Trains) {
+    trains.freight = [0.0; PERIODS];
+    trains.missing_calendar_estimate[1] = [0.0; PERIODS];
+    trains.status[1] = STATUS_ESTIMATED;
+    trains.source[1] = 0;
+}
+
 /// Every row's trains as its run carries them, rows in table order: those of the run's
 /// length-weighted median row, with guessed freight respecting each row's freight eligibility.
 pub(super) fn run_trains(table: &Table, takes_freight: &[bool]) -> Result<Vec<Trains>, String> {
@@ -121,7 +130,13 @@ pub(super) fn run_trains(table: &Table, takes_freight: &[bool]) -> Result<Vec<Tr
             |index| rows[index].length_m,
             |index| rows[index].value,
         );
-        let median_trains = trains[median];
+        let mut median_trains = trains[median];
+        // A passenger-only (`traffic_mode == 1`) median carrying a legacy guessed freight proxy
+        // (e.g. a saved table prepared before whole-line guessed proxies were zeroed on mode-1
+        // rows) must never pass that guessed freight onto untagged neighbours in the same run.
+        if traffic_modes[median] == 1 && GUESSED_TRAIN_SOURCES.contains(&median_trains.source[1]) {
+            clear_guessed_freight(&mut median_trains);
+        }
         // A freight-eligible row joined without a switch to a longer high-speed piece whose
         // guessed freight was zeroed by speed (not `traffic_mode == 1`) takes its freight from
         // the freight-eligible rows of the run; untagged pieces inside a `traffic_mode == 1` run
@@ -149,10 +164,7 @@ pub(super) fn run_trains(table: &Table, takes_freight: &[bool]) -> Result<Vec<Tr
         for index in members {
             let mut row_trains = median_trains;
             if !takes_freight[index] && GUESSED_TRAIN_SOURCES.contains(&row_trains.source[1]) {
-                row_trains.freight = [0.0; PERIODS];
-                row_trains.missing_calendar_estimate[1] = [0.0; PERIODS];
-                row_trains.status[1] = STATUS_ESTIMATED;
-                row_trains.source[1] = 0;
+                clear_guessed_freight(&mut row_trains);
             } else if takes_freight[index]
                 && let Some(fallback) = eligible_freight_fallback
             {

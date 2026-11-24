@@ -594,3 +594,144 @@ fn expand_rows_propagates_high_speed_line_speed_into_parallel_freight_allocation
     assert_eq!(expanded[1].child.traffic.freight.periods, [20.0, 0.0, 0.0]);
     assert_eq!(expanded[2].child.traffic.freight.periods, [0.0, 0.0, 0.0]);
 }
+
+/// When `split_parent` splits a curved high-speed piece at an evidence boundary, `write::expand_rows`
+/// weighs the split child chords (matching `table_freight_eligibility` on the encoded table): a
+/// 300 km/h curve whose unsplit chord is shorter than a 200 km/h straight piece (~1000 m vs 1100 m)
+/// but whose two split chords sum longer (~1414 m) tips the line median to 300 km/h and clears
+/// guessed freight on its parallel track before allocation.
+#[test]
+fn expand_rows_uses_split_curved_child_chords_for_line_speed() {
+    use crate::railways::{
+        encode::encode_children, freight_eligibility::table_freight_eligibility,
+        square_intervals::Interval, topology::Piece,
+    };
+    use arrow_array::{
+        ArrayRef, BooleanArray, Float32Array, Int16Array, Int32Array, Int64Array, RecordBatch,
+        StringArray, UInt8Array, UInt16Array,
+    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let model = model_with_whole_line_sources();
+    let square = crate::osm::geometry::Square { x: 256, y: 256 };
+    // Row 0 (unposted LGV) parallel to Row 1 (160 km/h conventional twin).
+    let (x0, y0) = crate::osm::geometry::lonlat_to_grid(0.1, -0.1);
+    let (x1, y1) = crate::osm::geometry::lonlat_to_grid(0.102, -0.1);
+    let (px0, py0) = crate::osm::geometry::lonlat_to_grid(0.1, -0.100055);
+    let (px1, py1) = crate::osm::geometry::lonlat_to_grid(0.102, -0.100055);
+    // Row 2: straight 200 km/h piece (~1110 m, 0.010 deg lon at lat -0.2).
+    let (s0x, s0y) = crate::osm::geometry::lonlat_to_grid(0.200, -0.2);
+    let (s1x, s1y) = crate::osm::geometry::lonlat_to_grid(0.210, -0.2);
+    // Row 3: curved 300 km/h V-piece whose unsplit chord is 0.009 deg (~1000 m < 1110 m), while
+    // splitting at its apex (0.2145, -0.1955) yields two chords summing ~1414 m (> 1110 m).
+    let curve_start = [-0.2, 0.210];
+    let curve_apex = [-0.1955, 0.2145];
+    let curve_end = [-0.2, 0.219];
+    let (c0x, c0y) = crate::osm::geometry::lonlat_to_grid(curve_start[1], curve_start[0]);
+    let (c1x, c1y) = crate::osm::geometry::lonlat_to_grid(curve_end[1], curve_end[0]);
+    let half_arc = crate::osm::geometry::flat_dist(
+        curve_start[0],
+        curve_start[1],
+        curve_apex[0],
+        curve_apex[1],
+    );
+    let full_arc = half_arc * 2.0;
+
+    let batch = RecordBatch::try_from_iter([
+        (
+            "osm_id",
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+        ),
+        ("segment_idx", Arc::new(Int16Array::from(vec![0, 0, 0, 0]))),
+        (
+            "start_gx",
+            Arc::new(Int32Array::from(vec![x0, px0, s0x, c0x])),
+        ),
+        (
+            "start_gy",
+            Arc::new(Int32Array::from(vec![y0, py0, s0y, c0y])),
+        ),
+        (
+            "end_gx",
+            Arc::new(Int32Array::from(vec![x1, px1, s1x, c1x])),
+        ),
+        (
+            "end_gy",
+            Arc::new(Int32Array::from(vec![y1, py1, s1y, c1y])),
+        ),
+        (
+            "length_m",
+            Arc::new(Float32Array::from(vec![
+                220.0,
+                220.0,
+                1110.0,
+                full_arc as f32,
+            ])),
+        ),
+        ("rail_type", Arc::new(UInt8Array::from(vec![0, 0, 0, 0]))),
+        ("usage", Arc::new(UInt8Array::from(vec![0, 0, 0, 0]))),
+        ("service", Arc::new(UInt8Array::from(vec![0, 0, 0, 0]))),
+        ("traffic_mode", Arc::new(UInt8Array::from(vec![0, 0, 0, 0]))),
+        (
+            "maxspeed",
+            Arc::new(UInt16Array::from(vec![0, 160, 200, 300])),
+        ),
+        (
+            "highspeed",
+            Arc::new(BooleanArray::from(vec![true, false, true, true])),
+        ),
+        (
+            "country_iso",
+            Arc::new(UInt16Array::from(vec![u16::from_le_bytes(*b"DE"); 4])),
+        ),
+        ("ref", Arc::new(StringArray::from(vec!["", "", "", ""]))),
+        (
+            "name",
+            Arc::new(StringArray::from(vec![
+                "CurveLGV", "CurveLGV", "CurveLGV", "CurveLGV",
+            ])),
+        ),
+    ])
+    .unwrap();
+
+    let piece = Piece::new(0.0, 0.0, full_arc, vec![curve_start, curve_apex, curve_end]);
+    let pieces = HashMap::from([((4i64, 0i16), piece)]);
+    let cut_claim = Interval {
+        osm_id: 4,
+        segment_idx: 0,
+        from_m: 0.0,
+        to_m: half_arc,
+        country: *b"DE",
+        source_id: 1,
+        passenger: 50.0,
+        freight: 0.0,
+        passenger_status: 1,
+        freight_status: 0,
+        matching: 2,
+        missing_calendar_estimate: [0.0; 2],
+        stop: 0,
+        resolved_section: None,
+    };
+    let intervals = HashMap::from([((4i64, 0i16), vec![cut_claim])]);
+
+    let expanded =
+        crate::railways::write::expand_rows(&model, &batch, &intervals, &pieces, square).unwrap();
+    // Row 3 split into 2 children -> 5 expanded rows total.
+    assert_eq!(expanded.len(), 5);
+    assert!(!expanded[0].takes_guessed_freight);
+    assert!(expanded[1].takes_guessed_freight);
+    assert_eq!(expanded[0].child.traffic.freight.periods, [0.0, 0.0, 0.0]);
+    assert_eq!(expanded[1].child.traffic.freight.periods, [20.0, 0.0, 0.0]);
+
+    // Encoded table agrees bit-for-bit with preparation's `takes_guessed_freight`.
+    let encoded = encode_children(&batch, &expanded).unwrap();
+    let downstream = table_freight_eligibility(&[encoded]).unwrap();
+    assert_eq!(
+        downstream.takes_freight,
+        expanded
+            .iter()
+            .map(|row| row.takes_guessed_freight)
+            .collect::<Vec<_>>()
+    );
+}

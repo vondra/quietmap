@@ -266,7 +266,8 @@ fn run_trains_respects_freight_eligibility_across_joined_runs() {
     // Run A (rows 0-1): short mode=1 joined to long mode=0 with guessed freight (source 9793).
     // Run B (rows 2-3): short mode=1 joined to long mode=0 with observed freight (source 111).
     // Run C (rows 4-5): long 300 km/h mode=0 (0 freight) joined to short 80 km/h mode=0 (20 frt).
-    // Run D (rows 6-7): long mode=1 (0 freight) joined to short untagged mode=0 (20 frt).
+    // Run D (rows 6-7): long mode=1 with legacy guessed freight (7.5, source 9644, cal_est 2.0)
+    //                   joined to short untagged mode=0 (20 frt): neither may inherit 9644.
     let columns: Vec<(&str, ArrayRef)> = vec![
         (
             "start_gx",
@@ -295,7 +296,7 @@ fn run_trains_respects_freight_eligibility_across_joined_runs() {
         ),
         (
             "freight_source_id",
-            Arc::new(UInt16Array::from(vec![0, 9793, 0, 111, 0, 0, 0, 0])),
+            Arc::new(UInt16Array::from(vec![0, 9793, 0, 111, 0, 0, 9644, 0])),
         ),
         (
             "trains_passenger_day",
@@ -314,7 +315,7 @@ fn run_trains_respects_freight_eligibility_across_joined_runs() {
         (
             "trains_freight_day",
             Arc::new(Float64Array::from(vec![
-                0.0, 10.0, 0.0, 12.0, 0.0, 20.0, 0.0, 20.0,
+                0.0, 10.0, 0.0, 12.0, 0.0, 20.0, 7.5, 20.0,
             ])),
         ),
         (
@@ -340,7 +341,7 @@ fn run_trains_respects_freight_eligibility_across_joined_runs() {
         (
             "freight_missing_calendar_estimate_day",
             Arc::new(Float64Array::from(vec![
-                0.0, 3.0, 0.0, 4.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 3.0, 0.0, 4.0, 0.0, 0.0, 2.0, 0.0,
             ])),
         ),
         (
@@ -387,9 +388,12 @@ fn run_trains_respects_freight_eligibility_across_joined_runs() {
     assert_eq!(resolved[5].passenger[0], 60.0);
     assert_eq!(resolved[5].freight[0], 20.0);
 
-    // Run D: untagged mode=0 piece inside a passenger-only mode=1 run still inherits zero freight.
-    assert_eq!(resolved[6].passenger[0], 80.0);
-    assert_eq!(resolved[6].freight, [0.0; 3]);
-    assert_eq!(resolved[7].passenger[0], 80.0);
-    assert_eq!(resolved[7].freight, [0.0; 3]);
+    // Run D: mode=1 median carrying a legacy guessed proxy (9644) clears its guessed freight
+    // before copying, so neither the mode=1 row nor its untagged mode=0 neighbour inherits 9644.
+    for idx in [6, 7] {
+        assert_eq!(resolved[idx].passenger[0], 80.0);
+        assert_eq!(resolved[idx].freight, [0.0; 3]);
+        assert_eq!(resolved[idx].missing_calendar_estimate[1], [0.0; 3]);
+        assert_eq!((resolved[idx].status[1], resolved[idx].source[1]), (2, 0));
+    }
 }

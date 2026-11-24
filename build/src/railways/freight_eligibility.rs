@@ -13,19 +13,76 @@ use std::collections::HashMap;
 /// at night, on standard gauge no freight wagon of Japan's runs on.
 pub(crate) const HIGH_SPEED_LINE_KMH: f64 = 250.0;
 
-/// One railway piece's geometry and line identity as high-speed line speed calculation sees it.
-pub(crate) struct HighSpeedChord<'a> {
-    pub highspeed: bool,
-    pub maxspeed: u16,
-    pub name: &'a str,
-    pub reference: &'a str,
-    pub ends: [(i32, i32); 2],
-}
-
 /// Per-row guessed-freight eligibility and high-speed line speed across a square's railway batches.
 pub(crate) struct SquareFreightEligibility {
     pub takes_freight: Vec<bool>,
     pub line_speed: Vec<Option<f64>>,
+}
+
+/// Streams named high-speed pieces' posted speeds (weighted by Mercator chord length) into a
+/// zero-allocation `(name, ref)` lookup table without buffering ordinary or unposted rows.
+#[derive(Default)]
+pub(crate) struct HighSpeedSpeedAccumulator {
+    posted: HashMap<(String, String), Vec<(f64, f64)>>,
+}
+
+/// Posted km-weighted median speed of each named high-speed line in a square, borrowed by
+/// `(name, ref)` without allocating lookup strings.
+#[derive(Default)]
+pub(crate) struct HighSpeedLineSpeeds {
+    by_name: HashMap<String, Vec<(String, f64)>>,
+}
+
+impl HighSpeedSpeedAccumulator {
+    pub(crate) fn push(
+        &mut self,
+        highspeed: bool,
+        maxspeed: u16,
+        name: &str,
+        reference: &str,
+        ends: [(i32, i32); 2],
+    ) {
+        if !highspeed || maxspeed == 0 || (name.is_empty() && reference.is_empty()) {
+            return;
+        }
+        let [a, b] = ends.map(|(x, y)| z30_corner_mercator_m(x, y));
+        self.posted
+            .entry((name.to_owned(), reference.to_owned()))
+            .or_default()
+            .push((f64::from(maxspeed), (a[0] - b[0]).hypot(a[1] - b[1])));
+    }
+
+    pub(crate) fn finish(self) -> HighSpeedLineSpeeds {
+        let mut by_name: HashMap<String, Vec<(String, f64)>> = HashMap::new();
+        for ((name, reference), mut speeds) in self.posted {
+            speeds.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let half = speeds.iter().map(|(_, length)| length).sum::<f64>() / 2.0;
+            let mut length = 0.0;
+            let median = speeds
+                .iter()
+                .find(|(_, row_length)| {
+                    length += row_length;
+                    length >= half
+                })
+                .map_or(speeds[0].0, |(speed, _)| *speed);
+            by_name.entry(name).or_default().push((reference, median));
+        }
+        HighSpeedLineSpeeds { by_name }
+    }
+}
+
+impl HighSpeedLineSpeeds {
+    pub(crate) fn get(&self, name: &str, reference: &str) -> Option<f64> {
+        self.by_name
+            .get(name)?
+            .iter()
+            .find(|(r, _)| r == reference)
+            .map(|(_, speed)| *speed)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.by_name.is_empty()
+    }
 }
 
 /// Read a UTF-8 Arrow cell, treating SQL nulls as empty strings.
@@ -47,41 +104,6 @@ pub(crate) fn takes_guessed_freight(speed_kmh: f64, traffic_mode: u8) -> bool {
     }
 }
 
-/// The posted speed of each named high-speed line in a square, `(name, ref)` to the km-weighted
-/// median of its high-speed pieces that post one, measured on chord lengths in Mercator metres.
-pub(crate) fn high_speed_line_speeds_from_chords<'a>(
-    rows: impl IntoIterator<Item = HighSpeedChord<'a>>,
-) -> HashMap<(String, String), f64> {
-    let mut posted: HashMap<(String, String), Vec<(f64, f64)>> = HashMap::new();
-    for row in rows {
-        if !row.highspeed || row.maxspeed == 0 || (row.name.is_empty() && row.reference.is_empty())
-        {
-            continue;
-        }
-        let [a, b] = row.ends.map(|(x, y)| z30_corner_mercator_m(x, y));
-        posted
-            .entry((row.name.to_owned(), row.reference.to_owned()))
-            .or_default()
-            .push((f64::from(row.maxspeed), (a[0] - b[0]).hypot(a[1] - b[1])));
-    }
-    posted
-        .into_iter()
-        .map(|(line, mut speeds)| {
-            speeds.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let half = speeds.iter().map(|(_, length)| length).sum::<f64>() / 2.0;
-            let mut length = 0.0;
-            let median = speeds
-                .iter()
-                .find(|(_, row_length)| {
-                    length += row_length;
-                    length >= half
-                })
-                .map_or(speeds[0].0, |(speed, _)| *speed);
-            (line, median)
-        })
-        .collect()
-}
-
 /// Guessed-freight eligibility and high-speed line speed for one railway piece: `built_for` is the
 /// higher of its posted speed and its named high-speed line's median speed (never the default).
 pub(crate) fn row_takes_guessed_freight(
@@ -90,13 +112,11 @@ pub(crate) fn row_takes_guessed_freight(
     traffic_mode: u8,
     name: &str,
     reference: &str,
-    line_speeds: &HashMap<(String, String), f64>,
+    line_speeds: &HighSpeedLineSpeeds,
 ) -> (bool, Option<f64>) {
     let line_speed =
         if highspeed && !line_speeds.is_empty() && (!name.is_empty() || !reference.is_empty()) {
-            line_speeds
-                .get(&(name.to_owned(), reference.to_owned()))
-                .copied()
+            line_speeds.get(name, reference)
         } else {
             None
         };
@@ -109,7 +129,7 @@ pub(crate) fn row_takes_guessed_freight(
 pub(crate) fn table_freight_eligibility(
     batches: &[RecordBatch],
 ) -> Result<SquareFreightEligibility, String> {
-    let mut chords = Vec::new();
+    let mut acc = HighSpeedSpeedAccumulator::default();
     for batch in batches {
         let start_gx = downcast::<Int32Array>(batch, "start_gx")?;
         let start_gy = downcast::<Int32Array>(batch, "start_gy")?;
@@ -120,19 +140,19 @@ pub(crate) fn table_freight_eligibility(
         let names = downcast::<StringArray>(batch, "name")?;
         let refs = downcast::<StringArray>(batch, "ref")?;
         for row in 0..batch.num_rows() {
-            chords.push(HighSpeedChord {
-                highspeed: highspeed.value(row),
-                maxspeed: maxspeed.value(row),
-                name: utf8_value(names, row),
-                reference: utf8_value(refs, row),
-                ends: [
+            acc.push(
+                highspeed.value(row),
+                maxspeed.value(row),
+                utf8_value(names, row),
+                utf8_value(refs, row),
+                [
                     (start_gx.value(row), start_gy.value(row)),
                     (end_gx.value(row), end_gy.value(row)),
                 ],
-            });
+            );
         }
     }
-    let line_speeds = high_speed_line_speeds_from_chords(chords);
+    let line_speeds = acc.finish();
     let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
     let mut takes_freight = Vec::with_capacity(total_rows);
     let mut line_speed = Vec::with_capacity(total_rows);
@@ -199,23 +219,10 @@ mod tests {
         // One straight 200 km/h piece (length 1100 in z30) vs a 300 km/h curve whose unsplit
         // chord is 1000 (< 1100 -> median 200) while its two split chords sum to 2 * 707 = 1414
         // (> 1100 -> median 300).
-        let unsplit = high_speed_line_speeds_from_chords([
-            HighSpeedChord {
-                highspeed: true,
-                maxspeed: 200,
-                name: "CurveLine",
-                reference: "",
-                ends: [(0, 0), (1100, 0)],
-            },
-            HighSpeedChord {
-                highspeed: true,
-                maxspeed: 300,
-                name: "CurveLine",
-                reference: "",
-                ends: [(1100, 0), (2100, 0)],
-            },
-        ]);
-        assert_eq!(unsplit[&("CurveLine".into(), String::new())], 200.0);
+        let mut unsplit = HighSpeedSpeedAccumulator::default();
+        unsplit.push(true, 200, "CurveLine", "", [(0, 0), (1100, 0)]);
+        unsplit.push(true, 300, "CurveLine", "", [(1100, 0), (2100, 0)]);
+        assert_eq!(unsplit.finish().get("CurveLine", ""), Some(200.0));
 
         let batch = RecordBatch::try_from_iter([
             (

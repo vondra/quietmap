@@ -2,7 +2,7 @@
 
 use super::encode::{CONTRACT_KEY, Expanded, encode_children};
 use super::freight_eligibility::{
-    HighSpeedChord, high_speed_line_speeds_from_chords, row_takes_guessed_freight, utf8_value,
+    HighSpeedSpeedAccumulator, row_takes_guessed_freight, utf8_value,
 };
 use super::merge::class_prior;
 use super::parallel_tracks::allocate_over_parallel_tracks;
@@ -206,17 +206,19 @@ pub(super) fn expand_rows(
     }
     // Compute high-speed line speeds on expanded child chords so preparation, the national
     // train-scale fit and the source emitter agree bit-for-bit on freight eligibility.
-    let line_speeds = high_speed_line_speeds_from_chords(expanded.iter().map(|row| {
+    let mut speeds = HighSpeedSpeedAccumulator::default();
+    for row in &expanded {
         let parent = row.parent as usize;
         let geom = row.child.geom;
-        HighSpeedChord {
-            highspeed: highspeed.value(parent),
-            maxspeed: maxspeed.value(parent),
-            name: utf8_value(names, parent),
-            reference: utf8_value(refs, parent),
-            ends: [(geom.start_gx, geom.start_gy), (geom.end_gx, geom.end_gy)],
-        }
-    }));
+        speeds.push(
+            highspeed.value(parent),
+            maxspeed.value(parent),
+            utf8_value(names, parent),
+            utf8_value(refs, parent),
+            [(geom.start_gx, geom.start_gy), (geom.end_gx, geom.end_gy)],
+        );
+    }
+    let line_speeds = speeds.finish();
     for row in &mut expanded {
         let parent = row.parent as usize;
         row.takes_guessed_freight = row_takes_guessed_freight(
