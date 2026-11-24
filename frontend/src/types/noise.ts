@@ -259,6 +259,26 @@ export interface PopupPiece {
  *  then the tree crowns in calm air and downwind. */
 export type RayTerms = [number, number, number, number, number, number, number, number]
 
+export type UnmodelledSiteKind =
+  | 'military_range'
+  | 'military_training_area'
+  | 'military_danger_area'
+
+/** A nearby mapped source whose noise is not included in the modelled level (an active military
+ *  firing range, training area or danger area within notification distance). */
+export interface UnmodelledSite {
+  /** Stable 16-hex outline id (matches `/api/source-outline/:id`). */
+  id: string
+  source_type: string
+  kind: UnmodelledSiteKind
+  name: string
+  /** True strictly when the click stands inside the site polygon (outside any inner hole). */
+  inside: boolean
+  /** Horizontal distance to the nearest boundary edge in metres (0 when inside, >= 1 outside). */
+  distance_m: number
+  area_m2: number
+}
+
 export interface PopupUpdate {
   seq: number
   /** True until every ring within the reach is read: the numbers shown are valid, but still refined. */
@@ -278,6 +298,9 @@ export interface PopupUpdate {
   top_contributors: Contributor[]
   /** The loudest flights by Lmax, loudest first; empty when no aircraft are heard. */
   top_flights: TopFlight[]
+  /** Nearby unmodelled industrial annotations (active military ranges / training areas) within
+   *  notification distance; omitted when none lie within reach. */
+  unmodelled?: UnmodelledSite[]
   /** With the final update only. */
   percentiles?: PopupPercentiles | null
   loudness?: PopupLoudness | null

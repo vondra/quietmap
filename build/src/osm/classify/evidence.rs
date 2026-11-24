@@ -41,9 +41,23 @@ pub fn keep_model_tag(family: &FeatureType, key: &str) -> bool {
             key.starts_with("generator:")
                 || key.starts_with("plant:")
                 || lifecycle_key(key)
+                || military_lifecycle_key(key)
                 || matches!(
                     key,
-                    "power" | "substation" | "voltage" | "rating" | "transformer"
+                    "power"
+                        | "substation"
+                        | "voltage"
+                        | "rating"
+                        | "transformer"
+                        | "military"
+                        | "access"
+                        | "hazard"
+                        | "boundary"
+                        | "area"
+                        | "indoor"
+                        | "building"
+                        | "seamark:type"
+                        | "end_date"
                 )
         }
         FeatureType::Building => {
@@ -72,6 +86,138 @@ fn lifecycle_key(key: &str) -> bool {
     ]
     .iter()
     .any(|prefix| key == *prefix || key.strip_prefix(prefix).is_some_and(|s| s.starts_with(':')))
+}
+
+const MILITARY_LIFECYCLE_PREFIXES: &[&str] = &[
+    "disused",
+    "abandoned",
+    "historic",
+    "razed",
+    "demolished",
+    "construction",
+    "proposed",
+    "was",
+    "former",
+    "removed",
+    "ruins",
+    "destroyed",
+];
+
+fn military_lifecycle_key(key: &str) -> bool {
+    MILITARY_LIFECYCLE_PREFIXES.iter().any(|prefix| {
+        key == *prefix || key.strip_prefix(prefix).is_some_and(|s| s.starts_with(':'))
+    })
+}
+
+fn truthy_tag(value: &str) -> bool {
+    !matches!(value, "no" | "false" | "0" | "")
+}
+
+/// True for the existing emitting industrial, power, quarry, farmyard, landfill, port and rail-yard
+/// tags that must retain their emitting path even when co-tagged with `military=*`.
+pub fn is_emitting_industrial<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
+    matches!(
+        tag("landuse"),
+        Some("industrial" | "quarry" | "farmyard" | "landfill" | "port" | "harbour")
+    ) || is_railway_yard(&tag)
+        || matches!(tag("man_made"), Some("works" | "wastewater_plant"))
+        || is_power_or_inactive_industry(&tag)
+        || is_turbine(&tag)
+}
+
+fn is_military_range_value(value: &str) -> bool {
+    matches!(value, "range" | "training_area" | "danger_area")
+}
+
+const MILITARY_LIFECYCLE_KEYS: [&str; 12] = [
+    "disused:military",
+    "abandoned:military",
+    "historic:military",
+    "razed:military",
+    "demolished:military",
+    "construction:military",
+    "proposed:military",
+    "was:military",
+    "former:military",
+    "removed:military",
+    "ruins:military",
+    "destroyed:military",
+];
+
+/// True when any active or lifecycle-prefixed military firing/training/danger tag is present, so a
+/// military range (active, disused, non-firing or node) never falls through to the civilian 20,000
+/// shots/yr shooting emitter.
+pub fn has_military_shooting_veto_lookup<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
+    tag("military").is_some_and(is_military_range_value)
+        || MILITARY_LIFECYCLE_KEYS
+            .iter()
+            .any(|key| tag(key).is_some_and(is_military_range_value))
+}
+
+pub fn has_military_shooting_veto<'a>(tags: &[(&'a str, &'a str)]) -> bool {
+    has_military_shooting_veto_lookup(|key| tags.iter().find(|&&(k, _)| k == key).map(|&(_, v)| v))
+}
+
+fn has_military_inactive_tag<'a>(tags: &[(&'a str, &'a str)]) -> bool {
+    tags.iter().any(|&(k, v)| {
+        if k == "end_date" {
+            return truthy_tag(v);
+        }
+        if let Some((prefix, feature)) = k.split_once(':') {
+            return MILITARY_LIFECYCLE_PREFIXES.contains(&prefix)
+                && matches!(feature, "military" | "landuse")
+                && truthy_tag(v);
+        }
+        matches!(
+            k,
+            "disused" | "abandoned" | "ruins" | "razed" | "demolished" | "historic"
+        ) && truthy_tag(v)
+    })
+}
+
+/// One universal admission rule for active open-air military firing ranges, training areas and
+/// danger areas: keeps real land ranges, drops barracks/bases/bunkers/bare `landuse=military`,
+/// inactive/lifecycle ranges, roofed buildings, offshore sea boxes, and non-firing UXO/minefield/
+/// nuclear/buffer-zone overlays.
+pub fn is_active_military_range<'a>(tags: &[(&'a str, &'a str)]) -> bool {
+    let tag = |key: &str| tags.iter().find(|&&(k, _)| k == key).map(|&(_, v)| v);
+    let Some(military) = tag("military").filter(|v| is_military_range_value(v)) else {
+        return false;
+    };
+    if is_emitting_industrial(tag) || has_military_inactive_tag(tags) {
+        return false;
+    }
+    if tag("building").is_some_and(|v| v != "no")
+        || tag("indoor").is_some_and(|v| v != "no")
+        || tag("area") == Some("no")
+        || tag("seamark:type").is_some()
+    {
+        return false;
+    }
+    let firing_hazard = matches!(
+        tag("hazard"),
+        Some("shooting_range" | "firing_range" | "firing" | "shooting")
+    );
+    if let Some(hazard) = tag("hazard")
+        && !firing_hazard
+        && hazard != "yes"
+    {
+        return false;
+    }
+    if military == "danger_area" {
+        match tag("boundary") {
+            Some("protected_area" | "military") => return false,
+            Some("hazard") if !firing_hazard => return false,
+            Some("civil") if tag("landuse") != Some("military") => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+pub fn is_active_military_range_map(tags: &Tags) -> bool {
+    let pairs: Vec<(&str, &str)> = tags.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    is_active_military_range(&pairs)
 }
 
 /// The building itself is power infrastructure, rather than hosting a generator.
@@ -146,6 +292,9 @@ pub fn industrial_class(tags: &Tags) -> Option<u8> {
         || (tag("power") != Some("plant") && tag("generator:source") == Some("solar"))
     {
         return Some(13);
+    }
+    if is_active_military_range_map(tags) {
+        return Some(physics::emission::industrial::SOURCE_MILITARY_RANGE);
     }
     None
 }

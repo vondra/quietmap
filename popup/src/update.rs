@@ -118,6 +118,8 @@ pub struct Update<'u> {
     pub rows: Vec<crate::rows::Row>,
     /// The loudest flights so far.
     pub flights: Vec<LoudFlight>,
+    /// Nearby unmodelled sites (active military ranges / training areas) within notification reach.
+    pub unmodelled: &'u [tiles::unmodelled::NearbySite],
     /// The asked source's loudest pieces, loudest first, and how all of it arrives (final update,
     /// when asked for).
     pub pieces: Vec<EvaluatedPiece>,
@@ -212,6 +214,7 @@ pub fn empty_answer(
     ground: &Ground,
     click: BuildingClick,
     selections: &[LayerSelection],
+    unmodelled: &[tiles::unmodelled::NearbySite],
     (reads, bytes, read_seconds, started): (usize, u64, f64, std::time::Instant),
     emit: &mut dyn FnMut(&Update) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -235,6 +238,7 @@ pub fn empty_answer(
         layers: layer_answers(selections),
         rows: Vec::new(),
         flights: Vec::new(),
+        unmodelled,
         pieces: Vec::new(),
         arrival: None,
         statistics: Statistics {

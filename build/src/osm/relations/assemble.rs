@@ -5,6 +5,8 @@ use super::*;
 /// Accumulates way geometries for relation assembly.
 pub struct AssembledRelation {
     pub rings: Vec<Vec<[f64; 2]>>,
+    /// Closed inner hole rings assigned to each outer ring (parallel to `rings`).
+    pub holes_per_ring: Vec<Vec<Vec<[f64; 2]>>>,
     pub tags: Tags,
     pub feature_types: Vec<FeatureType>,
 }
@@ -56,13 +58,16 @@ impl RelationAssembler {
     pub fn assemble(&self, rel_id: i64, manifest: &RelationManifest) -> Option<AssembledRelation> {
         let info = manifest.relations.get(&rel_id)?;
 
-        // Collect outer rings' coordinates
+        // Collect outer and inner rings' coordinates
         let mut outer_coords: Vec<Vec<[f64; 2]>> = Vec::new();
+        let mut inner_coords: Vec<Vec<[f64; 2]>> = Vec::new();
         for (way_id, role) in &info.member_ways {
-            if (role == "outer" || role.is_empty())
-                && let Some(coords) = self.way_geoms.get(way_id)
-            {
-                outer_coords.push(coords.clone());
+            if let Some(coords) = self.way_geoms.get(way_id) {
+                if role == "outer" || role.is_empty() {
+                    outer_coords.push(coords.clone());
+                } else if role == "inner" {
+                    inner_coords.push(coords.clone());
+                }
             }
         }
 
@@ -70,14 +75,27 @@ impl RelationAssembler {
             return None;
         }
 
-        // Try to merge outer ways into a single ring
+        // Try to merge outer ways into rings, and assign each closed inner hole to its outer ring.
         let merged = merge_outer_rings(outer_coords);
         if merged.is_empty() {
             return None;
         }
+        let mut holes_per_ring: Vec<Vec<Vec<[f64; 2]>>> = vec![Vec::new(); merged.len()];
+        for inner in merge_outer_rings(inner_coords) {
+            if !crate::osm::classify::is_a_closed_ring(&inner) {
+                continue;
+            }
+            if let Some(host) = merged
+                .iter()
+                .position(|outer| ring_contains_latlon(outer, inner[0]))
+            {
+                holes_per_ring[host].push(inner);
+            }
+        }
 
         Some(AssembledRelation {
             rings: merged,
+            holes_per_ring,
             tags: info.tags.clone(),
             feature_types: info.feature_types.clone(),
         })
@@ -152,4 +170,27 @@ pub(super) fn merge_outer_rings(ways: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> 
         rings.push(ring);
     }
     rings
+}
+
+/// Ray-cast containment in `[lat, lon]` order with longitude wrapped around the ring's first point.
+fn ring_contains_latlon(ring: &[[f64; 2]], point: [f64; 2]) -> bool {
+    if ring.len() < 3 {
+        return false;
+    }
+    let reference = ring[0][1];
+    let px = reference + crate::osm::geometry::wrapped_longitude_delta(reference, point[1]);
+    let py = point[0];
+    let mut inside = false;
+    let mut j = ring.len() - 1;
+    for i in 0..ring.len() {
+        let xi = reference + crate::osm::geometry::wrapped_longitude_delta(reference, ring[i][1]);
+        let yi = ring[i][0];
+        let xj = reference + crate::osm::geometry::wrapped_longitude_delta(reference, ring[j][1]);
+        let yj = ring[j][0];
+        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }

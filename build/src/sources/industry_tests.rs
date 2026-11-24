@@ -12,6 +12,7 @@ fn row(source_type: u8) -> IndustrialRow {
         name: String::new(),
         rated_power_kw: None,
         ring: Vec::new(),
+        holes: Vec::new(),
         area_m2: Some(46_710.0),
         nace: None,
         tags: Tags::new(),
@@ -230,4 +231,29 @@ fn retired_industrial_wind_parameters_cannot_change_the_independent_turbine_emis
             );
         }
     }
+}
+
+#[test]
+fn military_range_emits_nothing_and_does_not_suppress_residential_buildings() {
+    let (x, y) = (1 << 29, 1 << 29);
+    let ring = vec![
+        (x - 1_000, y - 1_000),
+        (x + 1_000, y - 1_000),
+        (x + 1_000, y + 1_000),
+        (x - 1_000, y + 1_000),
+    ];
+    let range = IndustrialRow {
+        ring: ring.clone(),
+        ..tagged(
+            SOURCE_MILITARY_RANGE,
+            r#"{"landuse":"military","military":"training_area"}"#,
+        )
+    };
+    assert_eq!(emission(&range), None);
+    let outlines = site_outlines_from_rows(vec![range]);
+    assert_eq!(outlines.containing((x, y)), None);
+
+    let factory = IndustrialRow { ring, ..row(3) };
+    let factory_outlines = site_outlines_from_rows(vec![factory]);
+    assert!(factory_outlines.containing((x, y)).is_some());
 }

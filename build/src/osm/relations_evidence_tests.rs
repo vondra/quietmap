@@ -79,3 +79,40 @@ fn outer_parts_and_reversed_members_survive() {
     assert_eq!(rings[0].len(), 4);
     assert_eq!(rings[1], vec![d, e, f, d]);
 }
+
+#[test]
+fn inner_holes_are_merged_and_assigned_to_their_containing_outer_ring() {
+    let outer = vec![[0., 0.], [0., 10.], [10., 10.], [10., 0.], [0., 0.]];
+    let hole_a = vec![[2., 2.], [2., 4.], [4., 4.]];
+    let hole_b = vec![[4., 4.], [4., 2.], [2., 2.]];
+    let manifest = RelationManifest {
+        relations: HashMap::from([(
+            77,
+            RelationInfo {
+                feature_types: vec![FeatureType::Industrial],
+                tags: Tags::new(),
+                member_ways: vec![
+                    (1, "outer".into()),
+                    (2, "inner".into()),
+                    (3, "inner".into()),
+                ],
+            },
+        )]),
+        way_to_relations: HashMap::from([
+            (1, vec![(77, "outer".into())]),
+            (2, vec![(77, "inner".into())]),
+            (3, vec![(77, "inner".into())]),
+        ]),
+    };
+    let mut assembler = RelationAssembler::new(&manifest);
+    assert!(assembler.add_way(1, outer, &manifest).is_empty());
+    assert!(assembler.add_way(2, hole_a, &manifest).is_empty());
+    assert_eq!(assembler.add_way(3, hole_b, &manifest), vec![77]);
+    let relation = assembler.assemble(77, &manifest).unwrap();
+    assert_eq!(relation.rings.len(), 1);
+    assert_eq!(relation.holes_per_ring.len(), 1);
+    assert_eq!(relation.holes_per_ring[0].len(), 1);
+    assert!(crate::osm::classify::is_a_closed_ring(
+        &relation.holes_per_ring[0][0]
+    ));
+}

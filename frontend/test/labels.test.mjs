@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { aircraftKindShares, contributorLabel, labelNamesClass, partLabel, subtypeLabel } from '../src/components/noise/labels.ts'
+import { aircraftKindShares, contributorLabel, labelNamesClass, partLabel, subtypeLabel, unmodelledKindLabel, unmodelledLabel } from '../src/components/noise/labels.ts'
 
 const road = (name, metadata) => ({
   id: 'r', source_type: 'road', name, subtype: 'tertiary', distance_m: 38,
@@ -61,4 +61,16 @@ test('a part reads as what makes its sound: a building\'s bells or guests, anoth
   assert.equal(partLabel('building', null, 'Jungmannova 15'), 'Building')
   assert.equal(partLabel('building', { building_type: 'kitchen_extract', name: 'Jungmannova 15' }, 'Jungmannova 15'), 'Kitchen extract')
   assert.equal(partLabel('building', { building_type: 'restaurant_bar', name: 'Jungmannova 15' }, 'Jungmannova 15'), 'Building')
+})
+
+test('an unmodelled military site reads as its name, else its active kind', () => {
+  assert.equal(unmodelledLabel({
+    id: '0123456789abcdef', source_type: 'industrial', kind: 'military_training_area',
+    name: 'Fixture Training Area', inside: false, distance_m: 80, area_m2: 34_200_000,
+  }), 'Fixture Training Area')
+  assert.equal(unmodelledLabel({
+    id: '0123456789abcdef', source_type: 'industrial', kind: 'military_range',
+    name: '', inside: true, distance_m: 0, area_m2: 500_000,
+  }), 'Military firing range')
+  assert.equal(unmodelledKindLabel('military_danger_area'), 'Military danger area')
 })

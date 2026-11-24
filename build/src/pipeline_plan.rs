@@ -273,6 +273,7 @@ pub(crate) fn steps() -> Vec<Step> {
             true,
         ),
         ("source-outlines", &["facilities"], None, Some(2), false),
+        ("unmodelled-sites", &["facilities"], None, Some(2), false),
         (
             "aircraft-boxes",
             &["aircraft-shuffle", "terrain", "weather"],

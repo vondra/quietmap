@@ -65,5 +65,77 @@ for (const display of [
       await expect.poll(shade).toBeLessThan(10)
       await expect(page.getByTestId('noise-badge').filter({ visible: true })).toHaveText('15 sone Nden')
     })
+
+    test('nearby unmodelled ranges show with null and non-null levels and draw their outline on open', async ({ page }) => {
+      await installHermeticMap(page, POINT)
+      const rangeId = '1234567890abcdef'
+      const { lat, lng } = POINT
+      const outline = {
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', properties: {}, geometry: {
+          type: 'Polygon', coordinates: [[[lng - 0.05, lat - 0.05], [lng + 0.05, lat - 0.05],
+            [lng + 0.05, lat + 0.05], [lng - 0.05, lat + 0.05], [lng - 0.05, lat - 0.05]]],
+        } }],
+      }
+      let requests = 0
+      await page.route('**/api/source-outline/**', async route => {
+        expect(new URL(route.request().url()).pathname).toBe(`/api/source-outline/${rangeId}`)
+        requests++
+        await route.fulfill({ json: outline }).catch(() => {})
+      })
+      await page.goto(mapUrl(POINT))
+      const { x, y } = await canvasCenter(page)
+      await page.mouse.click(x, y)
+
+      // Null-level update (including a building with no exposed facade) still displays the
+      // unmodelled range and draws its outline.
+      const silent = popupUpdate(1, false, lat, lng, SOURCE_DB)
+      silent.total_lden = null
+      silent.total = { ld: null, le: null, ln: null, lden: null }
+      silent.loudness = null
+      silent.building = { id: 'b1', height_m: 12, floor: 2, facade: null }
+      silent.top_contributors = []
+      silent.unmodelled = [
+        {
+          id: rangeId,
+          source_type: 'industrial',
+          kind: 'military_training_area',
+          name: 'Fixture Northern Artillery Training Area',
+          inside: false,
+          distance_m: 80,
+          area_m2: 34_200_000,
+        },
+        {
+          id: 'abcdef1234567890',
+          source_type: 'industrial',
+          kind: 'military_range',
+          name: '',
+          inside: true,
+          distance_m: 0,
+          area_m2: 120_000,
+        },
+      ]
+      await sendPopupLine(page, silent)
+      await endPopup(page)
+
+      const section = page.getByTestId('unmodelled-section').filter({ visible: true })
+      await expect(section).toBeVisible()
+      await expect(section).toContainText('Not in the level')
+      const rangeRow = section.getByRole('button', { name: /Fixture Northern Artillery Training Area/ })
+      await expect(rangeRow).toContainText('80 m')
+      const insideRow = section.getByRole('button', { name: /Military firing range/ })
+      await expect(insideRow).toContainText('Inside')
+      const shade = async () => (await pngCenterPixel(page,
+        await page.screenshot({ clip: { x: x + 60, y: y - 60, width: 1, height: 1 } })))[0]
+      await expect.poll(shade).toBeLessThan(10)
+      await rangeRow.click()
+      await expect.poll(() => requests).toBe(1)
+      await expect.poll(shade).toBeGreaterThan(50)
+      await expect(section).toContainText('Military training area')
+      await expect(section).toContainText('34.2 km²')
+      await expect(section).toContainText('Firing and blast noise is not included in the level.')
+      await rangeRow.click()
+      await expect.poll(shade).toBeLessThan(10)
+    })
   })
 }

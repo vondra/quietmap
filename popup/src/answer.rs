@@ -140,6 +140,7 @@ pub fn answer(
     let mut terrain_rings = 0;
     let weather_started = std::time::Instant::now();
     let weather = physics::weather::read_place(&release.weather_path, lat, lon)?;
+    let unmodelled = tiles::unmodelled::query_file(&release.unmodelled_path, lat, lon)?;
     let weather_read_seconds = weather_started.elapsed().as_secs_f64();
     let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
     // The yearly atmosphere of each square the rolls heard start in, as the boxes take theirs.
@@ -322,6 +323,7 @@ pub fn answer(
                 &ground,
                 click,
                 &selections,
+                &unmodelled,
                 (reads, bytes, read_seconds, started),
                 emit,
             );
@@ -729,6 +731,7 @@ pub fn answer(
             layers,
             rows,
             flights: listed_flights,
+            unmodelled: &unmodelled,
             pieces,
             arrival,
             statistics: Statistics {

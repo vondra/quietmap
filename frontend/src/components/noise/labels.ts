@@ -1,6 +1,20 @@
 // What a contributor is called in the popup: layer and class words, the contributor's label, and
 // what the aircraft layer is made of.
-import type { AircraftKind, Contributor } from '../../types/noise'
+import type { AircraftKind, Contributor, UnmodelledSite } from '../../types/noise'
+
+export const UNMODELLED_LABELS: Record<string, string> = {
+  military_range: 'Military firing range',
+  military_training_area: 'Military training area',
+  military_danger_area: 'Military danger area',
+}
+
+export function unmodelledKindLabel(kind: string): string {
+  return UNMODELLED_LABELS[kind] ?? kind.replace(/_/g, ' ')
+}
+
+export function unmodelledLabel(site: UnmodelledSite): string {
+  return site.name || unmodelledKindLabel(site.kind)
+}
 
 export const SOURCE_LABELS: Record<string, string> = {
   road: 'Roads',

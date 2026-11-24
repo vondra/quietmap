@@ -20,6 +20,7 @@ fn node_settlement_kind<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> O
     let mut outdoor_seating = None;
     let mut access = None;
     let mut sport = None;
+    let mut military_shooting_veto = false;
     for (k, v) in tags {
         match k {
             "amenity" => amenity = Some(v),
@@ -31,6 +32,9 @@ fn node_settlement_kind<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> O
             "access" => access = Some(v),
             "sport" => sport = Some(v),
             _ => {}
+        }
+        if !military_shooting_veto && super::has_military_shooting_veto(&[(k, v)]) {
+            military_shooting_veto = true;
         }
     }
     // Leisure-area node (own footprint) takes priority over the join POI: a
@@ -47,7 +51,13 @@ fn node_settlement_kind<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> O
     .into_iter()
     .flatten()
     .collect();
-    if is_leisure_area(&leisure_tags) {
+    let shooting_node = super::special_leisure_class(|key| {
+        leisure_tags
+            .iter()
+            .find(|&&(k, _)| k == key)
+            .map(|&(_, v)| v)
+    }) == Some(11);
+    if is_leisure_area(&leisure_tags) && !(military_shooting_veto && shooting_node) {
         return Some(FeatureType::Leisure);
     }
     // Function POI for the join — only if some key carries a noise-relevant value.
@@ -200,6 +210,15 @@ mod tests {
         assert_eq!(
             kept.get("shooting:range").map(String::as_str),
             Some("indoor")
+        );
+        // Military firing range nodes co-tagged sport=shooting must never emit 20,000 civilian shots.
+        assert_eq!(
+            node_settlement_kind([("military", "range"), ("sport", "shooting")].into_iter()),
+            None
+        );
+        assert_eq!(
+            node_settlement_kind([("was:military", "range"), ("sport", "shooting")].into_iter()),
+            None
         );
     }
 

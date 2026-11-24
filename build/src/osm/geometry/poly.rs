@@ -12,11 +12,20 @@ pub type GridRing = Vec<(i32, i32)>;
 
 /// Encode a ring to the `geom` column form.
 pub fn encode_grid_poly(ring: &[(i32, i32)]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + ring.len() * 8);
-    out.extend_from_slice(&(ring.len() as u32).to_le_bytes());
-    for &(gx, gy) in ring {
-        out.extend_from_slice(&gx.to_le_bytes());
-        out.extend_from_slice(&gy.to_le_bytes());
+    encode_grid_poly_with_holes(ring, &[])
+}
+
+/// Encode an outer ring and optional inner hole rings as concatenated `(u32 n, (i32 gx, i32 gy)[n])`
+/// blocks; with zero holes this is byte-identical to [`encode_grid_poly`].
+pub fn encode_grid_poly_with_holes(outer: &[(i32, i32)], holes: &[Vec<(i32, i32)>]) -> Vec<u8> {
+    let total_pts = outer.len() + holes.iter().map(Vec::len).sum::<usize>();
+    let mut out = Vec::with_capacity((1 + holes.len()) * 4 + total_pts * 8);
+    for ring in std::iter::once(outer).chain(holes.iter().map(Vec::as_slice)) {
+        out.extend_from_slice(&(ring.len() as u32).to_le_bytes());
+        for &(gx, gy) in ring {
+            out.extend_from_slice(&gx.to_le_bytes());
+            out.extend_from_slice(&gy.to_le_bytes());
+        }
     }
     out
 }

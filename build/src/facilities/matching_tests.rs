@@ -185,3 +185,13 @@ fn overlapping_footprints_with_different_country_ownership_are_not_duplicates() 
         );
     }
 }
+
+#[test]
+fn military_range_inside_factory_cannot_steal_point_observation() {
+    let factory = area(0.1, 0);
+    let range = area(0.01, physics::emission::industrial::SOURCE_MILITARY_RANGE);
+    let mut sites = vec![factory, range];
+    classify(&mut sites, &[observation(2410)]);
+    assert_eq!(sites[0].activity, 2410);
+    assert_eq!(sites[1].activity, 0);
+}
