@@ -2,9 +2,13 @@
 // the map (IsochronLayer) by the server's router. While an area is shown, changing its minutes or mode
 // redraws it at its own origin; another clicked point is offered explicitly as "From here".
 import { useState } from 'react'
-import type { ReachOptions, ReachRequest } from '../lib/url-state'
-import { CheckChip } from './ui/check-chip'
+import type { ReachMode, ReachOptions, ReachRequest } from '../lib/url-state'
 import { PRIMARY_BUTTON } from './ui/button'
+
+const MODES: { id: ReachMode; label: string }[] = [
+  { id: 'walk', label: 'Walk' },
+  { id: 'car', label: 'Car' },
+]
 
 export default function IsochronPanel({ at, from, atOtherPlace, options, onChange, onShow, busy, error }: {
   at: { lat: number; lng: number }
@@ -53,8 +57,21 @@ export default function IsochronPanel({ at, from, atOtherPlace, options, onChang
         {from && <span data-testid="isochron-origin" className="ml-auto min-w-0 truncate text-xs text-muted-foreground">from {from}</span>}
       </div>
       <div className="flex items-center gap-2">
-        <CheckChip checked={mode === 'walk'} label="Walk" onToggle={() => onChange({ ...options, mode: 'walk' })} />
-        <CheckChip checked={mode === 'car'} label="Car" onToggle={() => onChange({ ...options, mode: 'car' })} />
+        <div role="group" aria-label="Travel mode" data-testid="isochron-mode" className="inline-flex gap-0.5 rounded-md bg-muted p-0.5">
+          {MODES.map(choice => (
+            <button
+              key={choice.id}
+              type="button"
+              aria-pressed={mode === choice.id}
+              onClick={() => onChange({ ...options, mode: choice.id })}
+              className={`h-7 rounded-[5px] px-3 text-sm font-medium transition-colors ${mode === choice.id
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
         <button type="button" className={`${PRIMARY_BUTTON} ml-auto`} disabled={busy || minutes < 1} onClick={() => onShow({ ...at, ...options })}>
           {busy ? 'Drawing…' : atOtherPlace ? 'From here' : 'Show area'}
         </button>
