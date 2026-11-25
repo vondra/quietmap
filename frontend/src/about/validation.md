@@ -49,6 +49,37 @@ In Zurich, the four points use the mast positions in [Empa's survey, table 12](h
 Three fall on buildings, where the map uses a façade. The airport's [December 2024 bulletin](https://media.flughafen-zuerich.ch/-/jssmedia/airport/portal/dokumente/das-unternehmen/politics-and-responsibility/noise-and-sound-insulation/2412_lrmbulletin_dezember.pdf)
 shows the sites and lists 9 to 12 months of daytime readings per mast during equipment replacement.
 
+## Loud flights
+
+At Hunters Hill the microphone counted nearly three times as many loud flights as the map
+estimated. At St Peters the annual counts were close. The table gives flights per day reaching
+70 dB outdoors from September 2025 through August 2026. Open a neighbourhood to see its
+**Flights a day** table.
+
+| Sydney neighbourhood | Map | Microphone |
+|---|---:|---:|
+| [Hunters Hill](/#lat=-33.832806&lng=151.147197&z=15&d=-33.832806,151.147197&popup=%7B%22rest%22%3Atrue%2C%22aircraft%22%3Atrue%7D) | 23 | 67.2 |
+| [St Peters](/#lat=-33.912863&lng=151.176991&z=15&d=-33.912863,151.176991&popup=%7B%22rest%22%3Atrue%2C%22aircraft%22%3Atrue%7D) | 107 | 110.6 |
+| [Eastlakes](/#lat=-33.9324&lng=151.2084&z=15&d=-33.9324,151.2084&popup=%7B%22rest%22%3Atrue%2C%22aircraft%22%3Atrue%7D) | 78 | 63.1 |
+
+The map counted fewer loud flights at 11 of the 12 Sydney monitors. We included all four
+reported categories (arrivals, departures, training and other operations) and divided by all 365 days,
+including days with no recorded event. [Airservices Australia’s Sydney neighbourhood map](https://myneighbourhood.emsbk.com/syd5/).
+
+At one Mexico City address the grid estimates 141 loud flights a day. Calculating the peak of
+each tracked flight at the address gives 57. [Open the address on the map](/#lat=19.3940679&lng=-99.1378784&z=15&d=19.3940679,-99.1378784&popup=%7B%22rest%22%3Atrue%2C%22aircraft%22%3Atrue%7D).
+[How the grid works](/about/noise-at-a-point#what-the-popup-shows).
+
+On a first-floor terrace in Lisbon the median landing peak was 91.9 dB. The modeled peaks
+were typically 4.6 dB lower. Of 1,584 matched landings, 1,582 reached 70 dB at the microphone
+and all 1,584 did in the model. Of 1,409 matched takeoffs, 1,287 reached 70 dB at the
+microphone and 1,406 in the model. The median absolute difference for takeoffs was 3.2 dB.
+
+We matched aircraft identifiers and times on ten dates in July and August 2026. The Type 2
+meter used FAST time weighting and sat in a perforated enclosure. The operator reports agreement
+within 1–2 dB with two other meters. The reference calibration took place in a new enclosure in October.
+[Data and instrument details from Lisbon Finals (CC BY 4.0)](https://www.lisbonfinals.com/research.html).
+
 ## Railway noise
 
 Bruitparif could distinguish trains from other sound at 23 of its 26 sites. It analysed one day
