@@ -10,8 +10,8 @@ import type { Metric } from '../lib/hm3-decoder'
 import { History, Search, UserRound } from 'lucide-react'
 import PlaceRow from './PlaceRow'
 import { FLOATING } from './ui/button'
-import { placeLabel, samePlace, titleAt, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
-import { coordinateSuggestions, MAX_LATITUDE, type SearchResult } from '../lib/coordinates'
+import { historyPoint, levelsAt, placeLabel, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
+import { coordinateSuggestions, MAX_LATITUDE, samePoint, type SearchResult } from '../lib/coordinates'
 
 type Point = { lat: number; lng: number }
 
@@ -65,8 +65,8 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
   const listRef = useRef<HTMLUListElement>(null)
 
   /** A place's name, and where it is: the rest of its geocoded name, or all of it under a given name. */
-  const described = (at: Point, place: string | null) => {
-    const given = titleAt(titles, at)?.title ?? null
+  const described = (at: Point, place: string | null, destination = historyPoint(titles, at)) => {
+    const given = destination.title ?? null
     const label = placeLabel(place)
     return {
       at,
@@ -229,23 +229,26 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
             }}
           >
             <ul ref={listRef} id="search-list" role="listbox" aria-label="Places" className="overflow-y-auto overscroll-contain" style={{ maxHeight: room }}>
-              {places.map((place, k) => (
-                <li key={keyOf(place)} id={`search-option-${k}`} role="option" aria-selected={k === highlighted} onMouseEnter={() => setRowIndex(k)}>
-                  <PlaceRow
-                    listed
-                    {...described(place, place.place)}
-                    metric={metric}
-                    sone={place.sone}
-                    lden={place.lden}
-                    highlighted={k === highlighted}
-                    onOpen={() => choose(k)}
-                    onForget={() => onForget(place)}
-                  >
-                    {/* The open place by its pin, the others as the history. */}
-                    {open != null && samePlace(place, open.at) ? undefined : <History className="size-4 shrink-0 text-muted-foreground" />}
-                  </PlaceRow>
-                </li>
-              ))}
+              {places.map((place, k) => {
+                const destination = historyPoint(titles, place)
+                const levels = levelsAt(place, destination)
+                return (
+                  <li key={keyOf(place)} id={`search-option-${k}`} role="option" aria-selected={k === highlighted} onMouseEnter={() => setRowIndex(k)}>
+                    <PlaceRow
+                      listed
+                      {...described(place, place.place, destination)}
+                      metric={metric}
+                      sone={levels?.sone ?? null}
+                      lden={levels?.lden ?? null}
+                      highlighted={k === highlighted}
+                      onOpen={() => choose(k)}
+                      onForget={() => onForget(place)}
+                    >
+                      {open && samePoint(destination, open.at) ? undefined : <History className="size-4 shrink-0 text-muted-foreground" />}
+                    </PlaceRow>
+                  </li>
+                )
+              })}
               {shownResults.map((r, i) => {
                 const k = places.length + i
                 return (

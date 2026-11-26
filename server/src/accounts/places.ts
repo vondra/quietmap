@@ -2,7 +2,7 @@
 // under the rules the map keeps in the browser too (frontend/src/lib/place-rules.ts, this very file
 // run here). A longitude from a repeated world copy of the map is wrapped, as the popup wraps it.
 import {
-  PLACE_TITLES_MAX, RECENT_PLACES_MAX, TITLE_MAX, samePlace, type PlaceTitle, type RecentPlace,
+  PLACE_TITLES_MAX, RECENT_PLACES_MAX, TITLE_MAX, readPointLevels, samePlace, type PlaceTitle, type RecentPlace,
 } from '../../../frontend/src/lib/place-rules.ts'
 import { wrappedLongitude } from '../../../frontend/src/lib/coordinates.ts'
 
@@ -52,12 +52,11 @@ export function parseRecent(value: unknown, now: number): RecentPlace[] | string
     const at = point(sent)
     if (!at) return 'a recent place needs lat within ±90 and lng a number'
     if (places.some(place => samePlace(place, at))) continue
-    const { place, sone, lden, openedAt } = sent
+    const { place, openedAt } = sent
     places.push({
       ...at,
       place: typeof place === 'string' ? place.slice(0, PLACE_NAME_MAX) : null,
-      sone: finite(sone) ? sone : null,
-      lden: finite(lden) ? lden : null,
+      levels: readPointLevels(sent.levels),
       openedAt: finite(openedAt) && openedAt > 0 ? Math.min(Math.round(openedAt), now) : 0,
     })
   }

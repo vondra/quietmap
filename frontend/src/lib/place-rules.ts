@@ -3,15 +3,20 @@
 // clicked or searched, at most 50, the one opened last first; one place is any point within 30 m; a
 // name stays at the point it was first given, and of two names for one place the later is kept. Pure,
 // so that the server runs this very file.
+import { samePoint, wrappedLongitude, type Point } from './coordinates.ts'
+
+/** A completed popup's levels and the exact point requested. */
+export interface PointLevels extends Point {
+  sone: number | null
+  lden: number | null
+}
 
 export interface RecentPlace {
   lat: number
   lng: number
   /** The reverse-geocoded place, when known. */
   place: string | null
-  /** The whole day's loudness (sone) and Lden (dB), when answered. */
-  sone: number | null
-  lden: number | null
+  levels: PointLevels | null
   /** When it was opened last (ms since 1970; 0 for a place kept from before the history kept times). */
   openedAt: number
 }
@@ -50,6 +55,28 @@ export function samePlace(a: { lat: number, lng: number }, b: { lat: number, lng
   return metresBetween(a, b) < SAME_PLACE_M
 }
 
+/** A legacy entry has no record of where its numbers were computed. */
+export function readPointLevels(value: unknown): PointLevels | null {
+  if (!value || typeof value !== 'object') return null
+  const { lat, lng, sone, lden } = value as Partial<PointLevels>
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+  if (!finite(lat) || Math.abs(lat) > 90 || !finite(lng)) return null
+  return { lat, lng: wrappedLongitude(lng), sone: finite(sone) ? sone : null, lden: finite(lden) ? lden : null }
+}
+
+export function levelsAt(entry: RecentPlace | undefined, at: Point): PointLevels | null {
+  return entry?.levels && samePoint(entry.levels, at) ? entry.levels : null
+}
+
+/** The destination of a history row. A name can be given across the street from its first click. */
+export function historyPoint(titles: PlaceTitle[], entry: Point): Point & { title?: string } {
+  return titleAt(titles, entry) ?? entry
+}
+
+export function opensAt(entry: Point, titles: PlaceTitle[], at: Point): boolean {
+  return samePlace(entry, at) && samePoint(historyPoint(titles, entry), at)
+}
+
 /** The history's order: the place opened last first (a stable sort: places kept from before the
  *  history kept times keep their order). A visitor goes back to what they opened just before; an order
  *  by how often hid a place searched once under the places opened often (owner 2026-10-30). */
@@ -70,21 +97,26 @@ export function withOpened(list: RecentPlace[], at: { lat: number, lng: number }
   const older = list.find(other => samePlace(other, at))
   return withEntry(list, older
     ? { ...older, place: older.place ?? place, openedAt }
-    : { lat: at.lat, lng: at.lng, place, sone: null, lden: null, openedAt })
+    : { lat: at.lat, lng: at.lng, place, levels: null, openedAt })
 }
 
-/** `list` with an answered place's numbers, and a name when its entry has none, where the entry stands;
- *  `list` itself when nothing changes or the place is not in it (forgotten while it was computed). */
+/** Keep a completed answer in each row that opens its receiver, preserving the order and known names. */
 export function withAnswer(
   list: RecentPlace[],
-  answer: { lat: number, lng: number, place: string | null, sone: number | null, lden: number | null },
+  answer: PointLevels & { place: string | null },
+  titles: PlaceTitle[],
 ): RecentPlace[] {
-  const k = list.findIndex(other => samePlace(other, answer))
-  if (k < 0) return list
-  const older = list[k]
-  const entry = { ...older, place: older.place ?? answer.place, sone: answer.sone, lden: answer.lden }
-  if (entry.place === older.place && entry.sone === older.sone && entry.lden === older.lden) return list
-  return list.map((other, j) => (j === k ? entry : other))
+  let updated = list
+  for (const [i, entry] of list.entries()) {
+    if (!opensAt(entry, titles, answer)) continue
+    const place = entry.place ?? answer.place
+    const previous = levelsAt(entry, answer)
+    if (place === entry.place && previous && previous.sone === answer.sone && previous.lden === answer.lden) continue
+    if (updated === list) updated = [...list]
+    const { lat, lng, sone, lden } = answer
+    updated[i] = { ...entry, place, levels: { lat, lng: wrappedLongitude(lng), sone, lden } }
+  }
+  return updated
 }
 
 /** `list` with `name` given to the same place's entry if it has none yet (a name looked up after

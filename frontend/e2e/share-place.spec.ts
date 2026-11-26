@@ -115,7 +115,7 @@ test('a shared on-screen place clears the phone panels, and rotation lets a new 
     const opened = await recipient.newPage()
     await installHermeticMap(opened, POINT)
     await opened.goto(link)
-    const point = { lat: Number(POINT.lat.toFixed(6)), lng: Number(POINT.lng.toFixed(6)) }
+    const point = { lat: POINT.lat, lng: POINT.lng }
     await expect.poll(() => popupRequests(opened)).toEqual([point])
     await sendPopupLine(opened, { ...answer, center: [point.lat, point.lng] })
     await endPopup(opened)
@@ -155,7 +155,7 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
     // The address is written as the place opens: copied at once, it is already the place's link.
     const link = page.url()
     const state = new URLSearchParams(new URL(link).hash.slice(1))
-    expect(state.get('d')).toBe(`${point.lat.toFixed(6)},${point.lng.toFixed(6)}`)
+    expect(state.get('d')?.split(',').map(Number)).toEqual([point.lat, point.lng])
     expect(state.get('m')).toBe('lden')
     expect(state.get('ro')).toBe('road')
     expect(state.get('qc')).toBe('1')
@@ -163,15 +163,17 @@ for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', ()
     expect(state.get('bm')).toBe('terrain')
     expect(Number(state.get('z'))).toBe(12)
     await page.screenshot({ path: test.info().outputPath('shared-place.png') })
+    await page.reload()
+    await expect.poll(() => popupRequests(page)).toEqual([point])
+    await expect(page.getByTestId('open-place')).toContainText('60.0 dB')
 
     const recipient = await browser.newContext(phone ? PHONE : {})
     try {
       const opened = await recipient.newPage()
       await installHermeticMap(opened, POINT)
       await opened.goto(link)
-      const sharedPoint = { lat: Number(point.lat.toFixed(6)), lng: Number(point.lng.toFixed(6)) }
-      await expect.poll(() => popupRequests(opened)).toEqual([sharedPoint])
-      await sendPopupLine(opened, popupUpdate(1, false, sharedPoint.lat, sharedPoint.lng, 60))
+      await expect.poll(() => popupRequests(opened)).toEqual([point])
+      await sendPopupLine(opened, popupUpdate(1, false, point.lat, point.lng, 60))
       await expect(badge(opened)).toContainText('60.0 dB')
       await expect(opened.getByTestId('open-place')).toBeVisible()
       const openedState = new URLSearchParams(new URL(opened.url()).hash.slice(1))

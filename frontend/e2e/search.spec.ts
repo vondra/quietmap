@@ -1,9 +1,52 @@
 // A search, its address results and the selected place form one column on desktop and phone.
 import { expect, test } from '@playwright/test'
-import { PHONE, POINT, canvasCenter, installHermeticMap, mapUrl, popupRequests } from './support'
+import { popupUpdate } from './answers'
+import { PHONE, POINT, canvasCenter, installHermeticMap, mapUrl, popupRequests, sendPopupLine } from './support'
 
 for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', () => {
   if (phone) test.use(PHONE)
+  test('history keeps the level of the exact point it reopens', async ({ page }) => {
+    await installHermeticMap(page, POINT)
+    const url = mapUrl(POINT) + '&m=lden'
+    await page.goto(url)
+    const search = page.getByRole('combobox')
+    const option = page.getByRole('option')
+    const open = page.getByTestId('open-place')
+    const first = { lat: 50.554111, lng: 16.798389 }, second = { lat: 50.554111, lng: 16.798194 }
+    async function select(at: typeof first, count: number) {
+      await search.fill(`${at.lat}, ${at.lng}`)
+      await option.click()
+      await expect.poll(() => popupRequests(page)).toHaveLength(count)
+      expect((await popupRequests(page)).at(-1)).toEqual(at)
+    }
+    async function answer(at: typeof first, db: number) {
+      await sendPopupLine(page, popupUpdate(1, false, at.lat, at.lng, db))
+      await expect(open).toContainText(`${db.toFixed(1)} dB`)
+    }
+    await select(first, 1)
+    await answer(first, 59)
+    await select(second, 2)
+    await expect(open).not.toContainText('59.0 dB')
+    await answer(second, 75.8)
+    await search.click()
+    await expect(option).toHaveCount(1)
+    await expect(option).toContainText('59.0 dB')
+    await search.press('Escape')
+
+    const field = open.getByTestId('place-title')
+    await field.fill('Beside the road')
+    await field.press('Enter')
+    await select(first, 3)
+    await answer(first, 59)
+    await page.goto('/?reload=history'+url.slice(1))
+    await search.click()
+    await expect(option).toContainText('Beside the road')
+    await expect(option).toContainText('75.8 dB')
+    await option.getByRole('button', { name: 'Beside the road', exact: true }).click()
+    await expect.poll(() => popupRequests(page)).toEqual([second])
+    await answer(second, 75.8)
+  })
+
   test('search results join the field; selecting and opening elsewhere never reopen the list', async ({ page }) => {
     await installHermeticMap(page, POINT)
     const at = { lat: POINT.lat + 0.001, lng: POINT.lng + 0.001 }

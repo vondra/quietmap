@@ -22,6 +22,13 @@ export function wrappedLongitude(lon: number): number {
   return lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180
 }
 
+export type Point = { lat: number, lng: number }
+
+/** The same requested receiver, including the same longitude in another world copy. */
+export function samePoint(a: Point | null, b: Point | null): boolean {
+  return a === b || (a != null && b != null && a.lat === b.lat && wrappedLongitude(a.lng) === wrappedLongitude(b.lng))
+}
+
 /** A pasted latitude, longitude has one exact result, or none outside the map. Only text goes to the geocoder. */
 export function coordinateSuggestions(query: string): SearchResult[] | null {
   const parts = query.split(',')

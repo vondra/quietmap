@@ -4,7 +4,8 @@
 // visitor's names come from the account and go to it, the browser's own left as they were until
 // signing out at the top right.
 import { expect, test, type Page, type Route } from '@playwright/test'
-import { PHONE, POINT, installHermeticMap, openPoint, renameOpenPlace, swipeDown } from './support'
+import { popupUpdate } from './answers'
+import { PHONE, POINT, installHermeticMap, mapUrl, openPoint, popupRequests, renameOpenPlace, sendPopupLine, swipeDown } from './support'
 
 test.use(PHONE)
 
@@ -23,6 +24,30 @@ async function seedBrowserPlaces(page: Page, titles: object[], recent: object[] 
 }
 
 const storedTitles = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('quietmap.place-titles') ?? '[]'))
+
+test('an account refresh after a failed level save shows the stored history and keeps the failure visible', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  const at = { lat: 50.554111, lng: 16.798389 }
+  const recent = [{ ...at, place: 'Road microphone', openedAt: 1, levels: null }]
+  let attempts = 0
+  await page.route('**/api/me', route => json(route, { email: ACCOUNT, titles: [], recent }))
+  await page.route('**/api/places/recent', route => {
+    if (route.request().postDataJSON().recent[0]?.levels && ++attempts === 1) return json(route, {}, 503)
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto(mapUrl(POINT) + `&d=${at.lat},${at.lng}&m=lden`)
+  await expect.poll(() => popupRequests(page)).toEqual([at])
+  await expect(page.getByTestId('open-place').getByTestId('place-title')).toHaveValue('Road microphone')
+  const refreshed = page.waitForResponse(response => response.url().endsWith('/api/me'))
+  await sendPopupLine(page, popupUpdate(1, false, at.lat, at.lng, 59))
+  await refreshed
+  await page.getByRole('combobox').tap()
+  const row = page.getByRole('option', { name: /Road microphone/ })
+  await expect(row).toBeVisible()
+  await expect(row).not.toContainText('59.0 dB')
+  await expect(page.getByRole('alert')).toHaveText(/Not saved/)
+  expect(attempts).toBe(1)
+})
 
 test('a signed-out visitor finds the sign-in at the top right and under the places opened, and asks for a link', async ({ page }) => {
   await installHermeticMap(page, POINT)
@@ -120,8 +145,8 @@ test("the link's page signs in only at a press and adds the browser's places onl
   await page.waitForURL(url => url.pathname === '/')
   expect(added).toEqual([{
     titles: [{ lat: 50, lng: 14, title: 'Cabin', updatedAt: 3 }],
-    // Kept before the history kept times: opened at no known time.
-    recent: [{ lat: 50, lng: 14, place: 'Bedřichov, Czechia', sone: 0.3, lden: 31, openedAt: 0 }],
+    // The older record kept neither the opening time nor the point its levels came from.
+    recent: [{ lat: 50, lng: 14, place: 'Bedřichov, Czechia', levels: null, openedAt: 0 }],
   }])
   // Added to the account, they stay in this browser's own store as well, for when it signs out.
   expect(await storedTitles(page)).toEqual([{ lat: 50, lng: 14, title: 'Cabin', updatedAt: 3 }])

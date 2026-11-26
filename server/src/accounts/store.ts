@@ -7,7 +7,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { historyOrder, mergedTitles, samePlace, withTitle, type PlaceTitle, type RecentPlace } from '../../../frontend/src/lib/place-rules.ts'
+import { historyOrder, mergedTitles, readPointLevels, samePlace, withTitle, type PlaceTitle, type RecentPlace } from '../../../frontend/src/lib/place-rules.ts'
 import type { MediaItem } from '../../../frontend/src/lib/media.ts'
 import { MEDIA_KINDS, type MediaKind } from '../media/check.ts'
 
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS place_titles (user_id INTEGER NOT NULL REFERENCES use
   updated_at INTEGER NOT NULL, PRIMARY KEY (user_id, position));
 CREATE TABLE IF NOT EXISTS recent_places (user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   position INTEGER NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, place TEXT, sone REAL, lden REAL,
-  opened_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, position));
+  opened_at INTEGER NOT NULL DEFAULT 0, level_lat REAL, level_lng REAL, PRIMARY KEY (user_id, position));
 CREATE TABLE IF NOT EXISTS media (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   kind TEXT NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, taken_at INTEGER NOT NULL, bytes INTEGER NOT NULL,
   duration_s REAL, sha256 TEXT NOT NULL, details TEXT NOT NULL);
@@ -81,10 +81,13 @@ export class AccountStore {
     // when they were counted (until 2026-10-30) loses the count. In one transaction: a start cut short
     // changes both or neither.
     const columns = new Set(this.#db.prepare('PRAGMA table_info(recent_places)').all().map(column => column.name))
-    if (!columns.has('opened_at') || columns.has('count')) {
+    if (!columns.has('opened_at') || columns.has('count') || !columns.has('level_lat')) {
       this.#transaction(() => {
         if (!columns.has('opened_at')) this.#db.exec('ALTER TABLE recent_places ADD COLUMN opened_at INTEGER NOT NULL DEFAULT 0')
         if (columns.has('count')) this.#db.exec('ALTER TABLE recent_places DROP COLUMN count')
+        if (!columns.has('level_lat')) {
+          this.#db.exec('ALTER TABLE recent_places ADD COLUMN level_lat REAL; ALTER TABLE recent_places ADD COLUMN level_lng REAL')
+        }
       })
     }
   }
@@ -189,8 +192,11 @@ export class AccountStore {
   /** The account's names, and its recent places in the history's order (a list kept under an older
    *  order reads in this one). */
   places(id: number): Places {
-    const recent = this.#db.prepare('SELECT lat, lng, place, sone, lden, opened_at AS openedAt FROM recent_places WHERE user_id = ? ORDER BY position')
-      .all(id) as unknown as RecentPlace[]
+    const rows = this.#db.prepare('SELECT lat, lng, place, sone, lden, opened_at AS openedAt, level_lat, level_lng FROM recent_places WHERE user_id = ? ORDER BY position')
+      .all(id) as unknown as (Omit<RecentPlace, 'levels'> & { sone: number | null, lden: number | null, level_lat: number | null, level_lng: number | null })[]
+    const recent = rows.map(({ sone, lden, level_lat, level_lng, ...point }) => ({
+      ...point, levels: readPointLevels({ lat: level_lat, lng: level_lng, sone, lden }),
+    }))
     return { titles: this.#titles(id), recent: historyOrder(recent) }
   }
 
@@ -202,8 +208,9 @@ export class AccountStore {
 
   #writeRecent(id: number, recent: RecentPlace[]): void {
     this.#db.prepare('DELETE FROM recent_places WHERE user_id = ?').run(id)
-    const insert = this.#db.prepare('INSERT INTO recent_places (user_id, position, lat, lng, place, sone, lden, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    recent.forEach((place, k) => insert.run(id, k, place.lat, place.lng, place.place, place.sone, place.lden, place.openedAt))
+    const insert = this.#db.prepare('INSERT INTO recent_places (user_id, position, lat, lng, place, sone, lden, opened_at, level_lat, level_lng) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    recent.forEach(({ lat, lng, place, openedAt, levels }, k) => insert.run(id, k, lat, lng, place,
+      levels?.sone ?? null, levels?.lden ?? null, openedAt, levels?.lat ?? null, levels?.lng ?? null))
   }
 
   /** Names the place at `at` (null removes its name) as `withTitle` does; the account's names. */

@@ -26,11 +26,11 @@ export interface Shown extends Places {
 }
 
 /** A change of the recent places, or a place's name given or taken back. */
-type Change = { recent: (recent: RecentPlace[]) => RecentPlace[] } | { at: { lat: number, lng: number }, title: string | null, updatedAt: number }
+type Change = { recent: (recent: RecentPlace[], titles: PlaceTitle[]) => RecentPlace[] } | { at: { lat: number, lng: number }, title: string | null, updatedAt: number }
 
 function applied<T extends Places>(places: T, change: Change): T {
   return 'recent' in change
-    ? { ...places, recent: change.recent(places.recent) }
+    ? { ...places, recent: change.recent(places.recent, places.titles) }
     : { ...places, titles: withTitle(places.titles, change.at, change.title, change.updatedAt) }
 }
 
@@ -164,7 +164,7 @@ export function createPlacesKeeper() {
       change({ recent: recent => withOpened(recent, at, openedAt, place) })
     },
     /** An answered point's numbers, and its name when its place has none. */
-    answered: (answer: Parameters<typeof withAnswer>[1]) => change({ recent: recent => withAnswer(recent, answer) }),
+    answered: (answer: Parameters<typeof withAnswer>[1]) => change({ recent: (recent, titles) => withAnswer(recent, answer, titles) }),
     /** A place's geocoded name, which came back after the click. */
     nameLate: (at: { lat: number, lng: number }, name: string) => change({ recent: recent => withName(recent, at, name) }),
     forget: (place: RecentPlace) => change({ recent: recent => withoutPlace(recent, place) }),

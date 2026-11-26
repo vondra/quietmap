@@ -6,7 +6,7 @@ import test from 'node:test'
 
 import { loadPlaceTitles, loadRecentPlaces } from '../src/lib/browser-places.ts'
 import {
-  PLACE_TITLES_MAX, RECENT_PLACES_MAX, historyOrder, mergedTitles, placeLabel, samePlace, titleAt, withAnswer, withName,
+  PLACE_TITLES_MAX, RECENT_PLACES_MAX, historyOrder, levelsAt, mergedTitles, placeLabel, samePlace, titleAt, withAnswer, withName,
   withOpened, withTitle, withoutPlace,
 } from '../src/lib/place-rules.ts'
 
@@ -31,20 +31,32 @@ test('the history: the place opened last first, then the one opened before, howe
 
 test("an answer fills its place's numbers, and a name it has none, where it stands; a place forgotten stays so", () => {
   const list = withOpened(withOpened([], { lat: 50, lng: 14 }, 1), { lat: 49, lng: 15 }, 2)
-  const answered = withAnswer(list, { ...answer(50.0001, 14.0001, 5), place: 'Kytín' })
+  const across = answer(50.0001, 14.0001, 8)
+  assert.equal(withAnswer(list, across, []), list)
+  const answered = withAnswer(list, { ...answer(50, 14, 5), place: 'Kytín' }, [])
   assert.deepEqual(lats(answered), [49, 50])
-  assert.deepEqual(answered[1], { lat: 50, lng: 14, place: 'Kytín', sone: 5, lden: 43, openedAt: 1 })
+  assert.deepEqual(answered[1], { lat: 50, lng: 14, place: 'Kytín', levels: { lat: 50, lng: 14, sone: 5, lden: 43 }, openedAt: 1 })
+  const titles = withTitle([], across, 'Across the road', 3)
+  assert.equal(levelsAt(answered[1], across), null)
+  const named = withAnswer(answered, across, titles)
+  assert.equal(levelsAt(named[1], across).sone, 8)
+  assert.equal(withAnswer(named, answer(50, 14, 5), titles), named)
+  // Two independently kept anchors can both open one name between them.
+  const neighbours = [50.0002, 49.9998].reduce((entries, lat) => withOpened(entries, { lat, lng: 14 }, 1), [])
+  const middle = answer(50, 14, 6)
+  const both = withAnswer(neighbours, middle, withTitle([], middle, 'Between', 2))
+  assert.deepEqual(both.map(entry => levelsAt(entry, middle)?.sone), [6, 6])
   // A silent answer replaces the numbers; the name known stays, a search's or the geocoder's.
-  const silent = withAnswer(answered, { lat: 50, lng: 14, place: 'Elsewhere', sone: null, lden: null })
-  assert.deepEqual([silent[1].place, silent[1].sone], ['Kytín', null])
-  assert.equal(withAnswer(answered, { ...answer(50, 14, 5), place: 'Kytín' }), answered)
-  assert.equal(withAnswer(answered, answer(48, 16)), answered)
+  const silent = withAnswer(answered, { lat: 50, lng: 14, place: 'Elsewhere', sone: null, lden: null }, [])
+  assert.deepEqual([silent[1].place, silent[1].levels.sone], ['Kytín', null])
+  assert.equal(withAnswer(answered, { ...answer(50, 14, 5), place: 'Kytín' }, []), answered)
+  assert.equal(withAnswer(answered, answer(48, 16), []), answered)
   // Opened from a search, a place keeps the result's name over the geocoder's.
   const searched = withOpened([], { lat: 48, lng: 16 }, 3, 'Baker Street 221B, London')
-  assert.equal(withAnswer(searched, { ...answer(48, 16), place: 'Marylebone' })[0].place, 'Baker Street 221B, London')
+  assert.equal(withAnswer(searched, { ...answer(48, 16), place: 'Marylebone' }, [])[0].place, 'Baker Street 221B, London')
   // Places kept from before the history kept times keep their order through an answer.
   const old = [1, 2, 3].map(lat => ({ ...answer(lat, 0), openedAt: 0 }))
-  assert.deepEqual(lats(withAnswer(old, answer(3, 0, 9))), [1, 2, 3])
+  assert.deepEqual(lats(withAnswer(old, answer(3, 0, 9), [])), [1, 2, 3])
 })
 
 test('points 30 m apart are separate places, one entry a place where first opened; at most fifty, the one opened first goes', () => {
@@ -75,7 +87,7 @@ test('places a browser kept before the history kept times read as opened at no k
   const items = new Map([['quietmap.recent-places', JSON.stringify([{ lat: 50, lng: 14, place: 'Kytín', sone: 0.4, lden: 33, count: 3 }])]])
   globalThis.localStorage = { getItem: key => items.get(key) ?? null }
   t.after(() => delete globalThis.localStorage)
-  assert.deepEqual(loadRecentPlaces(), [{ lat: 50, lng: 14, place: 'Kytín', sone: 0.4, lden: 33, openedAt: 0 }])
+  assert.deepEqual(loadRecentPlaces(), [{ lat: 50, lng: 14, place: 'Kytín', levels: null, openedAt: 0 }])
   // A list kept under the order by how often reads in the history's order.
   items.set('quietmap.recent-places', JSON.stringify([{ ...answer(1, 0), openedAt: 100 }, { ...answer(2, 0), openedAt: 300 }, { ...answer(3, 0), openedAt: 200 }]))
   assert.deepEqual(lats(loadRecentPlaces()), [2, 3, 1])

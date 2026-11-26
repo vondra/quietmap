@@ -10,8 +10,8 @@ import test from 'node:test'
 import { withTitle } from '../src/lib/place-rules.ts'
 import { createPlacesKeeper } from '../src/lib/places-keeper.ts'
 
-const HOME = { lat: 50, lng: 14, place: 'Home', sone: 2, lden: 44, openedAt: 1 }
-const CAFE = { lat: 49, lng: 15, place: 'Cafe', sone: 9, lden: 60, openedAt: 2 }
+const HOME = { lat: 50, lng: 14, place: 'Home', levels: { lat: 50, lng: 14, sone: 2, lden: 44 }, openedAt: 1 }
+const CAFE = { lat: 49, lng: 15, place: 'Cafe', levels: { lat: 49, lng: 15, sone: 9, lden: 60 }, openedAt: 2 }
 const NEW = { lat: 48, lng: 16, place: 'New', sone: 1, lden: 38 }
 
 /** This browser's storage, as localStorage. */
