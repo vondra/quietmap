@@ -469,7 +469,7 @@ fn large_multi_cell_home_does_not_leak_via_left_out_or_over_subtract_neighbour_i
     };
     let weather_bytes = encode_weather(&vec![
         WeatherNode {
-            percent: [[50u8; SECTORS]; PERIODS],
+            percent: [[50u8; physics::weather::SECTORS]; PERIODS],
             ..WeatherNode::default()
         };
         ROWS * COLUMNS

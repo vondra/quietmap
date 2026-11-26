@@ -53,7 +53,7 @@ extern "C" __global__ void __launch_bounds__(LOUD_STATES * LOUD_LANES, 2) pixel_
     int p = LOUD_PERIOD_GROUP_PERIOD[k], group = LOUD_PERIOD_GROUP_GROUP[k];
     const float* in = input + offsets[pixel];
     int start[LOUD_LAYERS], count[LOUD_LAYERS];
-    bool profiled = loud_layers(in, start, count);
+    bool profiled = loud_layers(in, start, count, lane);
     float weight = profiled ? (float)LOUD_GROUP_SLOTS[p * LOUD_GROUPS_MAX + group] / (LOUD_PERIOD_HOURS[p] * LOUD_STATES)
                             : 1.0f / LOUD_STATES;
     weight *= repeats;
@@ -63,7 +63,7 @@ extern "C" __global__ void __launch_bounds__(LOUD_STATES * LOUD_LANES, 2) pixel_
     bool moves[LOUD_LAYERS];
     float floor = 0.0f;
     for (int l = 0; l < LOUD_LAYERS; l++) {
-        floors[l] = loud_floor(in + start[l], count[l], in[start[l] - PERIODS - 1 + p], p, group, state, &held[l], &moves[l]);
+        floors[l] = loud_floor(in + start[l], count[l], in[start[l] - PERIODS - 1 + p], p, group, state, lane, &held[l], &moves[l]);
         if (!moves[l]) floor += floors[l];
     }
     LoudLaneBins whole;
@@ -174,9 +174,12 @@ extern "C" __global__ void pixel_ndens(const float* input, const u64* offsets, c
     __shared__ int curves_at;
     int t = threadIdx.x;
     if (t == 0) {
-        int start[LOUD_LAYERS], count[LOUD_LAYERS];
-        loud_layers(in, start, count);
-        curves_at = start[LOUD_LAYERS - 1] + count[LOUD_LAYERS - 1] * LOUD_LINE_FLOATS;
+        int at = 0;
+        for (int l = 0; l < LOUD_LAYERS; l++) {
+            int count = (int)in[at + PERIODS];
+            at += PERIODS + 1 + count * LOUD_LINE_FLOATS;
+        }
+        curves_at = at;
     }
     if (t < LOUD_CURVES) nden[t] = 0.0f;
     __syncthreads();

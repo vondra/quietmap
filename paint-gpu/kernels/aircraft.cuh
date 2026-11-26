@@ -6,45 +6,46 @@
 // The constants (NPD_DISTANCES, LOG10_NPD_DISTANCES_FT, the installation slants, the screening's
 // ceiling and slope, PERIOD_SECONDS, ...) come from aircraft.rs aircraft_constants, from the Rust.
 
+#define QM_TAU_F64 6.283185307179586476925286766559
+
 // tiles::aircraft::AircraftBox at the square's frame, with what boxes.rs derives once a box:
-// the centroid in the square's frame (m), the average length (boxes.rs average_length_m), whether
-// screening applies (centroid altitude above ground under the ceiling), per period the share of it
-// its flights are in the box (boxes.rs box_passing) and whether it is silent.
+// double-precision centroid/axis/passing fields keep the 16 km reach, horizon sector edge and
+// 3 dB pass-class edges on the CPU's double-precision branch decisions.
 struct FlightBox {
-    float east_m, north_m;
-    float centroid_altitude_m;
-    float sin_axis, cos_axis;
-    float gradient, gradient_spread;
-    float average_length_m;
+    double east_m, north_m;
+    double centroid_altitude_m;
+    double sin_axis, cos_axis;
+    double gradient, gradient_spread;
+    double average_length_m;
+    double passing[PERIODS];
     float piece_length_m[PERIODS];
     float levels_db[PERIODS][NPD_DISTANCES];
     float tail_levels_db[PERIODS];
     float lg_scaled_distance[NPD_DISTANCES];
     float installation_shares[PERIODS][2][3];
-    float passing[PERIODS];
     u32 screened;
     u32 helicopter;
     u32 silent[PERIODS];
 };
 
-// One lattice point: where it stands in the square's frame, its altitude, the NPD levels' impedance
-// gain there (fixed wing), and its horizons (popup/src/aircraft/horizons.rs Horizons::write_f32).
+// One lattice point: where it stands in the square's frame, its altitude, its horizons
+// (popup/src/aircraft/horizons.rs Horizons::write_f32), and the NPD levels' impedance gain.
 struct FlightPoint {
-    float x, y;
-    float altitude_m;
-    float impedance_gain;
+    double x, y;
+    double altitude_m;
     u64 horizons;
+    float impedance_gain;
 };
 
 // One point's boxes of one tile, file and band: `count` boxes from `first`, heard within
 // `within_m`, each weighted by `weight` (FLIGHT_WEIGHT_*) at its distance, into sums `sum`.
 struct FlightSegment {
+    double within_m;
     u32 point;
     u32 sum;
     u32 first;
     u32 count;
     u32 weight;
-    float within_m;
     float coarse_m;
 };
 
@@ -78,12 +79,15 @@ __device__ float edge_loss_db(float edge_range_m, float edge_height_m, float sou
 
 // popup::aircraft::horizons::SectorEdges::loss_db over `sectors` sectors stored from `at`: the
 // steepest tangent of all, then per sector its steepest and six bands' (range, tangent), NaN range
-// for an empty band.
-__device__ float horizon_loss_db(const float* at, int sectors, float x, float y, float z) {
-    float range_m = hypotf(x, y);
-    if (range_m <= 1.0f || z >= at[0] * range_m) return 0.0f;
-    float angle = rem_euclidf(atan2f(y, x), QM_TAU);
-    int sector = min((int)(angle / QM_TAU * (float)sectors), sectors - 1);
+// for an empty band. Range and sector bearing are decided in double to match the CPU's sector_of.
+__device__ float horizon_loss_db(const float* at, int sectors, double x, double y, float z) {
+    double range_d = hypot(x, y);
+    if (range_d <= 1.0) return 0.0f;
+    float range_m = (float)range_d;
+    if (z >= at[0] * range_m) return 0.0f;
+    double angle = fmod(atan2(y, x), QM_TAU_F64);
+    if (angle < 0.0) angle += QM_TAU_F64;
+    int sector = min((int)(angle / QM_TAU_F64 * (double)sectors), sectors - 1);
     const float* edges = at + 1 + sector * (1 + 2 * HORIZON_BANDS);
     if (z >= edges[0] * range_m) return 0.0f;
     float loss = 0.0f;
@@ -171,51 +175,54 @@ __device__ float installation_energy_gain(int installation, float height_m, floa
 
 // One average piece's SEL energy per period at the receiver (physics::doc29::boxes::
 // average_piece_sel), the piece `centroid_m` (relative to the receiver) along the box's axis at
-// `gradient`.
-__device__ void average_piece_sel(const FlightBox& b, const float* centroid_m, float gradient, const float* terrain,
+// `gradient`. Closest points stay in double so horizon sector bearings match the CPU's f64 path.
+__device__ void average_piece_sel(const FlightBox& b, const double* centroid_m, double gradient, const float* terrain,
                                   const float* buildings, float* sel_energy) {
-    float half = 0.5f * fmaxf(b.average_length_m, 1.0f);
-    float step[3] = {b.cos_axis * half, b.sin_axis * half, gradient * half};
-    float start[3], delta[3];
+    double half = 0.5 * fmax(b.average_length_m, 1.0);
+    double step[3] = {b.cos_axis * half, b.sin_axis * half, gradient * half};
+    double start[3], delta[3];
     for (int axis = 0; axis < 3; axis++) {
         start[axis] = centroid_m[axis] - step[axis];
-        delta[axis] = 2.0f * step[axis];
+        delta[axis] = 2.0 * step[axis];
     }
     // physics::doc29::segment::closest_points
-    float horizontal_squared = delta[0] * delta[0] + delta[1] * delta[1];
-    float length_squared = horizontal_squared + delta[2] * delta[2];
-    float along, on_line[3], on_segment[3], lateral_m, height_m, lambda_height_m;
-    if (horizontal_squared <= 1e-6f) {
-        along = 0.0f;
-        for (int axis = 0; axis < 3; axis++) on_line[axis] = on_segment[axis] = start[axis];
-        lateral_m = hypotf(start[0], start[1]);
-        height_m = lambda_height_m = start[2];
+    double horizontal_squared = delta[0] * delta[0] + delta[1] * delta[1];
+    double length_squared = horizontal_squared + delta[2] * delta[2];
+    double along_d, on_line_d[3], on_segment_d[3];
+    float lateral_m, height_m, lambda_height_m;
+    if (horizontal_squared <= 1e-6) {
+        along_d = 0.0;
+        for (int axis = 0; axis < 3; axis++) on_line_d[axis] = on_segment_d[axis] = start[axis];
+        lateral_m = (float)hypot(start[0], start[1]);
+        height_m = lambda_height_m = (float)start[2];
     } else {
-        along = -(start[0] * delta[0] + start[1] * delta[1] + start[2] * delta[2]) / length_squared;
-        float clamped = clampf(along, 0.0f, 1.0f);
+        along_d = -(start[0] * delta[0] + start[1] * delta[1] + start[2] * delta[2]) / length_squared;
+        double clamped = fmin(fmax(along_d, 0.0), 1.0);
         for (int axis = 0; axis < 3; axis++) {
-            on_line[axis] = start[axis] + along * delta[axis];
-            on_segment[axis] = start[axis] + clamped * delta[axis];
+            on_line_d[axis] = start[axis] + along_d * delta[axis];
+            on_segment_d[axis] = start[axis] + clamped * delta[axis];
         }
-        lateral_m = fabsf(start[0] * delta[1] - start[1] * delta[0]) / sqrtf(horizontal_squared);
-        float slant_squared = on_line[0] * on_line[0] + on_line[1] * on_line[1] + on_line[2] * on_line[2];
-        height_m = copysignf(sqrtf(fmaxf(slant_squared - lateral_m * lateral_m, 0.0f)), on_line[2]);
-        float cos_climb = sqrtf(horizontal_squared / length_squared);
-        lambda_height_m = along >= 0.0f && along <= 1.0f ? height_m : on_segment[2] / cos_climb;
+        double lat_d = fabs(start[0] * delta[1] - start[1] * delta[0]) / sqrt(horizontal_squared);
+        double slant_sq_d = on_line_d[0] * on_line_d[0] + on_line_d[1] * on_line_d[1] + on_line_d[2] * on_line_d[2];
+        double h_d = copysign(sqrt(fmax(slant_sq_d - lat_d * lat_d, 0.0)), on_line_d[2]);
+        double cos_climb = sqrt(horizontal_squared / length_squared);
+        lateral_m = (float)lat_d;
+        height_m = (float)h_d;
+        lambda_height_m = (float)(along_d >= 0.0 && along_d <= 1.0 ? h_d : on_segment_d[2] / cos_climb);
     }
-    float segment_length_m = fmaxf(sqrtf(length_squared), 1.0f);
-    float slant_m = sqrtf(on_line[0] * on_line[0] + on_line[1] * on_line[1] + on_line[2] * on_line[2]);
+    float segment_length_m = fmaxf((float)sqrt(length_squared), 1.0f);
+    float slant_m = (float)sqrt(on_line_d[0] * on_line_d[0] + on_line_d[1] * on_line_d[1] + on_line_d[2] * on_line_d[2]);
     NpdPosition position = npd_position(slant_m);
     float scaled_distance_m = expf(npd_linear(position, b.lg_scaled_distance) * QM_LN_10);
-    float along_m = along * segment_length_m;
-    float stretch = hypotf(gradient, 1.0f);
+    float along_m = (float)along_d * segment_length_m;
+    float stretch = hypotf((float)gradient, 1.0f);
     float lateral_attenuation = lateral_attenuation_db(lambda_height_m, lateral_m);
     float corrections[3] = {installation_energy_gain(0, height_m, slant_m), installation_energy_gain(1, height_m, slant_m), 1.0f};
     float fraction = clampf(log10f(slant_m / INSTALLATION_SHARE_NEAR_M) / log10f(INSTALLATION_SHARE_FAR_M / INSTALLATION_SHARE_NEAR_M), 0.0f, 1.0f);
     float terrain_loss = 0.0f, building_loss = 0.0f;
     if (b.screened) {
-        terrain_loss = horizon_loss_db(terrain, TERRAIN_SECTORS, on_line[0], on_line[1], on_line[2]);
-        building_loss = horizon_loss_db(buildings, BUILDING_SECTORS, on_segment[0], on_segment[1], on_segment[2]);
+        terrain_loss = horizon_loss_db(terrain, TERRAIN_SECTORS, on_line_d[0], on_line_d[1], (float)on_line_d[2]);
+        building_loss = horizon_loss_db(buildings, BUILDING_SECTORS, on_segment_d[0], on_segment_d[1], (float)on_segment_d[2]);
     }
     // physics::doc29::screening::screened_sel_db(0, ...) - lateral attenuation
     float attenuation_gain = energy_of_level(-fmaxf(fmaxf(terrain_loss, building_loss) - lateral_attenuation, 0.0f) - lateral_attenuation);
@@ -237,10 +244,12 @@ __device__ void average_piece_sel(const FlightBox& b, const float* centroid_m, f
 }
 
 // popup::aircraft::FlightPasses::add_pass: the class of passes heard at `energy` while `passing` of
-// the period are in progress.
-__device__ int pass_class(float energy, float passing) {
-    float level_db = 10.0f * log10f(energy / passing);
-    int class_of = (int)fmaxf((level_db - PASS_LOWEST_DB) / PASS_CLASS_DB, 0.0f);
+// the period are in progress, with the 3 dB class boundary arithmetic in double. Callers pass
+// `(double)sel[period]` computed in f32, so a pass within one f32 step of -30 + 3k dB can still
+// cross to a neighbouring class compared with the cores' f64 SEL.
+__device__ int pass_class(double energy, double passing) {
+    double level_db = 10.0 * log10(energy / passing);
+    int class_of = (int)fmax((level_db - PASS_LOWEST_DB_F64) / PASS_CLASS_DB_F64, 0.0);
     return min(class_of, PASS_CLASSES - 1);
 }
 
@@ -254,7 +263,7 @@ extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint
     const FlightPoint point = points[segment.point];
     const float* terrain = horizons + point.horizons;
     const float* buildings = terrain + TERRAIN_HORIZON_FLOATS;
-    float reach_m = fminf(segment.within_m, AIRCRAFT_REACH_M);
+    double reach_m = fmin(segment.within_m, AIRCRAFT_REACH_M_F64);
     double* at = sums + (u64)segment.sum * FLIGHT_SUMS;
     double* class_energy = at + PERIODS;
     double* class_passing = class_energy + PERIODS * PASS_CLASSES;
@@ -263,14 +272,14 @@ extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint
     double energy[PERIODS] = {0.0, 0.0, 0.0};
     for (u32 k = threadIdx.x; k < segment.count; k += blockDim.x) {
         const FlightBox& b = boxes[segment.first + k];
-        float east_m = b.east_m - point.x, north_m = b.north_m - point.y;
-        float distance_m = hypotf(east_m, north_m);
+        double east_m = b.east_m - point.x, north_m = b.north_m - point.y;
+        double distance_m = hypot(east_m, north_m);
         if (distance_m > reach_m) continue;
-        float share = flight_weight(segment.weight, distance_m, segment.coarse_m);
+        float share = flight_weight(segment.weight, (float)distance_m, segment.coarse_m);
         if (share <= 0.0f) continue;
-        float centroid_m[3] = {east_m, north_m, b.centroid_altitude_m - point.altitude_m};
+        double centroid_m[3] = {east_m, north_m, b.centroid_altitude_m - point.altitude_m};
         float sel[PERIODS];
-        if (b.gradient_spread <= 0.0f) {
+        if (b.gradient_spread <= 0.0) {
             average_piece_sel(b, centroid_m, b.gradient, terrain, buildings, sel);
         } else {
             float upper[PERIODS];
@@ -278,15 +287,16 @@ extern "C" __global__ void flight_sums(const FlightBox* boxes, const FlightPoint
             average_piece_sel(b, centroid_m, b.gradient + b.gradient_spread, terrain, buildings, upper);
             for (int period = 0; period < PERIODS; period++) sel[period] = 0.5f * (sel[period] + upper[period]);
         }
-        float impedance = b.helicopter ? 1.0f : point.impedance_gain;
+        double share_d = (double)share;
+        double impedance = b.helicopter ? 1.0 : (double)point.impedance_gain;
         for (int period = 0; period < PERIODS; period++) {
-            float e = share * sel[period] * impedance / PERIOD_SECONDS[period];
-            float passing = share * b.passing[period];
-            energy[period] += (double)e;
-            if (e > 0.0f && passing > 0.0f) {
+            double e = share_d * (double)sel[period] * impedance / PERIOD_SECONDS_F64[period];
+            double passing = share_d * b.passing[period];
+            energy[period] += e;
+            if (e > 0.0 && passing > 0.0) {
                 int class_of = period * PASS_CLASSES + pass_class(e, passing);
-                atomicAdd(&class_energy[class_of], (double)e);
-                atomicAdd(&class_passing[class_of], (double)passing);
+                atomicAdd(&class_energy[class_of], e);
+                atomicAdd(&class_passing[class_of], passing);
             }
         }
     }

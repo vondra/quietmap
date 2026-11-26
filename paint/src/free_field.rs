@@ -12,6 +12,7 @@ use popup::answer::RECEIVER_HEIGHT_M;
 pub(crate) struct OwnSources(Vec<(u32, [f64; 2])>);
 
 impl OwnSources {
+    #[cfg(test)]
     pub fn of(square: &Square, own: &[u32]) -> Result<Self, String> {
         (own.iter())
             .map(|&index| {
@@ -20,6 +21,22 @@ impl OwnSources {
             })
             .collect::<Result<_, String>>()
             .map(OwnSources)
+    }
+
+    /// Builds `OwnSources` from a deduplicated per-chunk `(index, traced_ground_m)` lookup table
+    /// (sorted by candidate index), avoiding repeated terrain lookups for sources shared across
+    /// overlapping 3x3 block neighbourhoods.
+    pub fn from_lookup(own: &[u32], ground: &[(u32, [f64; 2])]) -> Self {
+        OwnSources(
+            own.iter()
+                .map(|&index| {
+                    let at = ground
+                        .binary_search_by_key(&index, |&(k, _)| k)
+                        .expect("own source ground precomputed");
+                    (index, ground[at].1)
+                })
+                .collect(),
+        )
     }
 
     pub fn is_empty(&self) -> bool {

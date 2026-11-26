@@ -406,16 +406,31 @@ struct LoudLine {
     }
 };
 
+// Warp-wide sum across all 32 lanes (every lane receives the same result).
+__device__ __forceinline__ float warp_sum_all(float v) {
+#pragma unroll
+    for (int off = 16; off > 0; off >>= 1) v += __shfl_xor_sync(LOUD_FULL_MASK, v, off);
+    return v;
+}
+
 // Where each layer's lines begin in a pixel's input and how many; whether any line follows the
-// hours (the pixel's periods then split into groups of hours).
-__device__ bool loud_layers(const float* in, int* start, int* count) {
+// hours (parallelized across warp lanes).
+__device__ bool loud_layers(const float* in, int* start, int* count, int lane) {
     bool profiled = false;
     int at = 0;
     for (int l = 0; l < LOUD_LAYERS; l++) {
-        count[l] = (int)in[at + PERIODS];
+        int c = (int)in[at + PERIODS];
+        count[l] = c;
         start[l] = at + PERIODS + 1;
-        for (int i = 0; i < count[l]; i++) profiled = profiled || LoudLine{in + start[l] + i * LOUD_LINE_FLOATS}.profile() >= 0;
-        at = start[l] + count[l] * LOUD_LINE_FLOATS;
+        bool has_prof = false;
+        for (int i = lane; i < c; i += LOUD_LANES) {
+            if (LoudLine{in + start[l] + i * LOUD_LINE_FLOATS}.profile() >= 0) {
+                has_prof = true;
+                break;
+            }
+        }
+        if (__any_sync(LOUD_FULL_MASK, has_prof)) profiled = true;
+        at = start[l] + c * LOUD_LINE_FLOATS;
     }
     return profiled;
 }
@@ -423,40 +438,48 @@ __device__ bool loud_layers(const float* in, int* start, int* count) {
 // percentiles.rs moment: one layer's energy that holds steady in group `group` of period `p` and
 // weather state `state` (its `steady` energy, the lines that hold their mean, those whose loud
 // moments stay under a hundredth of it), and whether a line moves; `held` is the energy the held
-// test compares against. Every lane alike.
-__device__ float loud_floor(const float* lines, int count, float steady, int p, int group, int state, float* held,
+// test compares against. Parallelized across all 32 warp lanes; every lane receives the same outputs.
+__device__ float loud_floor(const float* lines, int count, float steady, int p, int group, int state, int lane, float* held,
                             bool* moves) {
-    float floor = steady, candidates = 0.0f;
-    *moves = false;
-    for (int i = 0; i < count; i++) {
+    float floor_part = lane == 0 ? steady : 0.0f;
+    float cand_part = 0.0f;
+    bool moved = false;
+    for (int i = lane; i < count; i += LOUD_LANES) {
         LoudLine line{lines + i * LOUD_LINE_FLOATS};
         float factor = line.factor(p, group);
         float mean = line.mean(p, state) * factor;
         if (line.energy(p) <= 0.0f || mean <= 0.0f) continue;
         float duty = line.duty(p);
         if (!isnan(duty)) {
-            *moves = *moves || duty > 0.0f;
+            if (duty > 0.0f) moved = true;
             continue;
         }
         if (!isnan(line.passing(p))) {
-            if (line.passes_move(p)) *moves = true;
-            else floor += mean;
+            if (line.passes_move(p)) moved = true;
+            else floor_part += mean;
             continue;
         }
-        if (line.lambda(p) * factor >= LOUD_HOLDS_MEAN_LAMBDA) floor += mean;
-        else candidates += mean;
+        if (line.lambda(p) * factor >= LOUD_HOLDS_MEAN_LAMBDA) floor_part += mean;
+        else cand_part += mean;
     }
+    float floor = warp_sum_all(floor_part);
+    float candidates = warp_sum_all(cand_part);
     *held = floor + candidates;
-    for (int i = 0; i < count; i++) {
-        LoudLine line{lines + i * LOUD_LINE_FLOATS};
-        float factor = line.factor(p, group);
-        float mean = line.mean(p, state) * factor;
-        float lambda = line.lambda(p) * factor;
-        if (line.energy(p) <= 0.0f || mean <= 0.0f || !isnan(line.duty(p)) || !isnan(line.passing(p))
-            || lambda >= LOUD_HOLDS_MEAN_LAMBDA) continue;
-        if (mean * loud_exceeded(lambda) < LOUD_HELD_SHARE * *held) floor += mean;
-        else *moves = true;
+    if (candidates > 0.0f) {
+        float extra_part = 0.0f;
+        for (int i = lane; i < count; i += LOUD_LANES) {
+            LoudLine line{lines + i * LOUD_LINE_FLOATS};
+            float factor = line.factor(p, group);
+            float mean = line.mean(p, state) * factor;
+            float lambda = line.lambda(p) * factor;
+            if (line.energy(p) <= 0.0f || mean <= 0.0f || !isnan(line.duty(p)) || !isnan(line.passing(p))
+                || lambda >= LOUD_HOLDS_MEAN_LAMBDA) continue;
+            if (mean * loud_exceeded(lambda) < LOUD_HELD_SHARE * *held) extra_part += mean;
+            else moved = true;
+        }
+        floor += warp_sum_all(extra_part);
     }
+    *moves = __any_sync(LOUD_FULL_MASK, moved);
     return floor;
 }
 

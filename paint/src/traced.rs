@@ -72,14 +72,42 @@ pub(crate) struct Traced<'a, B> {
     deeper_of: Vec<u32>,
 }
 
-/// A traced source's Lden energy among a point's `sources` (sorted) and their `energies`.
+/// A traced source's Lden energy among a point's `sources` (sorted) and their `energies`,
+/// queried in ascending source-index order (as `Block::far` is sorted) with a galloping cursor.
 pub(crate) fn heard_among<'a>(
     sources: &'a [u32],
     energies: &'a [PairEnergy],
-) -> impl Fn(u32) -> Option<f64> + 'a {
+) -> impl FnMut(u32) -> Option<f64> + 'a {
+    let mut cursor = 0usize;
     move |index| {
-        let at = sources.binary_search(&index).ok()?;
-        Some(lden_energy(&energies[at].mixed))
+        if cursor >= sources.len() {
+            return None;
+        }
+        let current = sources[cursor];
+        if current == index {
+            cursor += 1;
+            return Some(lden_energy(&energies[cursor - 1].mixed));
+        }
+        if current > index {
+            return None;
+        }
+        // Advance linearly a few steps before binary-searching the tail.
+        let mut step = 1usize;
+        while cursor + step < sources.len() && sources[cursor + step] < index {
+            cursor += step;
+            step <<= 1;
+        }
+        let hi = (cursor + step).min(sources.len());
+        let lo = cursor + 1;
+        let offset = sources[lo..hi].partition_point(|&s| s < index);
+        cursor = lo + offset;
+        if cursor < sources.len() && sources[cursor] == index {
+            let at = cursor;
+            cursor += 1;
+            Some(lden_energy(&energies[at].mixed))
+        } else {
+            None
+        }
     }
 }
 

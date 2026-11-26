@@ -4,9 +4,15 @@
 // Coordinates are rebased in f64 before the GPU uses f32 frame metres. The repr(C) records mirror
 // scene.cuh, evaluate.cuh and paint.cu field by field.
 
-use crate::stream::{download_default, upload_default};
+pub use crate::eval_slot::PairResults;
+use crate::eval_slot::{EvalSlot, EvalSlotGuard, OutputPool, next_rays_per_pair};
+pub(crate) use crate::eval_slot::{ensure_device, trim_device};
+use crate::stream::{PinnedBuf, download_default, upload_default};
+use crate::turns::CardTurns;
 use cudarc::driver::sys::CUdevice_attribute;
-use cudarc::driver::{CudaDevice, CudaSlice, DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig};
+use cudarc::driver::{
+    CudaDevice, CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig,
+};
 use cudarc::nvrtc::{CompileOptions, compile_ptx_with_opts};
 use paint::exact::LAYERS;
 use paint::square::{Files, Square};
@@ -14,7 +20,7 @@ use physics::bands::{BAND_FREQUENCY_HZ, BANDS, PERIODS, SPEED_OF_SOUND_M_PER_S};
 use physics::weather::WeatherTable;
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use tiles::Kind;
 use tiles::geo::{Mercator, TILES_PER_AXIS, TileId};
 use tiles::obstacles::Obstacles;
@@ -99,7 +105,7 @@ pub const FAILED_LINE_CUTOFF: u32 = 8;
 /// than half.
 const THREADS_PER_BLOCK: u32 = 32;
 /// Bytes of one listed ray (kernels/evaluate.cuh PairRay).
-const PAIR_RAY_BYTES: usize = 24;
+pub(crate) const PAIR_RAY_BYTES: usize = 24;
 
 const TILE_NOT_READ: i32 = 0;
 const TILE_EMPTY: i32 = 1;
@@ -250,6 +256,13 @@ pub struct Gpu {
     pub name: String,
     /// Held while cudarc records and waits on the device's one event (`crate::stream`).
     pub(crate) event: Mutex<()>,
+    /// Shared turns across every square using this card, bounding concurrent `EvalSlot`s in VRAM.
+    pub(crate) turns: CardTurns,
+    /// Shared turns across concurrent `pixel_loudness` launches, bounding mixtures VRAM on the card.
+    pub(crate) loudness_turns: CardTurns,
+    eval_slots: Mutex<Vec<EvalSlot>>,
+    output_pool: OutputPool,
+    pub(crate) loudness_slots: Mutex<Vec<crate::loudness::LoudnessSlot>>,
 }
 
 impl Gpu {
@@ -271,62 +284,82 @@ impl Gpu {
             band_constants(),
             lattice_constants()
         );
-        let ptx = compile_ptx_with_opts(
-            source,
-            CompileOptions {
-                arch: Some(arch),
-                // Fast math reduces point and line pair time by about 44% and 42%, with unchanged
-                // agreement with the CPU (2026-10-09). The `use_fast_math` field only adds
-                // --fmad=true; the flag goes in `options`. Line numbers cost nothing at run time
-                // and let a profiler name the kernel's lines.
-                options: vec!["--use_fast_math".into(), "-lineinfo".into()],
-                ..Default::default()
-            },
-        )
-        .map_err(|error| format!("nvrtc: {error}"))?;
-        driver(device.load_ptx(
-            ptx,
-            "paint",
-            &[
-                "point_receivers",
-                "pair_rays",
-                "ray_transfers",
-                "pair_bands_to_points",
-                "struct_sizes",
-            ],
-        ))?;
         // The pixels' loudness, in full precision (fast math moved a sum's bin at its edges).
         let loudness = format!("{COMMON}{}", crate::loudness::loudness_source());
-        let ptx = compile_ptx_with_opts(
-            loudness,
-            CompileOptions {
-                arch: Some(arch),
-                options: vec!["-lineinfo".into()],
-                ..Default::default()
-            },
-        )
-        .map_err(|error| format!("nvrtc (loudness): {error}"))?;
-        driver(device.load_ptx(
-            ptx,
-            "loudness",
-            &["pixel_mixtures", "pixel_ndens", "loud_struct_sizes"],
-        ))?;
         // The aircraft boxes' sums at the corners' lattices, with the Rust's constants.
         let aircraft = format!(
             "{COMMON}{}{}",
             crate::aircraft::aircraft_constants(),
             include_str!("../kernels/aircraft.cuh")
         );
-        let ptx = compile_ptx_with_opts(
-            aircraft,
-            CompileOptions {
-                arch: Some(arch),
-                options: vec!["--use_fast_math".into(), "-lineinfo".into()],
-                ..Default::default()
-            },
-        )
-        .map_err(|error| format!("nvrtc (aircraft): {error}"))?;
-        driver(device.load_ptx(ptx, "aircraft", &["flight_sums", "flight_struct_sizes"]))?;
+        // Compile all three NVRTC modules concurrently to cut cold startup across invocations.
+        let (paint_ptx, loudness_ptx, aircraft_ptx) = std::thread::scope(|scope| {
+            let paint_handle = scope.spawn(move || {
+                compile_ptx_with_opts(
+                    source,
+                    CompileOptions {
+                        arch: Some(arch),
+                        // Fast math reduces point and line pair time by about 44% and 42%, with
+                        // unchanged agreement with the CPU (2026-10-09). The `use_fast_math` field
+                        // only adds --fmad=true; the flag goes in `options`. Line numbers cost
+                        // nothing at run time and let a profiler name the kernel's lines.
+                        options: vec!["--use_fast_math".into(), "-lineinfo".into()],
+                        ..Default::default()
+                    },
+                )
+                .map_err(|error| format!("nvrtc: {error}"))
+            });
+            let loudness_handle = scope.spawn(move || {
+                compile_ptx_with_opts(
+                    loudness,
+                    CompileOptions {
+                        arch: Some(arch),
+                        options: vec!["-lineinfo".into()],
+                        ..Default::default()
+                    },
+                )
+                .map_err(|error| format!("nvrtc (loudness): {error}"))
+            });
+            let aircraft_res = compile_ptx_with_opts(
+                aircraft,
+                CompileOptions {
+                    arch: Some(arch),
+                    options: vec!["--use_fast_math".into(), "-lineinfo".into()],
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| format!("nvrtc (aircraft): {error}"));
+            let paint_res = paint_handle
+                .join()
+                .unwrap_or_else(|_| Err("nvrtc thread panicked".into()));
+            let loudness_res = loudness_handle
+                .join()
+                .unwrap_or_else(|_| Err("nvrtc (loudness) thread panicked".into()));
+            (paint_res, loudness_res, aircraft_res)
+        });
+        driver(device.load_ptx(
+            paint_ptx?,
+            "paint",
+            &[
+                "point_receivers",
+                "scan_blocks",
+                "scan_block_sums",
+                "pair_rays",
+                "ray_transfers",
+                "pair_bands_to_points",
+                "struct_sizes",
+            ],
+        ))?;
+        driver(device.load_ptx(
+            loudness_ptx?,
+            "loudness",
+            &["pixel_mixtures", "pixel_ndens", "loud_struct_sizes"],
+        ))?;
+        driver(device.load_ptx(
+            aircraft_ptx?,
+            "aircraft",
+            &["flight_sums", "flight_struct_sizes"],
+        ))?;
         let sizes = driver(device.alloc_zeros::<u64>(HOST_STRUCT_SIZES.len()))?;
         let function = device
             .get_func("paint", "struct_sizes")
@@ -378,6 +411,11 @@ impl Gpu {
             device,
             name: format!("{name} (sm_{major}{minor}, {multiprocessors} SMs)"),
             event: Mutex::new(()),
+            turns: CardTurns::default(),
+            loudness_turns: CardTurns::default(),
+            eval_slots: Mutex::new(Vec::new()),
+            output_pool: Arc::new(Mutex::new(Vec::new())),
+            loudness_slots: Mutex::new(Vec::new()),
         })
     }
 
@@ -394,33 +432,36 @@ impl Gpu {
         download_default(&self.device, bands)
     }
 
-    /// Per receiver its position in the square's frame and the building it stands in (or 0); per
-    /// pair its candidate index, its receiver and its point's index in `bands`: what the candidate
-    /// delivers there per period, mixed, calm and downwind, and the failure, 0 for none; its mixed
-    /// bands added to the point's.
+    /// Per receiver its position in the square's frame, the building it stands in (or 0) and its
+    /// point index in `bands`; per pair its candidate index, its receiver and optional band weight
+    /// (`None` means 1.0 for every pair): evaluates rays in strict candidate-sorted order using a
+    /// device-only prefix sum, returning pinned host sums and failures while adding mixed bands
+    /// into `bands` (or writing per-pair spectra when `pair_spectra` is `Some`).
     pub fn evaluate_pairs(
         &self,
         square: &DeviceSquare,
-        (receivers, own_footprint): (&[[f64; 2]], &[u64]),
-        (candidates, receiver_of_pair, points, band_weights): (&[u32], &[u32], &[u32], &[f32]),
+        (receivers, own_footprint, point_of_receiver): (&[[f64; 2]], &[u64], &[u32]),
+        (candidates, receiver_of_pair, band_weights): (&[u32], &[u32], Option<&[f32]>),
         bands: &mut CudaSlice<f32>,
-        pair_spectra: Option<&mut Vec<f32>>,
-    ) -> Result<(Vec<[f32; PAIR_SUMS]>, Vec<u32>), String> {
+        mut pair_spectra: Option<&mut Vec<f32>>,
+    ) -> Result<PairResults, String> {
         let count = candidates.len();
-        if own_footprint.len() != receivers.len()
+        let receiver_count = receivers.len();
+        if own_footprint.len() != receiver_count
+            || point_of_receiver.len() != receiver_count
             || receiver_of_pair.len() != count
-            || points.len() != count
-            || band_weights.len() != count
+            || band_weights.is_some_and(|w| w.len() != count)
         {
             return Err(
-                "evaluate_pairs: an owner a receiver, a receiver and a point a candidate".into(),
+                "evaluate_pairs: an owner and point a receiver, a receiver and weight a candidate"
+                    .into(),
             );
         }
         if candidates.iter().any(|&index| index >= square.candidates)
             || receiver_of_pair
                 .iter()
-                .any(|&at| at as usize >= receivers.len())
-            || points
+                .any(|&at| at as usize >= receiver_count)
+            || point_of_receiver
                 .iter()
                 .any(|&point| (point as usize + 1) * POINT_BANDS > bands.len())
         {
@@ -431,189 +472,296 @@ impl Gpu {
             );
         }
         if count == 0 {
-            return Ok((Vec::new(), Vec::new()));
+            if let Some(spectra) = pair_spectra {
+                spectra.clear();
+            }
+            return Ok(PairResults {
+                sums: None,
+                failed: None,
+                pool: Arc::clone(&self.output_pool),
+                count: 0,
+            });
         }
-        let xy: Vec<f32> = receivers.iter().flatten().map(|&v| v as f32).collect();
         let device = &self.device;
-        let receiver_count = receivers.len();
-        // SAFETY (the buffers): each is written whole on the pairs' stream below before a kernel
-        // reads it: the inputs copied; `sums` zeroed (read back unwritten when `total == 0` or a
-        // pair emits zero rays, then stored by 1-ray pairs or `atomicAdd`ed by multi-ray pairs);
-        // `point_receivers` writes every receiver's failure and every receiver that does not
-        // fail, which alone are read; pass-1 `pair_rays` writes every pair's `ray_counts` and
-        // `failed` and only the slots pass-2 reads (`0..4*count`), then `pair_bands` is zeroed
-        // before `ray_transfers` stores (1-ray pairs) or `atomicAdd`s (multi-ray pairs) into it.
-        let mut device_xy = driver(unsafe { device.alloc::<f32>(xy.len()) })?;
-        let mut device_own = driver(unsafe { device.alloc::<u64>(receiver_count) })?;
-        let point_receivers =
-            driver(unsafe { device.alloc::<u8>(RECEIVER_BYTES * receiver_count) })?;
-        let receiver_failed = driver(unsafe { device.alloc::<u32>(receiver_count) })?;
-        let mut device_receiver_of_pair = driver(unsafe { device.alloc::<u32>(count) })?;
-        let mut device_candidates = driver(unsafe { device.alloc::<u32>(count) })?;
-        let mut device_points = driver(unsafe { device.alloc::<u32>(count) })?;
-        let mut device_band_weights = driver(unsafe { device.alloc::<f32>(count) })?;
-        let ray_counts = driver(unsafe { device.alloc::<u32>(count) })?;
-        let failed = driver(unsafe { device.alloc::<u32>(count) })?;
-        // The pairs' bands, which keep each pair's first rays from its counting to its writing
-        // (kernels/paint.cu PAIR_RAY_SLOTS), zeroed before the rays fill them when `total > 0`.
-        let mut pair_bands = driver(unsafe { device.alloc::<f32>(PERIODS * BANDS * count) })?;
-        // Zeroed: a launch without rays or a zero-ray pair reads them back unwritten.
-        let mut sums = driver(unsafe { device.alloc::<f32>(PAIR_SUMS * count) })?;
         let kernel = |name: &str| {
             device
                 .get_func("paint", name)
                 .ok_or(format!("kernel {name} missing"))
         };
         let threads = |n: usize| LaunchConfig {
-            grid_dim: ((n as u32).div_ceil(THREADS_PER_BLOCK), 1, 1),
+            grid_dim: ((n as u32).div_ceil(THREADS_PER_BLOCK).max(1), 1, 1),
             block_dim: (THREADS_PER_BLOCK, 1, 1),
             shared_mem_bytes: 0,
         };
-        // A null pointer: the listing kernel counts the rays instead of writing them.
+        let slot = self
+            .eval_slots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop();
+        let mut slot_guard = EvalSlotGuard {
+            pool: &self.eval_slots,
+            slot: Some(slot.unwrap_or_else(|| EvalSlot::new(device))),
+        };
+        let (mut out_sums, mut out_failed) = self
+            .output_pool
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop()
+            .unwrap_or_else(|| (PinnedBuf::new(device), PinnedBuf::new(device)));
+        out_sums.reserve(PAIR_SUMS * count)?;
+        out_failed.reserve(count)?;
+
+        let has_weights = band_weights.is_some();
+        let num_scan_blocks = count.div_ceil(1024);
+        let slot = slot_guard.slot.as_mut().expect("eval slot present");
+        let device_xy = ensure_device(device, &mut slot.device_xy, 2 * receiver_count)?;
+        let device_own = ensure_device(device, &mut slot.device_own, receiver_count)?;
+        let device_point_of_receiver =
+            ensure_device(device, &mut slot.device_point_of_receiver, receiver_count)?;
+        let point_receivers = ensure_device(
+            device,
+            &mut slot.point_receivers,
+            RECEIVER_BYTES * receiver_count,
+        )?;
+        let receiver_failed = ensure_device(device, &mut slot.receiver_failed, receiver_count)?;
+        let device_receiver_of_pair =
+            ensure_device(device, &mut slot.device_receiver_of_pair, count)?;
+        let device_candidates = ensure_device(device, &mut slot.device_candidates, count)?;
+        let mut device_band_weights = if has_weights {
+            Some(ensure_device(device, &mut slot.device_band_weights, count)?)
+        } else {
+            None
+        };
+        let ray_counts = ensure_device(device, &mut slot.ray_counts, count)?;
+        let ray_offsets = ensure_device(device, &mut slot.ray_offsets, count)?;
+        let block_sums = ensure_device(device, &mut slot.block_sums, num_scan_blocks)?;
+        let total_rays = ensure_device(device, &mut slot.total_rays, 1)?;
+        let failed = ensure_device(device, &mut slot.failed, count)?;
+        let pair_bands = ensure_device(device, &mut slot.pair_bands, PERIODS * BANDS * count)?;
+        let sums = ensure_device(device, &mut slot.sums, PAIR_SUMS * count)?;
+
+        slot.host_xy.reserve(2 * receiver_count)?;
+        {
+            let dst = slot.host_xy.as_mut_slice(2 * receiver_count);
+            for (i, &[x, y]) in receivers.iter().enumerate() {
+                dst[2 * i] = x as f32;
+                dst[2 * i + 1] = y as f32;
+            }
+        }
+        slot.host_own.copy_from_slice(own_footprint)?;
+        slot.host_point_of_receiver
+            .copy_from_slice(point_of_receiver)?;
+        slot.host_receiver_of_pair
+            .copy_from_slice(receiver_of_pair)?;
+        slot.host_candidates.copy_from_slice(candidates)?;
+        if let Some(weights) = band_weights {
+            slot.host_band_weights.copy_from_slice(weights)?;
+        }
+        slot.host_total.reserve(1)?;
+
+        let mut need_rays = count.saturating_mul(slot.rays_per_pair).max(4096);
+        let mut uploaded = false;
         let none = 0u64;
-        // The rays and their host/device offsets, populated once the rays are counted, are
-        // declared before the stream as every buffer is: the stream synchronizes on the host if
-        // any copy is still pending and joins the default stream before they are freed.
-        let mut offsets: Vec<u32>;
-        let (mut device_offsets, rays): (CudaSlice<u32>, CudaSlice<u8>);
-        // The pairs' kernels on a stream of their own, forked once their buffers are allocated:
-        // another pass's or square's kernels run beside them on the card
-        // ([`crate::stream::ForkedStream::copy`] on why its inputs go there too).
-        let stream = self.fork()?;
-        // SAFETY: `stream` is never leaked and drops before `xy`, the caller's arrays, and every
-        // device destination declared above.
-        unsafe {
-            stream.copy(&xy, &mut device_xy)?;
-            stream.copy(own_footprint, &mut device_own)?;
-            stream.copy(receiver_of_pair, &mut device_receiver_of_pair)?;
-            stream.copy(candidates, &mut device_candidates)?;
-            stream.copy(points, &mut device_points)?;
-            stream.copy(band_weights, &mut device_band_weights)?;
-        }
-        stream.zero(&mut sums)?;
-        // SAFETY (each launch): every buffer holds what the kernel indexes and is declared before
-        // `stream`: 2 coordinates, an owner, a receiver (RECEIVER_BYTES) and a failure per
-        // receiver; a receiver (within the receivers, checked), a candidate and a point (within
-        // `bands`, checked) per pair; a count, an offset, PAIR_SUMS sums, PERIODS x BANDS bands
-        // and a failure per pair; a PairRay (PAIR_RAY_BYTES) per ray.
-        unsafe {
-            stream.launch(
-                kernel("point_receivers")?,
-                threads(receiver_count),
-                (
-                    &square.scene,
-                    &device_xy,
-                    &device_own,
-                    receiver_count as u32,
-                    &point_receivers,
-                    &receiver_failed,
-                ),
-            )?;
-            stream.launch(
-                kernel("pair_rays")?,
-                threads(count),
-                (
-                    &square.scene,
-                    &point_receivers,
-                    &receiver_failed,
-                    &device_receiver_of_pair,
-                    &device_candidates,
-                    count as u32,
-                    none,
-                    none,
-                    &ray_counts,
-                    &failed,
-                    &pair_bands,
-                ),
-            )?;
-        }
-        offsets = stream.read_back(&ray_counts)?;
-        let mut total = 0u32;
-        for offset in &mut offsets {
-            (*offset, total) = (total, total + *offset);
-        }
-        if total > 0 {
-            // SAFETY: `device_offsets` is copied whole and pass-2 `pair_rays` writes all `total`
-            // `PairRay` records (24 bytes, no padding) before `ray_transfers` reads them.
-            device_offsets = driver(unsafe { device.alloc::<u32>(count) })?;
-            rays = driver(unsafe { device.alloc::<u8>(PAIR_RAY_BYTES * total as usize) })?;
-            // The stream may use them only after their allocation: the pool may give them memory
-            // another launch freed after it joined.
-            stream.wait_for_default()?;
-            // SAFETY: `stream` is never leaked and drops before `offsets` and `device_offsets`.
-            unsafe { stream.copy(&offsets, &mut device_offsets) }?;
-            unsafe {
-                stream.launch(
-                    kernel("pair_rays")?,
-                    threads(count),
-                    (
-                        &square.scene,
-                        &point_receivers,
-                        &receiver_failed,
-                        &device_receiver_of_pair,
-                        &device_candidates,
-                        count as u32,
-                        &device_offsets,
-                        &rays,
-                        &ray_counts,
-                        &failed,
-                        &pair_bands,
-                    ),
-                )?;
-            }
-            stream.zero(&mut pair_bands)?;
-            unsafe {
-                stream.launch(
-                    kernel("ray_transfers")?,
-                    threads(total as usize),
-                    (
-                        &square.scene,
-                        &point_receivers,
-                        &device_receiver_of_pair,
-                        &device_candidates,
-                        &rays,
-                        total,
-                        &sums,
-                        &pair_bands,
-                        &failed,
-                    ),
-                )?;
-            }
-            if pair_spectra.is_none() {
+        let weights_ptr: u64 = device_band_weights
+            .as_deref()
+            .map_or(0, |buf| *buf.device_ptr());
+        let scan_blocks_cfg = LaunchConfig {
+            grid_dim: (num_scan_blocks as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let scan_sums_cfg = LaunchConfig {
+            grid_dim: (1, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let host_xy = &slot.host_xy;
+        let host_own = &slot.host_own;
+        let host_point_of_receiver = &slot.host_point_of_receiver;
+        let host_receiver_of_pair = &slot.host_receiver_of_pair;
+        let host_candidates = &slot.host_candidates;
+        let host_band_weights = &slot.host_band_weights;
+        let host_total = &mut slot.host_total;
+        loop {
+            let rays = ensure_device(device, &mut slot.rays, PAIR_RAY_BYTES * need_rays)?;
+            let ray_capacity = need_rays as u32;
+            let overflow = {
+                let stream = self.fork()?;
+                let count_u32 = count as u32;
+                if !uploaded {
+                    // SAFETY: `stream` drops before `slot_guard` and all pinned/device buffers.
+                    unsafe {
+                        stream.copy_prefix(host_xy.as_slice(2 * receiver_count), device_xy)?;
+                        stream.copy_prefix(host_own.as_slice(receiver_count), device_own)?;
+                        stream.copy_prefix(
+                            host_point_of_receiver.as_slice(receiver_count),
+                            device_point_of_receiver,
+                        )?;
+                        stream.copy_prefix(
+                            host_receiver_of_pair.as_slice(count),
+                            device_receiver_of_pair,
+                        )?;
+                        stream.copy_prefix(host_candidates.as_slice(count), device_candidates)?;
+                        if let Some(device_weights) = device_band_weights.as_deref_mut() {
+                            stream
+                                .copy_prefix(host_band_weights.as_slice(count), device_weights)?;
+                        }
+                    }
+                    stream.zero_prefix(sums, PAIR_SUMS * count)?;
+                    unsafe {
+                        stream.launch(
+                            kernel("point_receivers")?,
+                            threads(receiver_count),
+                            (
+                                &square.scene,
+                                &*device_xy,
+                                &*device_own,
+                                receiver_count as u32,
+                                &*point_receivers,
+                                &*receiver_failed,
+                            ),
+                        )?;
+                    }
+                    uploaded = true;
+                }
+                let direct_single: u32 = u32::from(pair_spectra.is_none());
+                let mut pass1_params = [
+                    (&square.scene).as_kernel_param(),
+                    (&*point_receivers).as_kernel_param(),
+                    (&*receiver_failed).as_kernel_param(),
+                    (&*device_receiver_of_pair).as_kernel_param(),
+                    (&*device_candidates).as_kernel_param(),
+                    count_u32.as_kernel_param(),
+                    none.as_kernel_param(),
+                    none.as_kernel_param(),
+                    none.as_kernel_param(),
+                    ray_capacity.as_kernel_param(),
+                    direct_single.as_kernel_param(),
+                    none.as_kernel_param(),
+                    (&*ray_counts).as_kernel_param(),
+                    (&*failed).as_kernel_param(),
+                    (&*pair_bands).as_kernel_param(),
+                ];
+                unsafe {
+                    stream.launch(kernel("pair_rays")?, threads(count), &mut pass1_params[..])?;
+                    stream.launch(
+                        kernel("scan_blocks")?,
+                        scan_blocks_cfg,
+                        (&*ray_counts, count_u32, &*ray_offsets, &*block_sums),
+                    )?;
+                    stream.launch(
+                        kernel("scan_block_sums")?,
+                        scan_sums_cfg,
+                        (&*block_sums, num_scan_blocks as u32, &*total_rays),
+                    )?;
+                }
+                let mut pass2_params = [
+                    (&square.scene).as_kernel_param(),
+                    (&*point_receivers).as_kernel_param(),
+                    (&*receiver_failed).as_kernel_param(),
+                    (&*device_receiver_of_pair).as_kernel_param(),
+                    (&*device_candidates).as_kernel_param(),
+                    count_u32.as_kernel_param(),
+                    (&*ray_offsets).as_kernel_param(),
+                    (&*block_sums).as_kernel_param(),
+                    (&*total_rays).as_kernel_param(),
+                    ray_capacity.as_kernel_param(),
+                    direct_single.as_kernel_param(),
+                    (&*rays).as_kernel_param(),
+                    (&*ray_counts).as_kernel_param(),
+                    (&*failed).as_kernel_param(),
+                    (&*pair_bands).as_kernel_param(),
+                ];
+                unsafe {
+                    stream.launch(kernel("pair_rays")?, threads(count), &mut pass2_params[..])?;
+                }
+                if pair_spectra.is_some() {
+                    stream.zero_prefix(pair_bands, PERIODS * BANDS * count)?;
+                }
+                let direct_bands_ptr: u64 = if pair_spectra.is_none() {
+                    *bands.device_ptr()
+                } else {
+                    0
+                };
+                let mut ray_params = [
+                    (&square.scene).as_kernel_param(),
+                    (&*point_receivers).as_kernel_param(),
+                    (&*device_receiver_of_pair).as_kernel_param(),
+                    (&*device_candidates).as_kernel_param(),
+                    (&*device_point_of_receiver).as_kernel_param(),
+                    weights_ptr.as_kernel_param(),
+                    direct_bands_ptr.as_kernel_param(),
+                    (&*rays).as_kernel_param(),
+                    (&*total_rays).as_kernel_param(),
+                    ray_capacity.as_kernel_param(),
+                    (&*sums).as_kernel_param(),
+                    (&*pair_bands).as_kernel_param(),
+                    (&*failed).as_kernel_param(),
+                ];
                 unsafe {
                     stream.launch(
-                        kernel("pair_bands_to_points")?,
-                        threads(count),
-                        (
-                            &square.scene,
-                            &device_candidates,
-                            &device_points,
-                            &device_band_weights,
-                            count as u32,
-                            &pair_bands,
-                            &failed,
-                            &mut *bands,
-                        ),
+                        kernel("ray_transfers")?,
+                        threads(ray_capacity as usize),
+                        &mut ray_params[..],
                     )?;
+                    if pair_spectra.is_none() {
+                        stream.launch(
+                            kernel("pair_bands_to_points")?,
+                            threads(count),
+                            (
+                                &square.scene,
+                                &*device_receiver_of_pair,
+                                &*device_candidates,
+                                &*device_point_of_receiver,
+                                weights_ptr,
+                                count_u32,
+                                &*total_rays,
+                                ray_capacity,
+                                &*ray_counts,
+                                &*pair_bands,
+                                &*failed,
+                                &mut *bands,
+                            ),
+                        )?;
+                    }
+                }
+                stream.read_back_into(total_rays, host_total.as_mut_slice(1))?;
+                let total = host_total.as_slice(1)[0] as usize;
+                if total > ray_capacity as usize {
+                    // On rare overflow, `pair_rays` pass-2 skipped writing and `zero_prefix`
+                    // cleared `pair_bands` (pass-1's slot cache), so re-run pass-1 on retry.
+                    stream.finish()?;
+                    Err(total)
+                } else {
+                    stream.read_back_into(sums, out_sums.as_mut_slice(PAIR_SUMS * count))?;
+                    stream.read_back_into(failed, out_failed.as_mut_slice(count))?;
+                    if let Some(spectra) = pair_spectra.as_deref_mut() {
+                        *spectra = if total > 0 {
+                            stream.read_back_prefix(pair_bands, PERIODS * BANDS * count)?
+                        } else {
+                            vec![0.0; PERIODS * BANDS * count]
+                        };
+                    }
+                    stream.finish()?;
+                    Ok(total)
+                }
+            };
+            match overflow {
+                Err(total) => {
+                    need_rays = total.next_multiple_of(1024).max(need_rays);
+                }
+                Ok(total) => {
+                    slot.rays_per_pair = next_rays_per_pair(slot.rays_per_pair, total, count);
+                    break;
                 }
             }
         }
-        let sums = stream.read_back(&sums)?;
-        let failed = stream.read_back(&failed)?;
-        if let Some(spectra) = pair_spectra {
-            *spectra = if total > 0 {
-                stream.read_back(&pair_bands)?
-            } else {
-                vec![0.0; PERIODS * BANDS * count]
-            };
-        }
-        stream.finish()?;
-        Ok((
-            sums.chunks_exact(PAIR_SUMS)
-                .map(|chunk| std::array::from_fn(|k| chunk[k]))
-                .collect(),
-            failed,
-        ))
+        Ok(PairResults {
+            sums: Some(out_sums),
+            failed: Some(out_failed),
+            pool: Arc::clone(&self.output_pool),
+            count,
+        })
     }
 }
 

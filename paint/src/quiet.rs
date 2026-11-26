@@ -31,23 +31,28 @@ impl QuietBlocks {
     pub fn new(painter: &PointPainter) -> Result<Self, String> {
         let (square, grid) = (painter.square, painter.grid);
         let side = grid.pixels / grid.block;
-        let candidates = (0..side * side)
-            .into_par_iter()
-            .map_init(Vec::new, |near, at| {
-                let (x, y) = ((at % side) * grid.block, (at / side) * grid.block);
-                let (low, high) = rectangle_at(
-                    square,
-                    grid.pixels,
-                    x as f64,
-                    y as f64,
-                    (x + grid.block) as f64,
-                    (y + grid.block) as f64,
-                );
-                !painter.block_has_sources(near, at)
-                    && square.obstacles.is_open_rectangle(low, high)
-            })
-            .collect::<Vec<_>>();
-        let corner_paint = paint_corners(painter)?;
+        let (candidates, corner_paint) = rayon::join(
+            || {
+                (0..side * side)
+                    .into_par_iter()
+                    .map_init(Vec::new, |near, at| {
+                        let (x, y) = ((at % side) * grid.block, (at / side) * grid.block);
+                        let (low, high) = rectangle_at(
+                            square,
+                            grid.pixels,
+                            x as f64,
+                            y as f64,
+                            (x + grid.block) as f64,
+                            (y + grid.block) as f64,
+                        );
+                        !painter.block_has_sources(near, at)
+                            && square.obstacles.is_open_rectangle(low, high)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            || paint_corners(painter),
+        );
+        let corner_paint = corner_paint?;
         let mut quiet = Self {
             known_blocks: vec![false; candidates.len()],
             admissions: (0..candidates.len()).map(|_| None).collect(),

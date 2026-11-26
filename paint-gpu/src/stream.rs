@@ -5,7 +5,7 @@
 //! A side stream may use a buffer only once it follows that allocation, and a launch's buffers are
 //! declared before its stream so that the stream synchronizes or joins before they are freed.
 //!
-//! Host upload sources passed to [`upload_default`] and [`ForkedStream::copy`] stay alive and
+//! Host upload sources passed to [`upload_default`] and [`ForkedStream::copy_prefix`] stay alive and
 //! unchanged, and download destinations in [`download_default`] and [`ForkedStream::read_back`]
 //! stay alive and reserved for CUDA to write, until a host-side `cuStreamSynchronize` confirms
 //! completion (on normal return, early return or unwind). Whenever a host-side synchronize fails
@@ -61,6 +61,142 @@ unsafe fn finish_host_transfer(
     driver(copy)
 }
 
+/// Page-locked host buffer allocated through CUDA (`cuMemHostAlloc`) for direct DMA transfers.
+/// Requires `ValidAsZeroBits` because [`Self::reserve`] zero-initializes the buffer before
+/// exposing typed slices.
+pub(crate) struct PinnedBuf<T: DeviceRepr + ValidAsZeroBits + Copy> {
+    ptr: *mut T,
+    capacity: usize,
+    device: Arc<CudaDevice>,
+}
+
+// SAFETY: `PinnedBuf<T>` owns a portable page-locked host allocation (`CU_MEMHOSTALLOC_PORTABLE`)
+// and `T: Copy + DeviceRepr + ValidAsZeroBits + Send` has no thread affinity.
+unsafe impl<T: DeviceRepr + ValidAsZeroBits + Copy + Send> Send for PinnedBuf<T> {}
+
+impl<T: DeviceRepr + ValidAsZeroBits + Copy> PinnedBuf<T> {
+    pub(crate) fn new(device: &Arc<CudaDevice>) -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            capacity: 0,
+            device: Arc::clone(device),
+        }
+    }
+
+    pub(crate) fn reserve(&mut self, len: usize) -> Result<(), String> {
+        if len <= self.capacity {
+            return Ok(());
+        }
+        self.try_free()?;
+        let bytes = len
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or("pinned host buffer size overflow")?;
+        driver(self.device.bind_to_thread())?;
+        let mut raw: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: context bound above; `raw` receives a page-locked allocation of `bytes` bytes.
+        let status =
+            unsafe { sys::lib().cuMemHostAlloc(&mut raw, bytes, sys::CU_MEMHOSTALLOC_PORTABLE) };
+        driver(status.result())?;
+        // SAFETY: `raw` points to `bytes` writable bytes; `T: ValidAsZeroBits` guarantees all-zero
+        // bit patterns are valid values of `T`, pre-faulting pages and initializing `&mut [T]`.
+        unsafe {
+            std::ptr::write_bytes(raw.cast::<u8>(), 0, bytes);
+        }
+        self.ptr = raw.cast::<T>();
+        self.capacity = len;
+        Ok(())
+    }
+
+    pub(crate) fn copy_from_slice(&mut self, src: &[T]) -> Result<&[T], String> {
+        self.reserve(src.len())?;
+        if !src.is_empty() {
+            // SAFETY: `self.ptr` holds at least `src.len()` initialized elements and cannot alias `src`.
+            unsafe {
+                std::ptr::copy_nonoverlapping(src.as_ptr(), self.ptr, src.len());
+            }
+        }
+        Ok(self.as_slice(src.len()))
+    }
+
+    pub(crate) fn as_slice(&self, len: usize) -> &[T] {
+        assert!(len <= self.capacity);
+        if len == 0 {
+            &[]
+        } else {
+            // SAFETY: `len <= self.capacity` and `reserve` zero-initialized all elements.
+            unsafe { std::slice::from_raw_parts(self.ptr, len) }
+        }
+    }
+
+    pub(crate) fn as_mut_slice(&mut self, len: usize) -> &mut [T] {
+        assert!(len <= self.capacity);
+        if len == 0 {
+            &mut []
+        } else {
+            // SAFETY: exclusive `&mut self`, `len <= self.capacity`, all elements initialized.
+            unsafe { std::slice::from_raw_parts_mut(self.ptr, len) }
+        }
+    }
+
+    /// Releases the page-locked allocation when it grew beyond `max_retained` elements.
+    /// Keeps the pointer intact if freeing fails so a later attempt can still release it.
+    pub(crate) fn trim(&mut self, max_retained: usize) {
+        if self.capacity > max_retained {
+            let _ = self.try_free();
+        }
+    }
+
+    fn try_free(&mut self) -> Result<(), String> {
+        clear_after_free(&mut self.ptr, &mut self.capacity, |ptr| {
+            driver(self.device.bind_to_thread())?;
+            // SAFETY: `ptr` came from `cuMemHostAlloc` and no stream references it after sync.
+            let status = unsafe { sys::lib().cuMemFreeHost(ptr.cast::<std::ffi::c_void>()) };
+            driver(status.result())
+        })
+    }
+}
+
+/// Clears `(ptr, capacity)` only once `release` confirms the allocation was freed.
+fn clear_after_free<T>(
+    ptr: &mut *mut T,
+    capacity: &mut usize,
+    release: impl FnOnce(*mut T) -> Result<(), String>,
+) -> Result<(), String> {
+    if !ptr.is_null() {
+        release(*ptr)?;
+        *ptr = std::ptr::null_mut();
+        *capacity = 0;
+    }
+    Ok(())
+}
+
+impl<T: DeviceRepr + ValidAsZeroBits + Copy> Drop for PinnedBuf<T> {
+    fn drop(&mut self) {
+        let _ = self.try_free();
+    }
+}
+
+/// Copies the first `dst.len()` elements of `source` into `dst` on `stream`, keeping `dst` alive
+/// until a host-side synchronize confirms completion (aborting at once if synchronize fails).
+///
+/// # Safety
+/// The device context must be current on this thread and `stream` must belong to it.
+unsafe fn dtoh_into_on_stream<T: DeviceRepr>(
+    source: &CudaSlice<T>,
+    dst: &mut [T],
+    stream: sys::CUstream,
+) -> Result<(), String> {
+    if dst.is_empty() {
+        return Ok(());
+    }
+    if dst.len() > source.len() {
+        return Err("read-back destination larger than device buffer".into());
+    }
+    // SAFETY: `dst` stays borrowed across the async copy and unconditional synchronize.
+    let copy = unsafe { result::memcpy_dtoh_async(dst, *source.device_ptr(), stream) };
+    unsafe { finish_host_transfer(stream, copy) }
+}
+
 /// Copies `source` to the host on `stream`, keeping the destination `Vec` alive and reserved for
 /// CUDA to write until a host-side synchronize confirms completion (aborting at once if
 /// synchronize fails).
@@ -75,11 +211,7 @@ unsafe fn dtoh_on_stream<T: DeviceRepr + Default + Clone>(
         return Ok(Vec::new());
     }
     let mut values = vec![T::default(); source.len()];
-    // SAFETY: `values` holds `source.len()` initialized elements and stays alive across both the
-    // copy and the unconditional synchronize in `finish_host_transfer` (which aborts on failure
-    // before `values` can drop).
-    let copy = unsafe { result::memcpy_dtoh_async(&mut values, *source.device_ptr(), stream) };
-    unsafe { finish_host_transfer(stream, copy) }?;
+    unsafe { dtoh_into_on_stream(source, &mut values, stream) }?;
     Ok(values)
 }
 
@@ -129,7 +261,7 @@ pub(crate) struct ForkedStream<'a, 'host> {
     /// True from any side-stream work (`copy`, `zero`, `launch`) until a host-side synchronize
     /// confirms it finished.
     pending_work: Cell<bool>,
-    /// Ties every borrowed host source passed to [`Self::copy`] (invariant in `'host`) so Rust
+    /// Ties every borrowed host source passed to [`Self::copy_prefix`] (invariant in `'host`) so Rust
     /// requires each one to outlive this stream and remain unchanged until a host-side synchronize
     /// confirms completion (in [`Self::read_back`] on the normal path, or in [`Drop`] while work
     /// is still pending).
@@ -167,13 +299,6 @@ impl<'host> ForkedStream<'_, 'host> {
         self.stream.as_ref().expect("forked stream open")
     }
 
-    /// The stream's next work follows the default stream's so far as well (buffers allocated
-    /// since).
-    pub(crate) fn wait_for_default(&self) -> Result<(), String> {
-        let _held = self.event.lock().unwrap_or_else(PoisonError::into_inner);
-        driver(self.open_stream().wait_for_default())
-    }
-
     /// Ensures the context is current on the first queued operation after creation or a completed
     /// synchronize, then marks side-stream work pending before submitting to CUDA.
     fn begin_work(&self) -> Result<(), String> {
@@ -184,9 +309,8 @@ impl<'host> ForkedStream<'_, 'host> {
         Ok(())
     }
 
-    /// `values` copied into `buffer` on this stream, in its order: a kernel launched on it after
-    /// reads them. Copied on the default stream, each copy waited for there, a launch's six
-    /// inputs waited six times for whatever the passes of the squares had on that one stream.
+    /// Copies `values` into the start of `buffer` (`values.len() <= buffer.len()`) on this stream,
+    /// in its order: a kernel launched on it after reads them.
     ///
     /// # Safety
     /// 1. The caller must not leak this stream (for example with `std::mem::forget`): `values` is
@@ -194,35 +318,37 @@ impl<'host> ForkedStream<'_, 'host> {
     ///    confirms completion (in [`Self::read_back`] or [`Drop`], aborting if synchronize fails).
     /// 2. `buffer` is only borrowed for this call, not tied to `'host`: the caller must declare
     ///    `buffer` before this stream so this stream synchronizes or joins before `buffer` drops.
-    pub(crate) unsafe fn copy<T: DeviceRepr>(
+    pub(crate) unsafe fn copy_prefix<T: DeviceRepr>(
         &self,
         values: &'host [T],
         buffer: &mut CudaSlice<T>,
     ) -> Result<(), String> {
-        if values.len() != buffer.len() {
-            return Err("a buffer of another length than the values copied into it".into());
+        if values.len() > buffer.len() {
+            return Err("values larger than destination device buffer".into());
         }
         if values.is_empty() {
             return Ok(());
         }
         self.begin_work()?;
-        // SAFETY: the buffer holds as many values as are copied; `values` outlives this stream and
-        // `buffer` is kept alive past this stream by the caller's declaration order.
+        // SAFETY: `buffer` holds at least `values.len()` elements; `values` outlives this stream
+        // and `buffer` is declared before it.
         driver(unsafe {
             result::memcpy_htod_async(*buffer.device_ptr_mut(), values, self.open_stream().stream)
         })
     }
 
-    /// `buffer` zeroed on this stream, in its order: a kernel launched on it after reads zeros.
-    ///
-    /// `buffer` is only borrowed for this call while the memset remains queued on this stream: the
-    /// caller must declare `buffer` before this stream so this stream synchronizes or joins before
-    /// `buffer` drops.
-    pub(crate) fn zero<T: DeviceRepr + ValidAsZeroBits>(
+    /// Zeroes the first `count` elements of `buffer` on this stream, in its order: a kernel
+    /// launched on it after reads zeros. `buffer` must be declared before this stream so this
+    /// stream synchronizes or joins before `buffer` drops.
+    pub(crate) fn zero_prefix<T: DeviceRepr + ValidAsZeroBits>(
         &self,
         buffer: &mut CudaSlice<T>,
+        count: usize,
     ) -> Result<(), String> {
-        let bytes = buffer.num_bytes();
+        if count > buffer.len() {
+            return Err("zero_prefix count exceeds buffer length".into());
+        }
+        let bytes = count * std::mem::size_of::<T>();
         if bytes == 0 {
             return Ok(());
         }
@@ -268,6 +394,26 @@ impl<'host> ForkedStream<'_, 'host> {
         &self,
         source: &CudaSlice<T>,
     ) -> Result<Vec<T>, String> {
+        self.read_back_prefix(source, source.len())
+    }
+
+    /// Reads the first `count` elements of `source` into a newly allocated `Vec`.
+    pub(crate) fn read_back_prefix<T: DeviceRepr + Default + Clone>(
+        &self,
+        source: &CudaSlice<T>,
+        count: usize,
+    ) -> Result<Vec<T>, String> {
+        let mut values = vec![T::default(); count];
+        self.read_back_into(source, &mut values)?;
+        Ok(values)
+    }
+
+    /// Reads the first `dst.len()` elements of `source` into `dst` once the stream's work is done.
+    pub(crate) fn read_back_into<T: DeviceRepr>(
+        &self,
+        source: &CudaSlice<T>,
+        dst: &mut [T],
+    ) -> Result<(), String> {
         let stream = self.open_stream().stream;
         if self.pending_work.get() {
             // SAFETY: a stream this card created and still holds on this thread's bound context.
@@ -277,7 +423,7 @@ impl<'host> ForkedStream<'_, 'host> {
             self.pending_work.set(false);
         }
         // SAFETY: this thread bound the context in `Gpu::fork`; `stream` belongs to it.
-        unsafe { dtoh_on_stream(source, stream) }
+        unsafe { dtoh_into_on_stream(source, dst, stream) }
     }
 
     /// Joins and destroys the stream, returning any teardown failure as an ordinary error once all
@@ -325,5 +471,18 @@ mod tests {
         assert_eq!(panic_message(Box::new(String::from("owned"))), "owned");
         assert_eq!(panic_message(Box::new("static")), "static");
         assert_eq!(panic_message(Box::new(42u32)), "driver unwrap panicked");
+    }
+
+    #[test]
+    fn pinned_free_retains_pointer_on_error_and_clears_on_success() {
+        let mut dummy = 0u32;
+        let mut ptr: *mut u32 = &mut dummy;
+        let mut capacity = 16usize;
+        assert!(clear_after_free(&mut ptr, &mut capacity, |_| Err("bind failed".into())).is_err());
+        assert_eq!(ptr, &mut dummy as *mut u32);
+        assert_eq!(capacity, 16);
+        assert!(clear_after_free(&mut ptr, &mut capacity, |_| Ok(())).is_ok());
+        assert!(ptr.is_null());
+        assert_eq!(capacity, 0);
     }
 }

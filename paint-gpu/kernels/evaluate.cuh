@@ -51,17 +51,6 @@ __device__ void place_weather(const u8* nodes, float lat, float lon, PlaceWeathe
     }
 }
 
-// weather::FavourableProbability::at
-__device__ float favourable_at(const PlaceWeather& weather, int period, float azimuth_rad) {
-    float bearing_deg = rem_euclidf(90.0f - azimuth_rad * (180.0f / QM_PI), 360.0f);
-    float position = bearing_deg / (360.0f / (float)SECTORS);
-    int lower = ((int)floorf(position)) % SECTORS;
-    int upper = (lower + 1) % SECTORS;
-    float fraction = position - floorf(position);
-    const float* row = weather.favourable[period];
-    return row[lower] + fraction * (row[upper] - row[lower]);
-}
-
 // One receiver (popup::evaluate::Receiver without its reflection, which the painter applies to a
 // pixel's sum).
 struct Receiver {
@@ -106,8 +95,17 @@ __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacle
     u32 failed = ray_transfer(ground, obstacles, px, py, receiver.x, receiver.y, receiver.own_footprint, obstacles_on_ray, ends, s, &transfer);
     if (failed) return failed;
     float azimuth = atan2f(receiver.y - py, receiver.x - px);
+    float bearing_deg = rem_euclidf(90.0f - azimuth * (180.0f / QM_PI), 360.0f);
+    float pos = bearing_deg * ((float)SECTORS / 360.0f);
+    float pos_floor = floorf(pos);
+    int lower = ((int)pos_floor) & (SECTORS - 1);
+    int upper = (lower + 1) & (SECTORS - 1);
+    float fraction = pos - pos_floor;
     float p[PERIODS];
-    for (int period = 0; period < PERIODS; period++) p[period] = favourable_at(receiver.weather, period, azimuth);
+    for (int period = 0; period < PERIODS; period++) {
+        const float* row = receiver.weather.favourable[period];
+        p[period] = row[lower] + fraction * (row[upper] - row[lower]);
+    }
     for (int band = 0; band < BANDS; band++) {
         float air = weight * attenuation_energy(receiver.weather.alpha_db_per_km[band] * transfer.slant_m / 1000.0f);
         float homogeneous = attenuation_energy(state_attenuation_db(transfer.states[HOMOGENEOUS], band)
@@ -171,7 +169,7 @@ __device__ u32 pair_rays_of(const ObstacleScene& obstacles, const Receiver& rece
         ray.py = candidate.ay;
         ray.weight = 1.0f / (distance * distance * energy_of_level(11.0f));
         ray.source_ground_m = candidate.on_deck ? candidate.ground0 : QM_NAN;
-        return take(ray);
+        return take(ray, 0.0f);
     }
     float start[3] = {candidate.ax - receiver.x, candidate.ay - receiver.y, candidate.ground0 + source.height_m - receiver.altitude_m};
     float end[3] = {candidate.bx - receiver.x, candidate.by - receiver.y, candidate.ground1 + source.height_m - receiver.altitude_m};
@@ -192,7 +190,7 @@ __device__ u32 pair_rays_of(const ObstacleScene& obstacles, const Receiver& rece
         ray.py = candidate.ay + fraction * (candidate.by - candidate.ay);
         ray.weight = nodes.weight_rad[node] * divergence;
         ray.source_ground_m = candidate.on_deck ? candidate.ground0 + fraction * (candidate.ground1 - candidate.ground0) : QM_NAN;
-        failed = take(ray);
+        failed = take(ray, fraction);
         if (failed) return failed;
     }
     return 0;

@@ -22,8 +22,8 @@ fn no_own(_: usize, _: usize) -> Option<[f64; LAYERS]> {
 
 /// A field the coarse lattice blends exactly passes the quadrants' probes, at blocks of 8 and 16,
 /// and the block then blends every pixel from the coarse lattice, a probe within the tolerance
-/// taking the blend; a probe over half a phon or half a decibel off, or a coarse sample unknown,
-/// sends the block to the fine lattice.
+/// taking the blend; a probe outside the tolerance, or a coarse sample unknown, sends the block
+/// to the fine lattice.
 #[test]
 fn a_coarse_lattice_blends_a_block_only_where_its_quadrant_probes_agree() {
     for b in [8, 16] {
@@ -55,11 +55,11 @@ fn a_coarse_lattice_blends_a_block_only_where_its_quadrant_probes_agree() {
             }
         }
         let mut loud = samples.clone();
-        loud[18] = heard(field(px, py) * 1.05);
+        loud[18] = heard(field(px, py) * 1.07);
         assert!(!probes_agree(&lattice, &loud, &positions));
         let mut energetic = samples.clone();
         let mut probe = heard(field(px, py)).unwrap();
-        probe.paint.0[0] *= 1.2;
+        probe.paint.0[0] *= 1.25;
         energetic[18] = Some(probe);
         assert!(!probes_agree(&lattice, &energetic, &positions));
         let mut unknown = samples;
@@ -75,7 +75,7 @@ fn a_coarse_lattice_blends_a_block_only_where_its_quadrant_probes_agree() {
 
 /// A field the corners blend exactly passes the quadrants' probes, and every pixel of the block
 /// then takes the corners' blend at its centre, the corners standing at the block's edges. A probe
-/// over half a phon off, one in a building, or a corner in one, refuses the corners' blend.
+/// outside the tolerance, one in a building, or a corner in one, refuses the corners' blend.
 #[test]
 fn the_corners_blend_a_block_only_where_its_quadrant_probes_agree() {
     let b = 16;
@@ -105,7 +105,7 @@ fn the_corners_blend_a_block_only_where_its_quadrant_probes_agree() {
         }
     }
     let mut loud = samples.clone();
-    loud[18] = heard(at_centre(18) * 1.05);
+    loud[18] = heard(at_centre(18) * 1.07);
     assert!(!probes_agree(&lattice, &loud, &positions));
     let mut indoors = samples.clone();
     indoors[6] = None;

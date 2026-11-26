@@ -112,22 +112,21 @@ fn tangent_and_clipped_corners_keep_cpu_roofs_and_source_containment() {
         let point_indices: Vec<_> = (0..receivers.len() as u32).collect();
         let own = vec![0; receivers.len()];
         let candidates = vec![0; receivers.len()];
-        let weights = vec![1.0; receivers.len()];
-        let (energies, failed) = gpu
+        let results = gpu
             .evaluate_pairs(
                 &device_square,
-                (&receivers, &own),
-                (&candidates, &point_indices, &point_indices, &weights),
+                (&receivers, &own, &point_indices),
+                (&candidates, &point_indices, None),
                 &mut bands,
                 None,
             )
             .unwrap();
         assert_eq!(
-            failed,
+            results.failed(),
             vec![0; receivers.len()],
             "the regression must run on the card, without CPU fallback"
         );
-        for (position, actual) in receivers.into_iter().zip(energies) {
+        for (position, &actual) in receivers.into_iter().zip(results.sums()) {
             let point = Point::with_receiver_properties(&square, position, 0, 0.0).unwrap();
             let (expected, _) = whole_energy(&square, &point, 0, &mut Scratch::default()).unwrap();
             let expected: Vec<_> = expected
@@ -256,18 +255,19 @@ fn evaluate_and_compare_single_pair(
     let device_square = DeviceSquare::upload(gpu, square, files, weather).unwrap();
     let mut bands = gpu.bands(1).unwrap();
     let mut pair_spectra = Vec::new();
-    let (energies, failed) = gpu
+    let results = gpu
         .evaluate_pairs(
             &device_square,
-            (&[receiver], &[0]),
-            (&[0], &[0], &[0], &[1.0]),
+            (&[receiver], &[0], &[0]),
+            (&[0], &[0], None),
             &mut bands,
             Some(&mut pair_spectra),
         )
         .unwrap();
+    let energies = results.sums();
     assert_eq!(
-        failed,
-        vec![0],
+        results.failed(),
+        &[0],
         "{label}: must run on card without fallback"
     );
     assert_eq!(
@@ -722,37 +722,40 @@ fn zero_ray_failed_and_rewalked_pairs_stay_clean_without_dead_memsets() {
     // 1. All-zero-ray launch (`total == 0`) with `pair_spectra` requested.
     let mut bands = gpu.bands(2).unwrap();
     let mut spectra = vec![123.0; 4];
-    let (sums, failed) = gpu
+    let results = gpu
         .evaluate_pairs(
             &device_square,
-            (&[receiver, outside], &[0, 0]),
-            (&[short_cand, point_cand], &[0, 1], &[0, 1], &[1.0, 1.0]),
+            (&[receiver, outside], &[0, 0], &[0, 1]),
+            (&[short_cand, point_cand], &[0, 1], None),
             &mut bands,
             Some(&mut spectra),
         )
         .unwrap();
-    assert_eq!(failed, vec![0, paint_gpu::device::FAILED_NOT_READ]);
-    assert_eq!(sums, vec![[0.0; 9]; 2]);
+    assert_eq!(results.failed(), &[0, paint_gpu::device::FAILED_NOT_READ]);
+    assert_eq!(results.sums(), &[[0.0; 9]; 2]);
     assert_eq!(spectra, vec![0.0; 2 * PERIODS * BANDS]);
 
     // 2. Mixed launch (`total > 0`): 0-ray line, failed receiver, 1-ray point, >6-ray rewalk line.
     let mut bands = gpu.bands(2).unwrap();
     let mut spectra = Vec::new();
-    let (sums, failed) = gpu
+    let results = gpu
         .evaluate_pairs(
             &device_square,
-            (&[receiver, outside], &[0, 0]),
+            (&[receiver, outside], &[0, 0], &[0, 1]),
             (
                 &[short_cand, point_cand, point_cand, wide_cand],
                 &[0, 1, 0, 0],
-                &[0, 1, 0, 0],
-                &[1.0; 4],
+                None,
             ),
             &mut bands,
             Some(&mut spectra),
         )
         .unwrap();
-    assert_eq!(failed, vec![0, paint_gpu::device::FAILED_NOT_READ, 0, 0]);
+    let sums = results.sums();
+    assert_eq!(
+        results.failed(),
+        &[0, paint_gpu::device::FAILED_NOT_READ, 0, 0]
+    );
     assert_eq!(sums[0], [0.0; 9]);
     assert_eq!(&spectra[0..PERIODS * BANDS], &[0.0; PERIODS * BANDS]);
     let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
@@ -946,16 +949,17 @@ fn foliage_saturated_skyline_and_single_ray_stores_match_cpu() {
     let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather).unwrap();
     let mut bands = gpu.bands(1).unwrap();
     let mut spectra = Vec::new();
-    let (sums, failed) = gpu
+    let results = gpu
         .evaluate_pairs(
             &device_square,
-            (&[receiver], &[0]),
-            (&[0, 1], &[0, 0], &[0, 0], &[1.0, 1.0]),
+            (&[receiver], &[0], &[0]),
+            (&[0, 1], &[0, 0], None),
             &mut bands,
             Some(&mut spectra),
         )
         .unwrap();
-    assert_eq!(failed, vec![0, 0]);
+    let sums = results.sums();
+    assert_eq!(results.failed(), &[0, 0]);
     let point = Point::with_receiver_properties(&square, receiver, 0, 0.0).unwrap();
     for (pair_idx, cand_idx) in [(0usize, 0u32), (1, 1)] {
         let (expected, expected_bands) =

@@ -13,10 +13,33 @@ const SHARE_BINS: usize = 10;
 /// bins of their own: summed with the others the states' difference cancels, and the share no
 /// longer gives back the mean. A draw's weather is favourable in the bins whose share lies above
 /// it.
-#[derive(Clone, Default)]
-pub struct Weather(pub(super) [[[f64; PERIODS]; 3]; 2 * SHARE_BINS]);
+#[derive(Clone)]
+pub struct Weather {
+    bins: [[[f64; PERIODS]; 3]; 2 * SHARE_BINS],
+    active: u32,
+}
+
+impl Default for Weather {
+    fn default() -> Self {
+        Self {
+            bins: [[[0.0; PERIODS]; 3]; 2 * SHARE_BINS],
+            active: 0,
+        }
+    }
+}
 
 impl Weather {
+    /// Clears only the bins that were touched, avoiding zeroing the full 20-bin table.
+    pub fn clear(&mut self) {
+        let mut mask = self.active;
+        while mask != 0 {
+            let bin = mask.trailing_zeros() as usize;
+            self.bins[bin] = [[0.0; PERIODS]; 3];
+            mask &= mask - 1;
+        }
+        self.active = 0;
+    }
+
     /// Where a piece's `energy` of one period falls, the mix of its `states` (homogeneous,
     /// favourable): its bin, and its energy in either state and mixed; a piece without states
     /// (none computed) holds its mean in either.
@@ -35,7 +58,8 @@ impl Weather {
 
     /// Adds energy (homogeneous, favourable, mixed) to `bin` of `period` ([`Weather::binned`]).
     pub fn add_binned(&mut self, period: usize, bin: usize, values: [f64; 3]) {
-        for (state, value) in self.0[bin].iter_mut().zip(values) {
+        self.active |= 1u32 << bin;
+        for (state, value) in self.bins[bin].iter_mut().zip(values) {
             state[period] += value;
         }
     }
@@ -68,11 +92,18 @@ pub(super) fn weather_means(
     weather: &Weather,
     energy: [f64; PERIODS],
 ) -> [[f64; WEATHER_STATES]; PERIODS] {
+    if weather.active == 0 {
+        return energy.map(|value| [value; WEATHER_STATES]);
+    }
     std::array::from_fn(|period| {
         // Per state the excess of the bins whose share falls in it, whole and its part in it.
         let (mut whole, mut part) = ([0.0; WEATHER_STATES + 1], [0.0; WEATHER_STATES + 1]);
         let (mut calm, mut silent) = (0.0, true);
-        for [homogeneous, favourable, mix] in &weather.0 {
+        let mut mask = weather.active;
+        while mask != 0 {
+            let bin = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            let [homogeneous, favourable, mix] = &weather.bins[bin];
             let (homogeneous, favourable) = (homogeneous[period], favourable[period]);
             silent &= homogeneous + favourable <= 0.0;
             let share = favourable_share(mix[period], homogeneous, favourable);

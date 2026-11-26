@@ -72,6 +72,11 @@ impl Card {
         (self.state.lock().unwrap_or_else(PoisonError::into_inner)).stopped
     }
 
+    /// Number of squares currently reserved on the card.
+    pub(crate) fn active_squares(&self) -> usize {
+        (self.state.lock().unwrap_or_else(PoisonError::into_inner)).squares
+    }
+
     /// Waits until the card has room for a square of `candidates` ([`has_room`]) and reserves it
     /// there: `None` when a painter stopped first.
     pub(crate) fn admit(&self, candidates: usize) -> Option<Reservation<'_>> {
@@ -108,9 +113,15 @@ impl Card {
 /// card memory. A third square joins only beside two small ones ([`has_room`]).
 pub(crate) const SQUARES_ON_THE_CARD: usize = 3;
 
-/// A square's sources at most this many candidates paint while the next one is prepared (Dobris's
-/// about 130,000 do; Prague's centre, 470,000 and 30-45 GB, paints alone).
-const PIPELINE_CANDIDATES_MAX: usize = 250_000;
+/// A square's sources at most this many candidates paint beside another on the card (a heavier
+/// square is admitted alone before its device scene is uploaded; three join only while they hold
+/// this many together). Two squares at the cap hold 1,200,000 candidates together; on a 12 GiB
+/// card, keeping the three densest squares of the 54-square world sample resident simultaneously
+/// (506,185 + 356,971 + 354,432 = 1,217,588 candidates) peaked at 6,565 MiB (6.41 GiB) VRAM and
+/// 20.27 GiB host RSS, leaving 4.59 GiB free on an 11 GiB card. Under the 600,000 cap, the six
+/// densest squares peaked at 6,471 MiB (6.32 GiB) VRAM and 13.0 GiB host RSS (down from 7,243 MiB
+/// / 7.07 GiB VRAM and 15.0 GiB RSS on the 506,185 + 356,971 pair before scratch bounding).
+pub(crate) const PIPELINE_CANDIDATES_MAX: usize = 600_000;
 
 #[cfg(test)]
 mod tests {

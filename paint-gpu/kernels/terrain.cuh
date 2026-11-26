@@ -111,6 +111,21 @@ __device__ bool cell_sample(const TerrainScene& scene, const TerrainTile& tile, 
     u32 next_column = c + (column_fraction > 0.0f ? 1u : 0u);
     if (next_row >= tile.rows || next_column >= tile.columns) return false;
     const u8* nodes = scene.nodes + tile.nodes_offset;
+    if (row_fraction == 0.0f || column_fraction == 0.0f) {
+        u32 r0 = r, c0 = c, r1 = next_row, c1 = next_column;
+        float f = row_fraction > 0.0f ? row_fraction : column_fraction;
+        u32 rec0 = *(const u32*)(nodes + 4 * ((u64)r0 * tile.columns + c0));
+        u32 rec1 = f > 0.0f ? *(const u32*)(nodes + 4 * ((u64)r1 * tile.columns + c1)) : rec0;
+        if ((rec0 & 0xffff) == HEIGHT_MISSING || ((rec0 >> 16) & 0xff) > PERCENT_MAX
+            || (rec1 & 0xffff) == HEIGHT_MISSING || ((rec1 >> 16) & 0xff) > PERCENT_MAX) return false;
+        float h0 = -500.0f + (float)(rec0 & 0xffff) * 0.2f;
+        float h1 = -500.0f + (float)(rec1 & 0xffff) * 0.2f;
+        float i0 = (float)((rec0 >> 16) & 0xff);
+        float i1 = (float)((rec1 >> 16) & 0xff);
+        out->height_m = (1.0f - f) * h0 + f * h1;
+        out->ground_factor = 1.0f - ((1.0f - f) * i0 + f * i1) * 0.01f;
+        return f >= 0.5f ? tile_trees(scene, tile, r1, c1, rec1, out) : tile_trees(scene, tile, r0, c0, rec0, out);
+    }
     u32 corner_row[4] = {r, r, next_row, next_row};
     u32 corner_column[4] = {c, next_column, c, next_column};
     u32 record[4];

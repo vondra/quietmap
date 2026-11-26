@@ -21,7 +21,7 @@ __device__ u32 walk_sample(const TerrainScene& sc, float east_m, float north_m, 
                            int north, GroundSample* out) {
     float tile_x = sc.tile_x_at_origin + east_m * sc.tiles_per_metre_east;
     float tile_y = sc.tile_y_at_origin - north_m * sc.tiles_per_metre_north;
-    i64 dx = (i64)floorf(tile_x), dy = (i64)floorf(tile_y);
+    int dx = (int)floorf(tile_x), dy = (int)floorf(tile_y);
     const TerrainTile* tile = terrain_tile(sc, dx, dy);
     if (!tile || tile->state == TILE_NOT_READ) return FAILED_NOT_READ;
     if (tile->state == TILE_READ) {
@@ -41,10 +41,11 @@ __device__ u32 walk_sample(const TerrainScene& sc, float east_m, float north_m, 
 
 // scene::Ground::at, the 1/6" height where the tile has one; 0 or a failure.
 __device__ u32 ground_at(const TerrainScene& scene, float east_m, float north_m, GroundSample* out) {
-    i64 dx = (i64)floorf(scene.tile_x_at_origin + east_m * scene.tiles_per_metre_east);
-    i64 dy = (i64)floorf(scene.tile_y_at_origin - north_m * scene.tiles_per_metre_north);
-    if (dx < -scene.radius || dx > scene.radius || dy < -scene.radius || dy > scene.radius) return FAILED_NOT_READ;
-    const TerrainTile& tile = scene.tiles[(dy + scene.radius) * (2 * scene.radius + 1) + dx + scene.radius];
+    int dx = (int)floorf(scene.tile_x_at_origin + east_m * scene.tiles_per_metre_east);
+    int dy = (int)floorf(scene.tile_y_at_origin - north_m * scene.tiles_per_metre_north);
+    int r = (int)scene.radius;
+    if (dx < -r || dx > r || dy < -r || dy > r) return FAILED_NOT_READ;
+    const TerrainTile& tile = scene.tiles[(dy + r) * (2 * r + 1) + dx + r];
     if (tile.state == TILE_NOT_READ) return FAILED_NOT_READ;
     if (tile.state == TILE_EMPTY) {
         ocean(out);
@@ -59,8 +60,8 @@ __device__ bool fine_near(const TerrainScene& sc, float ax, float ay, float bx, 
     float xs[2] = {fminf(ax, bx), fmaxf(ax, bx)}, ys[2] = {fminf(ay, by), fmaxf(ay, by)};
     for (int i = 0; i < 2; i++) {
         for (int j = 0; j < 2; j++) {
-            const TerrainTile* tile = terrain_tile(sc, (i64)floorf(sc.tile_x_at_origin + xs[i] * sc.tiles_per_metre_east),
-                                                   (i64)floorf(sc.tile_y_at_origin - ys[j] * sc.tiles_per_metre_north));
+            const TerrainTile* tile = terrain_tile(sc, (int)floorf(sc.tile_x_at_origin + xs[i] * sc.tiles_per_metre_east),
+                                                   (int)floorf(sc.tile_y_at_origin - ys[j] * sc.tiles_per_metre_north));
             if (tile && tile->state == TILE_READ && tile->fine_offset) return true;
         }
     }
@@ -105,7 +106,7 @@ __device__ u32 fine_walk_sample(const TerrainScene& sc, float east_m, float nort
                                 GroundSample* out) {
     float tile_x = sc.tile_x_at_origin + east_m * sc.tiles_per_metre_east;
     float tile_y = sc.tile_y_at_origin - north_m * sc.tiles_per_metre_north;
-    i64 dx = (i64)floorf(tile_x), dy = (i64)floorf(tile_y);
+    int dx = (int)floorf(tile_x), dy = (int)floorf(tile_y);
     const TerrainTile* tile = terrain_tile(sc, dx, dy);
     if (!tile || tile->state == TILE_NOT_READ) return FAILED_NOT_READ;
     if (tile->state == TILE_EMPTY) {

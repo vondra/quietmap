@@ -282,3 +282,16 @@ fn a_left_groups_bins_hold_what_the_layer_leaves_out_of_it_by_direction() {
         assert!((of_layer / (even(20.0 * k) * 0.5 + even(10.0 * k) * 2.0) - 1.0).abs() < 1e-12);
     }
 }
+
+#[test]
+fn packed_left_slot_round_trips_and_rejects_27_bit_overflow() {
+    let max_rank = LEFT_RANK_MASK as usize;
+    assert_eq!(unpack_left_slot(pack_left_slot(0, 0, 0)), (0, 0, 0));
+    assert_eq!(
+        unpack_left_slot(pack_left_slot(3, LAYERS - 1, max_rank)),
+        (3, LAYERS - 1, max_rank)
+    );
+    assert!(std::panic::catch_unwind(|| pack_left_slot(0, 0, max_rank + 1)).is_err());
+    assert!(std::panic::catch_unwind(|| pack_left_slot(4, 0, 0)).is_err());
+    assert!(std::panic::catch_unwind(|| pack_left_slot(0, LAYERS, 0)).is_err());
+}

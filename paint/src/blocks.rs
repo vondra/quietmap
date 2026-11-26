@@ -1,9 +1,8 @@
 //! A block of the painter's square: the sources its pixels evaluate exactly and what they leave out at its corners by layer and direction.
 
-use crate::corner_sources::{Corner, Ranked, SECTORS};
+use crate::corner_sources::{Corner, SECTORS};
 use crate::exact::LAYERS;
 use physics::bands::PERIODS;
-use popup::percentiles::Weather;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -61,7 +60,9 @@ pub(crate) struct LeftBin {
 pub(crate) struct LeftGroup {
     pub key: u64,
     pub loudest: u32,
+    pub layer: u8,
     pub nearest: [u32; 4],
+    pub max_corner_energy: [f64; PERIODS],
     pub bins: std::ops::Range<u32>,
 }
 
@@ -133,9 +134,8 @@ fn exact_sources(local: Vec<u32>, corners: [&Corner; 4]) -> (Vec<u32>, IndexSet)
 
 /// What a pixel tracing deeper adds to the sources of `set`: layer by layer each corner's loudest
 /// until what the corner has not traced is within [`DEEPER_UNTRACED_SHARES`] of the quietest
-/// corner's layer.
-fn deeper_additions(set: &IndexSet, corners: [&Corner; 4]) -> Vec<u32> {
-    let mut more = Vec::new();
+/// corner's layer. Passes every added index to `take`.
+fn collect_deeper_additions(set: &IndexSet, corners: [&Corner; 4], mut take: impl FnMut(u32)) {
     let mut added = IndexSet::default();
     for (layer, share) in DEEPER_UNTRACED_SHARES.into_iter().enumerate() {
         let quietest = (corners.iter())
@@ -143,6 +143,9 @@ fn deeper_additions(set: &IndexSet, corners: [&Corner; 4]) -> Vec<u32> {
             .fold(f64::INFINITY, f64::min);
         let budget = share * quietest;
         for corner in corners {
+            if corner.totals[layer] <= budget {
+                continue;
+            }
             let ranked = &corner.ranked[layer];
             let mut untraced: f64 = (ranked.iter())
                 .filter(|source| !set.contains(&source.index) && !added.contains(&source.index))
@@ -153,12 +156,17 @@ fn deeper_additions(set: &IndexSet, corners: [&Corner; 4]) -> Vec<u32> {
                     break;
                 }
                 if !set.contains(&source.index) && added.insert(source.index) {
-                    more.push(source.index);
+                    take(source.index);
                     untraced -= source.lden;
                 }
             }
         }
     }
+}
+
+fn deeper_additions(set: &IndexSet, corners: [&Corner; 4]) -> Vec<u32> {
+    let mut more = Vec::new();
+    collect_deeper_additions(set, corners, |index| more.push(index));
     more
 }
 
@@ -167,7 +175,9 @@ fn deeper_additions(set: &IndexSet, corners: [&Corner; 4]) -> Vec<u32> {
 pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
     let own_count = local.len();
     let (exact, set) = exact_sources(local, corners);
-    let most = exact.len() + deeper_additions(&set, corners).len();
+    let mut deeper = 0usize;
+    collect_deeper_additions(&set, corners, |_| deeper += 1);
+    let most = exact.len() + deeper;
     leave_out((own_count, most), exact, &set, corners)
 }
 
@@ -209,20 +219,37 @@ fn leave_out(
         .collect();
     far.sort_unstable_by_key(|(far, _)| far.index);
     let mut left_out = Box::new([[[[0.0; PERIODS]; SECTORS]; LAYERS]; 4]);
-    // Each source left out at a corner as a small key (its group, Lden energy and index there) and
-    // the corner: sorting the whole 360-byte groups moved more memory than anything else in a
-    // dense city square (2026-10-17).
-    let mut left: Vec<(u64, f64, u32, usize, &Ranked)> = Vec::new();
+    // Compact 24-byte sort key per left-out corner source (group, Lden energy, candidate index,
+    // packed corner/layer/rank slot) halves memory traffic during the block's sort.
+    #[derive(Clone, Copy)]
+    struct LeftEntry {
+        group: u64,
+        lden: f64,
+        index: u32,
+        slot: u32, // bits 30..32 corner, bits 27..30 layer, bits 0..27 ranked position
+    }
+    let mut left: Vec<LeftEntry> = Vec::new();
+    let (far_min, far_max) = far
+        .first()
+        .zip(far.last())
+        .map_or((u32::MAX, 0), |(first, last)| (first.0.index, last.0.index));
     for (c, corner) in corners.iter().enumerate() {
         for (layer, ranked) in corner.ranked.iter().enumerate() {
-            for source in ranked {
+            for (rank_idx, source) in ranked.iter().enumerate() {
                 if !set.contains(&source.index) {
                     let stratum = &mut left_out[c][layer][source.sector as usize];
                     for (total, value) in stratum.iter_mut().zip(source.energy.mixed) {
                         *total += value;
                     }
-                    left.push((source.group, source.lden, source.index, c, source));
-                } else if let Ok(at) = far.binary_search_by_key(&source.index, |(far, _)| far.index)
+                    left.push(LeftEntry {
+                        group: source.group,
+                        lden: source.lden,
+                        index: source.index,
+                        slot: pack_left_slot(c, layer, rank_idx),
+                    });
+                } else if source.index >= far_min
+                    && source.index <= far_max
+                    && let Ok(at) = far.binary_search_by_key(&source.index, |(far, _)| far.index)
                 {
                     let (far, heard) = &mut far[at];
                     far.layer = layer as u8;
@@ -235,45 +262,61 @@ fn leave_out(
     // One entry a group: its loudest source (ties to the lowest index) the representative, at each
     // corner its sources' energy by direction, period and weather bin, and its nearest.
     left.sort_unstable_by(|a, b| {
-        (a.0.cmp(&b.0))
-            .then(b.1.total_cmp(&a.1))
-            .then(a.2.cmp(&b.2))
+        (a.group.cmp(&b.group))
+            .then(b.lden.total_cmp(&a.lden))
+            .then(a.index.cmp(&b.index))
     });
     let mut left_groups: Vec<LeftGroup> = Vec::new();
     let mut left_bins: Vec<LeftBin> = Vec::new();
     let mut nearest_m = [f64::INFINITY; 4];
-    for &(key, _, index, c, source) in &left {
-        if left_groups.last().is_none_or(|group| group.key != key) {
-            close_group(&mut left_groups, &mut left_bins);
+    let mut group_sources = 0usize;
+    for entry in &left {
+        let (c, layer, rank_idx) = unpack_left_slot(entry.slot);
+        let source = &corners[c].ranked[layer][rank_idx];
+        if left_groups
+            .last()
+            .is_none_or(|group| group.key != entry.group)
+        {
+            close_group(&mut left_groups, &mut left_bins, group_sources);
             let start = left_bins.len() as u32;
             left_groups.push(LeftGroup {
-                key,
-                loudest: index,
+                key: entry.group,
+                loudest: entry.index,
+                layer: layer as u8,
                 nearest: [u32::MAX; 4],
+                max_corner_energy: [0.0; PERIODS],
                 bins: start..start,
             });
             nearest_m = [f64::INFINITY; 4];
+            group_sources = 0;
         }
+        group_sources += 1;
         let group = left_groups.last_mut().unwrap();
         let energy = &source.energy;
         for period in 0..PERIODS {
-            let states = [energy.states[0][period], energy.states[1][period]];
-            let (bin, values) = Weather::binned(energy.mixed[period], states);
-            if values.iter().any(|&value| value > 0.0) {
+            let mixed = energy.mixed[period];
+            let s0 = energy.states[0][period];
+            let s1 = energy.states[1][period];
+            let [h, f] = if s0 > 0.0 || s1 > 0.0 {
+                [s0, s1]
+            } else {
+                [mixed; 2]
+            };
+            if h > 0.0 || f > 0.0 || mixed > 0.0 {
                 left_bins.push(LeftBin {
                     corner: c as u8,
                     sector: source.sector,
                     period: period as u8,
-                    bin: bin as u8,
-                    values,
+                    bin: source.weather_bins[period],
+                    values: [h, f, mixed],
                 });
             }
         }
         if source.slant_distance_m < nearest_m[c] {
-            (nearest_m[c], group.nearest[c]) = (source.slant_distance_m, index);
+            (nearest_m[c], group.nearest[c]) = (source.slant_distance_m, entry.index);
         }
     }
-    close_group(&mut left_groups, &mut left_bins);
+    close_group(&mut left_groups, &mut left_bins, group_sources);
     exact.sort_unstable();
     // A corner that does not hear a far source loud takes its direction from one that does.
     let far = (far.into_iter())
@@ -300,27 +343,59 @@ fn leave_out(
 }
 
 /// Ends the last group's bins: one entry per corner, direction, period and bin, its sources' sum.
-fn close_group(groups: &mut [LeftGroup], bins: &mut Vec<LeftBin>) {
+fn close_group(groups: &mut [LeftGroup], bins: &mut Vec<LeftBin>, sources: usize) {
     let Some(group) = groups.last_mut() else {
         return;
     };
     let start = group.bins.start as usize;
-    let key = |entry: &LeftBin| (entry.corner, entry.sector, entry.period, entry.bin);
-    bins[start..].sort_unstable_by_key(key);
-    let mut kept = start;
-    for at in start..bins.len() {
-        if kept > start && key(&bins[kept - 1]) == key(&bins[at]) {
-            let values = bins[at].values;
-            for (sum, value) in bins[kept - 1].values.iter_mut().zip(values) {
-                *sum += value;
+    let kept = if sources <= 1 {
+        // A single source emits at most one bin per period in ascending period order.
+        bins.len()
+    } else {
+        let key = |entry: &LeftBin| (entry.corner, entry.sector, entry.period, entry.bin);
+        bins[start..].sort_unstable_by_key(key);
+        let mut kept = start;
+        for at in start..bins.len() {
+            if kept > start && key(&bins[kept - 1]) == key(&bins[at]) {
+                let values = bins[at].values;
+                for (sum, value) in bins[kept - 1].values.iter_mut().zip(values) {
+                    *sum += value;
+                }
+            } else {
+                bins[kept] = bins[at];
+                kept += 1;
             }
-        } else {
-            bins[kept] = bins[at];
-            kept += 1;
         }
+        bins.truncate(kept);
+        kept
+    };
+    let mut by_corner = [[0.0f64; PERIODS]; 4];
+    for bin in &bins[start..kept] {
+        by_corner[bin.corner as usize][bin.period as usize] += bin.values[2];
     }
-    bins.truncate(kept);
+    group.max_corner_energy =
+        std::array::from_fn(|p| (0..4).map(|c| by_corner[c][p]).fold(0.0f64, f64::max));
     group.bins.end = kept as u32;
+}
+
+/// Maximum 27-bit ranked index stored in a left-out entry's packed slot.
+const LEFT_RANK_MASK: u32 = 0x07ff_ffff;
+
+/// Packs `(corner, layer, rank_idx)` into a `u32`, failing closed if any field overflows its bits.
+fn pack_left_slot(corner: usize, layer: usize, rank_idx: usize) -> u32 {
+    assert!(
+        corner < 4 && layer < LAYERS && rank_idx <= LEFT_RANK_MASK as usize,
+        "left-out slot out of bounds: corner={corner}, layer={layer}, rank={rank_idx}"
+    );
+    ((corner as u32) << 30) | ((layer as u32) << 27) | (rank_idx as u32)
+}
+
+fn unpack_left_slot(slot: u32) -> (usize, usize, usize) {
+    (
+        (slot >> 30) as usize,
+        ((slot >> 27) & 0x7) as usize,
+        (slot & LEFT_RANK_MASK) as usize,
+    )
 }
 
 #[cfg(test)]

@@ -102,6 +102,31 @@ impl FlightBoxes {
         }
     }
 
+    /// Every box of every aircraft tile in band 0, for exact point sums (`FlightWeight::One`).
+    pub fn all(square: &Square) -> Self {
+        let lists: Vec<_> = square
+            .aircraft
+            .iter()
+            .map(|tile| {
+                [tile.fine.as_ref(), tile.far.as_ref()].map(|boxes| {
+                    let all = boxes.map_or_else(Vec::new, |boxes| (0..boxes.box_count()).collect());
+                    [all, Vec::new()]
+                })
+            })
+            .collect();
+        let occupied = [
+            lists
+                .iter()
+                .any(|tile| tile.iter().any(|boxes| !boxes[0].is_empty())),
+            false,
+        ];
+        Self {
+            lists,
+            occupied,
+            coarse_m: 0.0,
+        }
+    }
+
     /// The flights of `request` on the cores: per band its boxes' energy and passes.
     pub fn sums(
         &self,

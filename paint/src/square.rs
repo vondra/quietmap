@@ -17,6 +17,7 @@ use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect, loud};
 use popup::obstacles::{Footprint, Scene};
 use popup::release::{Release, RingFiles};
 use popup::scene::Ground;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tiles::Kind;
@@ -108,7 +109,8 @@ pub struct Square<'a> {
     home_plant_by_footprint: HashMap<u64, Vec<u32>>,
     pub index: Index,
     reaches_squared: Vec<f64>,
-    spreads: Vec<Spread>,
+    /// Precomputed spread for each candidate.
+    pub(crate) spreads: Vec<Spread>,
     pub aircraft: Vec<AircraftTile<'a>>,
     /// The rolls of the runways within their reach of the square, by path.
     pub rolls: Vec<HeardPath>,
@@ -146,33 +148,55 @@ impl<'a> Square<'a> {
             tiles::square::Square,
             PlaceAtmosphere,
         > = std::collections::HashMap::new();
-        for (index, &other) in read.tiles.iter().enumerate() {
-            if read.kinds.contains(&Kind::Terrain) && ground_slot(tile, other, files.ground_rings) {
-                let terrain = read
-                    .file(index, Kind::Terrain)
-                    .map(Terrain::parse)
+        let parsed_tiles: Vec<_> = (0..read.tiles.len())
+            .into_par_iter()
+            .map(|index| -> Result<_, String> {
+                let other = read.tiles[index];
+                let mut ground_data = None;
+                if read.kinds.contains(&Kind::Terrain)
+                    && ground_slot(tile, other, files.ground_rings)
+                {
+                    let terrain = read
+                        .file(index, Kind::Terrain)
+                        .map(Terrain::parse)
+                        .transpose()
+                        .map_err(|e| e.to_string())?;
+                    let obstacles = read
+                        .file(index, Kind::Obstacles)
+                        .map(Obstacles::parse)
+                        .transpose()
+                        .map_err(|e| e.to_string())?;
+                    let src = read
+                        .file(index, Kind::Sources)
+                        .map(Sources::parse)
+                        .transpose()
+                        .map_err(|e| e.to_string())?;
+                    ground_data = Some((terrain, obstacles, src));
+                }
+                let parse_air = |kind| {
+                    read.file(index, kind)
+                        .map(Aircraft::parse)
+                        .transpose()
+                        .map_err(|e| e.to_string())
+                };
+                let (fine, far) = (parse_air(Kind::Aircraft)?, parse_air(Kind::AircraftFar)?);
+                let parsed_rolls = read
+                    .file(index, Kind::AircraftRolls)
+                    .map(tiles::aircraft_rolls::parse)
                     .transpose()
                     .map_err(|e| e.to_string())?;
+                Ok((other, ground_data, fine, far, parsed_rolls))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        for (other, ground_data, fine, far, parsed_rolls) in parsed_tiles {
+            if let Some((terrain, obstacles, src)) = ground_data {
                 ground.insert(other, terrain);
-                let obstacles = read
-                    .file(index, Kind::Obstacles)
-                    .map(Obstacles::parse)
-                    .transpose()
-                    .map_err(|e| e.to_string())?;
                 obstacle_tiles.push((other, obstacles));
-                if let Some(bytes) = read.file(index, Kind::Sources) {
-                    sources.push((other, Sources::parse(bytes).map_err(|e| e.to_string())?));
+                if let Some(src) = src {
+                    sources.push((other, src));
                 }
             }
-            let parse = |kind| {
-                read.file(index, kind)
-                    .map(Aircraft::parse)
-                    .transpose()
-                    .map_err(|e| e.to_string())
-            };
-            let (fine, far) = (parse(Kind::Aircraft)?, parse(Kind::AircraftFar)?);
-            if let Some(bytes) = read.file(index, Kind::AircraftRolls) {
-                let parsed = tiles::aircraft_rolls::parse(bytes).map_err(|e| e.to_string())?;
+            if let Some(parsed) = parsed_rolls {
                 let place = (roll_atmospheres.entry(tiles::square::Square::of(other)))
                     .or_insert_with_key(|square| {
                         let (lat, lon) = square.middle_tile().centre().to_degrees();
@@ -221,18 +245,24 @@ impl<'a> Square<'a> {
         let (lat, lon) = tile.centre().to_degrees();
         let centre: PlaceWeather = weather.place(lat, lon);
         let gain = receiver_bound(centre.favourable.maximum(), 0.0, centre.alpha_db_per_km);
+        let collected: Vec<_> = sources
+            .par_iter()
+            .enumerate()
+            .map(|(index, (other, file))| {
+                collect(
+                    file,
+                    *other,
+                    (0, index as u16),
+                    &ground.frame,
+                    [0.0, 0.0],
+                    GROUND_REACH_M + half_diagonal,
+                    &gain,
+                )
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         let mut attributes = Attributes::default();
         let mut candidates = Vec::new();
-        for (index, (other, file)) in sources.iter().enumerate() {
-            let (list, mut found) = collect(
-                file,
-                *other,
-                (0, index as u16),
-                &ground.frame,
-                [0.0, 0.0],
-                GROUND_REACH_M + half_diagonal,
-                &gain,
-            )?;
+        for (list, mut found) in collected {
             let list = attributes.push(list);
             for candidate in &mut found {
                 candidate.attribute.list = list;

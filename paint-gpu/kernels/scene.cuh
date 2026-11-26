@@ -39,7 +39,7 @@ __device__ __forceinline__ u32 read_u32(const u8* bytes) {
     return *(const u32*)bytes;  // files start 8-byte aligned in the blob; every field here is 4-aligned
 }
 __device__ __forceinline__ u16 read_u16(const u8* bytes) {
-    return (u16)(bytes[0] | (bytes[1] << 8));
+    return *(const u16*)bytes;  // every u16 field accessed here is 2-byte aligned in the blob
 }
 
 struct OutlineMeta {
@@ -95,8 +95,9 @@ __device__ __forceinline__ u64 tile_outline_footprint_id(const ObstacleScene& sc
 
 // An outline's geometry metadata without reading tile_squares for footprint_id.
 __device__ __forceinline__ OutlineMeta tile_outline_meta(const ObstacleScene& scene, const ObstacleTile& tile, u32 index) {
-    const u8* record = tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index;
-    return OutlineMeta{read_u32(record), read_u16(record + 8), record[11] & 3};
+    const u32* record = (const u32*)(tile_outlines(scene, tile) + (u64)OUTLINE_BYTES * index);
+    u32 tail = record[2];
+    return OutlineMeta{record[0], (u16)(tail & 0xffffu), (int)((tail >> 24) & 3u)};
 }
 
 // A stored vertex: tile-local int16 steps.
@@ -113,19 +114,20 @@ __device__ __forceinline__ void lattice_steps(const ObstacleScene& scene, float 
 }
 
 // obstacles::Scene::locate: the state of the tile holding a scene cell; `tile` and `index` are set
-// for a read tile.
-__device__ int scene_locate(const ObstacleScene& scene, i64 cell_x, i64 cell_y, const ObstacleTile** tile, int* index) {
+// for a read tile. CELLS_PER_SIDE is 128, so Euclidean div/rem are arithmetic shift and mask.
+static_assert(CELLS_PER_SIDE == 128, "scene_locate uses power-of-two shift/mask");
+__device__ __forceinline__ int scene_locate(const ObstacleScene& scene, i64 cell_x, i64 cell_y, const ObstacleTile** tile, int* index) {
     i64 column = scene.origin_cell_in_centre_x + cell_x;
     i64 row = scene.origin_cell_in_centre_y + cell_y;
-    i64 offset_x = div_euclid_i64(column, CELLS_PER_SIDE);
-    i64 offset_y = div_euclid_i64(row, CELLS_PER_SIDE);
+    i64 offset_x = column >> 7;
+    i64 offset_y = row >> 7;
     i64 y = (i64)scene.centre_y + offset_y;
     if (y < 0 || y >= TILES_PER_AXIS) return TILE_EMPTY;
     if (offset_x < -scene.radius || offset_x > scene.radius || offset_y < -scene.radius || offset_y > scene.radius) return TILE_NOT_READ;
     const ObstacleTile& slot = scene.tiles[(offset_y + scene.radius) * (2 * scene.radius + 1) + offset_x + scene.radius];
     if (slot.state == TILE_READ) {
         *tile = &slot;
-        *index = (int)(rem_euclid_i64(row, CELLS_PER_SIDE) * CELLS_PER_SIDE + rem_euclid_i64(column, CELLS_PER_SIDE));
+        *index = (int)(((row & 127) << 7) | (column & 127));
     }
     return slot.state;
 }
@@ -145,13 +147,12 @@ __device__ __forceinline__ float filter_bound(float magnitude) {
     return magnitude * 0x1p-20f + 0x1p-90f;
 }
 
-// Whether segment_intersection_t below surely finds no crossing, decided in f32 (consumer cards
-// run f64 at 1/32 to 1/64 of f32): the ray's line misses the edge (u outside [0, 1]) or the edge's
-// line the ray (t outside [0, 1]) by more than the bound, which holds the f64 test's slack. Every
-// other case, hits and near-parallel edges among them, goes to the f64 test unchanged: the same
-// crossings at the same t (a float t would merge a corner clipped within micrometres,
-// tests/corner_rays.rs).
-__device__ __forceinline__ bool segment_surely_missed(float sx, float sy, float dx, float dy, float ax, float ay, float bx, float by) {
+// Whether segment_intersection_t below surely finds no crossing within [t_lo, t_hi], decided in f32
+// (consumer cards run f64 at 1/32 to 1/64 of f32): the ray's line misses the edge (u outside [0, 1])
+// or the edge's line misses the cell's ray stretch (t outside [t_lo, t_hi]) by more than the bound,
+// which holds the f64 test's slack. Every other case goes to the f64 test unchanged.
+__device__ __forceinline__ bool segment_surely_missed(float sx, float sy, float dx, float dy, float ax, float ay, float bx, float by,
+                                                      float t_lo, float t_hi) {
     float ex = __fsub_rn(bx, ax), ey = __fsub_rn(by, ay), wx = __fsub_rn(ax, sx), wy = __fsub_rn(ay, sy);
     float d1 = __fmul_rn(dx, ey), d2 = __fmul_rn(dy, ex);
     float t1 = __fmul_rn(wx, ey), t2 = __fmul_rn(wy, ex);
@@ -159,35 +160,44 @@ __device__ __forceinline__ bool segment_surely_missed(float sx, float sy, float 
     float denominator = d1 - d2;
     float bound = filter_bound((fabsf(d1) + fabsf(d2)) + (fabsf(t1) + fabsf(t2)) + (fabsf(u1) + fabsf(u2)));
     float abs_d = fabsf(denominator);
-    float sign = denominator > 0.0f ? 1.0f : -1.0f, reach = abs_d + bound;
+    float sign = denominator > 0.0f ? 1.0f : -1.0f;
     float t_numerator = sign * (t1 - t2), u_numerator = sign * (u1 - u2);
-    return abs_d > bound && (t_numerator < -bound || t_numerator > reach || u_numerator < -bound || u_numerator > reach);
+    float t_min = t_lo * abs_d - bound - abs_d * 0x1p-20f;
+    float t_max = t_hi * abs_d + bound + abs_d * 0x1p-20f;
+    return abs_d > bound && (t_numerator < t_min || t_numerator > t_max || u_numerator < -bound || u_numerator > abs_d + bound);
 }
 
-// crossings::segment_intersection_t; false for no crossing.
-__device__ __forceinline__ bool segment_intersection_t(double sx, double sy, double dx, double dy, double ax, double ay, double bx, double by, double* t_out) {
+// crossings::segment_intersection_t; false for no crossing. Also sets `*u_interior` when the hit
+// lies strictly inside the edge (both endpoints strictly off the ray line, proving `a != 0 && b != 0`
+// for `edge_bounds_roof`).
+__device__ __forceinline__ bool segment_intersection_t(double sx, double sy, double dx, double dy, double ax, double ay, double bx, double by,
+                                                       double* t_out, bool* u_interior) {
     double ex = bx - ax, ey = by - ay;
     double denominator = dx * ey - dy * ex;
-    if (denominator == 0.0f) return false;
+    if (denominator == 0.0) return false;
     double wx = ax - sx, wy = ay - sy;
     double t_numerator = wx * ey - wy * ex;
     double u_numerator = wx * dy - wy * dx;
     double sign = denominator > 0.0 ? 1.0 : -1.0;
     double extent = fabs(denominator);
-    // Reject clear misses before two slow divisions. Eight double epsilons include rounding
-    // at u = 0 or 1; possible hits keep the original t division and endpoint comparisons.
+    // Reject clear misses before division. Eight double epsilons include rounding at u = 0 or 1.
     double slack = extent * 1.7763568394002505e-15;
-    if (sign * t_numerator < -slack || sign * t_numerator > extent + slack
-        || sign * u_numerator < -slack || sign * u_numerator > extent + slack) return false;
+    double st = sign * t_numerator;
+    double su = sign * u_numerator;
+    if (st < -slack || st > extent + slack || su < -slack || su > extent + slack) return false;
+    // Exact IEEE double division preserves exact crossing-t ties when two overlapping roofs share
+    // a common exit edge with different edge lengths (different denominators).
     double t = t_numerator / denominator;
-    // Interior edge hits need no u division; at its endpoints retain the original rounding.
-    bool within_edge = sign * u_numerator > slack && sign * u_numerator < extent - slack;
+    // Interior edge hits need no u division and prove both endpoints lie strictly off the ray line.
+    bool interior = su > slack && su < extent - slack;
+    bool within_edge = interior;
     if (!within_edge) {
         double u = u_numerator / denominator;
         within_edge = u >= 0.0 && u <= 1.0;
     }
-    if (t > 0.0f && t < 1.0f && within_edge) {
+    if (t > 0.0 && t < 1.0 && within_edge) {
         *t_out = t;
+        *u_interior = interior;
         return true;
     }
     return false;
@@ -282,9 +292,10 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
     float delta[2] = {ex - sx, ey - sy};
     float start[2] = {sx, sy};
     const float cell_steps = (float)CELL_STEPS;
-    i64 cell[2] = {(i64)floorf(sx / cell_steps), (i64)floorf(sy / cell_steps)};
-    i64 last[2] = {(i64)floorf(ex / cell_steps), (i64)floorf(ey / cell_steps)};
-    i64 step[2] = {delta[0] >= 0.0f ? 1 : -1, delta[1] >= 0.0f ? 1 : -1};
+    int cell[2] = {(int)floorf(sx * (1.0f / cell_steps)), (int)floorf(sy * (1.0f / cell_steps))};
+    int last[2] = {(int)floorf(ex * (1.0f / cell_steps)), (int)floorf(ey * (1.0f / cell_steps))};
+    int step[2] = {delta[0] >= 0.0f ? 1 : -1, delta[1] >= 0.0f ? 1 : -1};
+    int bound_off[2] = {delta[0] >= 0.0f ? 1 : 0, delta[1] >= 0.0f ? 1 : 0};
     float pad = 1e-5f * (1.0f + fabsf(delta[0]) + fabsf(delta[1]));
     // crossings::segment_intersection_t leaves out the ray's ends (t in (0, 1), in f64). In f32 an
     // end standing on a wall (a pixel on a facade line) rounds up to millimetres to either side,
@@ -295,27 +306,50 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
     float t_enter = 0.0f;
     CellHit hits[CELL_CROSSINGS];
     u8 order[CELL_CROSSINGS];
+    int orig_cx = (int)scene.origin_cell_in_centre_x, orig_cy = (int)scene.origin_cell_in_centre_y;
+    int cached_ox = 0x7fffffff, cached_oy = 0x7fffffff, cached_state = TILE_EMPTY;
+    const ObstacleTile* cached_tile = 0;
     while (true) {
         float t_max[2];
         for (int axis = 0; axis < 2; axis++) {
             if (delta[axis] == 0.0f) {
                 t_max[axis] = QM_INFINITY;
             } else {
-                float boundary = (float)(cell[axis] + (delta[axis] >= 0.0f ? 1 : 0)) * cell_steps;
+                float boundary = (float)(cell[axis] + bound_off[axis]) * cell_steps;
                 t_max[axis] = fabsf((boundary - start[axis]) / delta[axis]);
             }
         }
         bool last_cell = cell[0] == last[0] && cell[1] == last[1];
         float t_exit = last_cell ? 1.0f : fminf(fminf(t_max[0], t_max[1]), 1.0f);
-        const ObstacleTile* tile = 0;
-        int index = 0;
-        int state = scene_locate(scene, cell[0], cell[1], &tile, &index);
-        if (state == TILE_NOT_READ) return FAILED_NOT_READ;
+        int col = orig_cx + cell[0], row = orig_cy + cell[1];
+        int ox = col >> 7, oy = row >> 7;
+        if (ox != cached_ox || oy != cached_oy) {
+            cached_ox = ox;
+            cached_oy = oy;
+            int y = (int)scene.centre_y + oy;
+            int rad = (int)scene.radius;
+            if (y < 0 || y >= TILES_PER_AXIS) {
+                cached_state = TILE_EMPTY;
+                cached_tile = 0;
+            } else if (ox < -rad || ox > rad || oy < -rad || oy > rad) {
+                cached_state = TILE_NOT_READ;
+                cached_tile = 0;
+            } else {
+                cached_tile = &scene.tiles[(oy + rad) * (2 * rad + 1) + ox + rad];
+                cached_state = cached_tile->state;
+            }
+        }
+        if (cached_state == TILE_NOT_READ) return FAILED_NOT_READ;
+        const ObstacleTile* tile = cached_tile;
+        int index = ((row & 127) << 7) | (col & 127);
+        int state = cached_state;
         if (state == TILE_READ) {
             u32 run_begin, run_end;
             tile_cell_runs(scene, *tile, index, &run_begin, &run_end);
             if (run_begin < run_end) {
                 float t0 = clampf(t_enter, 0.0f, 1.0f), t1 = clampf(t_exit, 0.0f, 1.0f);
+                float t_lo_f = fmaxf(fmaxf(t_enter - CELL_WINDOW_SLACK, endpoint_t) - 1e-6f, 0.0f);
+                float t_hi_f = fminf(fminf(t_exit + CELL_WINDOW_SLACK, 1.0f - endpoint_t) + 1e-6f, 1.0f);
                 float p[2] = {start[0] + delta[0] * t0, start[1] + delta[1] * t0};
                 float q[2] = {start[0] + delta[0] * t1, start[1] + delta[1] * t1};
                 int low[2], high[2];
@@ -335,8 +369,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                     double next_t = 2.0;
                     // The cell's runs and their edges in one loop through the f32 filter, then the edges
                     // it kept, KEPT_EDGES at a time, through the exact test and index-sorted insertion;
-                    // `edge_bounds_roof` runs only on the emitted crossings. The same crossings in the
-                    // same order.
+                    // `edge_bounds_roof` runs only on emitted non-interior crossings.
                     u32 run_index = run_begin, next = 1, last_edge = 0, outline_index = 0;
                     int ax = 0, ay = 0;
                     while (run_index < run_end || next <= last_edge) {
@@ -345,12 +378,13 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                         while (kept < KEPT_EDGES) {
                             if (next > last_edge) {
                                 if (run_index == run_end) break;
-                                const u8* run = runs + (u64)RUN_BYTES * run_index++;
-                                outline_index = read_u32(run);
-                                u32 first = tile_outline_first_vertex(scene, *tile, outline_index) + read_u16(run + 4);
+                                const u32* run = (const u32*)(runs + (u64)RUN_BYTES * run_index++);
+                                outline_index = run[0];
+                                u32 span_packed = run[1];
+                                u32 first = tile_outline_first_vertex(scene, *tile, outline_index) + (span_packed & 0xffffu);
                                 tile_vertex_local(scene, *tile, first, &ax, &ay);
                                 next = first + 1;
-                                last_edge = first + read_u16(run + 6);
+                                last_edge = first + (span_packed >> 16);
                                 if (next > last_edge) continue;
                             }
                             int bx, by;
@@ -358,7 +392,7 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                             bool meets = high[0] >= min(ax, bx) && max(ax, bx) >= low[0] && high[1] >= min(ay, by) && max(ay, by) >= low[1];
                             if (meets
                                 && !segment_surely_missed(start[0], start[1], delta[0], delta[1], offset[0] + (float)ax, offset[1] + (float)ay,
-                                                          offset[0] + (float)bx, offset[1] + (float)by)) {
+                                                          offset[0] + (float)bx, offset[1] + (float)by, t_lo_f, t_hi_f)) {
                                 kept_edge[kept] = next - 1;
                                 kept_outline[kept] = outline_index;
                                 kept++;
@@ -375,14 +409,15 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                             float a[2] = {offset[0] + (float)ex, offset[1] + (float)ey};
                             float b[2] = {offset[0] + (float)fx, offset[1] + (float)fy};
                             double t;
-                            if (!segment_intersection_t(start[0], start[1], delta[0], delta[1], a[0], a[1], b[0], b[1], &t)
+                            bool u_interior;
+                            if (!segment_intersection_t(start[0], start[1], delta[0], delta[1], a[0], a[1], b[0], b[1], &t, &u_interior)
                                 || t < t_enter - CELL_WINDOW_SLACK || t > t_exit + CELL_WINDOW_SLACK
                                 || !(t > endpoint_t && t < 1.0f - endpoint_t)) continue;
                             CellHit hit;
                             hit.t = t;
                             hit.footprint_id = tile_outline_footprint_id(scene, *tile, kept_outline[k]);
                             hit.edge = edge;
-                            hit.outline_index = kept_outline[k];
+                            hit.outline_index = kept_outline[k] | (u_interior ? 0x80000000u : 0u);
                             if (have_taken && !cell_hit_before(taken, hit)) continue;
                             // Insert in order via byte indices, keeping the first CELL_CROSSINGS.
                             u8 entry;
@@ -411,14 +446,19 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
                     }
                     for (int k = 0; k < count; k++) {
                         const CellHit& h = hits[order[k]];
-                        OutlineMeta outline = tile_outline_meta(scene, *tile, h.outline_index);
+                        u32 outline_idx = h.outline_index & 0x7fffffffu;
+                        bool u_interior = (h.outline_index & 0x80000000u) != 0u;
+                        OutlineMeta outline = tile_outline_meta(scene, *tile, outline_idx);
                         Crossing crossing;
                         crossing.t = h.t;
                         crossing.height_dm = outline.height_dm;
                         crossing.footprint_id = h.footprint_id;
                         crossing.edge = (slot << 32) | (u64)h.edge;
-                        crossing.bounds_roof = edge_bounds_roof(scene, *tile, h.outline_index, outline, h.edge, start[0], start[1],
-                                                                delta[0], delta[1]);
+                        crossing.bounds_roof = outline.kind == OUTLINE_KIND_WALL
+                            ? 0
+                            : (u_interior ? 1
+                                          : edge_bounds_roof(scene, *tile, outline_idx, outline, h.edge, start[0], start[1],
+                                                             delta[0], delta[1]));
                         crossing.tie = (k + 1 < count ? hits[order[k + 1]].t : next_t) == h.t;
                         u32 failed = take(crossing);
                         if (failed) return failed;

@@ -15,29 +15,28 @@ pub(super) fn evaluate(
     let mut evaluated = vec![(PairEnergy::default(), [[0.0; BANDS]; PERIODS]); pairs.len()];
     let mut refused = Vec::new();
     let slots = vec![0; points.len()];
-    batch.turns.in_turn(|| -> Result<(), String> {
+    batch.gpu.turns.in_turn(|| -> Result<(), String> {
         let mut bands = batch.gpu.bands(1)?;
         let mut inputs = LaunchInputs::default();
         for launch in order.chunks(PAIRS_PER_LAUNCH) {
             inputs.gather(launch, (points, pairs), &slots);
             let mut flat = Vec::new();
-            let (sums, failed) = batch.gpu.evaluate_pairs(
+            let results = batch.gpu.evaluate_pairs(
                 batch.device_square,
-                (&inputs.receivers, &inputs.own),
+                (&inputs.receivers, &inputs.own, &inputs.point_of_receiver),
                 (
                     &inputs.candidates,
                     &inputs.receiver_of_pair,
-                    &inputs.at,
-                    &inputs.weights,
+                    inputs.band_weights(),
                 ),
                 &mut bands,
                 Some(&mut flat),
             )?;
-            for (((&at, sums), bands), failed) in launch
+            for (((&at, sums), bands), &failed) in launch
                 .iter()
-                .zip(&sums)
+                .zip(results.sums())
                 .zip(flat.chunks_exact(PERIODS * BANDS))
-                .zip(failed)
+                .zip(results.failed())
             {
                 if failed != 0 {
                     refused.push(at as usize);

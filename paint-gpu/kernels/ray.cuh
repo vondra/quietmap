@@ -83,13 +83,25 @@ __device__ __noinline__ u32 list_crossings(const ObstacleScene& obstacles, float
 
 // The next listed crossing the terrain walk takes after `*crossing`, and its distance from the source
 // (never behind the last taken's, `*last_x`), INFINITY for none; the crossings of footprints
-// containing the source passed, the roofs they close closed.
-__device__ __forceinline__ u32 next_taken_crossing(RayStream& s, int* crossing, float* crossing_x, float* last_x) {
+// containing the source passed, the roofs they close closed. Also caches the crossing in `*cur`.
+__device__ __forceinline__ u32 next_taken_crossing(RayStream& s, bool has_containing, int* crossing, float* crossing_x, float* last_x,
+                                                   RayCrossing* cur) {
+    if (!has_containing) {
+        if (++(*crossing) < s.crossing_count) {
+            const RayCrossing c = s.crossings[*crossing];
+            *cur = c;
+            *crossing_x = *last_x = fmaxf(c.t * s.length, *last_x);
+            return 0;
+        }
+        *crossing_x = QM_INFINITY;
+        return 0;
+    }
     for ((*crossing)++; *crossing < s.crossing_count; (*crossing)++) {
-        const RayCrossing& c = s.crossings[*crossing];
+        const RayCrossing c = s.crossings[*crossing];
         bool passed = false;
         for (int k = 0; k < s.containing_count; k++) passed |= s.containing[k] == c.footprint_id;
         if (!passed) {
+            *cur = c;
             *crossing_x = *last_x = fmaxf(c.t * s.length, *last_x);
             return 0;
         }
@@ -114,12 +126,21 @@ __device__ __forceinline__ u32 take_crossing(RayStream& s, const RayCrossing& c,
     add_stretch(prefix, behind.x, x, behind.z, terrain_z, behind.g, terrain_g, 0.0f, s.path.source_ground_z);
     // Round height_dm * 0.1f before adding terrain_z so fast-math FMA cannot shift wall tops.
     float height = terrain_z + __fmul_rn((float)c.height_dm, 0.1f);
+    *is_top = x > 0.0f && x < s.length;
+    *top = BandCandidate{x, height, terrain_z, terrain_g, prefix};
     if (c.flags & RAY_CROSSING_BOUNDS_ROOF) {
         int open = -1;
         for (int k = 0; k < s.open_count; k++) {
             if (s.open[k].footprint_id == c.footprint_id) open = k;
         }
         if (open >= 0) {
+            // Fast path for the common non-overlapping, non-tied building exit: stream directly
+            // without staging into `closing_from` and sorting one element.
+            if ((c.flags & RAY_CROSSING_CLOSES) && s.closing_count == 0) {
+                OpenRoof from = s.open[open];
+                s.open[open] = s.open[--s.open_count];
+                return stream_roof(s, from, x, height, prefix, s.vertices - 1);
+            }
             if (s.closing_count == OPEN_ROOFS) return FAILED_CAPACITY;
             s.closing_from[s.closing_count] = s.open[open];
             s.closing_top[s.closing_count] = height;
@@ -133,8 +154,6 @@ __device__ __forceinline__ u32 take_crossing(RayStream& s, const RayCrossing& c,
             s.open[s.open_count++] = OpenRoof{c.footprint_id, x, height, prefix, s.vertices - 1};
         }
     }
-    *is_top = x > 0.0f && x < s.length;
-    *top = BandCandidate{x, height, terrain_z, terrain_g, prefix};
     // Close the roofs at this distance once no other crossing there follows.
     if ((c.flags & RAY_CROSSING_CLOSES) && s.closing_count > 0) return stream_closing_roofs(s);
     return 0;
@@ -210,7 +229,9 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
     // crossing, its distance, and the vertex ending the stretch it lies on (`walked` until walked).
     int walked = 1, open_group = -1, crest = 0, crossing = -1, crossing_ahead = 1;
     float open_from = 0.0f, crest_z = 0.0f, crossing_x, last_crossing_x = 0.0f;
-    if ((failed = next_taken_crossing(s, &crossing, &crossing_x, &last_crossing_x))) return failed;
+    bool has_containing = s.containing_count > 0;
+    RayCrossing cur_crossing;
+    if ((failed = next_taken_crossing(s, has_containing, &crossing, &crossing_x, &last_crossing_x, &cur_crossing))) return failed;
     // The stretches by lattice: their ends and the lattices' scales.
     float stretch_ends[3] = {1.0f, 1.0f, 1.0f};
     int stretch_scales[3] = {1, 1, 1};
@@ -274,10 +295,10 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
                 }
                 open_group = group;
             } else if (ahead.x > 0.0f && ahead.x < length) {
-                // Taken at the chunk's end with its crossings, by the walk's one stream_candidate (a
-                // second copy streaming it at once where nothing waited before it no longer pays,
-                // 2026-11-12).
-                s.candidates[candidates++] = (u16)walked;
+                float chord = source.z + (receiver.z - source.z) * ahead.x * frame.inverse_length;
+                if (!(bands[0].blocked && bands[1].blocked && ahead.z < chord - 1e-4f)) {
+                    s.candidates[candidates++] = (u16)walked;
+                }
             }
             behind = ahead;
             prefix_behind = prefix;
@@ -287,6 +308,9 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
         // (the CPU's stable sort): every candidate at once to both states' bands, a crossing's wall
         // as it is taken. A crossing sees the vertices up to the one ending its stretch.
         float limit = open_group >= 0 ? open_from : behind.x;
+        int cached_ahead = -1;
+        TerrainPoint x_behind, x_ahead;
+        Moments x_prefix;
         for (int next = 0;;) {
             bool vertex_ready = next < candidates, crossing_ready = crossing_x < limit;
             if (!vertex_ready && !crossing_ready) break;
@@ -297,10 +321,15 @@ __device__ __noinline__ u32 walk_ray(const TerrainScene& ground, float sx, float
                 TerrainPoint vertex = recent_vertex(s, k);
                 candidate = BandCandidate{vertex.x, vertex.z, vertex.z, vertex.g, vertex_prefix(s, k)};
             } else {
+                if (cached_ahead != crossing_ahead) {
+                    x_behind = recent_vertex(s, crossing_ahead - 1);
+                    x_ahead = recent_vertex(s, crossing_ahead);
+                    x_prefix = vertex_prefix(s, crossing_ahead - 1);
+                    cached_ahead = crossing_ahead;
+                }
                 s.vertices = crossing_ahead + 1;
-                failed = take_crossing(s, s.crossings[crossing], crossing_x, recent_vertex(s, crossing_ahead - 1),
-                                       recent_vertex(s, crossing_ahead), vertex_prefix(s, crossing_ahead - 1), &candidate, &streams);
-                if (!failed) failed = next_taken_crossing(s, &crossing, &crossing_x, &last_crossing_x);
+                failed = take_crossing(s, cur_crossing, crossing_x, x_behind, x_ahead, x_prefix, &candidate, &streams);
+                if (!failed) failed = next_taken_crossing(s, has_containing, &crossing, &crossing_x, &last_crossing_x, &cur_crossing);
                 s.vertices = walked;
                 if (failed) return failed;
                 if (!(behind.x > crossing_x)) {

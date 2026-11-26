@@ -108,29 +108,33 @@ fn a_refused_patch_keeps_its_samples_and_leaves_its_other_pixels_to_a_pass() {
 fn a_probe_paints_as_its_patch_paints_the_pixels_around_it() {
     let (_, positions) = sample_positions(16);
     let mut samples: Vec<Option<Anchor>> = (positions.iter())
-        .map(|&(x, y)| anchor(on_the_law(1000.0 * (1.0 + x as f64 + 2.0 * y as f64))))
+        .map(|&(x, y)| {
+            anchor(on_the_law(
+                10_000.0 * (1.0 + 0.1 * x as f64 + 0.2 * y as f64),
+            ))
+        })
         .collect();
-    // The first patch's lattice points hear 1,000 to 13,000 and blend 4,919 at its probe, which
-    // hears 11,000 on their law: refused, and carried.
-    let mut probe = on_the_law(11_000.0);
+    // The first patch's lattice points hear 10,000 to 22,000 (3.4 dB spread) and blend ~15,338 at
+    // its probe, which hears 20,000 on their law: refused, and carried.
+    let mut probe = on_the_law(20_000.0);
     probe.1[LAYERS] *= 1.01;
     samples[25] = anchor(probe);
     let block = QuietSamples::patched(16, &samples, &|_| true, &no_own);
     let painted = block.known_at(2, 2).unwrap();
     assert_eq!(painted.0, probe.0);
-    assert!((painted.1[LAYERS] / on_the_law(11_000.0).1[LAYERS] - 1.0).abs() < 1e-6);
+    assert!((painted.1[LAYERS] / on_the_law(20_000.0).1[LAYERS] - 1.0).abs() < 1e-6);
     assert_eq!(block.known_at(1, 1), None);
-    // Half a phon and more off the law it is not carried, and keeps its own paint.
+    // Over the visibility tolerance off the law it is not carried, and keeps its own paint.
     probe.1[LAYERS] *= 2.0f64.powf(0.1);
     samples[25] = anchor(probe);
     let block = QuietSamples::patched(16, &samples, &|_| true, &no_own);
     assert_eq!(block.known_at(2, 2), Some(probe));
     assert_eq!(block.loudness_from(1, 1, &probe.0), None);
     // A probe that agrees with the blend takes the blend.
-    samples[25] = anchor(on_the_law(5_000.0));
+    samples[25] = anchor(on_the_law(15_338.0));
     let block = QuietSamples::patched(16, &samples, &|_| true, &no_own);
     let blended = block.known_at(2, 2).unwrap();
-    assert!((blended.0[0] / 4_918.7 - 1.0).abs() < 1e-4, "{blended:?}");
+    assert!((blended.0[0] / 15_338.0 - 1.0).abs() < 1e-3, "{blended:?}");
 }
 
 /// A block of 8 pixels' last interval is one pixel wide: its probe stands on a lattice line, and
@@ -150,19 +154,25 @@ fn an_edge_interval_without_an_interior_probe_keeps_its_unsampled_pixels() {
 
 /// A block whose loudness follows its energy to the power 0.4 from one lattice point to another
 /// finds that slope, and a pixel of another energy within its refused patch's points' takes the
-/// loudness of that law at its own; one over half a decibel beyond them is not carried, nor one
+/// loudness of that law at its own; one over 1.5 dB beyond them is not carried, nor one
 /// of a patch that blends.
 #[test]
 fn a_pixels_loudness_follows_its_energy_along_the_lattices_slope() {
     let (_, positions) = sample_positions(16);
+    // Keep the first patch's corner spread under 7.5 dB (10,000..22,000 = 3.4 dB) so carried
+    // loudness stays eligible while still spanning enough range to fit the 0.4 slope.
     let mut samples: Vec<Option<Anchor>> = (positions.iter())
-        .map(|&(x, y)| anchor(on_the_law(1000.0 * (1.0 + x as f64 + 2.0 * y as f64))))
+        .map(|&(x, y)| {
+            anchor(on_the_law(
+                10_000.0 * (1.0 + 0.1 * x as f64 + 0.2 * y as f64),
+            ))
+        })
         .collect();
-    samples[25] = anchor(on_the_law(11_000.0));
+    samples[25] = anchor(on_the_law(20_000.0));
     let block = QuietSamples::patched(16, &samples, &|_| true, &no_own);
     assert!(block.patches().1 >= 1);
-    // The first patch's lattice points hear 1,000 to 13,000.
-    let within = on_the_law(11_000.0);
+    // The first patch's lattice points hear 10,000 to 22,000.
+    let within = on_the_law(20_000.0);
     let carried = block.loudness_from(1, 3, &within.0).unwrap();
     for (carried, expected) in carried.iter().zip(within.1) {
         assert!(
@@ -170,10 +180,30 @@ fn a_pixels_loudness_follows_its_energy_along_the_lattices_slope() {
             "{carried} {expected}"
         );
     }
-    assert!(block.loudness_from(1, 3, &on_the_law(14_000.0).0).is_some());
-    assert_eq!(block.loudness_from(1, 3, &on_the_law(15_000.0).0), None);
-    assert_eq!(block.loudness_from(1, 3, &on_the_law(880.0).0), None);
+    // +1.5 dB above 22,000 is ~31,076; -1.5 dB below 10,000 is ~7,079.
+    assert!(block.loudness_from(1, 3, &on_the_law(30_000.0).0).is_some());
+    assert_eq!(block.loudness_from(1, 3, &on_the_law(32_000.0).0), None);
+    assert_eq!(block.loudness_from(1, 3, &on_the_law(6_800.0).0), None);
     assert_eq!(block.loudness_from(9, 9, &on_the_law(40_000.0).0), None);
+}
+
+/// A refused patch whose outdoor lattice points span more than 7.5 dB on a layer of at least
+/// 32 dB (e.g. across a building wall or shadow edge) refuses carried loudness so pixels inside
+/// compute their own loudness.
+#[test]
+fn carried_loudness_refuses_steep_energy_cliff_patches() {
+    let (_, positions) = sample_positions(16);
+    let mut samples: Vec<Option<Anchor>> = (positions.iter())
+        .map(|&(x, _)| {
+            // 32 dB at x == 0, 42 dB at x >= 4 (10 dB cliff across the first column of patches).
+            let energy = if x == 0 { 1_600.0 } else { 16_000.0 };
+            anchor(on_the_law(energy))
+        })
+        .collect();
+    // Force patch (0, 0) to be refused by a screening edge even though its probe lies on the law.
+    samples[25] = anchor(on_the_law(5_000.0));
+    let block = QuietSamples::patched(16, &samples, &|cell| cell != 0, &no_own);
+    assert_eq!(block.loudness_from(1, 1, &on_the_law(5_000.0).0), None);
 }
 
 /// A road beside a block: each exact point hears the road's free field there times an excess
@@ -230,7 +260,7 @@ fn a_blocks_own_sources_blend_by_their_free_field() {
 }
 
 /// Loudness is carried only where each layer a visitor could see, and the total, lie within the
-/// lattice points' range widened by half a decibel: a layer of 20 dB or more beyond it refuses
+/// lattice points' range widened by 1.5 dB: a layer of 20 dB or more beyond it refuses
 /// the carry though the total lies within, a fainter layer does not.
 #[test]
 fn loudness_is_carried_only_within_the_lattice_points_energies_layer_by_layer() {
@@ -258,6 +288,6 @@ fn loudness_is_carried_only_within_the_lattice_points_energies_layer_by_layer() 
     );
     // At 20 dB and more it must lie within its own range, though the total does.
     assert_eq!(carrying.loudness_from(1, 1, &layers(10_000.0, 150.0)), None);
-    assert_eq!(carrying.loudness_from(1, 1, &layers(12_000.0, 50.0)), None);
-    assert_eq!(carrying.loudness_from(1, 1, &layers(8_000.0, 50.0)), None);
+    assert_eq!(carrying.loudness_from(1, 1, &layers(15_000.0, 50.0)), None);
+    assert_eq!(carrying.loudness_from(1, 1, &layers(7_000.0, 50.0)), None);
 }

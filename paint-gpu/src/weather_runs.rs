@@ -5,60 +5,74 @@ use paint::exact::LAYERS;
 use paint::sone::PACKED_LINE_FLOATS as LINE_FLOATS;
 use physics::bands::PERIODS;
 use popup::percentiles::WEATHER_STATES;
+use rayon::prelude::*;
 
 /// A pixel's packed weather: per period the first state of each run of states in which every line
 /// of every layer has the same mean (as the card reads them), and whether a line follows the hours.
-fn pixel_runs(pixel: &[f32]) -> ([Vec<usize>; PERIODS], bool) {
-    let mut lines = Vec::new();
+fn pixel_runs(pixel: &[f32]) -> ([([u8; WEATHER_STATES], usize); PERIODS], bool) {
+    let mut lines: Vec<&[f32]> = Vec::new();
     let mut at = 0;
     for _ in 0..LAYERS {
         let count = pixel[at + PERIODS] as usize;
         let start = at + PERIODS + 1;
-        lines.extend(
-            (0..count).map(|i| &pixel[start + i * LINE_FLOATS..start + (i + 1) * LINE_FLOATS]),
-        );
+        for i in 0..count {
+            lines.push(&pixel[start + i * LINE_FLOATS..start + (i + 1) * LINE_FLOATS]);
+        }
         at = start + count * LINE_FLOATS;
     }
     let profiled = (lines.iter()).any(|line| line[2 * PERIODS + PERIODS * WEATHER_STATES] >= 0.0);
     let heads = std::array::from_fn(|period| {
-        let mean = |line: &[f32], state: usize| line[PERIODS + period * WEATHER_STATES + state];
-        (0..WEATHER_STATES)
-            .filter(|&state| {
-                state == 0
-                    || lines
-                        .iter()
-                        .any(|line| mean(line, state) != mean(line, state - 1))
-            })
-            .collect()
+        let base = PERIODS + period * WEATHER_STATES;
+        let mut h = [0u8; WEATHER_STATES];
+        let mut len = 1usize;
+        for state in 1..WEATHER_STATES {
+            if lines
+                .iter()
+                .any(|line| line[base + state] != line[base + state - 1])
+            {
+                h[len] = state as u8;
+                len += 1;
+            }
+        }
+        (h, len)
     });
     (heads, profiled)
 }
 
-/// The blocks of `pixels` (each its packed floats) by their number of states: per count n (1 to
+/// The blocks of `pixels` (`offsets` into `input`) by their number of states: per count n (1 to
 /// WEATHER_STATES) where its blocks begin in `tasks` and `runs` and how many; `tasks` each block's
 /// pixel * period groups + its index in `period_groups`; `runs` per block its first states, then the
 /// runs' lengths (WEATHER_STATES bytes each, unused zero). A pixel none of whose lines follows the
 /// hours has one group a period.
-pub(crate) fn mixture_blocks<'a>(
-    pixels: impl Iterator<Item = &'a [f32]>,
+pub(crate) fn mixture_blocks(
+    input: &[f32],
+    offsets: &[u64],
     period_groups: &[(usize, usize)],
 ) -> (Vec<(usize, usize)>, Vec<u32>, Vec<u8>) {
+    let per_pixel: Vec<_> = offsets
+        .par_iter()
+        .map(|&at| pixel_runs(&input[at as usize..]))
+        .collect();
     let mut by_states: Vec<Vec<(u32, [u8; 2 * WEATHER_STATES])>> =
         vec![Vec::new(); WEATHER_STATES + 1];
-    for (pixel, floats) in pixels.enumerate() {
-        let (heads, profiled) = pixel_runs(floats);
+    for (pixel, (heads, profiled)) in per_pixel.into_iter().enumerate() {
         for (k, &(period, group)) in period_groups.iter().enumerate() {
             if group > 0 && !profiled {
                 continue;
             }
-            let heads = &heads[period];
+            let (heads, count) = heads[period];
             let mut run = [0u8; 2 * WEATHER_STATES];
-            for (i, &head) in heads.iter().enumerate() {
-                let end = heads.get(i + 1).copied().unwrap_or(WEATHER_STATES);
-                run[i] = head as u8;
-                run[WEATHER_STATES + i] = (end - head) as u8;
+            for i in 0..count {
+                let head = heads[i];
+                let end = if i + 1 < count {
+                    heads[i + 1]
+                } else {
+                    WEATHER_STATES as u8
+                };
+                run[i] = head;
+                run[WEATHER_STATES + i] = end - head;
             }
-            by_states[heads.len()].push(((pixel * period_groups.len() + k) as u32, run));
+            by_states[count].push(((pixel * period_groups.len() + k) as u32, run));
         }
     }
     let (mut spans, mut tasks, mut runs) = (Vec::new(), Vec::new(), Vec::new());
@@ -118,7 +132,7 @@ mod tests {
         let (heads, profiled) = pixel_runs(&one_layer(lines.len(), &packed));
         // Flights sound alike in every weather state and follow no hourly profile.
         assert!(!profiled);
-        assert!(heads.iter().all(|heads| heads == &[0]));
+        assert!(heads.iter().all(|&(h, len)| len == 1 && h[0] == 0));
     }
 
     /// Equal consecutive states share a block's warp with their run's length; a pixel without
@@ -128,8 +142,10 @@ mod tests {
         let groups = [(0, 0), (0, 1), (1, 0), (2, 0), (2, 1)];
         let runs = pixel([3.0, 3.0, 2.0, 2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 0.5], -1.0);
         let steady = pixel([1.0; WEATHER_STATES], 0.0);
-        let pixels = [runs.as_slice(), steady.as_slice()];
-        let (spans, tasks, bytes) = mixture_blocks(pixels.into_iter(), &groups);
+        let mut input = runs.clone();
+        let offsets = [0u64, input.len() as u64];
+        input.extend_from_slice(&steady);
+        let (spans, tasks, bytes) = mixture_blocks(&input, &offsets, &groups);
         // The first pixel: four runs in each of its three periods' first groups.
         assert_eq!(spans[4], (5, 3));
         assert_eq!(&tasks[5..8], &[0, 2, 3]);

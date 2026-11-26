@@ -9,7 +9,8 @@
 
 use crate::exact::LAYERS;
 use crate::lattice_blend::{
-    Anchor, Heard, blend, carried_loudness, log_energies, loudness_slopes, within_lattice_range,
+    Anchor, CARRIED_LOUDNESS_BEYOND, Heard, blend, carried_loudness, log_energies, loudness_slopes,
+    within_carried_spread, within_lattice_range,
 };
 use crate::levels::Painted;
 use crate::paint::corner_weights;
@@ -80,6 +81,12 @@ impl Lattice {
         })
     }
 
+    /// Whether the outdoor lattice points around pixel (x, y) are smooth enough to carry loudness
+    /// across a refused patch ([`within_carried_spread`]).
+    fn carried_spread_ok(&self, x: usize, y: usize) -> bool {
+        within_carried_spread(self.around(x, y).0)
+    }
+
     /// The loudness `energies` carry at pixel (x, y) from the outdoor points around it
     /// ([`carried_loudness`]): `None` where all four stand in buildings, or with `within` where
     /// the energies lie beyond the points' ([`within_lattice_range`]).
@@ -91,7 +98,7 @@ impl Lattice {
     ) -> Option<[f64; LAYERS + 1]> {
         let (around, weights) = self.around(x, y);
         let here = log_energies(energies);
-        if within && !within_lattice_range(around, &here) {
+        if within && !within_lattice_range(around, &here, CARRIED_LOUDNESS_BEYOND) {
             return None;
         }
         carried_loudness(around, weights, &here, &self.slopes)
@@ -172,9 +179,10 @@ impl QuietSamples {
                 continue;
             }
             let (energies, ndens) = probe.paint;
-            carried[cell] = (lattice.carried_at((x, y), &energies, false)).is_some_and(|carried| {
-                loudness_visibly_agrees(&ndens, &carried, &lattice.loudest_around(x, y).ndens)
-            });
+            carried[cell] = lattice.carried_spread_ok(x, y)
+                && (lattice.carried_at((x, y), &energies, false)).is_some_and(|carried| {
+                    loudness_visibly_agrees(&ndens, &carried, &lattice.loudest_around(x, y).ndens)
+                });
             if carried[cell] {
                 let carried = lattice.carried_at((x, y), &energies, true);
                 pixels[y * side + x] = Some((energies, carried.unwrap_or(ndens)));

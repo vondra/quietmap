@@ -92,15 +92,49 @@ pub(crate) fn loudness_slopes(lattice: &[Option<Heard>]) -> [f64; LAYERS + 1] {
 /// their carried loudness missed their own by over 1 phon at 26-47 % of them, the others' at
 /// 0.9-1.9 % (private evidence 2026-11-12/fable-speed, `carry_guard_study.py`).
 const CARRIED_BEYOND: f64 = 0.115_129_254_649_702_28;
+/// Margin when carrying loudness alone onto pixels whose exact ray energies are already known
+/// (`1.5 dB = ln(10^(1.5 / 10))`). Chosen below one 2 dB map loudness bin (widened from 0.5 dB
+/// because exact energies already capture local attenuation) to avoid full loudness synthesis on
+/// refused patches; the combined release kept 97.68 % of visible popup clicks within 1 phon and
+/// 99.97 % within 3 phon in the 54-square world sample (2026-11-26).
+pub(crate) const CARRIED_LOUDNESS_BEYOND: f64 = 0.345_387_763_949_106_84;
 
 /// A layer under this Lden energy at a pixel and at its lattice points (20 dB) is not asked to lie
 /// within their range: no visitor sees it (carried so, no layer under 20 dB reads over 0.27 sone
 /// in the world sample's 56 million cells).
 const HEARD_FROM: f64 = 100.0;
 
+/// Maximum energy spread across a refused patch's outdoor lattice points
+/// (`7.5 dB = ln(10^(7.5 / 10))`) for carrying loudness on any layer or total reaching
+/// [`CARRIED_SPREAD_FROM`] (`32 dB = 10^(32 / 10)`, matching `visible::tolerance::TOTAL_FROM_DB`
+/// just below the 35 dB visible floor). Chosen just under the 8-21 dB shadow-cliff spreads seen
+/// at >10 phon outdoor map-to-map outliers across the 56.6M assessed pixels of the 54-square
+/// world sample (2026-11-26); checking the eight remaining >10 phon map-to-map outliers against
+/// the popup showed all five outdoor pixels within 0.1-3.6 phon of the popup (the other three
+/// were indoor pixels of two small buildings).
+const CARRIED_MAX_SPREAD: f64 = 1.726_938_819_745_534_2;
+const CARRIED_SPREAD_FROM: f64 = 1_584.893_192_461_114;
+
+/// Whether the outdoor points `around` a refused patch stay within [`CARRIED_MAX_SPREAD`] of each
+/// other in every layer (and total) reaching [`CARRIED_SPREAD_FROM`].
+pub(crate) fn within_carried_spread(around: [Option<&Heard>; 4]) -> bool {
+    let from = (CARRIED_SPREAD_FROM + ENERGY_FLOOR).ln();
+    (0..=LAYERS).all(|at| {
+        let (low, high) = (around.iter().flatten())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), point| {
+                (low.min(point.energies[at]), high.max(point.energies[at]))
+            });
+        high < from || high - low <= CARRIED_MAX_SPREAD
+    })
+}
+
 /// Whether a pixel's energies (`here`, [`log_energies`]) lie within the range of the outdoor
-/// points' `around` it, widened by [`CARRIED_BEYOND`], in the total and in every layer heard there.
-pub(crate) fn within_lattice_range(around: [Option<&Heard>; 4], here: &[f64; LAYERS + 1]) -> bool {
+/// points' `around` it, widened by `margin`, in the total and in every layer heard there.
+pub(crate) fn within_lattice_range(
+    around: [Option<&Heard>; 4],
+    here: &[f64; LAYERS + 1],
+    margin: f64,
+) -> bool {
     let heard_from = (HEARD_FROM + ENERGY_FLOOR).ln();
     (0..=LAYERS).all(|at| {
         let (low, high) = (around.iter().flatten())
@@ -108,7 +142,7 @@ pub(crate) fn within_lattice_range(around: [Option<&Heard>; 4], here: &[f64; LAY
                 (low.min(point.energies[at]), high.max(point.energies[at]))
             });
         (at < LAYERS && here[at].max(high) < heard_from)
-            || (here[at] >= low - CARRIED_BEYOND && here[at] <= high + CARRIED_BEYOND)
+            || (here[at] >= low - margin && here[at] <= high + margin)
     })
 }
 
@@ -189,7 +223,7 @@ pub(crate) fn blend(
     }
     let here = log_energies(&energies);
     let around = around.map(Some);
-    if !within_lattice_range(around, &here) {
+    if !within_lattice_range(around, &here, CARRIED_BEYOND) {
         return None;
     }
     carried_loudness(around, weights, &here, slopes).map(|ndens| (energies, ndens))

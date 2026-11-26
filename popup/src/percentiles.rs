@@ -28,8 +28,8 @@ mod traffic;
 mod weather;
 pub(crate) use lines::at_mean_flow;
 pub use lines::{
-    Group, HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Line, LineParts, PASSES_HOLD_MEAN,
-    click_lines, place_lines,
+    FLUCTUATING_SHARE_MIN, Group, HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Line, LineParts,
+    PASSES_HOLD_MEAN, click_lines, place_lines,
 };
 use traffic::lambda;
 pub use traffic::{Heard, Passes, hour_factor, hour_groups, passes_at};

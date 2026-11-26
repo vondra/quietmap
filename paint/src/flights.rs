@@ -177,6 +177,33 @@ pub(crate) fn aircraft_sums(square: &Square, point: &Point) -> Result<FlightSums
     Ok(total)
 }
 
+/// All flights at every point of `points` within the aircraft reach, evaluating boxes on the card
+/// when `batch` is present and adding the runways' rolls on the cores.
+pub(crate) fn aircraft_sums_many(
+    square: &Square,
+    points: &[Point],
+    batch: Option<&dyn Batch>,
+) -> Result<Vec<FlightSums>, String> {
+    let Some(batch) = batch.filter(|_| square.has_aircraft_boxes()) else {
+        return points
+            .par_iter()
+            .map(|point| aircraft_sums(square, point))
+            .collect();
+    };
+    let boxes = FlightBoxes::all(square);
+    let requests: Vec<FlightRequest> = points
+        .iter()
+        .map(|point| FlightRequest {
+            point,
+            weights: [boxes.occupied[0].then_some(FlightWeight::One), None],
+            within_m: AIRCRAFT_REACH_M,
+        })
+        .collect();
+    let mut sums = flight_sums(square, &boxes, &requests, Some(batch))?;
+    add_rolls(square, &mut sums, &requests)?;
+    Ok(sums.into_iter().map(|pair| pair[0]).collect())
+}
+
 /// The lattices' requests, all block corners: at the hum's points (every `hum / block`th corner)
 /// the far boxes and at every fourth of them the distant ones, then at every second corner the
 /// near boxes.

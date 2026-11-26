@@ -6,17 +6,19 @@
 //! cell; a painted map is scored against it cell by cell. A building's pixels are not assessed: the
 //! popup's answers inside buildings score the map there.
 
-use crate::exact::{Batch, LAYERS, Point, add_bands, evaluate_all, loud_pairs, whole_energy};
+use crate::exact::{
+    Batch, LAYERS, PIXELS_PER_LOUDNESS_BATCH, Point, add_bands, evaluate_all, loud_pairs,
+    whole_energy,
+};
 use crate::flight_spectra::FlightSpectra;
-use crate::flights::aircraft_sums;
+use crate::flights::{aircraft_sums, aircraft_sums_many};
 use crate::hum::Hum;
 use crate::levels::Painted;
 use crate::levels::PaintedCells;
 use crate::paint::Grid;
 use crate::paint::metres_at;
 use crate::sone::{
-    Displays, NOTHING_LEFT_OUT, PixelSound, PixelSoundScratch, SoundBesideExactPairs, pixel_ndens,
-    pixel_sound,
+    Displays, NOTHING_LEFT_OUT, PixelSound, PixelSoundScratch, SoundBesideExactPairs, pixel_sound,
 };
 use crate::square::Square;
 use popup::evaluate::Scratch;
@@ -97,15 +99,14 @@ pub(crate) fn paint_points(
     background: (&Hum, &FlightSpectra, &Displays),
     batch: Option<&dyn Batch>,
 ) -> Result<Vec<Painted>, String> {
+    if points.is_empty() {
+        return Ok(Vec::new());
+    }
     let (hum, flight_spectra, displays) = background;
     let pairs = loud_pairs(square, points);
     let (evaluated, flights) = rayon::join(
         || evaluate_all(square, points, &pairs, batch),
-        || {
-            (points.par_iter())
-                .map(|point| aircraft_sums(square, point))
-                .collect::<Result<Vec<_>, String>>()
-        },
+        || aircraft_sums_many(square, points, batch),
     );
     let (evaluated, flights) = (evaluated?, flights?);
     // The pairs come point by point: each point's run of them.
@@ -118,44 +119,99 @@ pub(crate) fn paint_points(
         starts[k + 1] += starts[k];
     }
     let candidates: Vec<u32> = pairs.iter().map(|pair| pair.candidate).collect();
-    let painted: Vec<Painted> = (0..points.len())
-        .into_par_iter()
-        .map(|k| -> Result<_, String> {
-            let (steady, bands) = hum.at(pixels_at[k] % n, pixels_at[k] / n);
-            let rest = SoundBesideExactPairs {
-                steady,
-                bands,
-                left_out: NOTHING_LEFT_OUT,
-                flights: flights[k],
-            };
-            let range = starts[k]..starts[k + 1];
-            let reflection = points[k].reflection();
-            let layers = crate::levels::layer_energy(
-                square,
-                &rest.steady,
-                &rest.flights.energy,
-                reflection,
+    let sound_at = |scratch: &mut PixelSoundScratch,
+                    k: usize|
+     -> Result<([f64; LAYERS], PixelSound), String> {
+        let (steady, bands) = hum.at(pixels_at[k] % n, pixels_at[k] / n);
+        let rest = SoundBesideExactPairs {
+            steady,
+            bands,
+            left_out: NOTHING_LEFT_OUT,
+            flights: flights[k],
+        };
+        let range = starts[k]..starts[k + 1];
+        let reflection = points[k].reflection();
+        let layers = crate::levels::layer_energy(
+            square,
+            &rest.steady,
+            &rest.flights.energy,
+            reflection,
+            &candidates[range.clone()],
+            &evaluated.pairs[range.clone()],
+        );
+        let sound = pixel_sound(
+            square,
+            displays,
+            scratch,
+            (&points[k], reflection),
+            (
                 &candidates[range.clone()],
-                &evaluated.pairs[range.clone()],
-            );
-            let ndens = pixel_ndens(
-                square,
-                displays,
-                (&points[k], reflection),
-                (
-                    &candidates[range.clone()],
-                    &evaluated.pairs[range],
-                    &evaluated.bands[k],
-                ),
-                (
-                    &rest,
-                    &flight_spectra.at(pixels_at[k] % n, pixels_at[k] / n),
-                ),
-                Resolution::MAP,
-            )?;
-            Ok((layers, ndens))
-        })
-        .collect::<Result<_, String>>()?;
+                &evaluated.pairs[range],
+                &evaluated.bands[k],
+            ),
+            (
+                &rest,
+                &flight_spectra.at(pixels_at[k] % n, pixels_at[k] / n),
+            ),
+        )?;
+        Ok((layers, sound))
+    };
+    let mut painted = Vec::with_capacity(points.len());
+    for first in (0..points.len()).step_by(PIXELS_PER_LOUDNESS_BATCH) {
+        let end = (first + PIXELS_PER_LOUDNESS_BATCH).min(points.len());
+        match batch {
+            Some(batch) => {
+                let parts = (first..end)
+                    .collect::<Vec<_>>()
+                    .par_chunks(32)
+                    .map_init(
+                        PixelSoundScratch::default,
+                        |scratch, chunk| -> Result<_, String> {
+                            let mut layers = Vec::with_capacity(chunk.len());
+                            let mut input = Vec::new();
+                            let mut offsets = Vec::with_capacity(chunk.len());
+                            for &k in chunk {
+                                let (layer, sound) = sound_at(scratch, k)?;
+                                layers.push(layer);
+                                offsets.push(input.len() as u64);
+                                sound.pack_with_scratch(&mut scratch.fold, &mut input);
+                            }
+                            Ok((layers, input, offsets))
+                        },
+                    )
+                    .collect::<Result<Vec<_>, String>>()?;
+                let floats: usize = parts.iter().map(|(_, input, _)| input.len()).sum();
+                let mut input = Vec::with_capacity(floats);
+                let mut offsets = Vec::with_capacity(end - first);
+                let mut layers = Vec::with_capacity(end - first);
+                for (part_layers, part_in, part_off) in parts {
+                    let base = input.len() as u64;
+                    offsets.extend(part_off.into_iter().map(|o| base + o));
+                    input.extend_from_slice(&part_in);
+                    layers.extend(part_layers);
+                }
+                let card = batch.loudness(&input, &offsets)?;
+                painted.extend(
+                    layers
+                        .into_iter()
+                        .zip(card.into_iter().map(|ndens| ndens.map(f64::from))),
+                );
+            }
+            None => {
+                let chunk: Vec<Painted> = (first..end)
+                    .into_par_iter()
+                    .map_init(PixelSoundScratch::default, |scratch, k| {
+                        let (layers, sound) = sound_at(scratch, k)?;
+                        Ok((
+                            layers,
+                            sound.ndens_with_scratch(&mut scratch.fold, Resolution::MAP),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                painted.extend(chunk);
+            }
+        }
+    }
     Ok(painted)
 }
 

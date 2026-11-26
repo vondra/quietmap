@@ -14,6 +14,7 @@
 pub mod aircraft;
 pub mod batch;
 pub mod device;
+mod eval_slot;
 pub mod loudness;
 pub mod square_writer;
 mod stream;

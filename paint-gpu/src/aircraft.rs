@@ -38,23 +38,25 @@ const FLIGHT_THREADS: u32 = 128;
 const SUMS: usize = PERIODS + 2 * PERIODS * PASS_CLASSES;
 
 /// kernels/aircraft.cuh FlightBox.
+/// Double-precision geometry and passing shares come first so the 16 km reach, horizon sector
+/// bearing and 3 dB pass-class edges match the CPU's f64 branch decisions.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct DeviceFlightBox {
-    east_m: f32,
-    north_m: f32,
-    centroid_altitude_m: f32,
-    sin_axis: f32,
-    cos_axis: f32,
-    gradient: f32,
-    gradient_spread: f32,
-    average_length_m: f32,
+    east_m: f64,
+    north_m: f64,
+    centroid_altitude_m: f64,
+    sin_axis: f64,
+    cos_axis: f64,
+    gradient: f64,
+    gradient_spread: f64,
+    average_length_m: f64,
+    passing: [f64; PERIODS],
     piece_length_m: [f32; PERIODS],
     levels_db: [[f32; NPD_DISTANCES]; PERIODS],
     tail_levels_db: [f32; PERIODS],
     lg_scaled_distance: [f32; NPD_DISTANCES],
     installation_shares: [[[f32; 3]; 2]; PERIODS],
-    passing: [f32; PERIODS],
     screened: u32,
     helicopter: u32,
     silent: [u32; PERIODS],
@@ -64,23 +66,23 @@ pub(crate) struct DeviceFlightBox {
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct DeviceFlightPoint {
-    x: f32,
-    y: f32,
-    altitude_m: f32,
-    impedance_gain: f32,
+    x: f64,
+    y: f64,
+    altitude_m: f64,
     horizons: u64,
+    impedance_gain: f32,
 }
 
 /// kernels/aircraft.cuh FlightSegment.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct DeviceFlightSegment {
+    within_m: f64,
     point: u32,
     sum: u32,
     first: u32,
     count: u32,
     weight: u32,
-    within_m: f32,
     coarse_m: f32,
 }
 
@@ -105,9 +107,10 @@ pub(crate) fn aircraft_constants() -> String {
         .collect();
     let seconds: Vec<String> = PERIOD_HOURS
         .iter()
-        .map(|&hours| format!("{:?}f", (hours * 3_600.0) as f32))
+        .map(|&hours| format!("{:?}", hours * 3_600.0))
         .collect();
     let define = |name: &str, value: f64| format!("#define {name} {:?}f\n", value as f32);
+    let define_f64 = |name: &str, value: f64| format!("#define {name} {:?}\n", value);
     [
         format!("#define NPD_DISTANCES {NPD_DISTANCES}\n"),
         format!(
@@ -115,7 +118,7 @@ pub(crate) fn aircraft_constants() -> String {
             logs.join(", ")
         ),
         format!(
-            "__constant__ float PERIOD_SECONDS[PERIODS] = {{{}}};\n",
+            "__constant__ double PERIOD_SECONDS_F64[PERIODS] = {{{}}};\n",
             seconds.join(", ")
         ),
         define("METRES_PER_FOOT", METRES_PER_FOOT),
@@ -127,7 +130,7 @@ pub(crate) fn aircraft_constants() -> String {
         define("PATH_DIFFERENCE_SLOPE_PER_M", PATH_DIFFERENCE_SLOPE_PER_M),
         define("GRAZING_LOSS_DB", GRAZING_LOSS_DB),
         define("SCREENING_CAP_DB", SCREENING_CAP_DB),
-        define("AIRCRAFT_REACH_M", AIRCRAFT_REACH_M),
+        define_f64("AIRCRAFT_REACH_M_F64", AIRCRAFT_REACH_M),
         format!("#define HORIZON_BANDS {HORIZON_BANDS}\n"),
         format!("#define TERRAIN_SECTORS {TERRAIN_SECTORS}\n"),
         format!("#define BUILDING_SECTORS {BUILDING_SECTORS}\n"),
@@ -135,35 +138,43 @@ pub(crate) fn aircraft_constants() -> String {
         format!("#define FLIGHT_THREADS {FLIGHT_THREADS}\n"),
         format!("#define FLIGHT_SUMS {SUMS}\n"),
         format!("#define PASS_CLASSES {PASS_CLASSES}\n"),
-        define("PASS_CLASS_DB", PASS_CLASS_DB),
-        define("PASS_LOWEST_DB", PASS_LOWEST_DB),
+        define_f64("PASS_CLASS_DB_F64", PASS_CLASS_DB),
+        define_f64("PASS_LOWEST_DB_F64", PASS_LOWEST_DB),
     ]
     .concat()
 }
 
-/// A square's listed boxes on the card: per aircraft tile, file and band where its boxes begin.
+/// A square's listed boxes on the card: per aircraft tile, file and band where its boxes begin
+/// and how many boxes were uploaded there.
 pub struct DeviceFlightBoxes {
     boxes: CudaSlice<DeviceFlightBox>,
     first: Vec<[[u32; 2]; 2]>,
+    counts: Vec<[[u32; 2]; 2]>,
 }
 
 impl DeviceFlightBoxes {
     /// Decodes and uploads every box `flight_boxes` lists.
     pub fn upload(gpu: &Gpu, square: &Square, flight_boxes: &FlightBoxes) -> Result<Self, String> {
         let mut first = Vec::with_capacity(square.aircraft.len());
+        let mut counts = Vec::with_capacity(square.aircraft.len());
         let mut lists = Vec::new();
         let mut count = 0u32;
         for (tile, files) in square.aircraft.iter().zip(&flight_boxes.lists) {
-            first.push(std::array::from_fn(|file| {
-                std::array::from_fn(|band| {
-                    let at = count;
+            let mut tile_first = [[0u32; 2]; 2];
+            let mut tile_counts = [[0u32; 2]; 2];
+            for file in 0..2 {
+                for band in 0..2 {
+                    tile_first[file][band] = count;
                     if let Some(boxes) = [&tile.fine, &tile.far][file] {
+                        let len = files[file][band].len() as u32;
+                        tile_counts[file][band] = len;
                         lists.push((tile.tile, *boxes, &files[file][band]));
-                        count += files[file][band].len() as u32;
+                        count += len;
                     }
-                    at
-                })
-            }));
+                }
+            }
+            first.push(tile_first);
+            counts.push(tile_counts);
         }
         let tile_m = [square.frame.east_m_per_unit, square.frame.north_m_per_unit];
         let boxes: Vec<DeviceFlightBox> = lists
@@ -178,17 +189,18 @@ impl DeviceFlightBoxes {
                     let (sin_axis, cos_axis) = record.axis_rad.sin_cos();
                     let f = |values: [f64; PERIODS]| values.map(|value| value as f32);
                     DeviceFlightBox {
-                        east_m: east_m as f32,
-                        north_m: north_m as f32,
-                        centroid_altitude_m: record.centroid_altitude_m as f32,
-                        sin_axis: sin_axis as f32,
-                        cos_axis: cos_axis as f32,
-                        gradient: record.gradient as f32,
-                        gradient_spread: record.gradient_spread as f32,
+                        east_m,
+                        north_m,
+                        centroid_altitude_m: record.centroid_altitude_m,
+                        sin_axis,
+                        cos_axis,
+                        gradient: record.gradient,
+                        gradient_spread: record.gradient_spread,
                         average_length_m: average_length_m(
                             &record.energy_db,
                             &record.piece_length_m,
-                        ) as f32,
+                        ),
+                        passing: box_passing(boxes, &record, tile_m),
                         piece_length_m: f(record.piece_length_m),
                         levels_db: record.energy_db.map(|levels| levels.map(|l| l as f32)),
                         tail_levels_db: f(record.tail_energy_db),
@@ -196,7 +208,6 @@ impl DeviceFlightBoxes {
                         installation_shares: record
                             .installation_shares
                             .map(|slants| slants.map(|shares| shares.map(|s| s as f32))),
-                        passing: f(box_passing(boxes, &record, tile_m)),
                         screened: u32::from(
                             record.centroid_altitude_m - record.place.ground_m
                                 < SCREENING_CEILING_ABOVE_GROUND_M,
@@ -210,7 +221,11 @@ impl DeviceFlightBoxes {
             })
             .collect();
         let boxes = upload_default(&gpu.device, &boxes)?;
-        Ok(DeviceFlightBoxes { boxes, first })
+        Ok(DeviceFlightBoxes {
+            boxes,
+            first,
+            counts,
+        })
     }
 }
 
@@ -249,11 +264,12 @@ impl Gpu {
                         let Some(weight) = request.weights[band] else {
                             continue;
                         };
-                        let count = flight_boxes.lists[tile.number][tile.file][band].len() as u32;
+                        let count = device_boxes.counts[tile.number][tile.file][band];
                         if count == 0 {
                             continue;
                         }
                         segments.push(DeviceFlightSegment {
+                            within_m: request.within_m,
                             point: slot as u32,
                             sum: (2 * slot + band) as u32,
                             first: device_boxes.first[tile.number][tile.file][band],
@@ -263,7 +279,6 @@ impl Gpu {
                                 FlightWeight::Far => 1,
                                 FlightWeight::Near => 2,
                             },
-                            within_m: request.within_m as f32,
                             coarse_m: flight_boxes.coarse_m as f32,
                         });
                     }
@@ -275,11 +290,11 @@ impl Gpu {
         for (request, prepared) in requests.iter().zip(prepared) {
             let point = request.point;
             points.push(DeviceFlightPoint {
-                x: point.position[0] as f32,
-                y: point.position[1] as f32,
-                altitude_m: point.altitude_m as f32,
-                impedance_gain: energy(receiver_impedance_db(point.altitude_m)) as f32,
+                x: point.position[0],
+                y: point.position[1],
+                altitude_m: point.altitude_m,
                 horizons: horizons.len() as u64,
+                impedance_gain: energy(receiver_impedance_db(point.altitude_m)) as f32,
             });
             if let Some((floats, request_segments)) = prepared {
                 horizons.extend(floats);

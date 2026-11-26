@@ -6,9 +6,8 @@
 //! Sampled quiet pairs carry importance weights for their bands; their energies stay unweighted.
 
 use crate::aircraft::DeviceFlightBoxes;
-use crate::device::{DeviceSquare, Gpu, PAIR_SUMS};
+use crate::device::{DeviceSquare, Gpu, PAIR_SUMS, PairResults};
 use crate::loudness::LOUDNESS_FLOATS;
-use crate::turns::CardTurns;
 use paint::exact::{Batch, Evaluated, LAYERS, Pair, PairEnergy, Point, add_bands, whole_energy};
 use paint::flight_boxes::{FlightBoxes, FlightRequest};
 use paint::flights::FlightSums;
@@ -16,7 +15,7 @@ use paint::square::Square;
 use physics::bands::{BANDS, PERIODS};
 use popup::evaluate::Scratch;
 use rayon::prelude::*;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// Pairs one launch takes: 160 bytes per pair, 24 per ray, 576 per reached point and 268 per
 /// receiver.
@@ -25,14 +24,38 @@ const PAIRS_PER_LAUNCH: usize = 2_000_000;
 #[path = "hum_pairs.rs"]
 mod hum_pairs;
 
+/// Exact layout identity of an uploaded `FlightBoxes` table, preventing collisions between
+/// layouts with equal band totals but different per-tile offsets or box order.
+#[derive(PartialEq, Eq)]
+struct FlightBoxesKey {
+    lists: Vec<[[Vec<usize>; 2]; 2]>,
+    coarse_m_bits: u64,
+}
+
+impl FlightBoxesKey {
+    fn from_boxes(boxes: &FlightBoxes) -> Self {
+        Self {
+            lists: boxes.lists.clone(),
+            coarse_m_bits: boxes.coarse_m.to_bits(),
+        }
+    }
+
+    fn matches(&self, boxes: &FlightBoxes) -> bool {
+        self.coarse_m_bits == boxes.coarse_m.to_bits() && self.lists == boxes.lists
+    }
+}
+
+struct CachedFlightBoxes {
+    key: FlightBoxesKey,
+    boxes: Arc<DeviceFlightBoxes>,
+}
+
 pub struct GpuBatch<'a> {
     pub gpu: &'a Gpu,
     pub device_square: &'a DeviceSquare,
     pub square: &'a Square<'a>,
-    /// The square's aircraft boxes, uploaded at the first flights asked.
-    flight_boxes: OnceLock<DeviceFlightBoxes>,
-    /// The card's turns among the square's evaluations, each taken for its launches alone.
-    turns: CardTurns,
+    /// The square's aircraft boxes uploaded for the last `FlightBoxes` layout key.
+    flight_boxes: Mutex<Option<CachedFlightBoxes>>,
 }
 
 impl<'a> GpuBatch<'a> {
@@ -41,8 +64,7 @@ impl<'a> GpuBatch<'a> {
             gpu,
             device_square,
             square,
-            flight_boxes: OnceLock::new(),
-            turns: CardTurns::default(),
+            flight_boxes: Mutex::new(None),
         }
     }
 }
@@ -67,15 +89,15 @@ fn by_candidate(pairs: &[Pair], candidates: usize) -> Vec<u32> {
     order
 }
 
-/// One launch's inputs as the card takes them: each of its points' receiver once, and per pair its
-/// candidate, receiver, slot and weight.
+/// One launch's inputs as the card takes them: each of its points' receiver once (with its band
+/// slot), and per pair its candidate, receiver and optional non-unit weight.
 #[derive(Default)]
 struct LaunchInputs {
     receivers: Vec<[f64; 2]>,
     own: Vec<u64>,
+    point_of_receiver: Vec<u32>,
     candidates: Vec<u32>,
     receiver_of_pair: Vec<u32>,
-    at: Vec<u32>,
     weights: Vec<f32>,
     /// Each point's receiver in this launch (`u32::MAX`: none), cleared after each gather.
     receiver_of_point: Vec<u32>,
@@ -83,21 +105,23 @@ struct LaunchInputs {
 }
 
 impl LaunchInputs {
+    fn band_weights(&self) -> Option<&[f32]> {
+        (!self.weights.is_empty()).then_some(self.weights.as_slice())
+    }
+
     /// The launch's pairs' inputs, each pair read once (`slot_of` each point's slot), each point's
     /// receiver once in the order its pairs first come.
     fn gather(&mut self, launch: &[u32], (points, pairs): (&[Point], &[Pair]), slot_of: &[u32]) {
         self.receivers.clear();
         self.own.clear();
+        self.point_of_receiver.clear();
         self.candidates.clear();
         self.receiver_of_pair.clear();
-        self.at.clear();
         self.weights.clear();
         self.candidates.reserve(launch.len());
         self.receiver_of_pair.reserve(launch.len());
-        self.at.reserve(launch.len());
-        self.weights.reserve(launch.len());
         self.receiver_of_point.resize(points.len(), u32::MAX);
-        for &k in launch {
+        for (idx, &k) in launch.iter().enumerate() {
             let pair = &pairs[k as usize];
             let receiver = &mut self.receiver_of_point[pair.point as usize];
             if *receiver == u32::MAX {
@@ -105,12 +129,19 @@ impl LaunchInputs {
                 *receiver = self.receivers.len() as u32;
                 self.receivers.push(point.position);
                 self.own.push(point.own_footprint);
+                self.point_of_receiver.push(slot_of[pair.point as usize]);
                 self.points.push(pair.point);
             }
             self.receiver_of_pair.push(*receiver);
             self.candidates.push(pair.candidate);
-            self.at.push(slot_of[pair.point as usize]);
-            self.weights.push(pair.band_weight as f32);
+            let w = pair.band_weight as f32;
+            if !self.weights.is_empty() {
+                self.weights.push(w);
+            } else if w != 1.0 {
+                self.weights.reserve(launch.len());
+                self.weights.resize(idx, 1.0);
+                self.weights.push(w);
+            }
         }
         for point in self.points.drain(..) {
             self.receiver_of_point[point as usize] = u32::MAX;
@@ -143,8 +174,8 @@ struct Launched {
     refused: Vec<usize>,
     /// The reached points' bands.
     bands: Vec<f32>,
-    /// The last launch's sums, to unpack.
-    last_sums: Vec<[f32; PAIR_SUMS]>,
+    /// The last launch's pinned results, to unpack.
+    last_results: Option<PairResults>,
 }
 
 impl GpuBatch<'_> {
@@ -166,15 +197,15 @@ impl GpuBatch<'_> {
         let launches: Vec<&[u32]> = order.chunks(PAIRS_PER_LAUNCH).collect();
         let mut gathering = LaunchInputs::default();
         let (mut energies, mut refused) = (Vec::new(), Vec::new());
-        let mut evaluated: Option<(&[u32], Vec<[f32; PAIR_SUMS]>)> = None;
+        let mut evaluated: Option<(&[u32], PairResults)> = None;
         for (at, &launch) in launches.iter().enumerate() {
-            let (sums, failed) = std::thread::scope(|scope| {
+            let results = std::thread::scope(|scope| {
                 scope.spawn(|| {
                     if energies.is_empty() {
                         energies = vec![PairEnergy::default(); pairs.len()];
                     }
-                    if let Some((launch, sums)) = evaluated.take() {
-                        unpack(launch, &sums, &mut energies);
+                    if let Some((prev_launch, prev_results)) = evaluated.take() {
+                        unpack(prev_launch, prev_results.sums(), &mut energies);
                     }
                     if let Some(next) = launches.get(at + 1) {
                         gathering.gather(next, (points, pairs), slot_of);
@@ -182,30 +213,33 @@ impl GpuBatch<'_> {
                 });
                 self.gpu.evaluate_pairs(
                     self.device_square,
-                    (&gathered.receivers, &gathered.own),
+                    (
+                        &gathered.receivers,
+                        &gathered.own,
+                        &gathered.point_of_receiver,
+                    ),
                     (
                         &gathered.candidates,
                         &gathered.receiver_of_pair,
-                        &gathered.at,
-                        &gathered.weights,
+                        gathered.band_weights(),
                     ),
                     &mut device_bands,
                     None,
                 )
             })?;
             refused.extend(
-                (launch.iter().zip(&failed))
+                (launch.iter().zip(results.failed()))
                     .filter(|&(_, &failed)| failed != 0)
                     .map(|(&k, _)| k as usize),
             );
-            evaluated = Some((launch, sums));
+            evaluated = Some((launch, results));
             std::mem::swap(&mut gathered, &mut gathering);
         }
         Ok(Launched {
             energies,
             refused,
             bands: self.gpu.download(&device_bands)?,
-            last_sums: evaluated.map(|(_, sums)| sums).unwrap_or_default(),
+            last_results: evaluated.map(|(_, results)| results),
         })
     }
 }
@@ -237,11 +271,12 @@ impl Batch for GpuBatch<'_> {
             mut energies,
             refused,
             bands: flat,
-            last_sums,
-        } = (self.turns)
+            last_results,
+        } = (self.gpu.turns)
             .in_turn(|| self.launch((points, pairs), &order, (&slot_of, reached.len()), first))?;
-        if let Some(launch) = order.chunks(PAIRS_PER_LAUNCH).last() {
-            unpack(launch, &last_sums, &mut energies);
+        if let (Some(launch), Some(results)) = (order.chunks(PAIRS_PER_LAUNCH).last(), last_results)
+        {
+            unpack(launch, results.sums(), &mut energies);
         }
         let mut bands = vec![[[[0.0; BANDS]; PERIODS]; LAYERS]; points.len()];
         for (&at, point) in reached
@@ -308,13 +343,74 @@ impl Batch for GpuBatch<'_> {
         boxes: &FlightBoxes,
         requests: &[FlightRequest],
     ) -> Result<Vec<[FlightSums; 2]>, String> {
-        let device_boxes = match self.flight_boxes.get() {
-            Some(device_boxes) => device_boxes,
+        assert!(
+            std::ptr::eq(square, self.square),
+            "GpuBatch::flight_sums called with a square other than the batch's own"
+        );
+        let cached = self
+            .flight_boxes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|entry| entry.key.matches(boxes))
+            .map(|entry| Arc::clone(&entry.boxes));
+        let device_boxes = match cached {
+            Some(uploaded) => uploaded,
             None => {
-                let uploaded = DeviceFlightBoxes::upload(self.gpu, square, boxes)?;
-                self.flight_boxes.get_or_init(|| uploaded)
+                let uploaded = Arc::new(DeviceFlightBoxes::upload(self.gpu, square, boxes)?);
+                *self
+                    .flight_boxes
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(CachedFlightBoxes {
+                    key: FlightBoxesKey::from_boxes(boxes),
+                    boxes: Arc::clone(&uploaded),
+                });
+                uploaded
             }
         };
-        self.gpu.flight_sums(square, boxes, device_boxes, requests)
+        self.gpu.flight_sums(square, boxes, &device_boxes, requests)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flight_boxes_cache_key_distinguishes_layouts_with_equal_totals() {
+        let layout_a = FlightBoxes {
+            lists: vec![
+                [[vec![0, 1], vec![]], [vec![], vec![]]],
+                [[vec![2], vec![]], [vec![], vec![]]],
+            ],
+            occupied: [true, false],
+            coarse_m: 380.0,
+        };
+        let layout_b = FlightBoxes {
+            lists: vec![
+                [[vec![0], vec![]], [vec![], vec![]]],
+                [[vec![1, 2], vec![]], [vec![], vec![]]],
+            ],
+            occupied: [true, false],
+            coarse_m: 380.0,
+        };
+        let layout_permuted = FlightBoxes {
+            lists: vec![
+                [[vec![1, 0], vec![]], [vec![], vec![]]],
+                [[vec![2], vec![]], [vec![], vec![]]],
+            ],
+            occupied: [true, false],
+            coarse_m: 380.0,
+        };
+        let layout_other_spacing = FlightBoxes {
+            lists: layout_a.lists.clone(),
+            occupied: [true, false],
+            coarse_m: 760.0,
+        };
+        let key = FlightBoxesKey::from_boxes(&layout_a);
+        assert!(key.matches(&layout_a));
+        assert!(!key.matches(&layout_b));
+        assert!(!key.matches(&layout_permuted));
+        assert!(!key.matches(&layout_other_spacing));
     }
 }

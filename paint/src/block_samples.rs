@@ -72,9 +72,22 @@ pub(crate) fn sample_block_pixels(
             .iter()
             .map(|block| positions.len() * block.most)
             .collect();
-        let own: Vec<OwnSources> = (blocks.par_iter())
-            .map(|block| OwnSources::of(square, &block.own))
+        let mut unique_own: Vec<u32> = blocks
+            .iter()
+            .flat_map(|block| block.own.iter().copied())
+            .collect();
+        unique_own.sort_unstable();
+        unique_own.dedup();
+        let own_ground: Vec<(u32, [f64; 2])> = unique_own
+            .par_iter()
+            .map(|&index| {
+                let ground_m = square.candidates[index as usize].traced_ground_m(&square.ground)?;
+                Ok((index, ground_m))
+            })
             .collect::<Result<_, String>>()?;
+        let own: Vec<OwnSources> = (blocks.par_iter())
+            .map(|block| OwnSources::from_lookup(&block.own, &own_ground))
+            .collect();
         for run in runs_within(&bounds, PASS_BLOCKS) {
             let ids = &chunk[run.clone()];
             let block_of = |slot: usize| &blocks[run.start + slot];

@@ -11,9 +11,9 @@
 #define LINE_PERPENDICULAR_FLOOR_M 0.5f
 #define POINT_DIVERGENCE_LINEAR 12.589254117941673f
 
-// line::wrap_to_pi
-__device__ float wrap_to_pi(float angle) {
-    float a = fmodf(angle, QM_TAU);
+// line::wrap_to_pi: fast path avoids slow software `fmodf` for angle differences in [-2pi, 2pi].
+__device__ __forceinline__ float wrap_to_pi(float angle) {
+    float a = fabsf(angle) <= QM_TAU ? angle : fmodf(angle, QM_TAU);
     if (a > QM_PI) return a - QM_TAU;
     if (a <= -QM_PI) return a + QM_TAU;
     return a;
@@ -270,15 +270,16 @@ __device__ u32 line_buckets_of(const float* start, const float* end, LineBuckets
 __device__ void mask_wide_buckets(const ObstacleScene& scene, float origin_x, float origin_y, float los_floor_m, LineBuckets& b) {
     struct Wedge {
         float low_c, low_s, high_c, high_s;
-        i64 row_lo, row_hi, col_lo, col_hi;
+        int row_lo, row_hi, col_lo, col_hi;
     };
     Wedge wedges[LINE_BUCKET_COUNT];
     float ox, oy;
     lattice_steps(scene, origin_x, origin_y, &ox, &oy);
     float east_m = scene.metres_per_step_x, north_m = scene.metres_per_step_y;
     const float cell_steps = (float)CELL_STEPS;
+    const float inv_cell_steps = 1.0f / cell_steps;
     u32 wide = 0;
-    i64 row_lo = 0, row_hi = -1, col_lo = 0, col_hi = -1;
+    int row_lo = 0, row_hi = -1, col_lo = 0, col_hi = -1;
     for (int k = 0; k < b.count; k++) {
         if (!b.wide[k]) continue;
         for (int w = 0; w < WIDE_BUCKET_MASK_WORDS; w++) b.mask[k][w] = 0u;
@@ -289,10 +290,10 @@ __device__ void mask_wide_buckets(const ObstacleScene& scene, float origin_x, fl
         e.low_s = sinf(w.span_lo);
         e.high_c = cosf(w.span_hi);
         e.high_s = sinf(w.span_hi);
-        e.row_lo = (i64)floorf((oy - radius_m / north_m) / cell_steps);
-        e.row_hi = (i64)floorf((oy + radius_m / north_m) / cell_steps);
-        e.col_lo = (i64)floorf((ox - radius_m / east_m) / cell_steps);
-        e.col_hi = (i64)floorf((ox + radius_m / east_m) / cell_steps);
+        e.row_lo = (int)floorf((oy - radius_m / north_m) * inv_cell_steps);
+        e.row_hi = (int)floorf((oy + radius_m / north_m) * inv_cell_steps);
+        e.col_lo = (int)floorf((ox - radius_m / east_m) * inv_cell_steps);
+        e.col_hi = (int)floorf((ox + radius_m / east_m) * inv_cell_steps);
         if (!wide) {
             row_lo = e.row_lo, row_hi = e.row_hi, col_lo = e.col_lo, col_hi = e.col_hi;
         } else {
@@ -301,75 +302,127 @@ __device__ void mask_wide_buckets(const ObstacleScene& scene, float origin_x, fl
         }
         wide |= 1u << k;
     }
-    for (i64 row = row_lo; row <= row_hi; row++) {
-        float south = (oy - (float)(row + 1) * cell_steps) * north_m;
-        float north = (oy - (float)row * cell_steps) * north_m;
-        float dy = fmaxf(fmaxf(south, -north), 0.0f);
-        for (i64 column = col_lo; column <= col_hi; column++) {
-            float west = ((float)column * cell_steps - ox) * east_m;
-            float east = ((float)(column + 1) * cell_steps - ox) * east_m;
-            float dx = fmaxf(fmaxf(west, -east), 0.0f);
-            float cx[4] = {west, east, west, east}, cy[4] = {south, south, north, north};
-            // The buckets that walk this cell.
-            u32 walking = 0;
+    int orig_row = (int)floorf(oy * inv_cell_steps), orig_col = (int)floorf(ox * inv_cell_steps);
+    float cell_w = cell_steps * east_m;
+    float inv_east_m = 1.0f / east_m;
+    int max_dr = max(orig_row - row_lo, row_hi - orig_row);
+    for (int dr = 0; dr <= max_dr && wide; dr++) {
+        for (int rdir = 0; rdir < (dr == 0 ? 1 : 2) && wide; rdir++) {
+            int row = rdir == 0 ? orig_row + dr : orig_row - dr;
+            if (row < row_lo || row > row_hi) continue;
+            float south = (oy - (float)(row + 1) * cell_steps) * north_m;
+            float north = (oy - (float)row * cell_steps) * north_m;
+            float dy = fmaxf(fmaxf(south, -north), 0.0f);
+            float dy2 = dy * dy;
+            u32 row_wide = 0u;
+            int row_col_lo = col_hi + 1, row_col_hi = col_lo - 1;
+            int ck_lo[LINE_BUCKET_COUNT], ck_hi[LINE_BUCKET_COUNT];
             for (int k = 0; k < b.count; k++) {
                 const Wedge& e = wedges[k];
-                if (!(wide >> k & 1u) || row < e.row_lo || row > e.row_hi || column < e.col_lo || column > e.col_hi) continue;
-                float radius_m = b.span[k].need_radius;
-                if (dx * dx + dy * dy > radius_m * radius_m) continue;
-                bool below = true, above = true;
-                for (int c = 0; c < 4; c++) {
-                    if (!(e.low_c * cy[c] - e.low_s * cx[c] < 0.0f)) below = false;
-                    if (!(cx[c] * e.high_s - cy[c] * e.high_c < 0.0f)) above = false;
-                }
-                if (!(below || above)) walking |= 1u << k;
+                if (!(wide >> k & 1u) || row < e.row_lo || row > e.row_hi) continue;
+                float r = b.span[k].need_radius;
+                float r2 = r * r;
+                // Conservative magnitude-relative margins so row/column filters are strict
+                // supersets of the original per-cell radius and 4-corner wedge predicates.
+                float r2_eps = fmaxf(1e-3f, 1e-5f * r2);
+                float r2_rem = r2 - dy2;
+                if (r2_rem < -r2_eps) continue;
+                float max_dx = sqrtf(fmaxf(r2_rem + r2_eps, 0.0f));
+                float east_min = -max_dx, west_max = max_dx;
+                float scale = fmaxf(1.0f, fmaxf(fabsf(south), fabsf(north)) + max_dx + cell_w);
+                float eps = 1e-4f * scale;
+                float my_lo = fmaxf(e.low_c * south, e.low_c * north);
+                if (e.low_s > 1e-6f) west_max = fminf(west_max, (my_lo + eps) / e.low_s);
+                else if (e.low_s < -1e-6f) east_min = fmaxf(east_min, (my_lo + eps) / e.low_s);
+                else if (my_lo + fabsf(e.low_s) * (max_dx + cell_w) + eps < 0.0f) continue;
+                float my_hi = fmaxf(-e.high_c * south, -e.high_c * north);
+                if (e.high_s > 1e-6f) east_min = fmaxf(east_min, -(my_hi + eps) / e.high_s);
+                else if (e.high_s < -1e-6f) west_max = fminf(west_max, -(my_hi + eps) / e.high_s);
+                else if (my_hi + fabsf(e.high_s) * (max_dx + cell_w) + eps < 0.0f) continue;
+                if (east_min - cell_w > west_max + eps) continue;
+                int clo = max(e.col_lo, (int)floorf((ox + (east_min - eps) * inv_east_m) * inv_cell_steps) - 1);
+                int chi = min(e.col_hi, (int)floorf((ox + (west_max + eps) * inv_east_m) * inv_cell_steps) + 1);
+                if (clo > chi) continue;
+                ck_lo[k] = clo;
+                ck_hi[k] = chi;
+                row_wide |= 1u << k;
+                row_col_lo = min(row_col_lo, clo);
+                row_col_hi = max(row_col_hi, chi);
             }
-            if (!walking) continue;
-            const ObstacleTile* tile = 0;
-            int index = 0;
-            if (scene_locate(scene, column, row, &tile, &index) != TILE_READ) continue;
-            if (scene.cell_max_height[tile->cell_max_offset + index] <= los_floor_m) continue;
-            u32 run_begin, run_end;
-            tile_cell_runs(scene, *tile, index, &run_begin, &run_end);
-            const u8* runs = tile_runs(scene, *tile);
-            for (u32 run_index = run_begin; run_index < run_end && walking; run_index++) {
-                const u8* run = runs + (u64)RUN_BYTES * run_index;
-                OutlineMeta outline = tile_outline_meta(scene, *tile, read_u32(run));
-                if (outline.kind == OUTLINE_KIND_WALL && (float)outline.height_dm * 0.1f <= los_floor_m) continue;
-                u32 first = outline.first_vertex + read_u16(run + 4);
-                u32 edge_count = read_u16(run + 6);
-                int lx, ly;
-                tile_vertex_local(scene, *tile, first, &lx, &ly);
-                float ax = (tile->offset_x + (float)lx - ox) * east_m, ay = (oy - (tile->offset_y + (float)ly)) * north_m;
-                float azimuth_a = atan2f(ay, ax);
-                for (u32 next = first + 1; next <= first + edge_count && walking; next++) {
-                    tile_vertex_local(scene, *tile, next, &lx, &ly);
-                    float bx = (tile->offset_x + (float)lx - ox) * east_m, by = (oy - (tile->offset_y + (float)ly)) * north_m;
-                    float azimuth_b = atan2f(by, bx);
-                    float nearest_m = origin_to_segment_distance(ax, ay, bx, by);
-                    if (nearest_m >= 1e-6f) {
-                        float unwrapped_b = azimuth_a + wrap_to_pi(azimuth_b - azimuth_a);
-                        float arc_lo = fminf(azimuth_a, unwrapped_b), arc_hi = fmaxf(azimuth_a, unwrapped_b);
-                        u32 saturated = 0u;
-                        for (int k = 0; k < b.count; k++) {
-                            const WideSpan& w = b.span[k];
-                            if ((walking >> k & 1u) && nearest_m <= w.need_radius) {
-                                mark_blocked_bins(b.g, arc_lo, arc_hi, nearest_m, w.need_radius, w.span_lo, w.span_hi, w.bin_width, b.mask[k]);
-                                u32 all = 0xffffffffu;
-#pragma unroll
-                                for (int word = 0; word < WIDE_BUCKET_MASK_WORDS; word++) all &= b.mask[k][word];
-                                if (all == 0xffffffffu) saturated |= 1u << k;
-                            }
+            if (!row_wide) continue;
+            int start_col = min(max(orig_col, row_col_lo), row_col_hi);
+            int max_dc = max(start_col - row_col_lo, row_col_hi - start_col);
+            for (int dc = 0; dc <= max_dc && (wide & row_wide); dc++) {
+                for (int cdir = 0; cdir < (dc == 0 ? 1 : 2) && (wide & row_wide); cdir++) {
+                    int column = cdir == 0 ? start_col + dc : start_col - dc;
+                    if (column < row_col_lo || column > row_col_hi) continue;
+                    float west = ((float)column * cell_steps - ox) * east_m;
+                    float east = ((float)(column + 1) * cell_steps - ox) * east_m;
+                    float dx = fmaxf(fmaxf(west, -east), 0.0f);
+                    float cx[4] = {west, east, west, east}, cy[4] = {south, south, north, north};
+                    u32 active = wide & row_wide;
+                    u32 walking = 0;
+                    for (int k = 0; k < b.count; k++) {
+                        if (!(active >> k & 1u) || column < ck_lo[k] || column > ck_hi[k]) continue;
+                        float radius_m = b.span[k].need_radius;
+                        if (dx * dx + dy * dy > radius_m * radius_m) continue;
+                        const Wedge& e = wedges[k];
+                        bool below = true, above = true;
+                        for (int c = 0; c < 4; c++) {
+                            if (!(e.low_c * cy[c] - e.low_s * cx[c] < 0.0f)) below = false;
+                            if (!(cx[c] * e.high_s - cy[c] * e.high_c < 0.0f)) above = false;
                         }
-                        if (saturated) {
-                            wide &= ~saturated;
-                            walking &= ~saturated;
-                            if (!wide) return;
+                        if (!(below || above)) walking |= 1u << k;
+                    }
+                    if (!walking) continue;
+                    const ObstacleTile* tile = 0;
+                    int index = 0;
+                    if (scene_locate(scene, column, row, &tile, &index) != TILE_READ) continue;
+                    if (scene.cell_max_height[tile->cell_max_offset + index] <= los_floor_m) continue;
+                    u32 run_begin, run_end;
+                    tile_cell_runs(scene, *tile, index, &run_begin, &run_end);
+                    const u8* runs = tile_runs(scene, *tile);
+                    for (u32 run_index = run_begin; run_index < run_end && walking; run_index++) {
+                        const u32* run = (const u32*)(runs + (u64)RUN_BYTES * run_index);
+                        OutlineMeta outline = tile_outline_meta(scene, *tile, run[0]);
+                        if (outline.kind == OUTLINE_KIND_WALL && (float)outline.height_dm * 0.1f <= los_floor_m) continue;
+                        u32 span_packed = run[1];
+                        u32 first = outline.first_vertex + (span_packed & 0xffffu);
+                        u32 edge_count = span_packed >> 16;
+                        int lx, ly;
+                        tile_vertex_local(scene, *tile, first, &lx, &ly);
+                        float ax = (tile->offset_x + (float)lx - ox) * east_m, ay = (oy - (tile->offset_y + (float)ly)) * north_m;
+                        float azimuth_a = atan2f(ay, ax);
+                        for (u32 next = first + 1; next <= first + edge_count && walking; next++) {
+                            tile_vertex_local(scene, *tile, next, &lx, &ly);
+                            float bx = (tile->offset_x + (float)lx - ox) * east_m, by = (oy - (tile->offset_y + (float)ly)) * north_m;
+                            float azimuth_b = atan2f(by, bx);
+                            float nearest_m = origin_to_segment_distance(ax, ay, bx, by);
+                            if (nearest_m >= 1e-6f) {
+                                float unwrapped_b = azimuth_a + wrap_to_pi(azimuth_b - azimuth_a);
+                                float arc_lo = fminf(azimuth_a, unwrapped_b), arc_hi = fmaxf(azimuth_a, unwrapped_b);
+                                u32 saturated = 0u;
+                                for (int k = 0; k < b.count; k++) {
+                                    const WideSpan& w = b.span[k];
+                                    if ((walking >> k & 1u) && nearest_m <= w.need_radius) {
+                                        mark_blocked_bins(b.g, arc_lo, arc_hi, nearest_m, w.need_radius, w.span_lo, w.span_hi, w.bin_width, b.mask[k]);
+                                        u32 all = 0xffffffffu;
+#pragma unroll
+                                        for (int word = 0; word < WIDE_BUCKET_MASK_WORDS; word++) all &= b.mask[k][word];
+                                        if (all == 0xffffffffu) saturated |= 1u << k;
+                                    }
+                                }
+                                if (saturated) {
+                                    wide &= ~saturated;
+                                    walking &= ~saturated;
+                                    if (!wide) return;
+                                }
+                            }
+                            ax = bx;
+                            ay = by;
+                            azimuth_a = azimuth_b;
                         }
                     }
-                    ax = bx;
-                    ay = by;
-                    azimuth_a = azimuth_b;
                 }
             }
         }

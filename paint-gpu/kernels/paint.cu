@@ -68,50 +68,146 @@ extern "C" __global__ void point_receivers(const SquareScene* square_ptr, const 
 }
 
 // A pair's first rays kept by its counting for its writing, in the pair's bands (which the rays fill
-// only later): PAIR_RAY_SLOTS of them, each as its start, its weight (never negative: its sign
-// carries the flag of obstacles on the ray, set for none) and its deck's ground. The listing walked
-// each line piece's masks twice, to count its rays and to write them (a sixth of a dense city
-// square's pair kernels on compute capability 12.0, 2026-10-20).
-#define PAIR_RAY_SLOTS (PERIODS * BANDS / 4)
+// only later): PAIR_RAY_SLOTS of them, each as its fraction along the source segment and its signed
+// weight (never negative: its sign carries the flag of obstacles on the ray, set for none). Storing
+// two floats per ray doubles the cached capacity to 12 rays in the same buffer and halves slot traffic.
+#define PAIR_RAY_SLOTS (PERIODS * BANDS / 2)
 
 // What a pair's listing hands each ray to: counted and kept, or written at the pair's offset.
 struct RayLister {
     PairRay* rays;
     float* slots;
     u32 count;
-    __device__ u32 operator()(const PairRay& ray) {
+    __device__ u32 operator()(const PairRay& ray, float fraction) {
         if (rays) {
             rays[count] = ray;
         } else if (count < PAIR_RAY_SLOTS) {
-            float* slot = slots + 4 * count;
-            slot[0] = ray.px;
-            slot[1] = ray.py;
-            slot[2] = (ray.obstacles_on_ray & PAIR_RAY_OBSTACLES) ? ray.weight : -ray.weight;
-            slot[3] = ray.source_ground_m;
+            float* slot = slots + 2 * count;
+            slot[0] = fraction;
+            slot[1] = (ray.obstacles_on_ray & PAIR_RAY_OBSTACLES) ? ray.weight : -ray.weight;
         }
         count++;
         return 0;
     }
 };
 
+// Exclusive prefix sum over `counts[0..n]` in tiles of 1024 (`blockDim.x == 256`), writing
+// tile-local exclusive offsets to `offsets` and each tile's total to `block_sums`.
+extern "C" __global__ void scan_blocks(const u32* counts, u32 n, u32* offsets, u32* block_sums) {
+    __shared__ u32 warp_sums[8];
+    int t = threadIdx.x, lane = t & 31, warp = t >> 5;
+    u32 base = blockIdx.x * 1024u + 4u * (u32)t;
+    u32 v0 = base < n ? counts[base] : 0u;
+    u32 v1 = base + 1u < n ? counts[base + 1u] : 0u;
+    u32 v2 = base + 2u < n ? counts[base + 2u] : 0u;
+    u32 v3 = base + 3u < n ? counts[base + 3u] : 0u;
+    u32 local_sum = v0 + v1 + v2 + v3;
+    u32 s = local_sum;
+#pragma unroll
+    for (int off = 1; off < 32; off <<= 1) {
+        u32 up = __shfl_up_sync(0xffffffffu, s, off);
+        if (lane >= off) s += up;
+    }
+    if (lane == 31) warp_sums[warp] = s;
+    __syncthreads();
+    if (warp == 0) {
+        u32 ws = lane < 8 ? warp_sums[lane] : 0u;
+#pragma unroll
+        for (int off = 1; off < 8; off <<= 1) {
+            u32 up = __shfl_up_sync(0xffffffffu, ws, off);
+            if (lane >= off) ws += up;
+        }
+        if (lane < 8) warp_sums[lane] = ws;
+    }
+    __syncthreads();
+    u32 excl = (warp > 0 ? warp_sums[warp - 1] : 0u) + (s - local_sum);
+    if (base < n) offsets[base] = excl;
+    excl += v0;
+    if (base + 1u < n) offsets[base + 1u] = excl;
+    excl += v1;
+    if (base + 2u < n) offsets[base + 2u] = excl;
+    excl += v2;
+    if (base + 3u < n) offsets[base + 3u] = excl;
+    if (t == 255) block_sums[blockIdx.x] = warp_sums[7];
+}
+
+// Single-block exclusive prefix sum over `block_sums[0..num_blocks]` (`blockDim.x == 256`),
+// writing the grand total into `*total_out`.
+extern "C" __global__ void scan_block_sums(u32* block_sums, u32 num_blocks, u32* total_out) {
+    __shared__ u32 warp_sums[8];
+    int t = threadIdx.x, lane = t & 31, warp = t >> 5;
+    u32 carry = 0u;
+    for (u32 base = 0u; base < num_blocks; base += 256u) {
+        u32 idx = base + (u32)t;
+        u32 v = idx < num_blocks ? block_sums[idx] : 0u;
+        u32 s = v;
+#pragma unroll
+        for (int off = 1; off < 32; off <<= 1) {
+            u32 up = __shfl_up_sync(0xffffffffu, s, off);
+            if (lane >= off) s += up;
+        }
+        if (lane == 31) warp_sums[warp] = s;
+        __syncthreads();
+        if (warp == 0) {
+            u32 ws = lane < 8 ? warp_sums[lane] : 0u;
+#pragma unroll
+            for (int off = 1; off < 8; off <<= 1) {
+                u32 up = __shfl_up_sync(0xffffffffu, ws, off);
+                if (lane >= off) ws += up;
+            }
+            if (lane < 8) warp_sums[lane] = ws;
+        }
+        __syncthreads();
+        u32 excl = carry + (warp > 0 ? warp_sums[warp - 1] : 0u) + (s - v);
+        if (idx < num_blocks) block_sums[idx] = excl;
+        carry += warp_sums[7];
+        __syncthreads();
+    }
+    if (t == 0) *total_out = carry;
+}
+
 // Per pair (candidate `candidate_index[i]` at receiver `receiver_of_pair[i]` of `point_receivers`): with
 // `rays` null its rays counted into `ray_counts`, its first ones kept in `slots` (PERIODS x BANDS floats
-// a pair) and its failure into `failed`; else its rays written from `ray_offsets[i]`, from its slots
-// when they hold them all.
+// a pair) and its failure into `failed`; else its rays written in strict candidate-sorted order at
+// `ray_offsets[i] + block_sums[i >> 10]` when `0 < *total_rays <= ray_capacity`.
 extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const Receiver* receivers, const u32* receiver_failed,
                                      const u32* receiver_of_pair, const u32* candidate_index, u32 pair_count,
-                                     const u32* ray_offsets, PairRay* rays, u32* ray_counts, u32* failed, float* slots) {
+                                     const u32* ray_offsets, const u32* block_sums, const u32* total_rays, u32 ray_capacity,
+                                     u32 direct_single, PairRay* rays, u32* ray_counts, u32* failed, float* slots) {
+    if (rays) {
+        u32 total = *total_rays;
+        if (total == 0u || total > ray_capacity) return;
+    }
     const SquareScene& square = *square_ptr;
     u32 pair = blockIdx.x * blockDim.x + threadIdx.x;
     if (pair >= pair_count || (rays && failed[pair])) return;
     float* pair_slots = slots + (u64)pair * (PERIODS * BANDS);
     if (rays && ray_counts[pair] <= PAIR_RAY_SLOTS) {
         u32 count = ray_counts[pair];
+        u32 base = ray_offsets[pair] + block_sums[pair >> 10];
         u32 single = count == 1u ? PAIR_RAY_SINGLE : 0u;
-        for (u32 k = 0; k < count; k++) {
-            const float* slot = pair_slots + 4 * k;
-            u32 flags = (signbit(slot[2]) ? 0u : PAIR_RAY_OBSTACLES) | single;
-            rays[ray_offsets[pair] + k] = PairRay{pair, flags, slot[0], slot[1], fabsf(slot[2]), slot[3]};
+        const Candidate& candidate = square.candidates[candidate_index[pair]];
+        if (!candidate.line) {
+            if (count == 1u) {
+                float signed_w = pair_slots[1];
+                u32 flags = (signbit(signed_w) ? 0u : PAIR_RAY_OBSTACLES) | PAIR_RAY_SINGLE;
+                float ground_m = candidate.on_deck ? candidate.ground0 : QM_NAN;
+                rays[base] = PairRay{pair, flags, candidate.ax, candidate.ay, fabsf(signed_w), ground_m};
+            }
+        } else {
+            float dx = candidate.bx - candidate.ax, dy = candidate.by - candidate.ay;
+            float dg = candidate.ground1 - candidate.ground0;
+            bool on_deck = candidate.on_deck != 0u;
+            for (u32 k = 0; k < count; k++) {
+                const float* slot = pair_slots + 2 * k;
+                float frac = slot[0], signed_w = slot[1];
+                u32 flags = (signbit(signed_w) ? 0u : PAIR_RAY_OBSTACLES) | single;
+                float ground_m = on_deck ? candidate.ground0 + frac * dg : QM_NAN;
+                rays[base + k] = PairRay{pair, flags, candidate.ax + frac * dx, candidate.ay + frac * dy, fabsf(signed_w), ground_m};
+            }
+        }
+        if (direct_single && count > 1u) {
+            for (int j = 0; j < PERIODS * BANDS; j++) pair_slots[j] = 0.0f;
         }
         return;
     }
@@ -119,11 +215,14 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const Receiv
     const Receiver& receiver = receivers[at];
     u32 status = receiver_failed[at];
     const Candidate& candidate = square.candidates[candidate_index[pair]];
-    RayLister lister{rays ? rays + ray_offsets[pair] : 0, pair_slots, 0u};
+    u32 base = rays ? ray_offsets[pair] + block_sums[pair >> 10] : 0u;
+    RayLister lister{rays ? rays + base : 0, pair_slots, 0u};
     if (status == 0) status = pair_rays_of(square.obstacles, receiver, candidate, square.attributes[candidate.attribute], pair, lister);
     if (!rays) {
         ray_counts[pair] = status == 0 ? lister.count : 0u;
         failed[pair] = status;
+    } else if (direct_single) {
+        for (int j = 0; j < PERIODS * BANDS; j++) pair_slots[j] = 0.0f;
     }
 }
 
@@ -138,17 +237,22 @@ extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const Receiv
 #endif
 
 // Per listed ray, a thread each: its pair's sums (PAIR_SUMS a pair) and mixed bands (PERIODS x BANDS
-// a pair) added to, or its failure to the pair's.
-extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, RAY_BLOCKS_PER_MULTIPROCESSOR) ray_transfers(const SquareScene* square_ptr, const Receiver* receivers,
-                                         const u32* receiver_of_pair, const u32* candidate_index, const PairRay* rays,
-                                         u32 ray_count, float* sums, float* pair_bands, u32* failed) {
-    const SquareScene& square = *square_ptr;
+// a pair) added to, or its failure to the pair's. For single-ray pairs when `bands` is provided,
+// mixed bands go straight into the receiver's point bands, skipping the `pair_bands` round-trip.
+extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, RAY_BLOCKS_PER_MULTIPROCESSOR) ray_transfers(
+        const SquareScene* square_ptr, const Receiver* receivers, const u32* receiver_of_pair,
+        const u32* candidate_index, const u32* point_of_receiver, const float* band_weight, float* bands,
+        const PairRay* rays, const u32* total_rays, u32 ray_capacity, float* sums, float* pair_bands, u32* failed) {
+    u32 ray_count = *total_rays;
+    if (ray_count == 0u || ray_count > ray_capacity) return;
     u32 k = blockIdx.x * blockDim.x + threadIdx.x;
     if (k >= ray_count) return;
+    const SquareScene& square = *square_ptr;
     const PairRay ray = rays[k];
     u32 pair = ray.pair;
+    u32 rec = receiver_of_pair[pair];
     // A listed ray's receiver was built: a pair whose receiver failed lists none.
-    const Receiver& receiver = receivers[receiver_of_pair[pair]];
+    const Receiver& receiver = receivers[rec];
     const Candidate& candidate = square.candidates[candidate_index[pair]];
     RayStream s;
     float out[PAIR_SUMS], ray_bands[PERIODS * BANDS];
@@ -162,22 +266,45 @@ extern "C" __global__ void __launch_bounds__(THREADS_PER_BLOCK, RAY_BLOCKS_PER_M
     }
     if (single) {
         for (int j = 0; j < PAIR_SUMS; j++) sums[(u64)PAIR_SUMS * pair + j] = out[j];
-        for (int j = 0; j < PERIODS * BANDS; j++) pair_bands[(u64)pair * (PERIODS * BANDS) + j] = ray_bands[j];
+        if (bands) {
+            float w = band_weight ? band_weight[pair] : 1.0f;
+            if (w != 0.0f) {
+                u32 point = point_of_receiver[rec];
+                float* point_bands = bands + ((u64)point * LAYERS + candidate.layer) * (PERIODS * BANDS);
+                for (int j = 0; j < PERIODS * BANDS; j++) {
+                    float v = w * ray_bands[j];
+                    if (v != 0.0f) atomicAdd(&point_bands[j], v);
+                }
+            }
+        } else {
+            for (int j = 0; j < PERIODS * BANDS; j++) pair_bands[(u64)pair * (PERIODS * BANDS) + j] = ray_bands[j];
+        }
     } else {
         for (int j = 0; j < PAIR_SUMS; j++) atomicAdd(&sums[(u64)PAIR_SUMS * pair + j], out[j]);
         for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&pair_bands[(u64)pair * (PERIODS * BANDS) + j], ray_bands[j]);
     }
 }
 
-// Per answered pair: its mixed bands added to point `point_index[i]`'s in `bands` (LAYERS x PERIODS
-// x BANDS a point).
-extern "C" __global__ void pair_bands_to_points(const SquareScene* square_ptr, const u32* candidate_index,
-                                                const u32* point_index, const float* band_weight, u32 pair_count, const float* pair_bands,
+// Per answered multi-ray pair: its mixed bands added to its receiver's point in `bands` (single-ray
+// pairs already accumulated directly inside `ray_transfers`).
+extern "C" __global__ void pair_bands_to_points(const SquareScene* square_ptr, const u32* receiver_of_pair,
+                                                const u32* candidate_index, const u32* point_of_receiver,
+                                                const float* band_weight, u32 pair_count, const u32* total_rays,
+                                                u32 ray_capacity, const u32* ray_counts, const float* pair_bands,
                                                 const u32* failed, float* bands) {
-    const SquareScene& square = *square_ptr;
+    u32 ray_count = *total_rays;
+    if (ray_count == 0u || ray_count > ray_capacity) return;
     u32 pair = blockIdx.x * blockDim.x + threadIdx.x;
-    if (pair >= pair_count || failed[pair]) return;
+    if (pair >= pair_count || failed[pair] || ray_counts[pair] <= 1u) return;
+    float w = band_weight ? band_weight[pair] : 1.0f;
+    if (w == 0.0f) return;
+    const SquareScene& square = *square_ptr;
     const Candidate& candidate = square.candidates[candidate_index[pair]];
-    float* point_bands = bands + ((u64)point_index[pair] * LAYERS + candidate.layer) * (PERIODS * BANDS);
-    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&point_bands[j], band_weight[pair] * pair_bands[(u64)pair * (PERIODS * BANDS) + j]);
+    u32 point = point_of_receiver[receiver_of_pair[pair]];
+    float* point_bands = bands + ((u64)point * LAYERS + candidate.layer) * (PERIODS * BANDS);
+    const float* pb = pair_bands + (u64)pair * (PERIODS * BANDS);
+    for (int j = 0; j < PERIODS * BANDS; j++) {
+        float v = w * pb[j];
+        if (v != 0.0f) atomicAdd(&point_bands[j], v);
+    }
 }

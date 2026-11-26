@@ -3,11 +3,12 @@
 //! groups of hours, ISO 532-1), the pixels' packed sounds in (`paint::sone::PixelSound::pack`),
 //! their Nden out.
 
-use crate::device::{Gpu, driver};
+use crate::device::{Gpu, ensure_device, trim_device};
+use crate::stream::PinnedBuf;
 use crate::weather_runs::mixture_blocks;
-use cudarc::driver::LaunchConfig;
-use paint::exact::LAYERS;
-use paint::sone::PACKED_LINE_FLOATS;
+use cudarc::driver::{CudaDevice, CudaSlice, LaunchConfig};
+use paint::exact::{LAYERS, PIXELS_PER_LOUDNESS_BATCH};
+use paint::sone::{PACKED_LINE_FLOATS, map_hour_groups};
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS};
 use physics::loudness::{A0, DCB, DLL, LTQ, RAP, RNS, SILENT_DB, THIRD_OCTAVES, USL, ZUP};
 use physics::percentile::{
@@ -18,17 +19,14 @@ use popup::distribution::{LEVEL_MIN_DB, SPAN_DB, node_probabilities};
 use popup::loudness::{CURVE_HIGH_DB, CURVE_LOW_DB};
 use popup::percentiles::{
     HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, PASSES_HOLD_MEAN, Resolution, WEATHER_STATES,
-    hour_factor, hour_groups,
 };
+use std::sync::{Arc, Mutex, PoisonError};
 
 const DISTRIBUTION: &str = include_str!("../kernels/distribution.cuh");
 const LOUDNESS: &str = include_str!("../kernels/loudness.cuh");
 
 /// Floats a pixel's answer takes: per layer and in total.
 pub const LOUDNESS_FLOATS: usize = LAYERS + 1;
-
-/// The hourly profiles (`popup::percentiles` HOURLY_SHARES's rows).
-const PROFILES: usize = 3;
 
 /// The loudness kernels' source, their tables first.
 pub(crate) fn loudness_source() -> String {
@@ -52,12 +50,9 @@ pub(crate) fn loud_warp_bytes() -> usize {
 /// A pixel's blocks on the card: each period's groups of hours (as when some line follows a
 /// profile), its weather states a warp each.
 fn period_groups() -> Vec<(usize, usize)> {
-    let resolution = Resolution::MAP;
+    let hours = map_hour_groups();
     (0..PERIODS)
-        .flat_map(|period| {
-            let groups = hour_groups(true, period, resolution.hour_groups).0.len();
-            (0..groups).map(move |group| (period, group))
-        })
+        .flat_map(|period| (0..hours.groups[period].len()).map(move |group| (period, group)))
         .collect()
 }
 
@@ -108,26 +103,12 @@ fn loudness_constants() -> String {
         .flat_map(|row| node_rows.iter().map(move |node| node[row]))
         .collect();
     let shares: Vec<f64> = nodes.iter().map(|&(_, share)| share).collect();
-    // The map's groups of hours (as when some line follows a profile): their hours and each
-    // profile's mean flow over them against the period's.
-    let groups: Vec<(Vec<Vec<usize>>, usize)> = (0..PERIODS)
-        .map(|period| hour_groups(true, period, resolution.hour_groups))
-        .collect();
-    let groups_max = groups.iter().map(|(g, _)| g.len()).max().unwrap_or(1);
-    let mut group_slots = vec![0; PERIODS * groups_max];
-    let mut factor = vec![1.0; PROFILES * PERIODS * groups_max];
-    for (period, (slots, _)) in groups.iter().enumerate() {
-        for (group, slots) in slots.iter().enumerate() {
-            group_slots[period * groups_max + group] = slots.len();
-            for profile in 0..PROFILES {
-                factor[(profile * PERIODS + period) * groups_max + group] = (slots
-                    .iter()
-                    .map(|&slot| hour_factor(profile, period, slot))
-                    .sum::<f64>())
-                    / slots.len() as f64;
-            }
-        }
-    }
+    // The map's groups of hours and profile flow factors, shared with `paint::sone`.
+    let hours = map_hour_groups();
+    let groups_max = hours.groups_max;
+    let group_slots = &hours.group_slots;
+    let factor = &hours.factors;
+    let group_counts: Vec<usize> = hours.groups.iter().map(Vec::len).collect();
     let defines = [
         format!("#define LOUD_BIN_DB {:?}f\n", resolution.bin_db as f32),
         format!("#define LOUD_BINS {}\n", bins()),
@@ -184,12 +165,9 @@ fn loudness_constants() -> String {
         ints("LOUD_TAIL", &tail),
         floats("LOUD_ROWS", &rows),
         floats("LOUD_SHARES", &shares),
-        ints(
-            "LOUD_GROUPS",
-            &groups.iter().map(|(g, _)| g.len()).collect::<Vec<_>>(),
-        ),
-        ints("LOUD_GROUP_SLOTS", &group_slots),
-        floats("LOUD_FACTOR", &factor),
+        ints("LOUD_GROUPS", &group_counts),
+        ints("LOUD_GROUP_SLOTS", group_slots),
+        floats("LOUD_FACTOR", factor),
         ints(
             "LOUD_PERIOD_GROUP_PERIOD",
             &period_group_part(|period_group| period_group.0),
@@ -212,6 +190,80 @@ fn loudness_constants() -> String {
     .concat()
 }
 
+/// Bounds on retained loudness slot buffers: at most one slot per concurrent turn on the card,
+/// and packed float inputs trimmed back to ~64 MB when an extreme chunk spikes higher.
+const MAX_RETAINED_LOUDNESS_SLOTS: usize = crate::turns::EVALUATIONS_ON_THE_CARD;
+const MAX_RETAINED_INPUT_FLOATS: usize = 16_000_000;
+const MAX_RETAINED_TASKS: usize = 8 * PIXELS_PER_LOUDNESS_BATCH;
+
+/// Reusable device and pinned host staging buffers for one concurrent `pixel_loudness` launch,
+/// avoiding per-batch allocations and pageable-memory DMA stalls.
+pub(crate) struct LoudnessSlot {
+    input: Option<CudaSlice<f32>>,
+    offsets: Option<CudaSlice<u64>>,
+    tasks: Option<CudaSlice<u32>>,
+    runs: Option<CudaSlice<u8>>,
+    mixtures: Option<CudaSlice<f32>>,
+    ndens: Option<CudaSlice<f32>>,
+    host_input: PinnedBuf<f32>,
+    host_offsets: PinnedBuf<u64>,
+    host_tasks: PinnedBuf<u32>,
+    host_runs: PinnedBuf<u8>,
+    host_ndens: PinnedBuf<f32>,
+}
+
+impl LoudnessSlot {
+    fn new(device: &Arc<CudaDevice>) -> Self {
+        Self {
+            input: None,
+            offsets: None,
+            tasks: None,
+            runs: None,
+            mixtures: None,
+            ndens: None,
+            host_input: PinnedBuf::new(device),
+            host_offsets: PinnedBuf::new(device),
+            host_tasks: PinnedBuf::new(device),
+            host_runs: PinnedBuf::new(device),
+            host_ndens: PinnedBuf::new(device),
+        }
+    }
+
+    fn trim_oversized(&mut self) {
+        let max_runs = MAX_RETAINED_TASKS * 2 * WEATHER_STATES;
+        let max_mix = mixture_floats() * PIXELS_PER_LOUDNESS_BATCH;
+        let max_ndens = LOUDNESS_FLOATS * PIXELS_PER_LOUDNESS_BATCH;
+        trim_device(&mut self.input, MAX_RETAINED_INPUT_FLOATS);
+        trim_device(&mut self.offsets, PIXELS_PER_LOUDNESS_BATCH);
+        trim_device(&mut self.tasks, MAX_RETAINED_TASKS);
+        trim_device(&mut self.runs, max_runs);
+        trim_device(&mut self.mixtures, max_mix);
+        trim_device(&mut self.ndens, max_ndens);
+        self.host_input.trim(MAX_RETAINED_INPUT_FLOATS);
+        self.host_offsets.trim(PIXELS_PER_LOUDNESS_BATCH);
+        self.host_tasks.trim(MAX_RETAINED_TASKS);
+        self.host_runs.trim(max_runs);
+        self.host_ndens.trim(max_ndens);
+    }
+}
+
+struct LoudnessSlotGuard<'a> {
+    pool: &'a Mutex<Vec<LoudnessSlot>>,
+    slot: Option<LoudnessSlot>,
+}
+
+impl Drop for LoudnessSlotGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(mut slot) = self.slot.take() {
+            slot.trim_oversized();
+            let mut pool = self.pool.lock().unwrap_or_else(PoisonError::into_inner);
+            if pool.len() < MAX_RETAINED_LOUDNESS_SLOTS {
+                pool.push(slot);
+            }
+        }
+    }
+}
+
 impl Gpu {
     /// Each pixel's Nden per layer and in total (sone) from its packed sound: `input` all the
     /// pixels' floats, `offsets` where each pixel's begin.
@@ -225,85 +277,106 @@ impl Gpu {
             return Ok(Vec::new());
         }
         let device = &self.device;
-        let (spans, tasks, runs) = mixture_blocks(
-            offsets.iter().map(|&at| &input[at as usize..]),
-            &period_groups(),
-        );
-        // SAFETY: each buffer is written whole on the stream below before a kernel reads it: the
-        // inputs copied, `mixtures` zeroed for `atomicAdd`, and `pixel_ndens` writes every element
-        // of `ndens`.
-        let mut device_input = driver(unsafe { device.alloc::<f32>(input.len()) })?;
-        let mut device_offsets = driver(unsafe { device.alloc::<u64>(count) })?;
-        let mut device_tasks = driver(unsafe { device.alloc(tasks.len()) })?;
-        let mut device_runs = driver(unsafe { device.alloc(runs.len()) })?;
-        let mut mixtures = driver(unsafe { device.alloc::<f32>(mixture_floats() * count) })?;
-        let ndens = driver(unsafe { device.alloc::<f32>(LOUDNESS_FLOATS * count) })?;
-        let kernel = |name: &str| {
-            device
-                .get_func("loudness", name)
-                .ok_or(format!("kernel {name} missing"))
-        };
-        // On a stream of their own, forked once their buffers are allocated: the pairs' kernels
-        // of another pass run beside them on the card.
-        let stream = self.fork()?;
-        // SAFETY: `stream` is never leaked and drops before `tasks`, `runs`, the caller's arrays,
-        // and every device destination declared above.
-        unsafe {
-            stream.copy(input, &mut device_input)?;
-            stream.copy(offsets, &mut device_offsets)?;
-            stream.copy(&tasks, &mut device_tasks)?;
-            stream.copy(&runs, &mut device_runs)?;
-        }
-        stream.zero(&mut mixtures)?;
-        let pixels_config = LaunchConfig {
-            grid_dim: (count as u32, 1, 1),
-            block_dim: (32, 1, 1),
-            shared_mem_bytes: 0,
-        };
-        // SAFETY: the kernels read each pixel's floats from its offset (the host packed them as
-        // kernels/distribution.cuh lays them out); the first adds into `mixture_floats()` zeroed
-        // floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel; every device
-        // buffer is declared before `stream`.
-        let state_bytes = loud_warp_bytes() + 4;
-        for (states, &(first, blocks)) in spans.iter().enumerate().filter(|(_, (_, n))| *n > 0) {
-            let config = LaunchConfig {
-                grid_dim: (blocks as u32, 1, 1),
-                block_dim: (states as u32 * 32, 1, 1),
-                shared_mem_bytes: (states * state_bytes) as u32,
+        let (spans, tasks, runs) = mixture_blocks(input, offsets, &period_groups());
+        // Bound concurrent loudness launches on the card so mixtures VRAM stays bounded across
+        // concurrent squares and passes.
+        self.loudness_turns.in_turn(|| {
+            let slot = self
+                .loudness_slots
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pop();
+            let mut guard = LoudnessSlotGuard {
+                pool: &self.loudness_slots,
+                slot: Some(slot.unwrap_or_else(|| LoudnessSlot::new(device))),
             };
+            let slot = guard.slot.as_mut().expect("loudness slot present");
+            let mix_len = mixture_floats() * count;
+            let nden_len = LOUDNESS_FLOATS * count;
+            let device_input = ensure_device(device, &mut slot.input, input.len())?;
+            let device_offsets = ensure_device(device, &mut slot.offsets, count)?;
+            let device_tasks = ensure_device(device, &mut slot.tasks, tasks.len())?;
+            let device_runs = ensure_device(device, &mut slot.runs, runs.len())?;
+            let mixtures = ensure_device(device, &mut slot.mixtures, mix_len)?;
+            let ndens = ensure_device(device, &mut slot.ndens, nden_len)?;
+            let kernel = |name: &str| {
+                device
+                    .get_func("loudness", name)
+                    .ok_or(format!("kernel {name} missing"))
+            };
+            let host_input = &mut slot.host_input;
+            let host_offsets = &mut slot.host_offsets;
+            let host_tasks = &mut slot.host_tasks;
+            let host_runs = &mut slot.host_runs;
+            let host_ndens = &mut slot.host_ndens;
+            host_input.copy_from_slice(input)?;
+            host_offsets.copy_from_slice(offsets)?;
+            host_tasks.copy_from_slice(&tasks)?;
+            host_runs.copy_from_slice(&runs)?;
+            host_ndens.reserve(nden_len)?;
+            // On a stream of their own, forked once their buffers are grown: the pairs' kernels of
+            // another pass run beside them on the card.
+            let stream = self.fork()?;
+            // SAFETY: `stream` is never leaked and drops before the pinned buffers and slot guard.
+            unsafe {
+                stream.copy_prefix(host_input.as_slice(input.len()), device_input)?;
+                stream.copy_prefix(host_offsets.as_slice(count), device_offsets)?;
+                stream.copy_prefix(host_tasks.as_slice(tasks.len()), device_tasks)?;
+                stream.copy_prefix(host_runs.as_slice(runs.len()), device_runs)?;
+            }
+            stream.zero_prefix(mixtures, mix_len)?;
+            let pixels_config = LaunchConfig {
+                grid_dim: (count as u32, 1, 1),
+                block_dim: (32, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            // SAFETY: the kernels read each pixel's floats from its offset (the host packed them as
+            // kernels/distribution.cuh lays them out); the first adds into `mixture_floats()`
+            // zeroed floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel;
+            // every device buffer outlives `stream`.
+            let state_bytes = loud_warp_bytes() + 4;
+            for (states, &(first, blocks)) in spans.iter().enumerate().filter(|(_, (_, n))| *n > 0)
+            {
+                let config = LaunchConfig {
+                    grid_dim: (blocks as u32, 1, 1),
+                    block_dim: (states as u32 * 32, 1, 1),
+                    shared_mem_bytes: (states * state_bytes) as u32,
+                };
+                unsafe {
+                    stream.launch(
+                        kernel("pixel_mixtures")?,
+                        config,
+                        (
+                            &*device_input,
+                            &*device_offsets,
+                            &*device_tasks,
+                            &*device_runs,
+                            first as u32,
+                            &*mixtures,
+                        ),
+                    )?;
+                }
+            }
             unsafe {
                 stream.launch(
-                    kernel("pixel_mixtures")?,
-                    config,
+                    kernel("pixel_ndens")?,
+                    pixels_config,
                     (
-                        &device_input,
-                        &device_offsets,
-                        &device_tasks,
-                        &device_runs,
-                        first as u32,
-                        &mixtures,
+                        &*device_input,
+                        &*device_offsets,
+                        &*mixtures,
+                        count as u32,
+                        &*ndens,
                     ),
                 )?;
             }
-        }
-        unsafe {
-            stream.launch(
-                kernel("pixel_ndens")?,
-                pixels_config,
-                (
-                    &device_input,
-                    &device_offsets,
-                    &mixtures,
-                    count as u32,
-                    &ndens,
-                ),
-            )?;
-        }
-        let flat = stream.read_back(&ndens)?;
-        stream.finish()?;
-        Ok(flat
-            .chunks_exact(LOUDNESS_FLOATS)
-            .map(|pixel| std::array::from_fn(|k| pixel[k]))
-            .collect())
+            stream.read_back_into(ndens, host_ndens.as_mut_slice(nden_len))?;
+            stream.finish()?;
+            Ok(host_ndens
+                .as_slice(nden_len)
+                .chunks_exact(LOUDNESS_FLOATS)
+                .map(|pixel| std::array::from_fn(|k| pixel[k]))
+                .collect())
+        })
     }
 }

@@ -19,6 +19,8 @@ const TRANSFER_MOST: f64 = 4.0;
 /// 0.7-6 % of the pixels deeper and the ground total's error over 1 dB falls from 2.8 to 1.1 % of a
 /// suburb's pixels, over 3 dB from 0.5 % to none (private evidence 2026-11-12/fable-speed).
 const DEEPER_FROM: f64 = 0.3;
+/// Quiet pixels under 25 dB of ground Lden energy need no deeper trace.
+const DEEPER_FLOOR: f64 = 316.227_766_016_837_95;
 
 impl Block {
     /// How much of what each corner leaves out of each layer and direction reaches a pixel with
@@ -37,7 +39,7 @@ impl Block {
     pub fn transfers(
         &self,
         weights: [f64; 4],
-        heard: impl Fn(u32) -> Option<f64>,
+        mut heard: impl FnMut(u32) -> Option<f64>,
     ) -> [Strata<f64>; 4] {
         let mut here = [[[0.0; SECTORS]; LAYERS]; 4];
         let mut there = [[[0.0; SECTORS]; LAYERS]; 4];
@@ -82,7 +84,7 @@ impl Block {
 
     /// What the block leaves out as it reaches a pixel with bilinear `weights` of the corners
     /// ([`Block::transfers`] by `heard`).
-    pub fn reaching(&self, weights: [f64; 4], heard: impl Fn(u32) -> Option<f64>) -> Reaching {
+    pub fn reaching(&self, weights: [f64; 4], heard: impl FnMut(u32) -> Option<f64>) -> Reaching {
         let mut transfers = self.transfers(weights, heard);
         let mut energy = [[[0.0; 4]; PERIODS]; LAYERS];
         let mut moved = 0.0;
@@ -117,11 +119,35 @@ pub(crate) struct Reaching {
 
 impl Reaching {
     /// Whether the transfers changed more than [`DEEPER_FROM`] of the pixel's loud ground sources'
-    /// sound, `traced` the Lden energy of the sources it traced.
+    /// sound, `traced` the Lden energy of the sources it traced. The 25 dB floor checks the
+    /// unscaled-energy upper bound (`total + moved`) so a pixel whose transfers suppress a loud
+    /// corner field below 25 dB still traces deeper.
     pub fn asks_deeper(&self, traced: f64) -> bool {
         let left: f64 = (self.energy.iter())
             .map(|layer| lden_energy(&layer.map(|corners| corners.iter().sum())))
             .sum();
-        self.moved > DEEPER_FROM * (traced + left)
+        let total = traced + left;
+        total + self.moved >= DEEPER_FLOOR && self.moved > DEEPER_FROM * total
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deeper_floor_keeps_tracing_when_transfers_suppress_loud_corners() {
+        let suppressed = Reaching {
+            transfers: [[[[0.0; SECTORS]; LAYERS]; 4][0]; 4],
+            energy: [[[0.0; 4]; PERIODS]; LAYERS],
+            moved: 10_000.0, // 40 dB moved away by shadowing transfers
+        };
+        assert!(suppressed.asks_deeper(150.0)); // ~22 dB post-transfer, but 40 dB moved away
+        let truly_quiet = Reaching {
+            transfers: [[[[0.0; SECTORS]; LAYERS]; 4][0]; 4],
+            energy: [[[0.0; 4]; PERIODS]; LAYERS],
+            moved: 100.0, // 20 dB
+        };
+        assert!(!truly_quiet.asks_deeper(100.0)); // 20 + 20 = 23 dB < 25 dB
     }
 }

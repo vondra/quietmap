@@ -226,35 +226,84 @@ pub fn corners_of(
         .corner_indices(2 * grid.block)
         .map(|at| corner_points[at].clone())
         .collect();
-    let ((flights, flight_spectra), ground) = rayon::join(
+    let ((flights, (flight_spectra, displays)), ground) = rayon::join(
         || {
             rayon::join(
                 || flights_at_corners(square, grid, &corner_points, batch),
-                || FlightSpectra::from_points(square, n, 2 * grid.block, &spectral_points),
+                || {
+                    rayon::join(
+                        || FlightSpectra::from_points(square, n, 2 * grid.block, &spectral_points),
+                        || Displays::of(square),
+                    )
+                },
             )
         },
         || -> Result<_, String> {
-            // Every block corner evaluates every source loud there.
-            let pairs = loud_pairs(square, &corner_points);
-            let corner_pairs = pairs.len();
-            let mut corners: Vec<Corner> = (0..corner_points.len())
-                .map(|_| Corner::default())
-                .collect();
-            let evaluated = evaluate_all(square, &corner_points, &pairs, batch)?;
-            for (pair, energy) in pairs.iter().zip(&evaluated.pairs) {
-                let (k, index) = (pair.point, pair.candidate);
-                let candidate = &square.candidates[index as usize];
-                let point = &corner_points[k as usize];
-                let slant_distance_m = square.slant_distance_m(index, point);
-                corners[k as usize].add(
-                    (
-                        candidate.layer as usize,
-                        sector_of(candidate.offset_from(point.position)),
-                    ),
-                    (index, candidate.group_key),
-                    (*energy, slant_distance_m),
-                );
-            }
+            let evaluate_corners_range = |range: Range<usize>| -> Result<
+                (Vec<Corner>, Vec<PointBands>, usize),
+                String,
+            > {
+                let points = &corner_points[range];
+                let pairs = loud_pairs(square, points);
+                let count = pairs.len();
+                let evaluated = evaluate_all(square, points, &pairs, batch)?;
+                let mut starts = vec![0usize; points.len() + 1];
+                for pair in &pairs {
+                    starts[pair.point as usize + 1] += 1;
+                }
+                for k in 0..points.len() {
+                    starts[k + 1] += starts[k];
+                }
+                let mut corners: Vec<Corner> =
+                    (0..points.len()).map(|_| Corner::default()).collect();
+                corners.par_iter_mut().enumerate().for_each(|(k, corner)| {
+                    let point = &points[k];
+                    let range = starts[k]..starts[k + 1];
+                    for (pair, energy) in pairs[range.clone()].iter().zip(&evaluated.pairs[range]) {
+                        let index = pair.candidate;
+                        let candidate = &square.candidates[index as usize];
+                        let slant_distance_m = if crate::sone::needs_slant(candidate.layer) {
+                            square.slant_distance_m(index, point)
+                        } else {
+                            f64::INFINITY
+                        };
+                        corner.add(
+                            (
+                                candidate.layer as usize,
+                                sector_of(candidate.offset_from(point.position)),
+                            ),
+                            (index, candidate.group_key),
+                            (*energy, slant_distance_m),
+                        );
+                    }
+                });
+                Ok((corners, evaluated.bands, count))
+            };
+            let (mut corners, corner_bands, corner_pairs) =
+                if batch.is_some() && corner_points.len() >= 1024 {
+                    let step = corner_points.len().div_ceil(crate::passes::PASSES_AT_ONCE);
+                    let runs: Vec<Range<usize>> = (0..corner_points.len())
+                        .step_by(step)
+                        .map(|start| start..(start + step).min(corner_points.len()))
+                        .collect();
+                    // Run as Rayon jobs rather than native threads so a one-thread Rayon pool
+                    // cannot deadlock waiting on `loud_pairs`, and preparation stays in its pool.
+                    let chunks: Vec<_> = runs
+                        .par_iter()
+                        .map(|range| evaluate_corners_range(range.clone()))
+                        .collect::<Result<_, String>>()?;
+                    let mut corners = Vec::with_capacity(corner_points.len());
+                    let mut bands = Vec::with_capacity(corner_points.len());
+                    let mut total_pairs = 0usize;
+                    for (chunk_corners, chunk_bands, count) in chunks {
+                        corners.extend(chunk_corners);
+                        bands.extend(chunk_bands);
+                        total_pairs += count;
+                    }
+                    (corners, bands, total_pairs)
+                } else {
+                    evaluate_corners_range(0..corner_points.len())?
+                };
             let hum_points: Vec<Point> = grid
                 .corner_indices(grid.hum_spacing)
                 .map(|at| corner_points[at].clone())
@@ -274,18 +323,51 @@ pub fn corners_of(
                     })
                 })
                 .collect();
-            let hum = Hum::from_loud(
-                square,
-                n,
-                grid.hum_spacing,
-                &hum_points,
-                &loud_energy,
-                batch,
-            )?;
-            Ok((corners, evaluated.bands, corner_pairs, hum))
+            // Overlap hum sampling on the card with sorting corners, choosing traced sources and
+            // summing corner bands on the cores.
+            let corner_side = n / grid.block + 1;
+            let reach = 2.0 * grid.block as f64;
+            let (hum, corner_band_sums) = rayon::join(
+                || {
+                    Hum::from_loud(
+                        square,
+                        n,
+                        grid.hum_spacing,
+                        &hum_points,
+                        &loud_energy,
+                        batch,
+                    )
+                },
+                || {
+                    let sums: Vec<[[f64; physics::bands::PERIODS]; LAYERS]> = corner_bands
+                        .iter()
+                        .map(|bands| {
+                            std::array::from_fn(|layer| {
+                                std::array::from_fn(|period| bands[layer][period].iter().sum())
+                            })
+                        })
+                        .collect();
+                    corners.par_iter_mut().enumerate().for_each(|(at, corner)| {
+                        for ranked in &mut corner.ranked {
+                            ranked.sort_unstable_by(|a, b| {
+                                b.lden.total_cmp(&a.lden).then(a.index.cmp(&b.index))
+                            });
+                        }
+                        let x = ((at % corner_side) * grid.block) as f64;
+                        let y = ((at / corner_side) * grid.block) as f64;
+                        let (low, high) = rectangle(x - reach, y - reach, x + reach, y + reach);
+                        corner.choose_traced(|index| {
+                            let [a, b] = square.candidates[index as usize].ends_m;
+                            meets(a, b, low, high)
+                        });
+                    });
+                    sums
+                },
+            );
+            Ok((corners, corner_bands, corner_band_sums, corner_pairs, hum?))
         },
     );
-    let (flights, flight_spectra) = (flights?, flight_spectra?);
+    let (flights, flight_spectra, displays) = (flights?, flight_spectra?, displays?);
     // The corners' classes of passes in the map's fewer streams, which the pixels blend.
     let flights: Vec<FlightSums> = (flights.into_par_iter())
         .map(|sums| FlightSums {
@@ -293,44 +375,19 @@ pub fn corners_of(
             passes: fewer_streams(&sums.passes),
         })
         .collect();
-    let (mut corners, corner_bands, corner_pairs, hum) = ground?;
+    let (corners, corner_bands, corner_band_sums, corner_pairs, hum) = ground?;
     let mut near = Vec::new();
     let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);
     square.index.reaching(low, high, &mut near);
     if near.is_empty() && no_flights && hum.silent() {
         return Ok(None);
     }
-    // A corner's bands: the shape of what its blocks leave out there.
-    let corner_band_sums = corner_bands
-        .iter()
-        .map(|bands| {
-            std::array::from_fn(|layer| {
-                std::array::from_fn(|period| bands[layer][period].iter().sum())
-            })
-        })
-        .collect();
-    // Each corner's sources loudest first, and of them those its pixels trace: a far one lies
-    // beyond the four blocks around the corner and the blocks around those.
-    let corner_side = n / grid.block + 1;
-    let reach = 2.0 * grid.block as f64;
-    corners.par_iter_mut().enumerate().for_each(|(at, corner)| {
-        for ranked in &mut corner.ranked {
-            ranked.sort_unstable_by(|a, b| b.lden.total_cmp(&a.lden).then(a.index.cmp(&b.index)));
-        }
-        let x = ((at % corner_side) * grid.block) as f64;
-        let y = ((at / corner_side) * grid.block) as f64;
-        let (low, high) = rectangle(x - reach, y - reach, x + reach, y + reach);
-        corner.choose_traced(|index| {
-            let [a, b] = square.candidates[index as usize].ends_m;
-            meets(a, b, low, high)
-        });
-    });
     Ok(Some(Corners {
         corner_points,
         flights,
         flight_spectra,
         hum,
-        displays: Displays::of(square)?,
+        displays,
         corners,
         corner_bands,
         corner_band_sums,
@@ -480,5 +537,125 @@ mod tests {
             vec![0..1, 1..2, 2..3]
         );
         assert!(runs_within(&[], 4).is_empty());
+    }
+
+    /// Preparing corners with a `Batch` on a one-thread Rayon pool must run every corner range on
+    /// that installed pool thread (native corner threads in `6d9c8e5c` ran outside the pool,
+    /// seeing `rayon::current_thread_index() == None` and deadlocking when `RAYON_NUM_THREADS=1`).
+    #[test]
+    fn painting_with_batch_completes_on_one_thread_rayon_pool() {
+        use crate::exact::{Evaluated, Pair, PairEnergy};
+        use crate::flight_boxes::{FlightBoxes, FlightRequest};
+        use crate::flights::FlightSums;
+        use crate::square::Files;
+        use physics::bands::{BANDS, PERIODS};
+        use physics::weather::{
+            COLUMNS, ROWS, WeatherNode, WeatherTable, encode as encode_weather,
+        };
+        use popup::evaluate::Bands;
+        use popup::release::Release;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::thread::ThreadId;
+        use tiles::Kind;
+        use tiles::geo::TileId;
+        use tiles::sources::{Attribute, Layer, Piece, encode as encode_sources};
+        use tiles::square::write_tiles;
+
+        struct MockBatch<'a> {
+            square: &'a Square<'a>,
+            pool_thread: ThreadId,
+            checking_corners: AtomicBool,
+        }
+        impl Batch for MockBatch<'_> {
+            fn evaluate(&self, points: &[Point], pairs: &[Pair]) -> Result<Evaluated, String> {
+                if self.checking_corners.load(Ordering::Relaxed) {
+                    assert_eq!(rayon::current_thread_index(), Some(0));
+                    assert_eq!(std::thread::current().id(), self.pool_thread);
+                }
+                evaluate_all(self.square, points, pairs, None)
+            }
+            fn pair_spectra(
+                &self,
+                points: &[Point],
+                pairs: &[Pair],
+            ) -> Result<Vec<(PairEnergy, Bands)>, String> {
+                let evaluated = evaluate_all(self.square, points, pairs, None)?;
+                Ok(evaluated
+                    .pairs
+                    .into_iter()
+                    .map(|energy| (energy, [[0.0; BANDS]; PERIODS]))
+                    .collect())
+            }
+            fn loudness(
+                &self,
+                _input: &[f32],
+                offsets: &[u64],
+            ) -> Result<Vec<[f32; LAYERS + 1]>, String> {
+                Ok(vec![[0.0; LAYERS + 1]; offsets.len()])
+            }
+            fn flight_sums(
+                &self,
+                square: &Square,
+                boxes: &FlightBoxes,
+                requests: &[FlightRequest],
+            ) -> Result<Vec<[FlightSums; 2]>, String> {
+                requests
+                    .iter()
+                    .map(|request| boxes.sums(square, request))
+                    .collect()
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let year = root.path().join("2026");
+        std::fs::create_dir(&year).unwrap();
+        let weather_bytes = encode_weather(&vec![WeatherNode::default(); ROWS * COLUMNS]);
+        std::fs::write(year.join("weather"), &weather_bytes).unwrap();
+        tiles::mark_year_complete(&year, br#"{"year":"2026","as_of":"2027-01-01"}"#, "test")
+            .unwrap();
+        let weather = WeatherTable::parse(&weather_bytes).unwrap();
+        let tile = TileId { x: 2212, y: 1387 };
+        let attributes = vec![Attribute {
+            layer: Layer::Industry,
+            height_m: 1.0,
+            ground_percent: 0,
+            platform_half_width_m: 0.0,
+            exclusion_radius_m: 0.0,
+            footprint_id: 0,
+            group_key: 1,
+            emission: [[80.0; BANDS]; PERIODS],
+            display: Vec::new(),
+        }];
+        let pieces = vec![Piece {
+            ends: [[0, 0], [10, 0]],
+            attribute: 0,
+        }];
+        write_tiles(
+            &year,
+            Kind::Sources,
+            &[(tile, encode_sources(&pieces, &attributes, &[]))],
+        )
+        .unwrap();
+        let release = Release::open(root.path(), "2026").unwrap();
+        let files = Files::read(&release, tile).unwrap();
+        let square = Square::new(&weather, tile, &files).unwrap();
+        let grid = Grid::at_zoom(12).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let cells = pool
+            .install(|| -> Result<PaintedCells, String> {
+                let batch = MockBatch {
+                    square: &square,
+                    pool_thread: std::thread::current().id(),
+                    checking_corners: AtomicBool::new(true),
+                };
+                let corners = corners_of(&square, grid, Some(&batch))?.expect("non-empty corners");
+                batch.checking_corners.store(false, Ordering::Relaxed);
+                paint_pixels(&square, grid, Some(&batch), corners)
+            })
+            .unwrap();
+        assert_eq!(cells.nden.len(), grid.pixels * grid.pixels);
     }
 }

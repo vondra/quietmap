@@ -75,6 +75,27 @@ impl Line {
         }
     }
 
+    /// A steady line holding its weather-state `means` (optionally following hourly `profile`),
+    /// used when map-resolution folding collapses minor fluctuating lines into steady energy.
+    pub fn steady(means: [[f64; WEATHER_STATES]; PERIODS], profile: Option<usize>) -> Self {
+        let energy = means.map(|period| {
+            if period.iter().any(|&value| value > 0.0) {
+                1.0
+            } else {
+                0.0
+            }
+        });
+        Line {
+            key: u64::MAX,
+            energy,
+            means,
+            lambda: [f64::INFINITY; PERIODS],
+            profile,
+            duty: None,
+            passing: None,
+        }
+    }
+
     /// A group's line by its `passes`: steady but for its events, or its passes; none where its
     /// traffic is unknown.
     pub fn of(group: &Group, passes: &Passes) -> Option<Self> {
@@ -290,4 +311,4 @@ pub fn place_lines<'a>(
 
 /// Contributors under this share of their period's energy count as steady (their fluctuation does
 /// not move a percentile of the sum).
-const FLUCTUATING_SHARE_MIN: f64 = 1e-4;
+pub const FLUCTUATING_SHARE_MIN: f64 = 1e-4;

@@ -42,6 +42,7 @@ mod quiet_corners;
 mod quiet_samples;
 mod region;
 pub mod sone;
+mod sone_fold;
 pub mod square;
 mod traced;
 mod transfers;

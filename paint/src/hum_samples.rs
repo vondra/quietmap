@@ -5,6 +5,7 @@ use crate::hum::HumPointSound;
 use crate::paint::PASS_PAIRS;
 use crate::square::Square;
 use physics::bands::{PERIODS, lden_energy};
+use physics::bound::received_energy_bound;
 use popup::candidates::{GROUND_REACH_M, loud};
 use popup::evaluate::{Bands, Scratch};
 use popup::sampling::{BoundSample, SampleRound};
@@ -66,15 +67,21 @@ pub(crate) fn sampled_hum(
                 .within(point.position, point.position, GROUND_REACH_M, &mut near);
             let mut pending: [Vec<(u32, f64)>; LAYERS] = std::array::from_fn(|_| Vec::new());
             let mut bounds = [[0.0; PERIODS]; LAYERS];
+            const REACH_SQ: f64 = GROUND_REACH_M * GROUND_REACH_M * (1.0 + 16.0 * f64::EPSILON);
             for index in near {
                 let candidate = &square.candidates[index as usize];
-                let distance_m = candidate.distance_from(point.position);
+                let [dx, dy] = candidate.offset_from(point.position);
+                if dx * dx + dy * dy > REACH_SQ {
+                    continue;
+                }
+                let distance_m = dx.hypot(dy);
                 if distance_m > GROUND_REACH_M {
                     continue;
                 }
-                let bound = candidate.bound_at_distance(
+                let bound = received_energy_bound(
+                    &square.attributes[candidate.attribute].energy,
+                    square.spreads[index as usize],
                     distance_m,
-                    &square.attributes[candidate.attribute],
                     &point.bound,
                 );
                 if !loud(&bound) {

@@ -211,7 +211,8 @@ impl PointPainter<'_> {
             let (at, point) = (places[k].1, &points[k]);
             let ((x, y), around, (fx, fy)) = self.place_of(at);
             let (block, list, energies, _) = traced.at(k);
-            let mut steady = corners.hum.energies_at(x, y);
+            let hum_energies = corners.hum.energies_at(x, y);
+            let mut steady = hum_energies;
             // How much of what each corner leaves out reaches the point, by layer and direction:
             // the block's far sources heard here against the corners' blend of them. A pixel
             // behind a wall hears a direction's far sources 10-20 dB under their blend, and the
@@ -235,12 +236,14 @@ impl PointPainter<'_> {
                 list,
                 energies,
             );
-            (steady, reaching, layers)
+            (hum_energies, steady, reaching, layers)
         };
+        // Only scalar ground energy is retained while selecting winning façades, avoiding ~3.7 KB
+        // of inline `Reaching` per candidate for the ~2/3 of candidates that `chosen` discards.
         let kept = chosen.map(|chosen| {
             let ground: Vec<f64> = (0..points.len())
                 .into_par_iter()
-                .map(|k| ground_energy(&heard_at(k).2))
+                .map(|k| ground_energy(&heard_at(k).3))
                 .collect();
             chosen(&ground)
         });
@@ -252,7 +255,7 @@ impl PointPainter<'_> {
             let (at, point) = (places[k].1, &points[k]);
             let ((x, y), around, (fx, fy)) = self.place_of(at);
             let (block, list, energies, heard_bands) = traced.at(k);
-            let (steady, reaching, layers) = heard_at(k);
+            let (hum_energies, steady, reaching, layers) = heard_at(k);
             let flights_around = around.map(|corner| &corners.flights[corner]);
             let reflection = point.reflection();
             // Of the layers' energies the block's own sources', and their free field here.
@@ -274,7 +277,7 @@ impl PointPainter<'_> {
                 return Ok((k, layers, Loudness::Known(ndens)));
             }
             // The left-out's bands: each corner's in the shape of all it hears in that layer.
-            let (_, mut bands) = corners.hum.at(x, y);
+            let mut bands = corners.hum.bands_at(x, y, &hum_energies);
             let left_out = match &reaching {
                 Some(reaching) => {
                     let left = &reaching.energy;
@@ -285,8 +288,9 @@ impl PointPainter<'_> {
                                 let shape = &corners.corner_bands[corner][layer][p];
                                 let sum = corners.corner_band_sums[corner][layer][p];
                                 if energy > 0.0 && sum > 0.0 {
+                                    let scale = energy / sum;
                                     for b in 0..BANDS {
-                                        bands[layer][p][b] += energy * shape[b] / sum;
+                                        bands[layer][p][b] += scale * shape[b];
                                     }
                                 }
                             }
@@ -317,10 +321,14 @@ impl PointPainter<'_> {
             )?;
             Ok(match self.batch {
                 Some(_) => {
-                    sound.pack(input);
+                    sound.pack_with_scratch(&mut scratch.fold, input);
                     (k, layers, Loudness::Packed)
                 }
-                None => (k, layers, Loudness::Known(sound.ndens(Resolution::MAP))),
+                None => (
+                    k,
+                    layers,
+                    Loudness::Known(sound.ndens_with_scratch(&mut scratch.fold, Resolution::MAP)),
+                ),
             })
         };
         let prepare_chunk = |first: usize, end: usize| -> Result<_, String> {
@@ -362,7 +370,7 @@ impl PointPainter<'_> {
         };
         let mut painted = vec![None; points.len()];
         std::thread::scope(|scope| -> Result<(), String> {
-            let (sender, receiver) = std::sync::mpsc::sync_channel(0);
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
             scope.spawn(move || {
                 for first in (0..points.len()).step_by(PIXELS_PER_LOUDNESS_BATCH) {
                     let chunk =

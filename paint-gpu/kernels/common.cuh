@@ -52,17 +52,6 @@ __device__ __forceinline__ float rem_euclidf(float value, float modulus) {
     float r = fmodf(value, modulus);
     return r < 0.0f ? r + fabsf(modulus) : r;
 }
-__device__ __forceinline__ i64 rem_euclid_i64(i64 value, i64 modulus) {
-    i64 r = value % modulus;
-    return r < 0 ? r + (modulus < 0 ? -modulus : modulus) : r;
-}
-__device__ __forceinline__ i64 div_euclid_i64(i64 value, i64 modulus) {
-    i64 q = value / modulus;
-    if (value % modulus < 0) {
-        q = modulus > 0 ? q - 1 : q + 1;
-    }
-    return q;
-}
 
 // A point in the vertical propagation plane: horizontal distance from the source, altitude.
 struct PlanePoint {

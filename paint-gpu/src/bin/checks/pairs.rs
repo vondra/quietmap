@@ -92,19 +92,13 @@ pub(super) fn check(
     // a first launch brings the card to its clocks.
     const LAUNCH: usize = 1 << 18;
     let own = vec![0u64; LAUNCH];
-    let band_weights = vec![1.0f32; LAUNCH];
     let point_of_pair: Vec<u32> = (0..LAUNCH as u32).collect();
     let mut bands = gpu.bands(LAUNCH)?;
     let warm = pairs.min(20_000);
     gpu.evaluate_pairs(
         &device_square,
-        (&receivers[..warm], &own[..warm]),
-        (
-            &chosen[..warm],
-            &point_of_pair[..warm],
-            &point_of_pair[..warm],
-            &band_weights[..warm],
-        ),
+        (&receivers[..warm], &own[..warm], &point_of_pair[..warm]),
+        (&chosen[..warm], &point_of_pair[..warm], None),
         &mut bands,
         None,
     )?;
@@ -114,21 +108,20 @@ pub(super) fn check(
         let count = LAUNCH.min(pairs - start);
         bands = gpu.bands(LAUNCH)?;
         let started = Instant::now();
-        let (sums, failures) = gpu.evaluate_pairs(
+        let results = gpu.evaluate_pairs(
             &device_square,
-            (&receivers[start..start + count], &own[..count]),
             (
-                &chosen[start..start + count],
+                &receivers[start..start + count],
+                &own[..count],
                 &point_of_pair[..count],
-                &point_of_pair[..count],
-                &band_weights[..count],
             ),
+            (&chosen[start..start + count], &point_of_pair[..count], None),
             &mut bands,
             None,
         )?;
         gpu_s += started.elapsed().as_secs_f64();
-        gpu_sums.extend(sums);
-        failed.extend(failures);
+        gpu_sums.extend_from_slice(results.sums());
+        failed.extend_from_slice(results.failed());
         gpu_bands.extend_from_slice(&gpu.download(&bands)?[..count * LAYERS * PERIODS * BANDS]);
     }
     let started = Instant::now();

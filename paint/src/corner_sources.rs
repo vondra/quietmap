@@ -1,7 +1,8 @@
 //! A block corner's loud sources: the direction each is heard from and those the pixels around the corner trace.
 
 use crate::exact::{LAYERS, PairEnergy};
-use physics::bands::lden_energy;
+use physics::bands::{PERIODS, lden_energy};
+use popup::percentiles::Weather;
 
 /// Directions of arrival a corner tells apart. What stands around a pixel screens the far sources
 /// of one direction alike, so one of them traced at the pixel carries the others: on 1,003 blocks
@@ -12,8 +13,11 @@ use physics::bands::lden_energy;
 pub const SECTORS: usize = 16;
 
 /// A direction of a layer holding less than this share of the layer's far energy at a corner keeps
-/// no representative of its own: it takes the layer's whole transfer there.
-const STRATUM_SHARE: f64 = 0.01;
+/// no representative of its own: it takes the layer's whole transfer there. Chosen at 0.02 (raised
+/// from 0.01; under 0.09 dB of a layer's far energy when unscreened) to drop weak directional rays;
+/// the combined release kept 97.68 % of visible popup clicks within 1 phon and 99.97 % within 3
+/// phon in the 54-square world sample (2026-11-26).
+const STRATUM_SHARE: f64 = 0.02;
 
 /// A corner traces its loudest sources, and its loudest far ones, until what it has not traced is
 /// at most this share of the layer there, and of the layer's far sources, per layer in
@@ -37,8 +41,8 @@ pub(crate) fn sector_of(offset: [f64; 2]) -> u8 {
 }
 
 /// A source loud at a corner: its index, its group, its Lden energy, its energy per period (mixed
-/// and in either weather state), its emitters' distance from the corner's receiver and the
-/// direction it is heard from.
+/// and in either weather state), its emitters' distance from the corner's receiver, the direction
+/// it is heard from and its precomputed weather share bin per period (`Weather::binned`).
 pub(crate) struct Ranked {
     pub index: u32,
     pub group: u64,
@@ -46,6 +50,7 @@ pub(crate) struct Ranked {
     pub energy: PairEnergy,
     pub slant_distance_m: f64,
     pub sector: u8,
+    pub weather_bins: [u8; PERIODS],
 }
 
 /// A block corner: per layer every source loud there, loudest first, the layer's total Lden
@@ -67,6 +72,9 @@ impl Corner {
         (energy, slant_distance_m): (PairEnergy, f64),
     ) {
         let lden = lden_energy(&energy.mixed);
+        let weather_bins = std::array::from_fn(|p| {
+            Weather::binned(energy.mixed[p], [energy.states[0][p], energy.states[1][p]]).0 as u8
+        });
         self.ranked[layer].push(Ranked {
             index,
             group,
@@ -74,6 +82,7 @@ impl Corner {
             energy,
             slant_distance_m,
             sector,
+            weather_bins,
         });
         self.totals[layer] += lden;
     }

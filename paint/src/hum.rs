@@ -26,13 +26,27 @@ const HUM_BLEND_FLOOR: f64 = 1.0;
 /// linear blend exceeded the hum computed at the pixel by +0.42 dB on average for the roads (+0.59
 /// to +0.98 for railways, industry and buildings), this blend by +0.02 (+0.39 to +0.70, much of it
 /// under the floor); against the popup, places under 2 sone +0.58 -> +0.49 phon (2026-10-14).
+fn blend_in_decibels_ln(ln_corners: [f64; 4], fx: f64, fy: f64) -> f64 {
+    let level = bilinear(ln_corners, fx, fy);
+    (level.exp() - HUM_BLEND_FLOOR).max(0.0)
+}
+
+#[cfg(test)]
 fn blend_in_decibels(corners: [f64; 4], fx: f64, fy: f64) -> f64 {
-    let level = bilinear(
+    blend_in_decibels_ln(
         corners.map(|energy| (energy + HUM_BLEND_FLOOR).ln()),
         fx,
         fy,
-    );
-    (level.exp() - HUM_BLEND_FLOOR).max(0.0)
+    )
+}
+
+fn precompute_ln(quiet: &[HumPointSound]) -> Vec<[[f64; PERIODS]; LAYERS]> {
+    quiet
+        .iter()
+        .map(|(energies, _)| {
+            energies.map(|layer| layer.map(|energy| (energy + HUM_BLEND_FLOOR).ln()))
+        })
+        .collect()
 }
 
 /// The hum at points every `spacing` of the square's pixels, row-major from the north-west: per
@@ -41,6 +55,7 @@ pub struct Hum {
     side: usize,
     spacing: usize,
     quiet: Vec<HumPointSound>,
+    quiet_ln: Vec<[[f64; PERIODS]; LAYERS]>,
 }
 
 impl Hum {
@@ -53,10 +68,13 @@ impl Hum {
     ) -> Result<Self, String> {
         let side = pixels / spacing + 1;
         if square.candidates.is_empty() {
+            let quiet = vec![([[0.0; PERIODS]; LAYERS], PointBands::default()); side * side];
+            let quiet_ln = precompute_ln(&quiet);
             return Ok(Self {
                 side,
                 spacing,
-                quiet: vec![([[0.0; PERIODS]; LAYERS], PointBands::default()); side * side],
+                quiet,
+                quiet_ln,
             });
         }
         let points = lattice_points(square, pixels, spacing)?;
@@ -94,65 +112,68 @@ impl Hum {
                     (at / side) * spacing,
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
         let quiet = sampled_hum(square, points, loud_energy, &seeds, batch)?;
+        let quiet_ln = precompute_ln(&quiet);
         Ok(Hum {
             side,
             spacing,
             quiet,
+            quiet_ln,
         })
     }
 
     /// The hum at the pixel `(x, y)` of the square, blended from the four points around its centre:
-    /// per layer its energy per period in decibels ([`blend_in_decibels`]) and its bands, blended
+    /// per layer its energy per period in decibels ([`blend_in_decibels_ln`]) and its bands, blended
     /// linearly in shape and scaled to that energy.
     pub fn at(&self, x: usize, y: usize) -> ([[f64; PERIODS]; LAYERS], PointBands) {
-        let (corners, fx, fy) = self.neighbours(x, y);
-        let blended: [[(f64, f64); PERIODS]; LAYERS] = std::array::from_fn(|layer| {
+        let energy = self.energies_at(x, y);
+        let bands = self.bands_at(x, y, &energy);
+        (energy, bands)
+    }
+
+    /// The hum bands at `(x, y)` scaled to already-computed `decibels` energies from `energies_at`.
+    pub fn bands_at(&self, x: usize, y: usize, decibels: &[[f64; PERIODS]; LAYERS]) -> PointBands {
+        let (indices, fx, fy) = self.neighbour_indices(x, y);
+        let corners = indices.map(|at| &self.quiet[at]);
+        std::array::from_fn(|layer| {
             std::array::from_fn(|p| {
-                let energies = corners.map(|corner| corner.0[layer][p]);
-                (
-                    blend_in_decibels(energies, fx, fy),
-                    bilinear(energies, fx, fy),
-                )
-            })
-        });
-        let energy = blended.map(|layer| layer.map(|(decibels, _)| decibels));
-        let bands = std::array::from_fn(|layer| {
-            std::array::from_fn(|p| {
-                let (decibels, linear) = blended[layer][p];
-                let scale = if linear > 0.0 { decibels / linear } else { 0.0 };
+                let d = decibels[layer][p];
+                if d <= 0.0 {
+                    return [0.0; physics::bands::BANDS];
+                }
+                let linear = bilinear(corners.map(|corner| corner.0[layer][p]), fx, fy);
+                let scale = if linear > 0.0 { d / linear } else { 0.0 };
                 std::array::from_fn(|b| {
                     scale * bilinear(corners.map(|corner| corner.1[layer][p][b]), fx, fy)
                 })
             })
-        });
-        (energy, bands)
+        })
     }
 
     /// The same hum energies as `at`, without constructing the unused spectral bands.
     pub fn energies_at(&self, x: usize, y: usize) -> [[f64; PERIODS]; LAYERS] {
-        let (corners, fx, fy) = self.neighbours(x, y);
+        let (indices, fx, fy) = self.neighbour_indices(x, y);
         std::array::from_fn(|layer| {
             std::array::from_fn(|period| {
-                let energies = corners.map(|corner| corner.0[layer][period]);
+                let energies = indices.map(|at| self.quiet[at].0[layer][period]);
                 if energies == [0.0; 4] {
                     0.0
                 } else {
-                    blend_in_decibels(energies, fx, fy)
+                    blend_in_decibels_ln(indices.map(|at| self.quiet_ln[at][layer][period]), fx, fy)
                 }
             })
         })
     }
 
-    fn neighbours(&self, x: usize, y: usize) -> ([&HumPointSound; 4], f64, f64) {
+    fn neighbour_indices(&self, x: usize, y: usize) -> ([usize; 4], f64, f64) {
         let last = self.side - 2;
         let (i, j) = ((x / self.spacing).min(last), (y / self.spacing).min(last));
         let fx = ((x - i * self.spacing) as f64 + 0.5) / self.spacing as f64;
         let fy = ((y - j * self.spacing) as f64 + 0.5) / self.spacing as f64;
-        let corners = [(0, 0), (1, 0), (0, 1), (1, 1)]
-            .map(|(di, dj)| &self.quiet[(j + dj) * self.side + i + di]);
-        (corners, fx, fy)
+        let indices =
+            [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(di, dj)| (j + dj) * self.side + i + di);
+        (indices, fx, fy)
     }
 
     /// Whether the hum stays under 0 dB at every point even with the largest reflection (3 dB):
@@ -202,11 +223,13 @@ mod tests {
                 });
                 (energies, PointBands::default())
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let quiet_ln = precompute_ln(&quiet);
         let hum = Hum {
             side: 3,
             spacing: 16,
             quiet,
+            quiet_ln,
         };
         for y in 0..32 {
             for x in 0..32 {
