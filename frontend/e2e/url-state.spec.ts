@@ -379,7 +379,7 @@ for (const phone of [false, true]) test.describe(phone ? 'phone reachable area' 
     expect(Number(cameraAfterResize.get('lat'))).toBeCloseTo(Number(cameraAtEdge.get('lat')), 4)
     expect(Number(cameraAfterResize.get('lng'))).toBeCloseTo(Number(cameraAtEdge.get('lng')), 4)
     expect(Number(cameraAfterResize.get('z'))).toBeCloseTo(Number(cameraAtEdge.get('z')), 3)
-    expect(cameraAfterResize.get('reach')).toBe(`${POINT.lat.toFixed(6)},${POINT.lng.toFixed(6)},45,car`)
+    expect(cameraAfterResize.get('reach')).toBe(`${POINT.lat},${POINT.lng},45,car`)
     await page.screenshot({ path: test.info().outputPath(`${phone ? 'phone' : 'desktop'}-isochron-edge.png`) })
 
     // Recomputing from the clicked edge point is an explicit choice.
