@@ -3,13 +3,13 @@ use super::national_train_km::{NationalTrainKm, from_eurostat};
 use super::rail_traffic::{Trains, column, run_trains};
 use super::tent::{FreightNetwork, Tier};
 use crate::dev4::{Dev4, Square, Table, z30_corner_mercator_m};
+use crate::railways::freight_eligibility::table_freight_eligibility;
 use crate::source_tables::TrainScales;
 use crate::year::{Kind, YearInputs};
 use anyhow::{Context, Result, anyhow, ensure};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int32Type, UInt8Type, UInt16Type};
 use chrono::Datelike;
-use physics::bands::PERIODS;
 use physics::emission::rail::RailType;
 use rayon::prelude::*;
 use serde_json::{Value, json};
@@ -162,18 +162,15 @@ fn square_train_km(
 }
 
 /// A prepared railway table's heavy rail by country: each row's run trains on its length, guessed
-/// freight at its tier where the row takes it ([`super::rail::guessed_freight_rows`], as the sources
-/// emit it).
+/// freight at its tier where the row takes it (as [`super::rail`] emits it).
 fn table_train_km(
     table: &Table,
     network: &FreightNetwork,
 ) -> Result<BTreeMap<[u8; 2], MappedTrainKm>> {
     let mut countries = BTreeMap::<[u8; 2], MappedTrainKm>::new();
     super::rail::require_rail_stamps(table).map_err(anyhow::Error::msg)?;
-    let run = run_trains(table).map_err(anyhow::Error::msg)?;
-    let line_speeds = super::rail::high_speed_line_speeds(table).map_err(anyhow::Error::msg)?;
-    let takes_freight =
-        super::rail::guessed_freight_rows(table, &line_speeds).map_err(anyhow::Error::msg)?;
+    let eligibility = table_freight_eligibility(&table.batches).map_err(anyhow::Error::msg)?;
+    let run = run_trains(table, &eligibility.takes_freight).map_err(anyhow::Error::msg)?;
     let mut index = 0;
     for batch in &table.batches {
         let read = |name| column(batch, name).map_err(anyhow::Error::msg);
@@ -190,17 +187,15 @@ fn table_train_km(
             i32s("end_gy")?,
         );
         for row in 0..batch.num_rows() {
-            let (mut trains, takes) = (run[index], takes_freight[index]);
+            let trains = run[index];
             index += 1;
             let iso = country.value(row).to_le_bytes();
             if RailType::from_code(kind.value(row)) != RailType::Rail || iso == [0, 0] {
                 continue;
             }
-            let guessed = GUESSED_TRAIN_SOURCES.contains(&trains.source[1]);
-            if guessed && !takes {
-                trains.freight = [0.0; PERIODS];
-            }
-            let tier = if guessed && takes {
+            let tier = if GUESSED_TRAIN_SOURCES.contains(&trains.source[1])
+                && trains.freight.iter().sum::<f64>() > 0.0
+            {
                 network.tier(
                     iso,
                     z30_corner_mercator_m(start_x.value(row), start_y.value(row)),

@@ -1,6 +1,9 @@
 //! Per-square Arrow rewrite: split, allocate over parallel tracks, stamp `rail_traffic_contract=1`.
 
 use super::encode::{CONTRACT_KEY, Expanded, encode_children};
+use super::freight_eligibility::{
+    HighSpeedSpeedAccumulator, row_takes_guessed_freight, utf8_value,
+};
 use super::merge::class_prior;
 use super::parallel_tracks::allocate_over_parallel_tracks;
 use super::split::{ChildGeom, split_parent};
@@ -9,7 +12,8 @@ use super::topology::load_square_pieces;
 use crate::osm::geometry::Square;
 use arrow_array::RecordBatch;
 use arrow_array::{
-    Array, Float32Array, Int16Array, Int32Array, Int64Array, UInt8Array, UInt16Array,
+    Array, BooleanArray, Float32Array, Int16Array, Int32Array, Int64Array, StringArray, UInt8Array,
+    UInt16Array,
 };
 use arrow_select::concat::concat_batches;
 use std::collections::HashMap;
@@ -75,30 +79,18 @@ pub(crate) fn col_u16<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt
 pub(crate) fn col_f32<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Float32Array, String> {
     downcast(batch, name)
 }
+fn col_bool<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a BooleanArray, String> {
+    downcast(batch, name)
+}
+fn col_str<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StringArray, String> {
+    downcast(batch, name)
+}
 
 fn downcast<'a, T: Array + 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T, String> {
     batch
         .column_by_name(name)
         .and_then(|column| column.as_any().downcast_ref::<T>())
         .ok_or_else(|| format!("railways Arrow missing {name}"))
-}
-
-fn utf8_at(batch: &RecordBatch, name: &str, row: usize) -> String {
-    batch
-        .column_by_name(name)
-        .and_then(|column| {
-            column
-                .as_any()
-                .downcast_ref::<arrow_array::StringArray>()
-                .map(|array| {
-                    if array.is_null(row) {
-                        String::new()
-                    } else {
-                        array.value(row).to_owned()
-                    }
-                })
-        })
-        .unwrap_or_default()
 }
 
 fn row_country(batch: &RecordBatch, row: usize) -> Result<[u8; 2], String> {
@@ -122,9 +114,13 @@ pub(super) fn expand_rows(
     let rail_type = col_u8(merged, "rail_type")?;
     let usage = col_u8(merged, "usage")?;
     let service = col_u8(merged, "service")?;
-    // The sources read the mode too (`sources::rail`): an extract without it is refused here, before it
-    // is finalized into a table they would refuse.
+    // The sources read these too (`sources::rail`, `railways::freight_eligibility`): an extract
+    // without them is refused here, before it is finalized into a table they would refuse.
     let traffic_mode = col_u8(merged, "traffic_mode")?;
+    let maxspeed = col_u16(merged, "maxspeed")?;
+    let highspeed = col_bool(merged, "highspeed")?;
+    let names = col_str(merged, "name")?;
+    let refs = col_str(merged, "ref")?;
     let mut expanded = Vec::new();
     for row in 0..merged.num_rows() {
         let id = osm_id.value(row);
@@ -176,8 +172,8 @@ pub(super) fn expand_rows(
             pieces.get(&(id, idx)),
             row_intervals,
         )?;
-        let ref_token = utf8_at(merged, "ref", row);
-        let name = utf8_at(merged, "name", row);
+        let ref_token = utf8_value(refs, row);
+        let name = utf8_value(names, row);
         let corridor = if ref_token.trim().is_empty() {
             name
         } else {
@@ -203,9 +199,37 @@ pub(super) fn expand_rows(
                 usage: usage.value(row),
                 service: service.value(row),
                 traffic_mode: mode,
+                takes_guessed_freight: true,
                 country_iso: country,
             });
         }
+    }
+    // Compute high-speed line speeds on expanded child chords so preparation, the national
+    // train-scale fit and the source emitter agree bit-for-bit on freight eligibility.
+    let mut speeds = HighSpeedSpeedAccumulator::default();
+    for row in &expanded {
+        let parent = row.parent as usize;
+        let geom = row.child.geom;
+        speeds.push(
+            highspeed.value(parent),
+            maxspeed.value(parent),
+            utf8_value(names, parent),
+            utf8_value(refs, parent),
+            [(geom.start_gx, geom.start_gy), (geom.end_gx, geom.end_gy)],
+        );
+    }
+    let line_speeds = speeds.finish();
+    for row in &mut expanded {
+        let parent = row.parent as usize;
+        row.takes_guessed_freight = row_takes_guessed_freight(
+            highspeed.value(parent),
+            maxspeed.value(parent),
+            row.traffic_mode,
+            utf8_value(names, parent),
+            utf8_value(refs, parent),
+            &line_speeds,
+        )
+        .0;
     }
     allocate_over_parallel_tracks(model, &mut expanded, square);
     Ok(expanded)

@@ -17,10 +17,9 @@ pub struct RunRow {
     pub value: f64,
 }
 
-/// For every row the index of its run's length-weighted median row by value (a row that joins no
-/// run is its own). Rows join where exactly two rows of their `meets` group share an end and both
-/// join as the same value. Runs stop at the square's edge.
-pub fn run_medians(rows: &[RunRow]) -> Vec<usize> {
+/// Partition rows into runs: rows join where exactly two rows of their `meets` group share an end
+/// and both join as the same value. Runs stop at the square's edge.
+pub fn run_groups(rows: &[RunRow]) -> Vec<Vec<usize>> {
     fn root(parent: &mut [usize], mut index: usize) -> usize {
         while parent[index] != index {
             parent[index] = parent[parent[index]];
@@ -51,24 +50,40 @@ pub fn run_medians(rows: &[RunRow]) -> Vec<usize> {
             .or_default()
             .push(index);
     }
+    runs.into_values().collect()
+}
+
+/// The row index in `members` at the length-weighted median of `value` (ties broken by row index).
+pub fn length_weighted_median(
+    members: &mut [usize],
+    length_m: impl Fn(usize) -> f64,
+    value: impl Fn(usize) -> f64,
+) -> usize {
+    members.sort_by(|&a, &b| value(a).total_cmp(&value(b)).then(a.cmp(&b)));
+    let half = members.iter().map(|&index| length_m(index)).sum::<f64>() / 2.0;
+    let mut length = 0.0;
+    members
+        .iter()
+        .copied()
+        .find(|&index| {
+            length += length_m(index);
+            length >= half
+        })
+        .unwrap_or(members[0])
+}
+
+/// For every row the index of its run's length-weighted median row by value (a row that joins no
+/// run is its own). Rows join where exactly two rows of their `meets` group share an end and both
+/// join as the same value. Runs stop at the square's edge.
+pub fn run_medians(rows: &[RunRow]) -> Vec<usize> {
     let mut median_of = vec![0; rows.len()];
-    for members in runs.values_mut() {
-        members.sort_by(|&a, &b| rows[a].value.total_cmp(&rows[b].value).then(a.cmp(&b)));
-        let half = members
-            .iter()
-            .map(|&index| rows[index].length_m)
-            .sum::<f64>()
-            / 2.0;
-        let mut length = 0.0;
-        let median = members
-            .iter()
-            .copied()
-            .find(|&index| {
-                length += rows[index].length_m;
-                length >= half
-            })
-            .unwrap_or(members[0]);
-        for &index in members.iter() {
+    for mut members in run_groups(rows) {
+        let median = length_weighted_median(
+            &mut members,
+            |index| rows[index].length_m,
+            |index| rows[index].value,
+        );
+        for index in members {
             median_of[index] = median;
         }
     }

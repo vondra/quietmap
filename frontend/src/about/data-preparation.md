@@ -467,7 +467,9 @@ the one its trains run on is counted as that track's (St. Louis files MetroLink 
   37.6 % of freight runs between 22 and 06 h, as counted at the German monitors (36.8 % between 23
   and 07 h). Lines mapped as
   passenger-only take no default freight, nor do lines run at 250 km/h or more that are not mapped
-  as carrying freight: high-speed lines carry passengers. A high-speed line that posts no speed
+  as carrying freight: high-speed lines carry passengers. Where parallel tracks share a corridor,
+  default freight is divided only among the tracks that take it, and a passenger-only segment does
+  not inherit default freight from a joined run. A high-speed line that posts no speed
   runs at its line's posted speed, else at 250 km/h, the median of the world's posted high-speed
   lines.
 - **Metro and crossings.** Above-ground metro uses the light-rail model; track underground emits

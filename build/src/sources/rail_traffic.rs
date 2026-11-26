@@ -1,8 +1,9 @@
 //! Preserve measured and missing-day trains separately through run medians, country scaling and period allocation.
-use super::runs::{RunRow, run_medians};
+use super::runs::{RunRow, length_weighted_median, run_groups};
 use super::tent::Tier;
 use crate::dev4::{Table, z30_corner_mercator_m};
 use crate::railways::encode::MATCHING_GLOBAL_SECTION;
+use crate::railways::merge::STATUS_ESTIMATED;
 use crate::source_tables::{SourceTables, TrainScales};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int32Type, UInt8Type, UInt16Type};
@@ -44,7 +45,7 @@ pub(super) fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn A
 
 /// One row's trains as dev4 stamped them: passenger and freight per period, and the status and
 /// source of each.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct Trains {
     pub passenger: [f64; PERIODS],
     pub freight: [f64; PERIODS],
@@ -53,11 +54,21 @@ pub(super) struct Trains {
     pub source: [u16; 2],
 }
 
+/// Clear guessed freight and normalize its provenance to preparation's estimated-zero convention
+/// so downstream provenance never attributes zero suppressed trains to a guessed dataset.
+fn clear_guessed_freight(trains: &mut Trains) {
+    trains.freight = [0.0; PERIODS];
+    trains.missing_calendar_estimate[1] = [0.0; PERIODS];
+    trains.status[1] = STATUS_ESTIMATED;
+    trains.source[1] = 0;
+}
+
 /// Every row's trains as its run carries them, rows in table order: those of the run's
-/// length-weighted median row ([`run_medians`]).
-pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
+/// length-weighted median row, with guessed freight respecting each row's freight eligibility.
+pub(super) fn run_trains(table: &Table, takes_freight: &[bool]) -> Result<Vec<Trains>, String> {
     let mut rows = Vec::new();
     let mut trains = Vec::new();
+    let mut traffic_modes = Vec::new();
     for batch in &table.batches {
         let i32s = |name| column(batch, name).map(|a| a.as_primitive::<Int32Type>());
         let f64s = |name| column(batch, name).map(|a| a.as_primitive::<Float64Type>());
@@ -68,6 +79,7 @@ pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
         let u8s = |name| column(batch, name).map(|a| a.as_primitive::<UInt8Type>());
         let u16s = |name| column(batch, name).map(|a| a.as_primitive::<UInt16Type>());
         let kind = u8s("rail_type")?;
+        let traffic_mode = u8s("traffic_mode")?;
         let freight_matching = batch
             .column_by_name("freight_matching")
             .map(|a| a.as_primitive::<UInt8Type>());
@@ -105,12 +117,66 @@ pub(super) fn run_trains(table: &Table) -> Result<Vec<Trains>, String> {
                 value: row_trains.passenger.iter().chain(&row_trains.freight).sum(),
             });
             trains.push(row_trains);
+            traffic_modes.push(traffic_mode.value(row));
         }
     }
-    Ok(run_medians(&rows)
-        .into_iter()
-        .map(|median| trains[median])
-        .collect())
+    if takes_freight.len() != trains.len() {
+        return Err("railways.arrow: takes_freight length mismatch".into());
+    }
+    let mut resolved = vec![Trains::default(); trains.len()];
+    for mut members in run_groups(&rows) {
+        let median = length_weighted_median(
+            &mut members,
+            |index| rows[index].length_m,
+            |index| rows[index].value,
+        );
+        let mut median_trains = trains[median];
+        // A passenger-only (`traffic_mode == 1`) median carrying a legacy guessed freight proxy
+        // (e.g. a saved table prepared before whole-line guessed proxies were zeroed on mode-1
+        // rows) must never pass that guessed freight onto untagged neighbours in the same run.
+        if traffic_modes[median] == 1 && GUESSED_TRAIN_SOURCES.contains(&median_trains.source[1]) {
+            clear_guessed_freight(&mut median_trains);
+        }
+        // A freight-eligible row joined without a switch to a longer high-speed piece whose
+        // guessed freight was zeroed by speed (not `traffic_mode == 1`) takes its freight from
+        // the freight-eligible rows of the run; untagged pieces inside a `traffic_mode == 1` run
+        // still inherit zero.
+        let eligible_freight_fallback = if !takes_freight[median]
+            && traffic_modes[median] != 1
+            && GUESSED_TRAIN_SOURCES.contains(&median_trains.source[1])
+        {
+            let mut eligible: Vec<usize> = members
+                .iter()
+                .copied()
+                .filter(|&index| takes_freight[index])
+                .collect();
+            (!eligible.is_empty()).then(|| {
+                let freight_median = length_weighted_median(
+                    &mut eligible,
+                    |index| rows[index].length_m,
+                    |index| trains[index].freight.iter().sum::<f64>(),
+                );
+                trains[freight_median]
+            })
+        } else {
+            None
+        };
+        for index in members {
+            let mut row_trains = median_trains;
+            if !takes_freight[index] && GUESSED_TRAIN_SOURCES.contains(&row_trains.source[1]) {
+                clear_guessed_freight(&mut row_trains);
+            } else if takes_freight[index]
+                && let Some(fallback) = eligible_freight_fallback
+            {
+                row_trains.freight = fallback.freight;
+                row_trains.missing_calendar_estimate[1] = fallback.missing_calendar_estimate[1];
+                row_trains.status[1] = fallback.status[1];
+                row_trains.source[1] = fallback.source[1];
+            }
+            resolved[index] = row_trains;
+        }
+    }
+    Ok(resolved)
 }
 
 fn read_missing_calendar_estimate(
