@@ -4,6 +4,7 @@
 // flights of a day by their peak level here and its loudest flights.
 import type { AircraftEvents, AircraftKind, Contributor, ContributorPart, PeriodLevels, TopFlight } from '../../../types/noise'
 import { fmtCount, fmtDbValue, fmtPercent, fmtSone, wholePercents } from '../../../utils/formatters'
+import { TEXT_LINK } from '../../ui/button'
 import { FadingText } from '../../ui/fading-text'
 import { HoverText } from '../../ui/info-tip'
 import { aircraftEventRows } from '../aircraft-events'
@@ -120,6 +121,9 @@ function FlightsByPeakTable({ events }: { events: AircraftEvents }) {
         </tbody>
       </table>
       {events.helicopters_per_day > 0 && lineRow('Helicopters ≥ 50 dB', `${fmtCount(events.helicopters_per_day)}/day`)}
+      <a className={TEXT_LINK} href="/about/validation#loud-flights" target="_blank" rel="noopener">
+        How accurate are the flight counts?
+      </a>
     </div>
   )
 }

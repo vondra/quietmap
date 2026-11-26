@@ -86,6 +86,27 @@ test('desktop: a hovered flight draws its track on the map, redrawn by every str
 test.describe('mobile', () => {
   test.use(PHONE)
 
+  test('a resident can check loud flight counts against microphones and return to the address', async ({ page }) => {
+    await installHermeticMap(page, POINT)
+    await page.goto(`${mapUrl(POINT)}&d=${POINT.lat},${POINT.lng}&popup=%7B%22aircraft%22%3Atrue%7D`)
+    await expect.poll(() => popupRequests(page)).toHaveLength(1)
+    const update = withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), [])
+    update.sources.find(source => source.source_type === 'aircraft')!.events = {
+      above_db: [50, 60, 70], per_day: [100, 45, 23], night: [10, 4, 2],
+      height_m: [900, 650, 500], type: ['A320', 'A320', 'A320'], helicopters_per_day: 0,
+    }
+    await sendPopupLine(page, update)
+    const sheet = page.getByTestId('mobile-detail-sheet')
+    const count = sheet.getByRole('row').filter({ hasText: '≥ 70 dB' }).getByRole('cell').nth(1)
+    await expect(count).toHaveText('23')
+    const [measurements] = await Promise.all([page.waitForEvent('popup'),
+      sheet.getByRole('link', { name: 'How accurate are the flight counts?' }).tap()])
+    await expect(measurements.getByRole('heading', { name: 'Loud flights' })).toBeInViewport()
+    await measurements.close()
+    await expect(count).toHaveText('23')
+    await expect.poll(() => popupRequests(page)).toHaveLength(1)
+  })
+
   test('a tapped flight draws its track above the sheet, until another row or a new click', async ({ page }) => {
     await installHermeticMap(page, POINT)
     await page.goto(mapUrl(POINT))

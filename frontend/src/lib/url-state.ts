@@ -1,5 +1,6 @@
 // Public map state encoded in the address; account data and time-limited offers never enter it.
 import { DEFAULT_BASEMAP, type BasemapId } from '../utils/basemaps'
+export { samePoint as sameDetailPosition } from './coordinates'
 import { resolveInitialView } from '../utils/initial-view'
 import { HEATMAP_LAYERS } from './tile-urls'
 import { parseDataLayers, type DataLayerId } from './data-layers'
@@ -47,10 +48,12 @@ export interface UrlState extends MapCamera {
 }
 
 // Six decimals keep the clicked point within 0.1 m: four could move it out of its building.
-const positionText = (p: Position) => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`
-export function sameDetailPosition(a: Position | null, b: Position | null): boolean {
-  return a === b || (a != null && b != null && positionText(a) === positionText(b))
+// Keep existing six-decimal addresses where exact. A shared receiver must make the same request after a reload.
+function coordinateText(value: number): string {
+  const sixDecimals = value.toFixed(6)
+  return Number(sixDecimals) === value ? sixDecimals : String(value)
 }
+const positionText = (p: Position) => `${coordinateText(p.lat)},${coordinateText(p.lng)}`
 function number(raw: string | null | undefined, fallback: number, min: number, max: number): number {
   const n = raw == null || raw.trim() === '' ? NaN : Number(raw)
   return Number.isFinite(n) && n >= min && n <= max ? n : fallback

@@ -147,8 +147,8 @@ test("an account's names follow the 30 m rule and the later time; its recent pla
   assert.deepEqual((await name(50, null, Date.now())).json(), { titles: [] })
 
   const recent = [
-    { lat: 1, lng: 2, place: 'Tijarafe, Spain', sone: 0.3, lden: 31, openedAt: 20 },
-    { lat: 3, lng: 4, place: null, sone: null, lden: null, openedAt: 10 },
+    { lat: 1, lng: 2, place: 'Tijarafe, Spain', levels: { lat: 1.0001, lng: 2, sone: 0.3, lden: 31 }, openedAt: 20 },
+    { lat: 3, lng: 4, place: null, levels: null, openedAt: 10 },
   ]
   assert.equal((await send('PUT', '/api/places/recent', { recent }, headers)).statusCode, 204)
   assert.deepEqual((await send('GET', '/api/me', undefined, headers)).json().recent, recent)
@@ -170,7 +170,7 @@ test("a browser's places join the account at the visitor's word: names merged, r
   await send('PUT', '/api/places/title', { lat: 50, lng: 14, title: 'Home', updatedAt: 5 }, headers)
   const browser = {
     titles: [{ lat: 50.0001, lng: 14, title: 'Flat', updatedAt: 9 }, { lat: 48, lng: 16, title: 'Lake' }],
-    recent: [{ lat: 48, lng: 16, place: null, sone: 1.1, lden: 38, openedAt: 7 }],
+    recent: [{ lat: 48, lng: 16, place: null, levels: { lat: 48, lng: 16, sone: 1.1, lden: 38 }, openedAt: 7 }],
   }
   const merged = (await send('POST', '/api/places/import', browser, headers)).json()
   assert.deepEqual(merged.titles, [{ lat: 50, lng: 14, title: 'Flat', updatedAt: 9 }, { lat: 48, lng: 16, title: 'Lake', updatedAt: 0 }])
@@ -232,16 +232,17 @@ test('a longitude from a repeated world is wrapped, and the recent places are on
   const twice = [{ lat: 50, lng: 14, place: 'A' }, { lat: 50.0001, lng: 14, place: 'B' }, { lat: 49, lng: 374 }]
   assert.equal((await send('PUT', '/api/places/recent', { recent: twice }, headers)).statusCode, 204)
   assert.deepEqual((await send('GET', '/api/me', undefined, headers)).json().recent, [
-    { lat: 50, lng: 14, place: 'A', sone: null, lden: null, openedAt: 0 },
-    { lat: 49, lng: 14, place: null, sone: null, lden: null, openedAt: 0 },
+    { lat: 50, lng: 14, place: 'A', levels: null, openedAt: 0 },
+    { lat: 49, lng: 14, place: null, levels: null, openedAt: 0 },
   ])
 })
 
 test('a database from before the recent places had times, half migrated, or from when they were counted, reads them without counts', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'qm-accounts-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  for (const columns of [[], ['count INTEGER NOT NULL DEFAULT 1'], ['count INTEGER NOT NULL DEFAULT 1', 'opened_at INTEGER NOT NULL DEFAULT 0']]) {
-    const database = join(directory, `accounts-${columns.length}.sqlite`)
+  const count = 'count INTEGER NOT NULL DEFAULT 1', opened = 'opened_at INTEGER NOT NULL DEFAULT 0'
+  for (const [version, columns] of [[], [count], [count, opened], [opened]].entries()) {
+    const database = join(directory, `accounts-${version}.sqlite`)
     const old = new DatabaseSync(database)
     old.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL);
       CREATE TABLE recent_places (user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -253,11 +254,11 @@ test('a database from before the recent places had times, half migrated, or from
     old.close()
     const store = new AccountStore(database)
     // Rows come with no prototype: compared as plain objects.
-    assert.deepEqual(store.places(1).recent.map(place => ({ ...place })), [{ lat: 50, lng: 14, place: 'Kytín', sone: 0.4, lden: 33, openedAt: 0 }])
+    assert.deepEqual(store.places(1).recent, [{ lat: 50, lng: 14, place: 'Kytín', levels: null, openedAt: 0 }])
     store.close()
     const kept = new DatabaseSync(database)
     assert.deepEqual(kept.prepare('PRAGMA table_info(recent_places)').all().map(column => column.name),
-      ['user_id', 'position', 'lat', 'lng', 'place', 'sone', 'lden', 'opened_at'])
+      ['user_id', 'position', 'lat', 'lng', 'place', 'sone', 'lden', 'opened_at', 'level_lat', 'level_lng'])
     kept.close()
   }
 })

@@ -21,7 +21,7 @@ import { type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import AccountButton from './components/AccountButton'
 import PlaceMedia, { MediaButtons } from './components/PlaceMedia'
-import { samePlace, titleAt } from './lib/place-rules'
+import { historyPoint, levelsAt, opensAt, samePlace, titleAt } from './lib/place-rules'
 import { usePlaces } from './hooks/usePlaces'
 import { createMediaKeeper } from './lib/media-keeper'
 import { isSignedIn } from './lib/places-keeper'
@@ -152,21 +152,20 @@ export default function App() {
     return () => { open = false }
   }, [detailPosition, nameLate])
 
-  // An answered point's numbers join its place in the history, with its name once it is known.
+  const openEntry = detailPosition ? recentPlaces.find(place => opensAt(place, placeTitles, detailPosition)) : undefined
+  const atHistoryPoint = openEntry != null
+  const completeAnswer = useMemo(() => detailPosition && noiseDetailData && !noiseDetailData.partial ? {
+    ...detailPosition, place: detailPlaceName,
+    sone: noiseDetailData.loudness?.nden_sone ?? null, lden: noiseDetailData.total_lden,
+  } : null, [detailPosition, noiseDetailData, detailPlaceName])
+  // Naming the open point can make it the destination. An account refresh alone never resends a failed save.
   useEffect(() => {
-    if (!detailPosition || !noiseDetailData || noiseDetailData.partial) return
-    answered({
-      lat: detailPosition.lat,
-      lng: detailPosition.lng,
-      place: detailPlaceName,
-      sone: noiseDetailData.loudness?.nden_sone ?? null,
-      lden: noiseDetailData.total_lden,
-    })
-  }, [detailPosition, noiseDetailData, detailPlaceName, answered])
+    if (completeAnswer && atHistoryPoint) answered(completeAnswer)
+  }, [completeAnswer, atHistoryPoint, answered])
   // The open place's own name, given or taken back under the search field, and its entry of the history,
   // which knows its name before the geocoder answers (a search's result, a place opened before).
   const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition)?.title ?? null : null
-  const openEntry = detailPosition && recentPlaces.find(place => samePlace(place, detailPosition))
+  const openLevels = completeAnswer ?? (detailPosition && levelsAt(openEntry, detailPosition))
   // Every opened point joins the history, including pasted addresses and browser Back.
   useEffect(() => {
     const searched = searchedName.current
@@ -307,8 +306,8 @@ export default function App() {
         open={detailPosition && {
           at: detailPosition,
           place: openEntry?.place ?? detailPlaceName,
-          sone: noiseDetailData?.loudness?.nden_sone ?? openEntry?.sone ?? null,
-          lden: (noiseDetailData?.partial ? null : noiseDetailData?.total_lden) ?? openEntry?.lden ?? null,
+          sone: openLevels?.sone ?? null,
+          lden: openLevels?.lden ?? null,
         }}
         notSaved={notSaved}
         // A place of the history flies in as a search's result does, out, across and in, to at least the
@@ -319,7 +318,7 @@ export default function App() {
           // Opened at once on its own entry: the arrival at its name's point, which may lie within 30 m
           // of a neighbour's entry too, then finds this one first.
           countOpening(place)
-          const at = titleAt(placeTitles, place) ?? place
+          const at = historyPoint(placeTitles, place)
           setSelectedLocation({ lat: at.lat, lon: at.lng, zoom: Math.max(latestState.current.zoom, SEARCH_FLIGHT_ZOOM) })
         }}
         onRename={rename}

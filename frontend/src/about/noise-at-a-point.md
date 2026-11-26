@@ -42,7 +42,7 @@ weapon firing and blast noise is not included in the modelled level. At Greenwic
 City. Halfway between two points on a grid line, the popup shows their average. Between grid
 lines it uses the four surrounding points, giving more weight to the nearer ones. The height is
 an average weighted by flights. The example aircraft type comes from the point contributing the
-most flights to that row.
+most flights to that row. [How the counts compare with microphones](/about/validation#loud-flights).
 
 <p>
 <img src="click.jpg" width="1740" height="1040" alt="The popup at Greenwich in London, under the search field's open place: the level and its sources by share, the largest road opened with its data, sound path and loudness alone" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">
