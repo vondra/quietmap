@@ -20,10 +20,10 @@ by sector are calibrated on Czechia's strategic maps of 2022, for want of measur
 
 ## Map against microphone
 
-Two numbers for each network. **Model minus measured** is the typical difference: half of the
-microphones lie below it and half above. In Barcelona it is −1.1 dB: at the typical microphone the
-map is 1.1 dB quieter than measured. **Half are within** is how far the map stands from half of the
-microphones, louder or quieter. In Barcelona half are within ±4.3 dB of the map. The values are
+Each row compares the model with measurements from one network. **Model minus measured** is the
+median difference. In Barcelona the map reads 1.1 dB quieter at the typical microphone.
+**Half are within** gives the size of the difference for half the comparisons, whether the map
+reads louder or quieter. In Barcelona half are within 4.3 dB. The values are
 <abbr title="the day-evening-night level: a year's average, the evening 5 dB and the night 10 dB heavier">Lden</abbr>,
 the averages of the hours given, or the US's
 <abbr title="the day-night level: a year's average, the night 10 dB heavier">DNL</abbr>;
@@ -36,7 +36,7 @@ the current version, November 2026.
 | Barcelona: [Ajuntament de Barcelona](https://opendata-ajuntament.barcelona.cat/data/dataset/xarxasoroll-equipsmonitor-dades) (CC BY 4.0), Lden 2025 | 154 | −1.1 dB | 4.3 dB |
 | Madrid: [Ayuntamiento de Madrid](https://datos.madrid.es/dataset/211356-0-contaminacion-acustica) (CC BY 4.0), Lden 2025 | 31 | +2.3 dB | 3.3 dB |
 | Dublin: [Dublin City Council](https://data.smartdublin.ie/sonitus-api) (CC BY), Lden 2025 | 14 | −4.4 dB | 5.7 dB |
-| Poland's roads: [Chief Inspectorate of Environmental Protection](https://dane.gov.pl/pl/dataset/1404) (CC BY 4.0), 06–22 h, 2018–2024, at 5,351 points | 6,616 | +0.1 dB | 3.0 dB |
+| Poland's roads: [Chief Inspectorate of Environmental Protection](https://dane.gov.pl/pl/dataset/1404) (CC BY 4.0), 06–22 h, 2018–2024, at 4,912 locations | 6,191 | +0.2 dB | 3.0 dB |
 | Prague airport: [Letiště Praha](https://www.prg.aero/en/noise-air-traffic-and-noise-airport-operations), aircraft only, positions read from the airport map, 06–22 and 22–06 h, January 2026 | 14 and 13 | −0.3 and +1.0 dB | 1.8 and 1.8 dB |
 | Minneapolis–St Paul airport: [Metropolitan Airports Commission](https://www.macnoise.com), aircraft only, DNL 2025–26 | 39 | +0.2 dB | 1.0 dB |
 | Zurich airport: [Flughafen Zürich](https://report.flughafen-zuerich.ch/2024/ar/en/laerm), aircraft only, 06–22 h, 2024 | 4 | −2.2 dB | 2.2 dB |
@@ -44,6 +44,33 @@ the current version, November 2026.
 
 The city microphones hear all the sounds around them. For windows such as 06–22 h, the model uses
 the corresponding hours of its day, evening and night averages.
+
+The Polish row compares all mapped sources with one reported daytime level per period. In 5,664
+of these periods the start and end dates were the same or one day apart. In a further 427 periods
+the national file lists several levels without dating the individual readings. The map fell below
+their range in 184 periods, within it in 104 and above it in 139. In 286 cases it was inside the
+range or within 3 dB of it.
+
+For one of those 427 periods the field report gives each day's reading.
+On [Wolności Street in Myszków](/#lat=50.573972&lng=19.30375&z=17&d=50.573972,19.30375&m=lden&calc=1),
+a microphone 4 m above ground recorded 62.3 to 66.2 dB by day from 13 to 19 June 2019.
+Averaged by sound energy, those seven days gave 65.0 dB. The 2026 map gives 64.4 dB for the same
+hours, 06:00–22:00. [GIOŚ field report, table 4](https://www.gov.pl/attachment/8992c366-3f95-4177-8711-6b84daa782c5#page=21).
+
+<details>
+<summary>Two nearby monitoring points in Gdańsk</summary>
+
+In 2020 the reported night levels on Słowackiego Street were 53.2 dB at
+[number 253](/#lat=54.38515&lng=18.429874&z=18&d=54.38515,18.429874&m=lden&calc=1)
+and 69.1 dB at [253D](/#lat=54.385109&lng=18.429993&z=18&d=54.385109,18.429993&m=lden&calc=1).
+The published coordinates are 9 m apart. The first falls inside a mapped building, so the map
+calculates at its loudest façade, about 1 m from the second point. To estimate 22:00–06:00 we
+combine one hour at the map's evening level with seven at its night level. This gives 61.8 and
+63.4 dB from all mapped sources, including aircraft. Roads alone give 60.8 and 61.2 dB.
+The measurement file omits the height and mounting position of both microphones.
+[GIOŚ road measurements, 2020](https://dane.gov.pl/pl/dataset/1404/resource/33678).
+
+</details>
 
 In Zurich, the four points use the mast positions in [Empa's survey, table 12](https://www.aramis.admin.ch/Default?DocumentID=70193&Load=true).
 Three fall on buildings, where the map uses a façade. The airport's [December 2024 bulletin](https://media.flughafen-zuerich.ch/-/jssmedia/airport/portal/dokumente/das-unternehmen/politics-and-responsibility/noise-and-sound-insulation/2412_lrmbulletin_dezember.pdf)
