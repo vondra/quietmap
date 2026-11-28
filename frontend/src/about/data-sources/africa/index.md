@@ -21,8 +21,8 @@ on counted networks worldwide on the 2024 map). Local streets, in the nine count
 trips their buildings make where enough buildings are mapped. A main road takes the medium and heavy
 shares of counted roads of its class elsewhere in the world, a street 1 % medium and 2 % heavy;
 motorcycles come from national fleets (WHO 2023; 13 % of a town street's traffic in Egypt), local
-estimates (20 % in Kenya, 30 % in Nigeria) or, without either, the median of the WHO region or the
-world.
+estimates on the 2026 map (20 % in Kenya, 30 % in Nigeria) or, without either, the median of the
+WHO region or the world.
 
 ## Railways
 

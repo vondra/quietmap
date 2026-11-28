@@ -5,7 +5,7 @@ intro: MÁV passenger timetable from a community mirror. Roads are estimated fro
 
 ## Roads
 
-No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
+No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, on the 2026 map (class defaults on the 2024 map), and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 0.8 % of a town street's traffic (WHO 2023).
 

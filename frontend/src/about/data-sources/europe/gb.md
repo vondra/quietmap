@@ -5,7 +5,7 @@ intro: Department for Transport counts on every road class in Great Britain, str
 
 ## Roads
 
-Traffic volumes: [Department for Transport count points](https://roadtraffic.dft.gov.uk/) (AADF; cars, vans, buses, trucks, motorcycles), most recent year per point, June 2026 release. The file covers Great Britain; Northern Ireland has no counts; its roads are estimated from the buildings around them.
+Traffic volumes: [Department for Transport count points](https://roadtraffic.dft.gov.uk/) (AADF; cars, vans, buses, trucks, motorcycles), most recent year per point, June 2026 release (through 2024 on the 2024 map). The file covers Great Britain; Northern Ireland has no counts; its roads are estimated from the buildings around them.
 
 - Motorways, A and B roads take the nearest point of their road number within 15 km whose DfT class fits the OSM class. Slip-road points (a short link named after a slip road, or a motorway or trunk point far below its own road) are never used for the main carriageway.
 - C roads and unclassified roads take a manual count (2020 excluded) when the point lies within 12 m of an OSM way and no road of another class runs within 20 m; the whole way takes that count.

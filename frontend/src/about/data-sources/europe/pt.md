@@ -7,7 +7,7 @@ intro: City traffic counts in Lisbon, timetables for trains and light rail. Othe
 
 Lisbon: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km; streets carry the trips their buildings make ([method](/about/data-preparation)).
+Elsewhere motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, on the 2026 map (class defaults on the 2024 map), and secondary and tertiary roads a fit of the trips made within 5 km; streets carry the trips their buildings make ([method](/about/data-preparation)).
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.3 % of a town street's traffic (WHO 2023); electric cars 2.3 % of cars, rolling noise only (IEA 2024).
 

@@ -5,7 +5,7 @@ intro: Passenger timetables for SNCB/NMBS and three regional tram and metro netw
 
 ## Roads
 
-No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
+No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, on the 2026 map (class defaults on the 2024 map), and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.2 % of a town street's traffic (WHO 2023); electric cars 4.1 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
 
@@ -18,11 +18,11 @@ Train counts come from four passenger timetables — one busy Wednesday on the 2
 - National railway: [SNCB/NMBS](https://gtfs.irail.be/) (195 of 366 days covered in 2024).
 - Trams, metro and light rail: [STIB/MIVB](https://stibmivb.opendatasoft.com/) (Brussels; 28 days in 2024), [De Lijn](http://gtfs.irail.be/de-lijn/de_lijn-gtfs.zip) (Antwerp, Ghent, coast tram; 21 days in 2024), [TEC](http://opendata.tec-wl.be/Current%20GTFS/TEC-GTFS.zip) (Charleroi; 83 days in 2024).
 
-Lines without a count take the class defaults. No Belgian timetable includes freight. On the 2026 map, Belgium publishes no 2024 goods train-kilometres and freight keeps the class defaults' national total; on the 2024 map it scales to Belgium's latest published Eurostat figure (2011). In both years freight is drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
+Lines without a count take the class defaults. No Belgian timetable includes freight. On the 2026 map, Belgium publishes no 2024 goods train-kilometres and freight keeps the class defaults' national total; on the 2024 map both freight and uncovered passenger defaults scale to Belgium's latest published Eurostat figures (2011). In both years freight is drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Industry
 
-Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium.
+Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium on the 2026 map (933 added on the 2024 map).
 
 ## Buildings and terrain
 

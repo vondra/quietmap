@@ -186,8 +186,8 @@ junctions and the place's yearly air temperature.
   roads' 90th percentile on the year's random samples and on the whole networks that cover most
   of their class's mapped length in their country. A network's counts covering less, and counts at
   sites a publisher selected, carry their own roads but stay out of this law: Germany's federal
-  and Poland's voivodeship roads, under 4 % of their countries' tertiary length, read 5 to 7 dB
-  above it, where Sweden's state roads, 89 % of Sweden's, read within 1 dB. A rural road network
+  and Poland's voivodeship roads, under 1 % of their countries' tertiary length, read 7 to 8 dB
+  above it, where Sweden's state roads, 86 % of Sweden's, read within 1 dB. A rural road network
   counted on its own,
   Thailand's, follows its own law. Motorways, trunk and primary roads follow one law of the trips
   within 1, 5 and 15 km, their lanes and one-way carriageways, fitted on counts of every design
@@ -198,7 +198,8 @@ junctions and the place's yearly air temperature.
   main road. A hotel makes 2.45 car trips a room a day: ITE's measured 8.17 vehicle trips a room
   (Trip Generation, 9th edition, land use 310) at an assumed half occupancy and 60 % by car, two
   factors without a measured source. Its rooms come from its floor, at the floor a room of the
-  year's mapped hotels, hostels, motels and guest houses that state their rooms: 85 m² in 2026.
+  year's mapped hotels, hostels, motels and guest houses that state their rooms: 85 m² in 2026
+  (75 m² in 2024).
   On the 2024 map, in a town, an unclassified street, and a residential street that a bus,
   trolleybus or coach line runs along, carries at least what counted unclassified streets that stand
   for their class (Great Britain's random sample) carry among as many trips around it (a one-way
@@ -460,7 +461,8 @@ the one its trains run on is counted as that track's (St. Louis files MetroLink 
   corridor, 2 on another TEN-T line and 0.5 off them within the country's total. Default passenger
   trains are lowered, never raised, toward the passenger train-kilometres the timetables leave,
   fully once that remainder exceeds the timetables' own error, in proportion below it; on the 2026
-  network the timetables of the median country they cover run within 8 % of its national total.
+  network the timetables of the median country they cover run within 8 % of its national total
+  (11 % on the 2024 network).
   Where the timetables alone reach the national total, the defaults stand. The 2026 factors
   were fitted before this, on the earlier prepared network, to 1.2 times the passenger
   train-kilometres and without Switzerland. In the EU, Switzerland, Norway and Great Britain
@@ -489,7 +491,8 @@ Where no count or national estimate exists, tracks start from the world defaults
 2026 map, six countries have main-line freight defaults of their own (Germany 24.5 trains a day,
 Switzerland 31.4), while on the 2024 map every country starts from the world 20. The country
 factors above then scale them: on the 2026 map, a French main line carries 23 passenger trains a
-day (38 on the 2024 map), and a German one 7 to 54 freight trains by its TEN-T tier. Main, branch
+day (28 on the 2024 map), and a German one 7 to 54 freight trains by its TEN-T tier (7 to 55 on the
+2024 map). Main, branch
 and industrial use must be mapped; other lines take the unclassified row. Parallel tracks share
 their line's count.
 
@@ -579,7 +582,7 @@ public air transport stages from [ANAC](https://www.anac.gov.br/acesso-a-informa
 [EUROCONTROL IFR arrivals and departures](https://ansperformance.eu/reference/dataset/airport-traffic/).
 Engine-class itinerant counts are adapted from Statistics Canada,
 [Table 23-10-0300-01](https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=2310030001),
-September 2025–August 2026. This does not constitute an endorsement by Statistics Canada of this
+September 2025–August 2026 on the 2026 map (calendar year 2024 on the 2024 map). This does not constitute an endorsement by Statistics Canada of this
 product.
 Civil international movements come from [Hong Kong CAD](https://www.cad.gov.hk/english/pdf/Stat%20Webpage.xlsx).
 Civil arrivals and departures at Changi contain information from
@@ -760,7 +763,8 @@ building sites, garden machinery, music and festivals.
   unless the place is tagged without outdoor seating. The guests sit 1.5 m in front of the nearest
   wall of the building the place is mapped in where that spot lies in no building (in front of a
   party wall it lies in the neighbour); walled in on every side, in front of the nearest wall.
-- **What screens.** A wall without a height stands 4 m; a greenhouse, or a mapped garage or shed,
+- **What screens.** A wall without a height stands 4 m on the 2026 map (3 m on the 2024 map, the
+  median of its mapped walls); a greenhouse, or a mapped garage or shed,
   without a measured or mapped height stands at most 3 m, and a point inside a greenhouse or under a
   grandstand is outdoors. Open car parks, carports, canopies, open roofs and underground footprints
   do not screen.

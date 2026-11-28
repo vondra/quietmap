@@ -7,7 +7,7 @@ intro: National and municipal road counts (Mastra), passenger timetable for all 
 
 Traffic volumes: [Mastra](https://www.opendata.dk/vejdirektoratet/taellinger-nogletal-mastra), the counting system of Vejdirektoratet and the municipalities (yearly average traffic and number of trucks per station). Mastra does not split trucks further: on the 2026 map, 5 % are assigned to the medium class and the rest to heavy; on the 2024 map, the total is retained and the year’s class model estimates its medium and heavy parts.
 
-Copenhagen also has counts from the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities). Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km.
+Copenhagen also has counts from the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities). Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, on the 2026 map (class defaults on the 2024 map), and secondary and tertiary roads a fit of the trips made within 5 km.
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.1 % of a town street's traffic (the region's median); electric cars 12.6 % of cars, rolling noise only (IEA 2024).
 

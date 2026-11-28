@@ -5,7 +5,7 @@ intro: Roads are estimated from the buildings around them; the single Feldkirch 
 
 ## Roads
 
-No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
+No traffic counts are loaded. Motorways, trunk and primary roads follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads, on the 2026 map (class defaults on the 2024 map), and secondary and tertiary roads a fit of the trips made within 5 km. Streets carry the trips their buildings make ([method](/about/data-preparation)).
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 1.5 % of a town street's traffic (the world median).
 
@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-One line crosses the country, from Feldkirch in Austria to Buchs in Switzerland. The Austrian and Swiss timetables are applied only within their own borders, so this section uses the class default: 80 passenger and 20 freight trains per day if OpenStreetMap marks it as a main line.
+One line crosses the country, from Feldkirch in Austria to Buchs in Switzerland. The Austrian and Swiss timetables are applied only within their own borders, so this section uses the class default: 80 passenger and 20 freight trains per day if OpenStreetMap marks it as a main line (scaled to Liechtenstein's Eurostat 2024 train-kilometres on the 2024 map).
 
 ## Industry
 

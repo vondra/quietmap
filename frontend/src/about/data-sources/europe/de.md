@@ -14,7 +14,7 @@ Autobahnen and Bundesstraßen: [BASt road traffic census](https://www.bast.de/) 
 | LZ, trucks with trailer | Heavy vehicles |
 | Krad | Motorcycles |
 
-Baden-Württemberg's [permanent counting stations](https://mobidata-bw.de/de/dataset/stundenwerte_dauerzaehlstellen) give every German road its day, evening and night shares: their hourly counts of 2025, by road group, cars and lorries apart.
+Baden-Württemberg's [permanent counting stations](https://mobidata-bw.de/de/dataset/stundenwerte_dauerzaehlstellen) give every German road its day, evening and night shares: their hourly counts of 2025 on the 2026 map (2024 on the 2024 map), by road group, cars and lorries apart.
 
 Berlin and Hamburg: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
@@ -35,7 +35,7 @@ help define the model's typical trains. [German railway monitoring method](https
 
 Wind turbines are OpenStreetMap points. A turbine paired with a [Marktstammdatenregister](https://www.marktstammdatenregister.de/MaStR/Datendownload) (Bundesnetzagentur, Datenlizenz Deutschland – Namensnennung 2.0) entry, one to one and nearest first within 500 m, takes its rated power and hub height from the register.
 
-The register adds 1,265 turbines OpenStreetMap lacks and removes 523 it calls dismantled.
+The register adds 1,265 turbines OpenStreetMap lacks and removes 523 it calls dismantled on the 2026 map (1,292 added on the 2024 map).
 
 ## Buildings and terrain
 

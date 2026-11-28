@@ -7,7 +7,7 @@ intro: City traffic counts in Vienna, ÖBB passenger timetable. Other roads are 
 
 Vienna: the city's [permanent counting stations](https://www.data.gv.at/katalog/dataset/stadt-wien_verkehrszhlstellenzhlwertewien) and the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km; streets carry the trips their buildings make ([method](/about/data-preparation)). ASFINAG motorway counts are not loaded yet.
+Elsewhere motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, on the 2026 map (class defaults on the 2024 map), and secondary and tertiary roads a fit of the trips made within 5 km; streets carry the trips their buildings make ([method](/about/data-preparation)). ASFINAG motorway counts are not loaded yet.
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 2.7 % of a town street's traffic (WHO 2023); electric cars 3.9 % of cars, rolling noise only (IEA 2024).
 

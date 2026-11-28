@@ -9,7 +9,7 @@ The [Freeway Bureau](https://www.freeway.gov.tw/) publishes freeway traffic per 
 
 Motorways, trunk and primary roads use the world estimate per lane; secondary and tertiary roads follow the trips made by the buildings within 5 km, streets the trips their buildings make, else class defaults ([world defaults](/about/data-preparation)).
 
-Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 35 % of a town street's traffic (set by hand: Taiwan registers more scooters than cars and WHO has no profile for it).
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 35 % of a town street's traffic (set by hand: Taiwan registers more scooters than cars and WHO has no profile for it) on the 2026 map (1.5 %, the world median, on the 2024 map).
 
 Unsigned roads: a primary road 60 km/h in towns, 50 outside.
 

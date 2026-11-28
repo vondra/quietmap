@@ -9,7 +9,7 @@ Motorways and national roads: [INWEVA](https://www.nationaalgeoregister.nl/geone
 
 A motorway takes the counted section of its number within 50 m running along it; only sections measured at their own loops count; derived neighbours are treated as uncounted. The detectors cannot see motorcycles: on the 2026 map, 1 % of each total is assigned to them. On the 2024 map, each mapped carriageway keeps its own directional count (added only for an undivided road), and the light-vehicle category includes motorcycles without separating them so their share is estimated by the year’s vehicle model. The published all-vehicle total and the two truck classes are retained; the remaining light-vehicle count is derived from their difference because the published class series can differ from the separately published total.
 
-Amsterdam: the 2025 Amsterdam file of the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities). These values come from the city's traffic model, not from counters, and are shown as modelled.
+Amsterdam: the 2025 Amsterdam file of the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities) on the 2026 map (the 2019 file on the 2024 map). These values come from the city's traffic model, not from counters, and are shown as modelled.
 
 Uncounted streets carry the trips their buildings make. Uncounted motorways, trunk and primary roads follow one model of the trips made around them, fitted on counted roads, and secondary and tertiary roads a fit of the trips made within 5 km.
 
@@ -23,7 +23,7 @@ Train, tram and metro counts: Dutch national timetable from [public-transport.ea
 
 ## Industry
 
-Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium.
+Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium on the 2026 map (933 added on the 2024 map).
 
 ## Buildings and terrain
 

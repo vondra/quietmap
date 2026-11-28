@@ -42,7 +42,7 @@ No Turkish timetable is loaded. Train counts are assigned per corridor (also app
 
 Tram track gets 350 trams per day in Istanbul and 250 elsewhere; light rail gets 500 and 400. Surface metro sections are included; see the [railway method](/about/data-preparation).
 
-These heavy-rail counts are then scaled to the country's train-kilometres (Eurostat 2024): on the 2026 map, passenger trains by 0.372 and freight by 0.681; on the 2024 map, the same fallback corridor counts are scaled to Eurostat 2024 train-kilometres.
+These heavy-rail counts are then scaled to the country's train-kilometres (Eurostat 2024): on the 2026 map, passenger trains by 0.372 and freight by 0.681; on the 2024 map, the same fallback corridor counts are scaled to Eurostat 2024 train-kilometres (passenger by 0.363 and freight by 0.848).
 
 ## Industry
 

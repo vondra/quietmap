@@ -31,7 +31,7 @@ Wind turbines: [US Wind Turbine Database](https://energy.usgs.gov/uswtdb/) from 
 
 Power plants: WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. Other factories are OSM industrial areas with an inferred type. The EPA Toxics Release Inventory is not used.
 
-The register adds 1,610 turbines OpenStreetMap lacks on the 2026 map (the 2024 map uses the pinned v7.2 archive filtered to pre-2025 commissioning).
+The register adds 1,610 turbines OpenStreetMap lacks on the 2026 map (the 2024 map uses the pinned v7.2 archive filtered to pre-2025 commissioning, adding 1,533 turbines).
 
 ## Ships
 
