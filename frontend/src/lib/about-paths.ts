@@ -17,9 +17,10 @@ export function aboutPageOf(pathname: string): string | null {
   return match ? (match[1] ?? '') : null
 }
 
-/** One-line year scope shown atop every Data sources page (landing, region and country). */
-export function dataSourcesYearScope(page: string, mapYear: string): string | null {
+/** The year scope atop every Data sources page (landing, region and country): their handwritten
+ * figures are the 2026 map's whichever year the site shows, so the year is not MAP_YEAR. */
+export function dataSourcesYearScope(page: string): string | null {
   return page === 'data-sources' || page.startsWith('data-sources/')
-    ? `Figures without a year describe the ${mapYear} map, the one this site shows.`
+    ? 'Unless another map year is named, this page describes the 2026 map.'
     : null
 }

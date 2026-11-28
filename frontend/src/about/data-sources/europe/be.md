@@ -18,7 +18,7 @@ Train counts come from four passenger timetables — one busy Wednesday on the 2
 - National railway: [SNCB/NMBS](https://gtfs.irail.be/) (195 of 366 days covered in 2024).
 - Trams, metro and light rail: [STIB/MIVB](https://stibmivb.opendatasoft.com/) (Brussels; 28 days in 2024), [De Lijn](http://gtfs.irail.be/de-lijn/de_lijn-gtfs.zip) (Antwerp, Ghent, coast tram; 21 days in 2024), [TEC](http://opendata.tec-wl.be/Current%20GTFS/TEC-GTFS.zip) (Charleroi; 83 days in 2024).
 
-Lines without a count take the class defaults. No Belgian timetable includes freight. On the 2026 map, Belgium publishes no 2024 goods train-kilometres and freight keeps the class defaults' national total; on the 2024 map freight scales to Belgium's latest published Eurostat figure (2011) and uncovered passenger defaults are lowered toward it. In both years freight is drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
+Lines without a count take the class defaults. No Belgian timetable includes freight. On the 2026 map, Belgium publishes no 2024 goods train-kilometres and freight keeps the class defaults' national total; on the 2024 map freight scales to Belgium's latest published Eurostat goods figure (2011), and uncovered passenger defaults are lowered toward its passenger figure of the same year. In both years freight is drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways).
 
 ## Industry
 

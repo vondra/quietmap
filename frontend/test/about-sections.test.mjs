@@ -32,12 +32,12 @@ test('a section id is its heading in lower case, its words joined by hyphens', (
 })
 
 test('every Data sources page gets the one-line year scope and other About pages do not', () => {
-  const expected = 'Figures without a year describe the 2026 map, the one this site shows.'
+  const expected = 'Unless another map year is named, this page describes the 2026 map.'
   for (const page of ['data-sources', 'data-sources/europe', 'data-sources/europe/cz']) {
-    assert.equal(dataSourcesYearScope(page, '2026'), expected)
+    assert.equal(dataSourcesYearScope(page), expected)
   }
   for (const page of ['', 'data-preparation', 'validation', 'news']) {
-    assert.equal(dataSourcesYearScope(page, '2026'), null)
+    assert.equal(dataSourcesYearScope(page), null)
   }
 })
 
