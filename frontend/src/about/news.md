@@ -16,6 +16,9 @@ intro: What changed in the data and the model, and what comes next.
 
 ## November 2026
 
+- **Polish roadside measurements.** You can now compare the map with continuous recordings at
+  393 locations. Half of its daytime estimates are within 2.7 dB of the microphone. The
+  [validation page](/about/validation) also shows the wider register of road assessments.
 - **Saved places.** A history entry now keeps the exact position you named, even if you later
   open another address nearby. Its level belongs to the point it reopens.
   Open an older entry once to see its level again. A copied link keeps the exact point you selected.
@@ -26,8 +29,8 @@ intro: What changed in the data and the model, and what comes next.
 - **Road counts checked against their roads.** A count no longer changes along a road that no other
   road joins, and no lane carries more than the busiest counted lanes, 29,400 vehicles a day on a
   one-way carriageway: Warsaw's Trasa Łazienkowska, which carried another road's count of 32 vehicles
-  a day, reads up to 13 dB louder. At the 28 Polish road monitors that moved by 3 dB or more, the
-  model now stands 3.4 dB from the measurement on average instead of 6.4.
+  a day, reads up to 13 dB louder. At the 28 Polish road assessment points where the map changed
+  by 3 dB or more, the mean absolute difference from the reported level fell from 6.4 to 3.4 dB.
 - **Railways in American cities.** 54 open timetables, Amtrak's and 53 commuter, metro, light-rail and
   streetcar services', now give the trains of 10,600 km of US track that took a default: beside New
   York's elevated subway the railway reads 4.7 to 7.1 dB louder.
@@ -112,14 +115,14 @@ intro: What changed in the data and the model, and what comes next.
   dataset (London's Marylebone Road: the Department for Transport's, counted).
 - **Bridges.** A road or railway on a bridge emits from its deck: under a motorway bridge 67 m above
   its valley the model went from 82.3 to 75.3 dB.
-- **Forest.** Tree crowns reduce noise by ISO 9613-2's foliage term: at 392 Polish road monitors
-  behind forest the model went from 2.4 to 0.3 dB above the measurement.
+- **Forest.** Tree crowns reduce noise by ISO 9613-2's foliage term. At 392 Polish road assessment
+  points behind forest the model went from 2.4 to 0.3 dB above the reported level.
 - **Roads.** Uncounted streets carry the trips their buildings make; uncounted main roads in Europe,
   the United States, Mexico, Chile, Colombia, Japan and New Zealand follow one model fitted on
   counted roads. Motorcycles run 3.8 dB louder than cars, and an unsigned US road drives at its
   class's median signed speed (a rural primary road 89 km/h, up to 3.5 dB louder).
 - **Poland's noise screens.** The 10,876 screens of the national topographic database screen the
-  roads: along motorways the model went from 4.1 to 3.2 dB above the monitors.
+  roads. Along motorways the model went from 4.1 to 3.2 dB above the reported levels.
 - **Wind turbines.** 472,924 standing turbines from OpenStreetMap and eight national registers.
 - **Railways.** A stretch between two switches carries one count; guessed freight is scaled to each
   country's freight train-kilometres in 29 European countries.

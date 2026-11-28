@@ -351,8 +351,8 @@ every wall the ray crosses stands at its height. Over this cross-section the pop
 <figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A ray seen from the side, from the source S to the point R. The ground is read at every line of the terrain grid; the hill is soft ground, the roof hard. In calm air the sound bends over the hilltop and the roof's edge in straight lines; downwind it follows arcs bent toward the ground and loses less.</figcaption>
 </figure>
 
-Every term is computed in eight octave bands from 63 Hz to 8 kHz. At 392 Polish road monitoring
-stations behind forest the model read a median 2.4 dB above the measurement without the crowns'
+Every term is computed in eight octave bands from 63 Hz to 8 kHz. At 392 Polish road assessment
+points behind forest the model read a median 2.4 dB above the reported level without the crowns'
 term and 0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above (October 2026).
 
 </details>
