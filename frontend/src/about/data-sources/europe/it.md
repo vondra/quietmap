@@ -27,7 +27,7 @@ Italy has no national open timetable. Train counts come from five regional feeds
 | Ferrotramviaria (2025 archive on 2026; 2024 archive covering all 366 days on 2024) | Bari to Barletta |
 | [Trenitalia Sardegna](https://www.sardegnamobilita.it/) | Sardinia |
 
-Lazio, Campania, Veneto and Sicily have no feed. Class defaults apply there: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks. The timetables are passenger-only. Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways); on the 2024 map, uncovered passenger defaults also scale to Eurostat 2024 passenger train-kilometres.
+Lazio, Campania, Veneto and Sicily have no feed. Class defaults start at 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks. The timetables are passenger-only. Freight comes from the class defaults, scaled to the country's goods train-kilometres (Eurostat 2024), drawn to the TEN-T corridors, with the [European night share](/about/data-sources/europe#railways); on the 2024 map, uncovered passenger defaults also scale to Eurostat 2024 passenger train-kilometres.
 
 ## Buildings and terrain
 

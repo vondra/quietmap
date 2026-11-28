@@ -5,11 +5,11 @@ intro: Datos Viales 2025 traffic counts with a measured vehicle mix on federal a
 
 ## Roads
 
-Traffic volumes: Datos Viales 2025, the annual counts of SICT and the Instituto Mexicano del Transporte. Each counted section has TDPA (annual average daily traffic) and a measured vehicle mix: cars, buses, trucks by axle count, motorcycles. A section without a published mix takes the national average: 79.5% light, 7.1% medium, 8.2% heavy, 5.2% motorcycles. SICT offers no download; the data is read from a community copy under CC BY 4.0.
+Traffic volumes: Datos Viales 2025 (2024 daily counts, TDPA), the annual counts of SICT and the Instituto Mexicano del Transporte. Each counted section has TDPA (annual average daily traffic) and a measured vehicle mix: cars, buses, trucks by axle count, motorcycles. A section without a published mix takes the national average: 79.5% light, 7.1% medium, 8.2% heavy, 5.2% motorcycles (on the 2024 map, every counted section carries a measured mix). SICT offers no download; the data is read from a community copy under CC BY 4.0.
 
 An OSM motorway, trunk, primary or secondary road takes the nearest counted section within 200 m with a compatible road type: a federal toll road matches a motorway or trunk, a free federal road a trunk or primary, a state road a primary or secondary. Roads outside Mexico never match.
 
-Counted sections reach 78 % of the motorway, trunk and primary length. Tertiary roads and streets are not in the dataset: uncounted secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make. On the 2026 map, motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on the counted roads of 19 other countries; on Mexico's counted roads it reads 1.3 dB low (on the 2024 map, uncounted main roads keep class defaults; [method](/about/data-preparation)).
+Counted sections reach 78 % of the motorway, trunk and primary length (80 % on the 2024 map). Tertiary roads and streets are not in the dataset: uncounted secondary and tertiary roads follow the trips made within 5 km of them, streets the trips their buildings make. On the 2026 map, motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on the counted roads of 19 other countries; on Mexico's counted roads it reads 1.3 dB low. On the 2024 map, uncounted main roads keep class defaults ([method](/about/data-preparation)).
 
 Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 2.1 % of a town street's traffic (WHO 2023); electric cars 0.2 % of cars, rolling noise only (IEA 2024).
 

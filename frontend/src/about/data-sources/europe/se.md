@@ -25,7 +25,7 @@ Train, tram and metro counts: on the 2026 map, the Swedish feed on [public-trans
 
 Wind turbines are OpenStreetMap points. A turbine paired with a built turbine in the [Vindbrukskollen register](https://vbk.lansstyrelsen.se/) (Länsstyrelserna, CC0), one to one and nearest first within 500 m, takes its rated power and hub height from the register; the others keep the rating OpenStreetMap tags, if any.
 
-The register adds 393 turbines OpenStreetMap lacks and removes 57 it calls dismantled on the 2026 map (182 added on the 2024 map).
+The register adds 393 turbines OpenStreetMap lacks and removes 57 it calls dismantled.
 
 ## Buildings and terrain
 

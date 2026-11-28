@@ -13,7 +13,7 @@ On roads without a matching route (and prefectural roads), census road-class med
 
 On matched roads, the 2026 map splits large vehicles 25 % medium and 75 % heavy (as the census gives no axle split) and sets motorcycles to zero. On the 2024 map, the census large-vehicle total is retained, the year’s class model estimates its medium and heavy parts, and missing motorcycles are estimated from the selected model’s vehicle shares and remain marked estimated; it is not a measured zero. Local streets carry the trips their buildings make.
 
-Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 2 % of a town street's traffic (a local estimate) on the 2026 map (2.9 %, the WHO region's median, on the 2024 map); electric cars 0.5 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
+Vehicle mix: where not counted, a main road takes the medium and heavy shares of counted roads of its class, a street 1 % medium and 2 % heavy; motorcycles 2 % of a town street's traffic (a local estimate); electric cars 0.5 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
 
 Unsigned roads: a primary road 40 km/h in towns, 50 outside, a motorway 100.
 

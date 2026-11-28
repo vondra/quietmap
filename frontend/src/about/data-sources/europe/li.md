@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 80 outside (cars drive 68 on a 
 
 ## Railways
 
-One line crosses the country, from Feldkirch in Austria to Buchs in Switzerland. The Austrian and Swiss timetables are applied only within their own borders, so this section uses the class default: 80 passenger and 20 freight trains per day if OpenStreetMap marks it as a main line (scaled to Liechtenstein's Eurostat 2024 train-kilometres on the 2024 map).
+One line crosses the country, from Feldkirch in Austria to Buchs in Switzerland. On the 2026 map, the Austrian and Swiss timetables are applied only within their own borders, and neither 2024 archive covers this section, so it starts from the class default: 80 passenger and 20 freight trains per day if OpenStreetMap marks it as a main line (scaled to Liechtenstein's Eurostat 2024 train-kilometres on the 2024 map: 33 passenger and 9 freight).
 
 ## Industry
 

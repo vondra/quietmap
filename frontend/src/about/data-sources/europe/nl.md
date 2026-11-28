@@ -23,7 +23,7 @@ Train, tram and metro counts: Dutch national timetable from [public-transport.ea
 
 ## Industry
 
-Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium on the 2026 map (933 added on the 2024 map).
+Wind turbines: OpenStreetMap's standing turbines with the power and height of [RIVM](https://data.rivm.nl/)'s register (public domain). The register adds 854 turbines OpenStreetMap lacks in the Netherlands and Belgium.
 
 ## Buildings and terrain
 

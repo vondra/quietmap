@@ -30,7 +30,7 @@ The northern narrow-gauge lines (former Feve), Euskotren, and metros and trams o
 
 Wind turbines are OpenStreetMap points. A turbine paired with an entry in the [Castilla-La Mancha turbine register](https://datosabiertos.castillalamancha.es/dataset/aerogeneradores) (CC BY-SA), the only open regional register, one to one and nearest first within 500 m, takes its rated power and hub height from it. Elsewhere a turbine keeps the rating OpenStreetMap tags, if any.
 
-The register adds 53 turbines OpenStreetMap lacks on the 2026 map (77 added on the 2024 map).
+The register adds 53 turbines OpenStreetMap lacks.
 
 ## Buildings and terrain
 

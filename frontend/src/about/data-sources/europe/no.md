@@ -21,7 +21,7 @@ Train and tram counts: Norwegian national timetable from [public-transport.earth
 
 Wind turbines are OpenStreetMap points, matched within 500 m to turbines of operating wind farms in the [NVE register](https://www.nve.no/) (NLOD 2.0). NVE publishes power per wind farm only; each turbine is assigned the farm's power divided by its number of turbines.
 
-The register adds 3 turbines OpenStreetMap lacks on the 2026 map (2 added on the 2024 map).
+The register adds 3 turbines OpenStreetMap lacks.
 
 ## Buildings and terrain
 

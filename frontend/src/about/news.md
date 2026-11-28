@@ -9,7 +9,7 @@ intro: What changed in the data and the model, and what comes next.
   the squares painted from older data are being painted again, those whose data changed first. That
   brings the flights as they pass, November's corrections and Lden to the whole map.
 - **Earlier years.** A noise map of 2024, from that year's roads, traffic, trains, flights and ships,
-  is being built; 2019 or earlier follows. The years will switch and play one after another, so a
+  has its data built and is next to be published (2026 is the map shown now); 2019 or earlier follows. The years will switch and play one after another, so a
   place can be compared over time.
 - **City railways.** Timetables for the railways of Japan, Korea, Great Britain and Brazil, where busy
   city lines take a default and read 5 to 10 dB low.

@@ -13,7 +13,7 @@ Unsigned roads: a primary road 50 km/h in towns, 70 outside, a motorway 130.
 
 ## Railways
 
-No timetable is loaded. Class defaults apply: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks.
+No timetable is loaded. Class defaults start at 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks.
 
 Where no count exists, the class defaults are scaled to the country's train-kilometres (Eurostat 2024); freight comes from them.
 

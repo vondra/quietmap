@@ -1,17 +1,17 @@
 ---
 title: United States
-intro: FHWA HPMS traffic counts on federal-aid highways (2022 edition on 2026; 2024 edition on 2024), the timetables of Amtrak and 53 commuter, metro and light-rail feeds, FRA crossing horns (and through-train counts on the 2024 map), USGS wind turbine database. Local streets are estimated from their buildings.
+intro: FHWA HPMS traffic counts on federal-aid highways (2022 edition on 2026; 2024 edition on 2024), the timetables of Amtrak and 53 commuter, metro and light-rail feeds (57 feeds on the 2024 map), FRA crossing horns (and through-train counts on the 2024 map), USGS wind turbine database. Local streets are estimated from their buildings.
 ---
 
 ## Roads
 
-Traffic volumes: [FHWA Highway Performance Monitoring System](https://www.fhwa.dot.gov/policyinformation/hpms.cfm), 2022 edition on the 2026 map (read from the public [HPMS feature service](https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/HPMS_FULL_US_2022_Sysnomulti_view/FeatureServer/0)) and 2024 edition on the 2024 map. An OSM road takes the nearest HPMS segment line within 100 m that runs along it and has a compatible functional class. A one-way segment counts one direction, unless it repeats the total of a two-way segment of the same road within 300 m; then it is that road's two-way total.
+Traffic volumes: [FHWA Highway Performance Monitoring System](https://www.fhwa.dot.gov/policyinformation/hpms.cfm), 2022 edition on the 2026 map (read from the public [HPMS feature service](https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/HPMS_FULL_US_2022_Sysnomulti_view/FeatureServer/0)) and 2024 edition on the 2024 map. An OSM road takes the nearest HPMS segment line within 100 m (200 m on the 2024 map) that runs along it and has a compatible functional class. A one-way segment counts one direction, unless it repeats the total of a two-way segment of the same road within 300 m; then it is that road's two-way total.
 
-HPMS publishes one total per segment; the vehicle mix comes from FHWA's state shares (below).
+On the 2026 map, HPMS publishes one total per segment and the vehicle mix comes from FHWA's state shares (below); on the 2024 map, HPMS also supplies measured truck counts on about two fifths of segments, with state shares filling missing classes.
 
 Day, evening and night split: [FHWA TMAS](https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/) hourly volume counts, one split per road group (motorways and trunks, primary roads, other roads) for the whole country. On the 2026 map, counts from 8,056 stations in 2025 are applied to all vehicles (trucks assumed to follow the same hourly profile as cars). On the 2024 map, 2024 TMAS hourly totals supply the non-heavy profile while heavy vehicles take the observed global heavy-vehicle profile (for example, 12.1 % non-heavy and 19.4 % heavy at night on motorways and trunk roads).
 
-Minor collectors and local streets are not in HPMS, whose values reach 60 % of the length of motorways, trunks and primaries and 1 % of secondary, tertiary and unclassified roads. Uncounted local streets carry the trips their buildings make, secondary and tertiary roads the trips made within 5 km of them. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)).
+On the 2026 map, minor collectors and local streets are not in HPMS, whose values reach 60 % of the length of motorways, trunks and primaries and 1 % of secondary, tertiary and unclassified roads; on the 2024 map, HPMS covers functional classes 1 to 7 and reaches 90 % of motorways, trunks and primaries and 49 % of secondary, tertiary and unclassified roads. Uncounted local streets carry the trips their buildings make, secondary and tertiary roads the trips made within 5 km of them. Motorways, trunks and primaries without a count follow one model of the trips made around them, fitted on counted roads ([method](/about/data-preparation)).
 
 Vehicle mix: where not counted, FHWA's state mix by road group and area ([Highway Statistics](https://www.fhwa.dot.gov/policyinformation/statistics.cfm), table VM-4), motorcycles included; electric cars 1.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 105 km/h on the 2026 map (80 km/h world default on the 2024 map).
 
@@ -31,7 +31,7 @@ Wind turbines: [US Wind Turbine Database](https://energy.usgs.gov/uswtdb/) from 
 
 Power plants: WRI Global Power Plant Database. Steel plants, cement plants and coal mines: Global Energy Monitor. Other factories are OSM industrial areas with an inferred type. The EPA Toxics Release Inventory is not used.
 
-The register adds 1,610 turbines OpenStreetMap lacks on the 2026 map (the 2024 map uses the pinned v7.2 archive filtered to pre-2025 commissioning, adding 1,533 turbines).
+The register adds 1,610 turbines OpenStreetMap lacks on the 2026 map (1,533 from the v7.2 archive on the 2024 map, excluding turbines commissioned from 2025 onward).
 
 ## Ships
 

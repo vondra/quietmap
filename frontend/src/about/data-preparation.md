@@ -143,8 +143,9 @@ gives New York's Brooklyn–Queens Expressway (2022), and national estimates cov
 China, India and a few other countries; another 14 % take their traffic from a model trained on the
 counted roads (predicting traffic from the trips buildings within 1, 5 and 15 km make), and the
 remaining 54 % have only an average for their road class in their country (October 2026). On the
-2024 map (the annual builder below), road classifications and manually drawn city boxes are not
-used: located counts give the strongest local evidence, route-wide counts are less precise, and
+2024 map (the annual builder below), national road classifications are not used as traffic counts
+and manually drawn city boxes are not used: located counts give the strongest local evidence,
+route-wide counts are less precise, and
 where no admitted count reaches a road, the global road model and nearby buildings supply the
 estimate. In both years, a side street nobody counted carries the trips its own buildings make, and
 in a town a residential street that a bus line runs along carries at least what an unclassified
@@ -179,15 +180,16 @@ junctions and the place's yearly air temperature.
   where a country's default stands instead — Russia, Turkey, Japan, Iran, Ukraine — it is kept),
   and in a town an unclassified street or a residential street that a bus, trolleybus or coach line
   runs along carries at least what Great Britain's, France's and Sweden's counted unclassified
-  streets carry among as many trips within 2 km. On the 2024 map, secondary, tertiary and
-  unclassified roads with only a class
-  estimate follow a law of the trips their buildings make within 1, 2 or 5 km, whichever predicts
+  streets carry among as many trips within 2 km. On the 2024 map, secondary and tertiary roads with
+  only a class estimate (and, as a floor in towns, unclassified roads and residential streets with a
+  bus line) follow a law of the trips their buildings make within 1, 2 or 5 km, whichever predicts
   the counts best, fitted with every country weighed alike and the trips held at the counted
   roads' 90th percentile on the year's random samples and on the whole networks that cover most
   of their class's mapped length in their country. A network's counts covering less, and counts at
   sites a publisher selected, carry their own roads but stay out of this law: Germany's federal
-  and Poland's voivodeship roads, under 1 % of their countries' tertiary length, read 7 to 8 dB
-  above it, where Sweden's state roads, 86 % of Sweden's, read within 1 dB. A rural road network
+  and Poland's voivodeship roads, under 1 % of their countries' tertiary length, average 7 to 8 dB
+  above it, where Sweden's state roads, 86 % of Sweden's, average 0.9 dB below it (mean absolute
+  difference 3.7 dB). A rural road network
   counted on its own,
   Thailand's, follows its own law. Motorways, trunk and primary roads follow one law of the trips
   within 1, 5 and 15 km, their lanes and one-way carriageways, fitted on counts of every design
@@ -204,9 +206,9 @@ junctions and the place's yearly air temperature.
   trolleybus or coach line runs along, carries at least what counted unclassified streets that stand
   for their class (Great Britain's random sample) carry among as many trips around it (a one-way
   residential street what a two-way one carries): a line mostly runs along a through street that its
-  class misses. In Great Britain's random sample of counted minor roads, 592 residential streets
-  with a line carry 1,820 vehicles a day in the median; the trips routed down them read 8.2 dB low,
-  this rule 0.5 dB.
+  class misses. On the 2026 map's Great Britain random sample of counted minor roads (2 km radius),
+  592 residential streets with a line carry 1,820 vehicles a day in the median; the trips routed
+  down them read 8.2 dB low, this rule 0.5 dB.
 - **A count beside its road.** A count that a dataset put on a service road, side lane, street or
   ramp beside the counted road, within 10 % of that road's own and within 30 m of it, or on a side
   lane of the road's name with its very count, belongs to the road: the way takes the model of its
@@ -462,7 +464,8 @@ the one its trains run on is counted as that track's (St. Louis files MetroLink 
   trains are lowered, never raised, toward the passenger train-kilometres the timetables leave,
   fully once that remainder exceeds the timetables' own error, in proportion below it; on the 2026
   network the timetables of the median country they cover run within 8 % of its national total
-  (11 % on the 2024 network).
+  (11 % on the 2024 network across the 14 countries where timetables cover at least three quarters
+  of mapped passenger train-kilometres).
   Where the timetables alone reach the national total, the defaults stand. The 2026 factors
   were fitted before this, on the earlier prepared network, to 1.2 times the passenger
   train-kilometres and without Switzerland. In the EU, Switzerland, Norway and Great Britain
@@ -763,8 +766,7 @@ building sites, garden machinery, music and festivals.
   unless the place is tagged without outdoor seating. The guests sit 1.5 m in front of the nearest
   wall of the building the place is mapped in where that spot lies in no building (in front of a
   party wall it lies in the neighbour); walled in on every side, in front of the nearest wall.
-- **What screens.** A wall without a height stands 4 m on the 2026 map (3 m on the 2024 map, the
-  median of its mapped walls); a greenhouse, or a mapped garage or shed,
+- **What screens.** A wall without a height stands 4 m; a greenhouse, or a mapped garage or shed,
   without a measured or mapped height stands at most 3 m, and a point inside a greenhouse or under a
   grandstand is outdoors. Open car parks, carports, canopies, open roofs and underground footprints
   do not screen.
