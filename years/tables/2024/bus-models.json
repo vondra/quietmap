@@ -1,0 +1,24 @@
+{
+  "rows": [
+    {
+      "city_trip_ends": 100000.0,
+      "coach_departures": 3.0,
+      "least_service": 0.12747923544550807,
+      "line_directions_exponent": 0.5702916468795262,
+      "most_trip_ends": 600000.0,
+      "one_line_direction": 42.039761344233895,
+      "period_shares": [
+        0.728448377411079,
+        0.1643701734530208,
+        0.10718144913590019
+      ],
+      "service_by_built_up": [
+        0.945130440584335,
+        0.49573807988536095,
+        1.394522801283309
+      ],
+      "service_exponent": 0.46540371736623054,
+      "trolleybus_line_weight": 6.0
+    }
+  ]
+}
