@@ -11,7 +11,7 @@ import remarkGfm from 'remark-gfm'
 
 import { expandYearSources, readYears } from '../scripts/year-sources.ts'
 import { splitFrontMatter } from '../src/lib/about-front-matter.ts'
-import { ABOUT_WEATHER, aboutPageOf, aboutPagePath } from '../src/lib/about-paths.ts'
+import { ABOUT_WEATHER, aboutPageOf, aboutPagePath, dataSourcesYearScope } from '../src/lib/about-paths.ts'
 import { ABOUT_REHYPE_PLUGINS, sectionId } from '../src/lib/about-sections.ts'
 
 const ABOUT_DIR = new URL('../src/about', import.meta.url).pathname
@@ -29,6 +29,16 @@ test('a section id is its heading in lower case, its words joined by hyphens', (
   assert.equal(sectionId('The weather'), 'the-weather')
   assert.equal(sectionId('Credits & terms'), 'credits-terms')
   assert.equal(sectionId('Terrain, ground and weather'), 'terrain-ground-and-weather')
+})
+
+test('every Data sources page gets the one-line year scope and other About pages do not', () => {
+  const expected = 'Figures without a year describe the 2026 map, the one this site shows.'
+  for (const page of ['data-sources', 'data-sources/europe', 'data-sources/europe/cz']) {
+    assert.equal(dataSourcesYearScope(page, '2026'), expected)
+  }
+  for (const page of ['', 'data-preparation', 'validation', 'news']) {
+    assert.equal(dataSourcesYearScope(page, '2026'), null)
+  }
 })
 
 test('a page never gives two headings one id', () => {

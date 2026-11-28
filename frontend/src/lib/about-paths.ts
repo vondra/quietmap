@@ -16,3 +16,10 @@ export function aboutPageOf(pathname: string): string | null {
   const match = pathname.match(/^\/about(?:\/([^/].*?))?\/?$/)
   return match ? (match[1] ?? '') : null
 }
+
+/** One-line year scope shown atop every Data sources page (landing, region and country). */
+export function dataSourcesYearScope(page: string, mapYear: string): string | null {
+  return page === 'data-sources' || page.startsWith('data-sources/')
+    ? `Figures without a year describe the ${mapYear} map, the one this site shows.`
+    : null
+}

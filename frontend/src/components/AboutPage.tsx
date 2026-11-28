@@ -7,7 +7,9 @@ import remarkGfm from 'remark-gfm'
 import ABOUT_INDEX from 'virtual:about-index'
 import { splitFrontMatter } from '../lib/about-front-matter'
 import { ABOUT_PAGES } from '../lib/about-pages'
+import { dataSourcesYearScope } from '../lib/about-paths'
 import { ABOUT_REHYPE_PLUGINS } from '../lib/about-sections'
+import { MAP_YEAR } from '../lib/map-year'
 import { setDocumentTitle } from '../utils/page-title'
 
 /** Where a page lists the pages below it (the regions, a region's countries); a page without it lists none. */
@@ -122,6 +124,7 @@ export default function AboutPage({ page }: { page: string }) {
     }
   }, [markdown])
   const crumbs = breadcrumb(page)
+  const scopeNote = dataSourcesYearScope(page, MAP_YEAR)
   const [before, after] = body.includes(SUBPAGES_MARKER) ? body.split(SUBPAGES_MARKER) : [body, null]
   return (
     <main className="h-full overflow-y-auto bg-background">
@@ -150,6 +153,7 @@ export default function AboutPage({ page }: { page: string }) {
               <h1 className="mb-2 text-3xl font-bold text-foreground">{meta.title}</h1>
             )}
             {meta.intro && <p className="mb-6 text-lg text-muted-foreground">{meta.intro}</p>}
+            {scopeNote && <p className="mb-6 text-sm text-muted-foreground">{scopeNote}</p>}
             <div className="about-prose">
               <Prose>{before}</Prose>
               {after !== null && (
