@@ -139,7 +139,7 @@ test("an account's names follow the 30 m rule and the later time; its recent pla
     send('PUT', '/api/places/title', { lat, lng: 14, title, updatedAt }, headers)
   await name(50, 'Door', 10)
   // 20 m north and later: the same place renamed, kept at the door.
-  assert.deepEqual((await name(50.00018, 'Front door', 20)).json(), { titles: [{ lat: 50, lng: 14, title: 'Front door', updatedAt: 20 }] })
+  assert.deepEqual((await name(50.00018, 'Front door', 20)).json(), { titles: [{ lat: 50, lng: 14, anchor: { lat: 50, lng: 14 }, title: 'Front door', updatedAt: 20 }] })
   // Another device's older rename, sent late, changes nothing; a time from the future is the server's now.
   assert.deepEqual((await name(50, 'Old', 15)).json().titles.map((t: { title: string }) => t.title), ['Front door'])
   const future = (await name(50, 'Home', Date.now() + DAY_MS)).json().titles[0]
@@ -164,6 +164,22 @@ test("an account's names follow the 30 m rule and the later time; its recent pla
   assert.deepEqual((await send('GET', '/api/me', undefined, await signIn('other@example.org'))).json(), { email: 'other@example.org', titles: [], recent: [] })
 })
 
+test("two exact named receivers within 30 m are edited independently from another device", async (t) => {
+  const { send, signIn } = await server(t)
+  const first = await signIn('receiver@example.org')
+  const second = await signIn('receiver@example.org')
+  const at = { lat: 50.00505, lng: 21.959486 }, near = { lat: 50.005264, lng: 21.959733 }
+  const put = (headers: typeof first, namedAt: typeof at, title: string | null, updatedAt: number) =>
+    send('PUT', '/api/places/title', { ...namedAt, anchor: namedAt, title, updatedAt }, headers)
+  await put(first, near, 'P25', 1)
+  await put(second, at, 'P24', 2)
+  assert.deepEqual((await send('GET', '/api/me', undefined, first)).json().titles,
+    [{ ...at, anchor: at, title: 'P24', updatedAt: 2 }, { ...near, anchor: near, title: 'P25', updatedAt: 1 }])
+  // An older tab also edits the nearest saved receiver when its name stands second in the list.
+  await send('PUT', '/api/places/title', { ...near, title: 'P25 revised', updatedAt: 3 }, first)
+  assert.deepEqual((await put(second, at, null, 4)).json().titles, [{ ...near, anchor: near, title: 'P25 revised', updatedAt: 3 }])
+})
+
 test("a browser's places join the account at the visitor's word: names merged, recent places only into none", async (t) => {
   const { send, signIn } = await server(t)
   const headers = await signIn('owner@example.org')
@@ -173,7 +189,8 @@ test("a browser's places join the account at the visitor's word: names merged, r
     recent: [{ lat: 48, lng: 16, place: null, levels: { lat: 48, lng: 16, sone: 1.1, lden: 38 }, openedAt: 7 }],
   }
   const merged = (await send('POST', '/api/places/import', browser, headers)).json()
-  assert.deepEqual(merged.titles, [{ lat: 50, lng: 14, title: 'Flat', updatedAt: 9 }, { lat: 48, lng: 16, title: 'Lake', updatedAt: 0 }])
+  assert.deepEqual(merged.titles, [{ lat: 50, lng: 14, anchor: { lat: 50, lng: 14 }, title: 'Flat', updatedAt: 9 },
+    { lat: 48, lng: 16, anchor: { lat: 48, lng: 16 }, title: 'Lake', updatedAt: 0 }])
   assert.deepEqual(merged.recent, browser.recent)
   const second = (await send('POST', '/api/places/import', { titles: [], recent: [{ lat: 1, lng: 1 }] }, headers)).json()
   assert.deepEqual(second.recent, browser.recent)
@@ -228,13 +245,16 @@ test('a longitude from a repeated world is wrapped, and the recent places are on
   const { send, signIn } = await server(t)
   const headers = await signIn('owner@example.org')
   const named = (await send('PUT', '/api/places/title', { lat: -16.5, lng: 181, title: 'Taveuni', updatedAt: 5 }, headers)).json()
-  assert.deepEqual(named.titles, [{ lat: -16.5, lng: -179, title: 'Taveuni', updatedAt: 5 }])
+  assert.deepEqual(named.titles, [{ lat: -16.5, lng: -179, anchor: { lat: -16.5, lng: -179 }, title: 'Taveuni', updatedAt: 5 }])
   const twice = [{ lat: 50, lng: 14, place: 'A' }, { lat: 50.0001, lng: 14, place: 'B' }, { lat: 49, lng: 374 }]
   assert.equal((await send('PUT', '/api/places/recent', { recent: twice }, headers)).statusCode, 204)
   assert.deepEqual((await send('GET', '/api/me', undefined, headers)).json().recent, [
     { lat: 50, lng: 14, place: 'A', levels: null, openedAt: 0 },
     { lat: 49, lng: 14, place: null, levels: null, openedAt: 0 },
   ])
+  await send('PUT', '/api/places/recent', { recent: [...twice, twice[0]], anchored: true }, headers)
+  assert.deepEqual((await send('GET', '/api/me', undefined, headers)).json().recent.map((row: {lat: number}) => row.lat),
+    [50, 50.0001, 49])
 })
 
 test('a database from before the recent places had times, half migrated, or from when they were counted, reads them without counts', async (t) => {
@@ -248,13 +268,18 @@ test('a database from before the recent places had times, half migrated, or from
       CREATE TABLE recent_places (user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
         position INTEGER NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, place TEXT, sone REAL, lden REAL,
         PRIMARY KEY (user_id, position));
+      CREATE TABLE place_titles (user_id INTEGER NOT NULL, position INTEGER NOT NULL, lat REAL NOT NULL,
+        lng REAL NOT NULL, title TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (user_id, position));
       INSERT INTO users VALUES (1, 'owner@example.org', 0);
+      INSERT INTO place_titles VALUES (1, 0, 50.0001, 14, 'House', 4);
       INSERT INTO recent_places VALUES (1, 0, 50, 14, 'Kytín', 0.4, 33);`)
     for (const column of columns) old.exec(`ALTER TABLE recent_places ADD COLUMN ${column}`)
     old.close()
     const store = new AccountStore(database)
     // Rows come with no prototype: compared as plain objects.
     assert.deepEqual(store.places(1).recent, [{ lat: 50, lng: 14, place: 'Kytín', levels: null, openedAt: 0 }])
+    store.setRecent(1, [])
+    assert.deepEqual(store.places(1).titles, [{ lat: 50.0001, lng: 14, title: 'House', updatedAt: 4, anchor: {lat: 50, lng: 14} }])
     store.close()
     const kept = new DatabaseSync(database)
     assert.deepEqual(kept.prepare('PRAGMA table_info(recent_places)').all().map(column => column.name),

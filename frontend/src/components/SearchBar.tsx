@@ -10,7 +10,7 @@ import type { Metric } from '../lib/hm3-decoder'
 import { History, Search, UserRound } from 'lucide-react'
 import PlaceRow from './PlaceRow'
 import { FLOATING } from './ui/button'
-import { historyPoint, levelsAt, placeLabel, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
+import { historyPoint, levelsAt, placeLabel, titleAt, type PlaceTitle, type RecentPlace } from '../lib/place-rules'
 import { coordinateSuggestions, MAX_LATITUDE, samePoint, type SearchResult } from '../lib/coordinates'
 
 type Point = { lat: number; lng: number }
@@ -65,8 +65,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
   const listRef = useRef<HTMLUListElement>(null)
 
   /** A place's name, and where it is: the rest of its geocoded name, or all of it under a given name. */
-  const described = (at: Point, place: string | null, destination = historyPoint(titles, at)) => {
-    const given = destination.title ?? null
+  const described = (at: Point, place: string | null, given = titleAt(titles, at, history)?.title ?? null) => {
     const label = placeLabel(place)
     return {
       at,
@@ -80,7 +79,7 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
   const coordinates = coordinateSuggestions(asked)
   const places = coordinates ? [] : asked
     ? history.filter(place => {
-      const { name, detail } = described(place, place.place)
+      const { name, detail } = described(place, place.place, historyPoint(history, titles, place).title ?? null)
       return folded(`${name} ${detail ?? ''}`).includes(folded(asked))
     }).slice(0, NAMED_MAX)
     : history
@@ -230,13 +229,13 @@ export default function SearchBar({ onSelect, getMapView, history, titles, metri
           >
             <ul ref={listRef} id="search-list" role="listbox" aria-label="Places" className="overflow-y-auto overscroll-contain" style={{ maxHeight: room }}>
               {places.map((place, k) => {
-                const destination = historyPoint(titles, place)
+                const destination = historyPoint(history, titles, place)
                 const levels = levelsAt(place, destination)
                 return (
                   <li key={keyOf(place)} id={`search-option-${k}`} role="option" aria-selected={k === highlighted} onMouseEnter={() => setRowIndex(k)}>
                     <PlaceRow
                       listed
-                      {...described(place, place.place, destination)}
+                      {...described(place, place.place, destination.title ?? null)}
                       metric={metric}
                       sone={levels?.sone ?? null}
                       lden={levels?.lden ?? null}

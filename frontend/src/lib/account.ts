@@ -3,6 +3,7 @@
 // change is sent as JSON with the account the page shows, so that the server refuses it (409) once
 // another account has signed in on this browser; the browser adds its origin, which the server checks.
 import type { PlaceTitle, RecentPlace } from './place-rules.ts'
+import type { Point } from './coordinates.ts'
 
 export interface AccountPlaces {
   titles: PlaceTitle[]
@@ -66,16 +67,16 @@ export async function deleteAccount(account: string): Promise<boolean> {
 }
 
 /** Names the place at a point for `account` (null removes its name). */
-export function saveTitle(account: string, title: { lat: number, lng: number, title: string | null, updatedAt: number }): Promise<Response | null> {
+export function saveTitle(account: string, title: Point & { anchor?: Point, title: string | null, updatedAt: number }): Promise<Response | null> {
   return send('PUT', '/api/places/title', { account, body: title })
 }
 
 /** Replaces `account`'s recent places. */
 export function saveRecent(account: string, recent: RecentPlace[]): Promise<Response | null> {
-  return send('PUT', '/api/places/recent', { account, body: { recent } })
+  return send('PUT', '/api/places/recent', { account, body: { recent, anchored: true } })
 }
 
 /** Adds a browser's places to `account`: whether they were. */
 export async function importPlaces(account: string, places: AccountPlaces): Promise<boolean> {
-  return (await send('POST', '/api/places/import', { account, body: places }))?.ok ?? false
+  return (await send('POST', '/api/places/import', { account, body: { ...places, anchored: true } }))?.ok ?? false
 }

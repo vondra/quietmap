@@ -1,7 +1,7 @@
 // The places of a visitor who is not signed in, kept in this browser's storage: the recent places and
 // the names given places (rules in place-rules.ts), read defensively, as storage may hold anything or
 // be blocked. A signed-in visitor's places live on the server instead (hooks/usePlaces.ts).
-import { PLACE_TITLES_MAX, RECENT_PLACES_MAX, historyOrder, readPointLevels, type PlaceTitle, type RecentPlace } from './place-rules.ts'
+import { PLACE_TITLES_MAX, RECENT_PLACES_MAX, bindPlaceTitles, historyOrder, readPointLevels, readTitleAnchor, type PlaceTitle, type RecentPlace } from './place-rules.ts'
 
 const RECENT_PLACES_KEY = 'quietmap.recent-places'
 /** The names' storage key: another tab's change of it reaches this one as a `storage` event. */
@@ -54,12 +54,15 @@ export function saveRecentPlaces(list: RecentPlace[]): void {
 
 /** The stored names (none when storage holds something else), or null when the browser keeps no
  *  storage. */
-export function loadPlaceTitles(): PlaceTitle[] | null {
-  return storedList(PLACE_TITLES_KEY)?.flatMap(entry => {
+export function loadPlaceTitles(recent?: RecentPlace[]): PlaceTitle[] | null {
+  const titles = storedList(PLACE_TITLES_KEY)?.flatMap(entry => {
     const [lat, lng] = [numberOrNull(entry.lat), numberOrNull(entry.lng)]
     const title = typeof entry.title === 'string' ? entry.title.trim() : ''
-    return lat == null || lng == null || !title ? [] : [{ lat, lng, title, updatedAt: numberOrNull(entry.updatedAt) ?? 0 }]
-  }).slice(0, PLACE_TITLES_MAX) ?? null
+    return lat == null || lng == null || !title ? [] : [{ lat, lng, title, updatedAt: numberOrNull(entry.updatedAt) ?? 0,
+      anchor: readTitleAnchor(entry.anchor, { lat, lng }) }]
+  }).slice(0, PLACE_TITLES_MAX)
+  if (!titles) return null
+  return titles.every(title => title.anchor) ? titles : bindPlaceTitles(titles, recent ?? loadRecentPlaces())
 }
 
 export function savePlaceTitles(titles: PlaceTitle[]): void {
@@ -68,5 +71,6 @@ export function savePlaceTitles(titles: PlaceTitle[]): void {
 
 /** This browser's places: the recent places and the names given (none when storage keeps none). */
 export function loadBrowserPlaces(): { recent: RecentPlace[], titles: PlaceTitle[] } {
-  return { recent: loadRecentPlaces(), titles: loadPlaceTitles() ?? [] }
+  const recent = loadRecentPlaces()
+  return { recent, titles: loadPlaceTitles(recent) ?? [] }
 }

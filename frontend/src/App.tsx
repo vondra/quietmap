@@ -21,7 +21,7 @@ import { type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import AccountButton from './components/AccountButton'
 import PlaceMedia, { MediaButtons } from './components/PlaceMedia'
-import { historyPoint, levelsAt, opensAt, samePlace, titleAt } from './lib/place-rules'
+import { entryOpeningAt, historyPoint, levelsAt, nearestPlace, samePlace, titleAt } from './lib/place-rules'
 import { usePlaces } from './hooks/usePlaces'
 import { createMediaKeeper } from './lib/media-keeper'
 import { isSignedIn } from './lib/places-keeper'
@@ -152,19 +152,20 @@ export default function App() {
     return () => { open = false }
   }, [detailPosition, nameLate])
 
-  const openEntry = detailPosition ? recentPlaces.find(place => opensAt(place, placeTitles, detailPosition)) : undefined
-  const atHistoryPoint = openEntry != null
+  const openEntry = detailPosition ? entryOpeningAt(recentPlaces, placeTitles, detailPosition) : undefined
+  const openRowLat = openEntry?.lat
+  const openRowLng = openEntry?.lng
   const completeAnswer = useMemo(() => detailPosition && noiseDetailData && !noiseDetailData.partial ? {
     ...detailPosition, place: detailPlaceName,
     sone: noiseDetailData.loudness?.nden_sone ?? null, lden: noiseDetailData.total_lden,
   } : null, [detailPosition, noiseDetailData, detailPlaceName])
-  // Naming the open point can make it the destination. An account refresh alone never resends a failed save.
+  // Sign-in can transfer this exact destination to another history row. A refresh of the same row cannot retry a failed save.
   useEffect(() => {
-    if (completeAnswer && atHistoryPoint) answered(completeAnswer)
-  }, [completeAnswer, atHistoryPoint, answered])
+    if (completeAnswer && openRowLat != null && openRowLng != null) answered(completeAnswer)
+  }, [completeAnswer, openRowLat, openRowLng, answered])
   // The open place's own name, given or taken back under the search field, and its entry of the history,
   // which knows its name before the geocoder answers (a search's result, a place opened before).
-  const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition)?.title ?? null : null
+  const detailTitle = detailPosition ? titleAt(placeTitles, detailPosition, recentPlaces)?.title ?? null : null
   const openLevels = completeAnswer ?? (detailPosition && levelsAt(openEntry, detailPosition))
   // Every opened point joins the history, including pasted addresses and browser Back.
   useEffect(() => {
@@ -265,9 +266,9 @@ export default function App() {
     </button>
   )
   // Folded, the panel keeps what it holds: its minutes, a request on its way, what went wrong.
-  const reachName = state.reach && (titleAt(placeTitles, state.reach)?.title
+  const reachName = state.reach && (titleAt(placeTitles, state.reach, recentPlaces)?.title
     ?? (sameDetailPosition(state.reach, detailPosition) ? detailPlaceName : null)
-    ?? recentPlaces.find(place => samePlace(place, state.reach!))?.place
+    ?? nearestPlace(recentPlaces, state.reach)?.place
     ?? `${state.reach.lat.toFixed(4)}, ${state.reach.lng.toFixed(4)}`)
   const isochronOrigin = detailPosition ?? state.reach
   const isochronPanel = isochronOrigin && (
@@ -315,10 +316,8 @@ export default function App() {
         // its entry was first opened up to 30 m away (owner 2026-10-30: a house named, reopened 20 m
         // across the street; the history's move kept the zoom, far out, without the way across).
         onOpenPlace={place => {
-          // Opened at once on its own entry: the arrival at its name's point, which may lie within 30 m
-          // of a neighbour's entry too, then finds this one first.
           countOpening(place)
-          const at = historyPoint(placeTitles, place)
+          const at = historyPoint(recentPlaces, placeTitles, place)
           setSelectedLocation({ lat: at.lat, lon: at.lng, zoom: Math.max(latestState.current.zoom, SEARCH_FLIGHT_ZOOM) })
         }}
         onRename={rename}

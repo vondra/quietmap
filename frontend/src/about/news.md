@@ -16,7 +16,8 @@ intro: What changed in the data and the model, and what comes next.
 
 ## November 2026
 
-- **Saved places.** Nearby clicks within 30 m share a history entry. Its level belongs to the point it reopens.
+- **Saved places.** A history entry now keeps the exact position you named, even if you later
+  open another address nearby. Its level belongs to the point it reopens.
   Open an older entry once to see its level again. A copied link keeps the exact point you selected.
 - **Flights as they pass.** How loud the flights sound at a place now follows the real flights: held
   second by second against every flight of 34 days at 14 places, it reads 9 % quieter to 30 % louder

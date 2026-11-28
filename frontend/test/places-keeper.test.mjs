@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { withTitle } from '../src/lib/place-rules.ts'
+import { withTitleAt } from '../src/lib/place-rules.ts'
 import { createPlacesKeeper } from '../src/lib/places-keeper.ts'
 
 const HOME = { lat: 50, lng: 14, place: 'Home', levels: { lat: 50, lng: 14, sone: 2, lden: 44 }, openedAt: 1 }
@@ -54,7 +54,7 @@ function server(t, signedIn) {
     const body = JSON.parse(init.body)
     if (url === '/api/places/title') {
       await state.titleGate
-      account.titles = withTitle(account.titles, body, body.title, body.updatedAt)
+      account.titles = withTitleAt(account.titles, body, body.title, body.updatedAt, body.anchor)
       return json({ titles: account.titles })
     }
     if (url === '/api/places/recent') {
@@ -105,6 +105,24 @@ test("a read of the account keeps the changes not yet sent, and another device's
   await settled(keeper)
   assert.deepEqual(keeper.shown().recent.map(place => place.place), ['New', 'Cafe', 'Home'])
   assert.deepEqual(state.accounts.a.recent.map(place => place.place), ['New', 'Cafe', 'Home'])
+})
+
+test('an early edit uses the named position of the account that answers', async (t) => {
+  browserStorage(t)
+  const state = server(t, 'a')
+  const browserName = { lat: 50, lng: 14.0001, title: 'Browser', updatedAt: 1 }
+  const accountName = { lat: 50, lng: 13.9999, title: 'Account', updatedAt: 1 }
+  localStorage.setItem('quietmap.place-titles', JSON.stringify([browserName]))
+  state.accounts.a.titles = [accountName]
+  state.hold()
+  const keeper = createPlacesKeeper()
+  const read = keeper.refresh()
+  keeper.rename(HOME, 'House')
+  state.open()
+  await read
+  await settled(keeper)
+  assert.deepEqual(state.accounts.a.titles.map(({lng,title}) => [lng,title]), [[accountName.lng,'House']])
+  assert.deepEqual(JSON.parse(localStorage.getItem('quietmap.place-titles')), [browserName])
 })
 
 test('a sign-out comes after the changes made, and no read brings the account back', async (t) => {

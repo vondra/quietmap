@@ -25,6 +25,33 @@ async function seedBrowserPlaces(page: Page, titles: object[], recent: object[] 
 
 const storedTitles = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('quietmap.place-titles') ?? '[]'))
 
+test('a named point keeps its completed level when sign-in resolves to a nearby history row', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  const first = { lat: 50.00505, lng: 21.959486 }
+  const second = { lat: 50.0054, lng: 21.959947 }
+  const door = { lat: 50.005264, lng: 21.959733 }
+  const recent = [first, second].map((at, i) => ({
+    ...at, place: null, openedAt: i, levels: { ...at, lden: i ? 66 : 68.8, sone: 10 },
+  }))
+  const identity = new Promise<Route>(resolve => { void page.route('**/api/me', resolve) })
+  await page.route('**/api/places/title', route => json(route, { titles: [route.request().postDataJSON()] }))
+  const saved: typeof recent[] = []
+  await page.route('**/api/places/recent', route => {
+    saved.push(route.request().postDataJSON().recent)
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto(mapUrl(POINT) + `&d=${door.lat},${door.lng}&m=lden`)
+  await expect.poll(() => popupRequests(page)).toEqual([door])
+  await sendPopupLine(page, popupUpdate(1, false, door.lat, door.lng, 70.1))
+  await expect(page.getByTestId('noise-badge').filter({ visible: true })).toContainText('70.1 dB')
+  await renameOpenPlace(page, 'Side door')
+  await json(await identity, { email: ACCOUNT, titles: [], recent })
+  await expect.poll(() => saved.at(-1)?.find(row => row.lat === second.lat)?.levels).toMatchObject({ ...door, lden: 70.1 })
+  const history = saved.at(-1)!
+  expect(history).toHaveLength(2)
+  expect(history.find(row => row.lat === first.lat)?.levels).toMatchObject({ ...first, lden: 68.8 })
+})
+
 test('an account refresh after a failed level save shows the stored history and keeps the failure visible', async ({ page }) => {
   await installHermeticMap(page, POINT)
   const at = { lat: 50.554111, lng: 16.798389 }
@@ -82,7 +109,7 @@ test("a signed-in visitor's names come from the account and go to it; signed out
   await page.route('**/api/me', route => (signedIn
     ? json(route, { email: ACCOUNT, titles: [{ lat: POINT.lat, lng: POINT.lng, title: 'Account name', updatedAt: 5 }], recent: [] })
     : json(route, { error: 'Not signed in' }, 401)))
-  const sent: { lat: number, lng: number, title: string, updatedAt: number }[] = []
+  const sent: { lat: number, lng: number, anchor: { lat: number, lng: number }, title: string, updatedAt: number }[] = []
   await page.route('**/api/places/title', route => {
     const name = route.request().postDataJSON()
     expect(route.request().headers()['x-quietmap-account']).toBe(ACCOUNT)
@@ -103,8 +130,7 @@ test("a signed-in visitor's names come from the account and go to it; signed out
   await page.keyboard.press('Escape')
   await renameOpenPlace(page, 'Renamed')
   await expect.poll(() => sent.map(name => name.title)).toEqual(['Renamed'])
-  // The tapped point, which is POINT up to the map's float arithmetic.
-  expect(Math.abs(sent[0].lat - POINT.lat) + Math.abs(sent[0].lng - POINT.lng)).toBeLessThan(1e-6)
+  expect(sent[0]).toMatchObject({ lat: POINT.lat, lng: POINT.lng, anchor: { lat: POINT.lat, lng: POINT.lng } })
   expect(sent[0].updatedAt).toBeGreaterThan(Date.parse('2026-01-01'))
   expect((await storedTitles(page)).map((name: { title: string }) => name.title)).toEqual(['Browser name'])
 
@@ -144,7 +170,8 @@ test("the link's page signs in only at a press and adds the browser's places onl
   await page.getByRole('button', { name: 'Add them' }).tap()
   await page.waitForURL(url => url.pathname === '/')
   expect(added).toEqual([{
-    titles: [{ lat: 50, lng: 14, title: 'Cabin', updatedAt: 3 }],
+    anchored: true,
+    titles: [{ lat: 50, lng: 14, title: 'Cabin', updatedAt: 3, anchor: { lat: 50, lng: 14 } }],
     // The older record kept neither the opening time nor the point its levels came from.
     recent: [{ lat: 50, lng: 14, place: 'Bedřichov, Czechia', levels: null, openedAt: 0 }],
   }])

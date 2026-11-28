@@ -2,9 +2,9 @@
 // under the rules the map keeps in the browser too (frontend/src/lib/place-rules.ts, this very file
 // run here). A longitude from a repeated world copy of the map is wrapped, as the popup wraps it.
 import {
-  PLACE_TITLES_MAX, RECENT_PLACES_MAX, TITLE_MAX, readPointLevels, samePlace, type PlaceTitle, type RecentPlace,
+  PLACE_TITLES_MAX, RECENT_PLACES_MAX, TITLE_MAX, readPointLevels, readTitleAnchor, samePlace, type PlaceTitle, type RecentPlace,
 } from '../../../frontend/src/lib/place-rules.ts'
-import { wrappedLongitude } from '../../../frontend/src/lib/coordinates.ts'
+import { samePoint, wrappedLongitude, type Point } from '../../../frontend/src/lib/coordinates.ts'
 
 /** The longest geocoded place name kept with a recent place. */
 const PLACE_NAME_MAX = 500
@@ -19,16 +19,18 @@ export function point({ lat, lng }: Record<string, unknown>): { lat: number, lng
 
 /** A name as sent (null removes it), its time capped at `now` (a missing one is the oldest), or
  *  what is wrong with it. */
-export function parseTitle(value: unknown, now: number): { at: { lat: number, lng: number }, title: string | null, updatedAt: number } | string {
+export function parseTitle(value: unknown, now: number): { at: Point, anchor?: Point, title: string | null, updatedAt: number } | string {
   const sent = entry(value)
   const at = point(sent)
   if (!at) return 'lat must be within ±90 and lng a number'
+  const anchor = readTitleAnchor(sent.anchor, at)
+  if ('anchor' in sent && !anchor) return 'a history anchor must be within 30 m of the named point'
   const title = typeof sent.title === 'string' ? sent.title.trim() : sent.title
   if (title !== null && (typeof title !== 'string' || title.length === 0 || title.length > TITLE_MAX)) {
     return `title must be 1 to ${TITLE_MAX} characters, or null to remove it`
   }
   const { updatedAt } = sent
-  return { at, title, updatedAt: finite(updatedAt) && updatedAt > 0 ? Math.min(Math.round(updatedAt), now) : 0 }
+  return { at, anchor, title, updatedAt: finite(updatedAt) && updatedAt > 0 ? Math.min(Math.round(updatedAt), now) : 0 }
 }
 
 /** The names a browser sends at its sign-in, or what is wrong with them. */
@@ -38,20 +40,19 @@ export function parseTitles(value: unknown, now: number): PlaceTitle[] | string 
   for (const sent of value) {
     const parsed = parseTitle(sent, now)
     if (typeof parsed === 'string') return parsed
-    if (parsed.title != null) titles.push({ ...parsed.at, title: parsed.title, updatedAt: parsed.updatedAt })
+    if (parsed.title != null) titles.push({ ...parsed.at, anchor: parsed.anchor, title: parsed.title, updatedAt: parsed.updatedAt })
   }
   return titles
 }
 
-/** The recent places as sent, one per place (the first of two within 30 m), their times capped at
- *  `now` (a missing time the oldest), or what is wrong with them. */
-export function parseRecent(value: unknown, now: number): RecentPlace[] | string {
+/** An anchored list identifies rows by exact first click. Older browsers group all clicks within 30 m. */
+export function parseRecent(value: unknown, now: number, anchored: boolean): RecentPlace[] | string {
   if (!Array.isArray(value) || value.length > RECENT_PLACES_MAX) return `recent must be at most ${RECENT_PLACES_MAX} places`
   const places: RecentPlace[] = []
   for (const sent of value.map(entry)) {
     const at = point(sent)
     if (!at) return 'a recent place needs lat within ±90 and lng a number'
-    if (places.some(place => samePlace(place, at))) continue
+    if (places.some(place => anchored ? samePoint(place, at) : samePlace(place, at))) continue
     const { place, openedAt } = sent
     places.push({
       ...at,

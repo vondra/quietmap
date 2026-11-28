@@ -7,7 +7,8 @@ import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, rmSync, statfsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { historyOrder, mergedTitles, readPointLevels, samePlace, withTitle, type PlaceTitle, type RecentPlace } from '../../../frontend/src/lib/place-rules.ts'
+import { bindPlaceTitles, historyOrder, mergedTitles, nearestPlace, readPointLevels, samePlace, withTitleAt, type PlaceTitle, type RecentPlace } from '../../../frontend/src/lib/place-rules.ts'
+import type { Point } from '../../../frontend/src/lib/coordinates.ts'
 import type { MediaItem } from '../../../frontend/src/lib/media.ts'
 import { MEDIA_KINDS, type MediaKind } from '../media/check.ts'
 
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sessions (token_sha256 TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS place_titles (user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   position INTEGER NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, title TEXT NOT NULL,
-  updated_at INTEGER NOT NULL, PRIMARY KEY (user_id, position));
+  updated_at INTEGER NOT NULL, anchor_lat REAL, anchor_lng REAL, PRIMARY KEY (user_id, position));
 CREATE TABLE IF NOT EXISTS recent_places (user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   position INTEGER NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, place TEXT, sone REAL, lden REAL,
   opened_at INTEGER NOT NULL DEFAULT 0, level_lat REAL, level_lng REAL, PRIMARY KEY (user_id, position));
@@ -90,6 +91,17 @@ export class AccountStore {
         }
       })
     }
+    this.#transaction(() => {
+      if (!this.#db.prepare('PRAGMA table_info(place_titles)').all().some(column => column.name === 'anchor_lat')) {
+        this.#db.exec('ALTER TABLE place_titles ADD COLUMN anchor_lat REAL; ALTER TABLE place_titles ADD COLUMN anchor_lng REAL')
+      }
+      // A rollback to an older server can also leave new names without anchors.
+      for (const row of this.#db.prepare('SELECT DISTINCT user_id FROM place_titles WHERE anchor_lat IS NULL').all()) {
+        const id = Number(row.user_id)
+        const { titles, recent } = this.places(id)
+        this.#writeTitles(id, bindPlaceTitles(titles, recent))
+      }
+    })
   }
 
   close(): void {
@@ -185,8 +197,10 @@ export class AccountStore {
   }
 
   #titles(id: number): PlaceTitle[] {
-    return this.#db.prepare('SELECT lat, lng, title, updated_at AS updatedAt FROM place_titles WHERE user_id = ? ORDER BY position')
-      .all(id) as unknown as PlaceTitle[]
+    const rows = this.#db.prepare('SELECT lat, lng, title, updated_at AS updatedAt, anchor_lat, anchor_lng FROM place_titles WHERE user_id = ? ORDER BY position')
+      .all(id) as unknown as (PlaceTitle & { anchor_lat: number | null, anchor_lng: number | null })[]
+    return rows.map(({ anchor_lat, anchor_lng, ...title }) => anchor_lat == null || anchor_lng == null ? title :
+      { ...title, anchor: { lat: anchor_lat, lng: anchor_lng } })
   }
 
   /** The account's names, and its recent places in the history's order (a list kept under an older
@@ -202,8 +216,9 @@ export class AccountStore {
 
   #writeTitles(id: number, titles: PlaceTitle[]): void {
     this.#db.prepare('DELETE FROM place_titles WHERE user_id = ?').run(id)
-    const insert = this.#db.prepare('INSERT INTO place_titles (user_id, position, lat, lng, title, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    titles.forEach((title, k) => insert.run(id, k, title.lat, title.lng, title.title, title.updatedAt))
+    const insert = this.#db.prepare('INSERT INTO place_titles (user_id, position, lat, lng, title, updated_at, anchor_lat, anchor_lng) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    titles.forEach((title, k) => insert.run(id, k, title.lat, title.lng, title.title, title.updatedAt,
+      title.anchor?.lat ?? title.lat, title.anchor?.lng ?? title.lng))
   }
 
   #writeRecent(id: number, recent: RecentPlace[]): void {
@@ -213,11 +228,14 @@ export class AccountStore {
       levels?.sone ?? null, levels?.lden ?? null, openedAt, levels?.lat ?? null, levels?.lng ?? null))
   }
 
-  /** Names the place at `at` (null removes its name) as `withTitle` does; the account's names. */
-  setTitle(id: number, at: { lat: number, lng: number }, title: string | null, updatedAt: number): PlaceTitle[] {
+  /** Older tabs send the raw click and display its nearest saved name. */
+  setTitle(id: number, at: Point, title: string | null, updatedAt: number, anchor?: Point): PlaceTitle[] {
     return this.#transaction(() => {
       const before = this.#titles(id)
-      const titles = withTitle(before, at, title, updatedAt)
+      const old = anchor ? undefined : nearestPlace(before, at)
+      const target = old ?? at
+      const owner = anchor ?? old?.anchor ?? nearestPlace(this.places(id).recent, target) ?? target
+      const titles = withTitleAt(before, target, title, updatedAt, { lat: owner.lat, lng: owner.lng })
       if (titles !== before) this.#writeTitles(id, titles)
       return titles
     })
@@ -232,10 +250,9 @@ export class AccountStore {
   importPlaces(id: number, browser: Places): Places {
     return this.#transaction(() => {
       const account = this.places(id)
-      const places = {
-        titles: mergedTitles(account.titles, browser.titles),
-        recent: account.recent.length > 0 ? account.recent : browser.recent,
-      }
+      const recent = account.recent.length > 0 ? account.recent : browser.recent
+      const titles = mergedTitles(account.titles, bindPlaceTitles(browser.titles, browser.recent), recent)
+      const places = { titles, recent }
       this.#writeTitles(id, places.titles)
       this.#writeRecent(id, places.recent)
       return places

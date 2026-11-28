@@ -5,6 +5,49 @@ import { PHONE, POINT, canvasCenter, installHermeticMap, mapUrl, popupRequests, 
 
 for (const phone of [false, true]) test.describe(phone ? 'phone' : 'desktop', () => {
   if (phone) test.use(PHONE)
+  test('two nearby history rows reopen and rename their own receivers after a reload', async ({ page }) => {
+    await installHermeticMap(page, POINT)
+    const url = mapUrl(POINT) + '&m=lden'
+    await page.goto(url)
+    const a = { lat: 50.00505, lng: 21.959486 }, b = { lat: 50.0054, lng: 21.959947 }
+    const c = { lat: 50.005264, lng: 21.959733 }
+    const search = page.getByRole('combobox'), rows = page.getByRole('option')
+    const field = page.getByTestId('open-place').getByTestId('place-title')
+    async function answer(at: typeof a, db: number) {
+      await expect.poll(async () => (await popupRequests(page)).at(-1)).toEqual(at)
+      await sendPopupLine(page, popupUpdate(1, false, at.lat, at.lng, db))
+      await expect(page.getByTestId('open-place')).toContainText(db.toFixed(1) + ' dB')
+    }
+    for (const [at, db] of [[a, 68.8], [b, 66], [c, 70.1]] as const) {
+      await search.fill(`${at.lat}, ${at.lng}`)
+      await rows.click()
+      await answer(at, db)
+    }
+    await field.fill('P25 microphone')
+    await field.press('Enter')
+    await search.click()
+    await expect(rows).toHaveCount(2)
+    await expect(rows.filter({ hasText: 'P25 microphone' })).toHaveCount(1)
+    await rows.filter({ hasText: '68.8 dB' }).getByRole('button').first().click()
+    await answer(a, 68.8)
+    await expect(field).not.toHaveValue('P25 microphone')
+    await field.fill('P24 microphone')
+    await field.press('Enter')
+    await page.goto('/?reload=nearby' + url.slice(1))
+    for (const [name, at, db] of [['P25 microphone', c, 70.1], ['P24 microphone', a, 68.8]] as const) {
+      await search.click()
+      await rows.getByRole('button', { name, exact: true }).click()
+      await answer(at, db)
+      await expect(field).toHaveValue(name)
+    }
+    await search.click()
+    if (!phone) await rows.filter({hasText:'P25 microphone'}).hover()
+    await rows.getByRole('button', { name: 'Forget P25 microphone' }).click()
+    await expect(rows).toHaveCount(1)
+    await expect(rows).toContainText('P24 microphone')
+    await expect(rows).toContainText('68.8 dB')
+  })
+
   test('history keeps the level of the exact point it reopens', async ({ page }) => {
     await installHermeticMap(page, POINT)
     const url = mapUrl(POINT) + '&m=lden'

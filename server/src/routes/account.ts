@@ -154,14 +154,14 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
     const [{ store }, user] = ready
     const parsed = parseTitle(request.body, Date.now())
     if (typeof parsed === 'string') return reply.status(400).send({ error: parsed })
-    return { titles: store.setTitle(user.id, parsed.at, parsed.title, parsed.updatedAt) }
+    return { titles: store.setTitle(user.id, parsed.at, parsed.title, parsed.updatedAt, parsed.anchor) }
   })
 
   app.put('/api/places/recent', async (request, reply) => {
     const ready = signedIn(accounts, request, reply, { change: true })
     if (!ready) return
     const [{ store }, user] = ready
-    const recent = parseRecent(body(request).recent, Date.now())
+    const recent = parseRecent(body(request).recent, Date.now(), body(request).anchored === true)
     if (typeof recent === 'string') return reply.status(400).send({ error: recent })
     store.setRecent(user.id, recent)
     return reply.status(204).send()
@@ -173,7 +173,7 @@ export async function accountRoutes(app: FastifyInstance, { accounts }: { accoun
     const [{ store }, user] = ready
     const now = Date.now()
     const titles = parseTitles(body(request).titles, now)
-    const recent = parseRecent(body(request).recent, now)
+    const recent = parseRecent(body(request).recent, now, body(request).anchored === true)
     if (typeof titles === 'string' || typeof recent === 'string') {
       return reply.status(400).send({ error: typeof titles === 'string' ? titles : recent })
     }

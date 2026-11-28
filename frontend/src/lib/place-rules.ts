@@ -1,8 +1,7 @@
 // The rules of a visitor's places, the same in the browser (browser-places.ts) and on the server for a
 // signed-in visitor (server/src/accounts/): the recent places are the history of the places opened,
-// clicked or searched, at most 50, the one opened last first; one place is any point within 30 m; a
-// name stays at the point it was first given, and of two names for one place the later is kept. Pure,
-// so that the server runs this very file.
+// clicked or searched, at most 50, most recent first. Nearby clicks share a row. A name retains both
+// the exact point where it was given and the row that opens it, even after another row is removed.
 import { samePoint, wrappedLongitude, type Point } from './coordinates.ts'
 
 /** A completed popup's levels and the exact point requested. */
@@ -28,6 +27,8 @@ export interface PlaceTitle {
   title: string
   /** When it was given (ms since 1970); 0 for a name kept from before names had times. */
   updatedAt: number
+  /** First click of the history row. Older names are paired once with their nearest existing row. */
+  anchor?: Point
 }
 
 /** The most recent places kept. */
@@ -55,6 +56,33 @@ export function samePlace(a: { lat: number, lng: number }, b: { lat: number, lng
   return metresBetween(a, b) < SAME_PLACE_M
 }
 
+export function readTitleAnchor(value: unknown, at: Point): Point | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { lat, lng } = value as Partial<Point>
+  if (typeof lat !== 'number' || !Number.isFinite(lat) || Math.abs(lat) > 90 ||
+      typeof lng !== 'number' || !Number.isFinite(lng)) return undefined
+  const anchor = { lat, lng: wrappedLongitude(lng) }
+  return samePlace(at, anchor) ? anchor : undefined
+}
+
+/** Equal distances use coordinates so opening a row or syncing another device cannot move a name. */
+export function nearestPlace<T extends Point>(places: T[], at: Point, accepts?: (place: T) => boolean): T | null {
+  let best: T | null = null
+  let distance = SAME_PLACE_M
+  for (const place of places) {
+    if (Math.abs(place.lat - at.lat) * METRES_PER_DEGREE > distance) continue
+    const metres = metresBetween(at, place)
+    if (metres < distance || (best && metres === distance &&
+        (place.lat < best.lat || (place.lat === best.lat && place.lng < best.lng)))) {
+      if (accepts && !accepts(place)) continue
+      if (metres === 0) return place
+      best = place
+      distance = metres
+    }
+  }
+  return best
+}
+
 /** A legacy entry has no record of where its numbers were computed. */
 export function readPointLevels(value: unknown): PointLevels | null {
   if (!value || typeof value !== 'object') return null
@@ -69,12 +97,14 @@ export function levelsAt(entry: RecentPlace | undefined, at: Point): PointLevels
 }
 
 /** The destination of a history row. A name can be given across the street from its first click. */
-export function historyPoint(titles: PlaceTitle[], entry: Point): Point & { title?: string } {
-  return titleAt(titles, entry) ?? entry
+export function historyPoint(history: RecentPlace[], titles: PlaceTitle[], entry: RecentPlace): Point & { title?: string } {
+  return nearestPlace(titles, entry, title => samePoint(anchorOf(title, history), entry)) ?? entry
 }
 
-export function opensAt(entry: Point, titles: PlaceTitle[], at: Point): boolean {
-  return samePlace(entry, at) && samePoint(historyPoint(titles, entry), at)
+export function entryOpeningAt(history: RecentPlace[], titles: PlaceTitle[], at: Point): RecentPlace | undefined {
+  const anchor = openingAnchor(titles, history, at)
+  const entry = history.find(row => samePoint(row, anchor))
+  return entry && samePoint(historyPoint(history, titles, entry), at) ? entry : undefined
 }
 
 /** The history's order: the place opened last first (a stable sort: places kept from before the
@@ -84,103 +114,150 @@ export function historyOrder(list: RecentPlace[]): RecentPlace[] {
   return [...list].sort((a, b) => b.openedAt - a.openedAt)
 }
 
-/** `list`, in the history's order, with `entry` replacing the place's entry or added; beyond the most
- *  kept the one ranked last goes, and no other entry stays within the place. */
-function withEntry(list: RecentPlace[], entry: RecentPlace): RecentPlace[] {
-  return historyOrder([entry, ...list.filter(other => !samePlace(other, entry))]).slice(0, RECENT_PLACES_MAX)
-}
-
 /** `list` with the place at `at` opened at `openedAt`: its entry opened again, where it was first
  *  opened (moved, it would take in a neighbour's entry within 30 m of the new point), or a new one
  *  named `place` (a search's result) until its own name comes. */
-export function withOpened(list: RecentPlace[], at: { lat: number, lng: number }, openedAt: number, place: string | null = null): RecentPlace[] {
-  const older = list.find(other => samePlace(other, at))
-  return withEntry(list, older
+export function withOpened(list: RecentPlace[], at: Point, openedAt: number, place: string | null = null, titles: PlaceTitle[] = []): RecentPlace[] {
+  at = openingAnchor(titles, list, at)
+  const older = list.find(row => samePoint(row, at))
+  const opened = older
     ? { ...older, place: older.place ?? place, openedAt }
-    : { lat: at.lat, lng: at.lng, place, levels: null, openedAt })
+    : { lat: at.lat, lng: at.lng, place, levels: null, openedAt }
+  return historyOrder([opened, ...list.filter(row => row !== older)]).slice(0, RECENT_PLACES_MAX)
 }
 
-/** Keep a completed answer in each row that opens its receiver, preserving the order and known names. */
+/** Keep a completed answer only in the row that reopens its receiver. */
 export function withAnswer(
   list: RecentPlace[],
   answer: PointLevels & { place: string | null },
   titles: PlaceTitle[],
 ): RecentPlace[] {
-  let updated = list
-  for (const [i, entry] of list.entries()) {
-    if (!opensAt(entry, titles, answer)) continue
-    const place = entry.place ?? answer.place
-    const previous = levelsAt(entry, answer)
-    if (place === entry.place && previous && previous.sone === answer.sone && previous.lden === answer.lden) continue
-    if (updated === list) updated = [...list]
-    const { lat, lng, sone, lden } = answer
-    updated[i] = { ...entry, place, levels: { lat, lng: wrappedLongitude(lng), sone, lden } }
-  }
-  return updated
+  const entry = entryOpeningAt(list, titles, answer)
+  if (!entry) return list
+  const place = entry.place ?? answer.place
+  const previous = levelsAt(entry, answer)
+  if (place === entry.place && previous && previous.sone === answer.sone && previous.lden === answer.lden) return list
+  const { lat, lng, sone, lden } = answer
+  return list.map(other => other === entry ? { ...entry, place, levels: { lat, lng: wrappedLongitude(lng), sone, lden } } : other)
 }
 
 /** `list` with `name` given to the same place's entry if it has none yet (a name looked up after
  *  the visitor clicked on comes back late); `list` itself when nothing changes. */
-export function withName(list: RecentPlace[], at: { lat: number, lng: number }, name: string): RecentPlace[] {
-  if (!list.some(other => other.place == null && samePlace(other, at))) return list
-  return list.map(other => (other.place == null && samePlace(other, at) ? { ...other, place: name } : other))
+export function withName(list: RecentPlace[], at: Point, name: string, titles: PlaceTitle[] = []): RecentPlace[] {
+  const anchor = openingAnchor(titles, list, at)
+  const entry = list.find(row => samePoint(row, anchor))
+  if (!entry || entry.place != null) return list
+  return list.map(other => other === entry ? { ...entry, place: name } : other)
 }
 
 /** `list` without the place. */
 export function withoutPlace(list: RecentPlace[], place: { lat: number, lng: number }): RecentPlace[] {
-  return list.filter(other => !samePlace(other, place))
+  return list.filter(other => !samePoint(other, place))
 }
 
-/** Which of `titles` names the place at `at`: the nearest within one place's 30 m (the first of
- *  equals), or -1. Two named spots a house apart stay two, and naming a point again keeps the name
- *  where it was given. */
-function titleIndex(titles: PlaceTitle[], at: { lat: number, lng: number }): number {
-  let nearest = -1
-  let nearestM = SAME_PLACE_M
-  titles.forEach((title, k) => {
-    const metres = metresBetween(title, at)
-    if (metres < nearestM) [nearest, nearestM] = [k, metres]
-  })
-  return nearest
+/** A nearby name applies within the same recent place. A saved name outlives its history row. */
+export function titleAt(titles: PlaceTitle[], at: Point, history: RecentPlace[] = []): PlaceTitle | null {
+  if (!titles.length) return null
+  const owner = openingAnchor(titles, history, at)
+  return nearestPlace(titles, at, title => samePoint(title, at) || !history.length || samePoint(anchorOf(title, history), owner))
 }
 
-/** The name the visitor gave the place at `at`, with the point it was given at, if any. */
-export function titleAt(titles: PlaceTitle[], at: { lat: number, lng: number }): PlaceTitle | null {
-  const k = titleIndex(titles, at)
-  return k < 0 ? null : titles[k]
+function anchorOf(title: PlaceTitle, history: RecentPlace[]): Point {
+  return title.anchor ?? nearestPlace(history, title) ?? title
 }
 
-/** `titles` with the place at `at` named `title` at `updatedAt`, first and at the point its name was
- *  first given, or without its name when `title` is null; a name given later than `updatedAt` stays
- *  (and `titles` itself is the answer). Uncapped. */
-function named(titles: PlaceTitle[], at: { lat: number, lng: number }, title: string | null, updatedAt: number): PlaceTitle[] {
-  const k = titleIndex(titles, at)
-  if (k >= 0 && titles[k].updatedAt > updatedAt) return titles
-  const others = titles.filter((_, j) => j !== k)
+const pointOrder = (a: Point, b: Point) => a.lat - b.lat || a.lng - b.lng
+const pointKey = (p: Point) => `${p.lat},${wrappedLongitude(p.lng)}`
+
+/** Closest eligible pairs first, with each point on each device participating at most once. */
+function closestPairs<L extends Point, R extends Point>(left: L[], right: R[], eligible: (a: L, b: R) => boolean): Map<L, R> {
+  const candidates = []
+  for (const a of left) for (const b of right) {
+    const distance = metresBetween(a, b)
+    if (distance < SAME_PLACE_M && eligible(a, b)) candidates.push({ a, b, distance })
+  }
+  candidates.sort((x, y) => x.distance - y.distance || pointOrder(x.a, y.a) || pointOrder(x.b, y.b))
+  const pairs = new Map<L, R>(), taken = new Set<R>()
+  for (const { a, b } of candidates) {
+    if (pairs.has(a) || taken.has(b)) continue
+    pairs.set(a, b)
+    taken.add(b)
+  }
+  return pairs
+}
+
+/** Preserve known account rows, then pair the remaining names with the receiving device's first clicks. */
+function pairTitleRows(titles: PlaceTitle[], history: RecentPlace[], fixed: Set<PlaceTitle>): PlaceTitle[] {
+  const destinations = new Map(titles.map(title => [pointKey(title), title]))
+  const used = new Set<string>(), owners = new Map<PlaceTitle, Point>()
+  const available = (title: PlaceTitle, owner: Point) => {
+    const key = pointKey(owner)
+    return !used.has(key) && (!destinations.has(key) || destinations.get(key) === title)
+  }
+  const assign = (title: PlaceTitle, point: Point) => {
+    owners.set(title, { lat: point.lat, lng: point.lng })
+    used.add(pointKey(point))
+  }
+  for (const title of titles) {
+    if (fixed.has(title) && title.anchor && available(title, title.anchor)) assign(title, title.anchor)
+  }
+  const remaining = titles.filter(title => !owners.has(title)).sort(pointOrder)
+  const origins = remaining.map(title => ({ ...(title.anchor ?? title), title }))
+  const pairs = closestPairs(origins, history, (origin, row) => available(origin.title, row) && samePlace(origin.title, row))
+  for (const [origin, row] of pairs) assign(origin.title, row)
+  for (const title of remaining) {
+    if (!owners.has(title)) assign(title, title.anchor && available(title, title.anchor) ? title.anchor : title)
+  }
+  return titles.map(title => ({ ...title, anchor: owners.get(title)! }))
+}
+
+/** Remember a legacy name's owner before opening or forgetting any more places. */
+export function bindPlaceTitles(titles: PlaceTitle[], history: RecentPlace[]): PlaceTitle[] {
+  return titles.every(title => title.anchor) ? titles : pairTitleRows(titles, history, new Set(titles))
+}
+
+function openingAnchor(titles: PlaceTitle[], history: RecentPlace[], at: Point): Point {
+  if (!titles.length) return nearestPlace(history, at) ?? at
+  const exact = titles.find(title => samePoint(title, at))
+  if (exact) return anchorOf(exact, history)
+  const row = nearestPlace(history, at, entry => samePlace(historyPoint(history, titles, entry), at))
+  if (row) return row
+  const named = nearestPlace(titles, at, title => samePlace(anchorOf(title, history), at))
+  return named ? anchorOf(named, history) : at
+}
+
+export function titlePosition(titles: PlaceTitle[], history: RecentPlace[], at: Point): { at: Point, anchor: Point } {
+  const saved = titleAt(titles, at, history)
+  const point = saved ?? at
+  const owner = saved ? anchorOf(saved, history) : openingAnchor(titles, history, at)
+  return { at: { lat: point.lat, lng: point.lng }, anchor: { lat: owner.lat, lng: owner.lng } }
+}
+
+/** Update the name at its saved coordinate, keeping a newer edit that already reached the account. */
+export function withTitleAt(titles: PlaceTitle[], at: Point, title: string | null, updatedAt: number, anchor?: Point): PlaceTitle[] {
+  const ownerTitle = anchor && titles.find(other => samePoint(other.anchor ?? other, anchor))
+  const old = titles.find(other => samePoint(other, at)) ?? (ownerTitle && samePlace(ownerTitle, at) ? ownerTitle : undefined)
+  if (old ? old.updatedAt > updatedAt : title == null) return titles
+  const others = titles.filter(other => other !== old)
   if (title == null) return others
-  const point = k < 0 ? at : titles[k]
-  return [{ lat: point.lat, lng: point.lng, title, updatedAt }, ...others]
-}
-
-/** As `named`, at most the most kept, the newest first. */
-export function withTitle(
-  titles: PlaceTitle[],
-  at: { lat: number, lng: number },
-  title: string | null,
-  updatedAt: number,
-): PlaceTitle[] {
-  const next = named(titles, at, title, updatedAt)
-  return next === titles ? titles : next.slice(0, PLACE_TITLES_MAX)
+  const owner = old?.anchor ?? (ownerTitle ? at : anchor)
+  return [{ lat: old?.lat ?? at.lat, lng: old?.lng ?? at.lng, title, updatedAt,
+    ...(owner && { anchor: { lat: owner.lat, lng: owner.lng } }) }, ...others].slice(0, PLACE_TITLES_MAX)
 }
 
 /** An account's names with a browser's added: of two names for one place the later is kept, the
  *  account's on a tie (names kept from before names had times are all equally old); then the newest
  *  most kept, so that no name falls out before the later one for its place is known. */
-export function mergedTitles(account: PlaceTitle[], browser: PlaceTitle[]): PlaceTitle[] {
-  const oldestFirst = [...browser].sort((a, b) => a.updatedAt - b.updatedAt)
-  const merged = oldestFirst.reduce((titles, title) => {
-    const k = titleIndex(titles, title)
-    return k >= 0 && titles[k].updatedAt >= title.updatedAt ? titles : named(titles, title, title.title, title.updatedAt)
-  }, account)
-  return [...merged].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, PLACE_TITLES_MAX)
+export function mergedTitles(account: PlaceTitle[], browser: PlaceTitle[], history: RecentPlace[] = []): PlaceTitle[] {
+  // A near match must fit the first click on both devices. A neighbour may share only one of them.
+  const matched = closestPairs(account, browser, (a, b) => samePoint(a, b) || !a.anchor || !b.anchor ||
+    (samePlace(a, b.anchor) && samePlace(b, a.anchor)))
+  const existing = account.map(title => {
+    const incoming = matched.get(title)
+    return incoming && incoming.updatedAt > title.updatedAt ? { ...title, title: incoming.title, updatedAt: incoming.updatedAt } : title
+  })
+  const imported = new Set(matched.values())
+  const merged = [...existing, ...browser.filter(title => !imported.has(title))]
+    .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, PLACE_TITLES_MAX)
+  return history.length || merged.some(title => title.anchor) ? pairTitleRows(merged, history, new Set(existing)) : merged
 }
